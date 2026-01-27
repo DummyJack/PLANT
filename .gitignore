@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+venv/
+
+# Logs
+log/
+
+# 環境變數
+config/.env
+
+# 輸出檔案
+output/
+artifact/
+
+# macOS
+.DS_Store

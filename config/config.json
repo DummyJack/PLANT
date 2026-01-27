@@ -1,0 +1,12 @@
+{
+  "rounds": 1,
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "temperature": 0.7,
+  "enable_user": true,
+  "enable_analyst": true,
+  "enable_expert": true,
+  "enable_mediator": true,
+  "enable_modeler": true,
+  "enable_documentor": true
+}
