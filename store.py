@@ -42,30 +42,12 @@ class Store:
     
     # ===== Artifact 相關 =====
     
-    def load_artifact(self) -> Dict[str, Any]:
-        """載入 artifact.json"""
-        artifact_path = self.artifact_dir / "artifact.json"
-        if not artifact_path.exists():
-            # 回傳初始結構
-            return {
-                "rough_idea": "",
-                "stakeholders": [],
-                "analyse": {
-                    "system_description": "",
-                    "pairs": [],
-                    "report": []
-                },
-                "feedback": [],
-                "decisions": []
-            }
-        return self.load_json(artifact_path)
-    
     def save_artifact(self, data: Dict[str, Any]):
         """儲存 artifact.json"""
         self.save_json(data, self.artifact_dir / "artifact.json")
     
     def load_mom(self) -> Dict[str, Any]:
-        """載入 mom.json（會議記錄）"""
+        """載入 mom.json"""
         mom_path = self.artifact_dir / "mom.json"
         if not mom_path.exists():
             return {"rounds": []}
@@ -86,13 +68,6 @@ class Store:
         """儲存 draft.json"""
         self.save_json(data, self.artifact_dir / "draft.json")
     
-    def load_srs(self) -> Dict[str, Any]:
-        """載入 srs.json"""
-        srs_path = self.artifact_dir / "srs.json"
-        if not srs_path.exists():
-            return {}
-        return self.load_json(srs_path)
-    
     def save_srs(self, data: Dict[str, Any]):
         """儲存 srs.json"""
         self.save_json(data, self.artifact_dir / "srs.json")
@@ -111,7 +86,13 @@ class Store:
             raise FileNotFoundError(f"spec.json 模板不存在: {template_path}")
         return self.load_json(template_path)
     
-    # ===== Markdown 輸出 =====
+    def save_config(self, config: Dict[str, Any]) -> None:
+        """儲存 config.json"""
+        config_path = self.config_dir / "config.json"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    
+    # ===== Markdown 相關 =====
     
     def save_markdown(self, content: str, filename: str):
         """儲存 Markdown 檔案到 output 目錄"""
@@ -119,21 +100,30 @@ class Store:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
     
-    def load_markdown(self, filename: str) -> str:
-        """載入 Markdown 檔案"""
-        filepath = self.output_dir / filename
-        if not filepath.exists():
-            raise FileNotFoundError(f"檔案不存在: {filepath}")
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
-    
-    # ===== Log 相關 =====
-    
-    def append_log(self, log_entry: str, log_file: str = "system.log"):
-        """追加 log 到檔案"""
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_path = self.log_dir / log_file
+    # 將 JSON 資料轉換為 Markdown 格式
+    def generate_markdown(self, json_data: Dict[str, Any]) -> str:
+        md = ""
+        md += json.dumps(json_data, ensure_ascii=False, indent=2)
         
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] {log_entry}\n")
+        return md
+    
+    # ===== PlantUML 相關 =====
+    
+    # 將模型中的 PlantUML 程式碼儲存為 .plantuml 檔案
+    def save_plantuml_files(self, model_data: Dict[str, Any]) -> None:
+        models = model_data.get("models", [])
+        
+        for model in models:
+            model_name = model.get("name", "unnamed")
+            plantuml_code = model.get("plantuml", "")
+            
+            if plantuml_code:
+                # 清理檔案名稱（移除特殊字元）
+                safe_name = "".join(c for c in model_name if c.isalnum() or c in (' ', '-', '_')).strip()
+                filename = f"{safe_name}.plantuml"
+                filepath = self.output_dir / filename
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(plantuml_code)
+                
+                print(f"✓ 儲存 PlantUML: {filename}")

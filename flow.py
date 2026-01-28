@@ -2,7 +2,7 @@ from typing import Dict, Any
 from agents import UserAgent, AnalystAgent, ExpertAgent, MediatorAgent, ModelerAgent, DocumentorAgent
 from model import create_model
 from store import Store
-from utils import Logger, MoMManager
+from utils import Logger, MoMManager, Collect
 
 # 流程
 class Flow:
@@ -25,7 +25,7 @@ class Flow:
         self.expert_agent = ExpertAgent(self.model, doc_dir="doc")
         self.mediator_agent = MediatorAgent(self.model)
         self.modeler_agent = ModelerAgent(self.model)
-        self.documentor_agent = DocumentorAgent(self.model)
+        self.documentor_agent = DocumentorAgent(self.model, self.store)
     
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
@@ -46,7 +46,7 @@ class Flow:
         
         # 建立初始 artifact
         self.store.save_artifact(artifact)
-        self.logger.info("創建新的 artifact.json")
+        self.logger.info("創建中間產物(artifact.json)")
         
         for round_num in range(1, rounds + 1):
             self.logger.info(f"\n{'='*60}")
@@ -92,7 +92,7 @@ class Flow:
             
             # 1.3 Human 選擇
             self.logger.info("\n請選擇利害關係人")
-            selected = self.mediator_agent.collect_stakeholder_selection(proposed)
+            selected = Collect.user_selection(proposed)
             self.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
             
             self.mom_manager.add_stage("Human Selection", "Human",
@@ -101,9 +101,9 @@ class Flow:
         else:
             selected = [sh['name'] for sh in artifact.get("stakeholders", [])]
         
-        # Stage 2: User - 扮演利害關係人提出需求
+        # Stage 2: User - 模擬利害關係人提出需求
         if self.config.get("enable_user", True):
-            self.logger.info("\nStage 2: 扮演利害關係人提出需求")
+            self.logger.info("\nStage 2: 模擬不同的利害關係人提出想法")
             system_description = artifact.get("system_description")
             
             if round_num == 1:
@@ -142,10 +142,14 @@ class Flow:
             self.store.save_artifact(artifact)
             self.logger.info(f"✓ 產生衝突報告")
             
-            # 3.3 產生 report.md
-            report_md = self.analyst_agent.generate_report_markdown(system_description, conflicts)
-            self.store.save_markdown(report_md, "report.md")
-            self.logger.info("✓ 產生 report.md")
+            # 3.3 產生 report.md（只在有衝突時產生）
+            if conflicts:
+                system_description = artifact.get("system_description")
+                report_md = self.analyst_agent.generate_report_markdown(system_description, conflicts)
+                self.store.save_markdown(report_md, "report.md")
+                self.logger.info("✓ 產生 report.md")
+            else:
+                self.logger.info("✓ 無衝突，跳過 report.md 生成")
             
             self.mom_manager.add_stage("Analyst", "AnalystAgent", 
                                        f"識別 {len(conflicts)} 個衝突",
@@ -161,6 +165,8 @@ class Flow:
         feedback = []
         if self.config.get("enable_expert", True):
             self.logger.info("\nStage 4: 收集專家建議")
+            
+            system_description = artifact.get("system_description")
             
             if round_num == 1:
                 # 第一輪：產生新的專家建議
@@ -193,7 +199,7 @@ class Flow:
             # 5.2 收集人類決策
             self.logger.info("\n請進行衝突裁決：")
             for option in decision_options:
-                decision = self.mediator_agent.collect_human_decision(option)
+                decision = Collect.user_decision(option)
                 decisions.append(decision)
                 
                 # 記錄到 MoM
@@ -244,8 +250,7 @@ class Flow:
             self.store.save_json(uml_json, "artifact/uml.json")
             
             # 產生 PlantUML 檔案
-            output_dir = self.store.base_dir / "output"
-            self.modeler_agent.save_plantuml_files(uml_json, output_dir)
+            self.store.save_plantuml_files(uml_json)
 
             self.logger.info("✓ 產生系統模型 (uml.json 和 .plantuml 檔案)")
             self.mom_manager.add_stage("Modeler", "ModelerAgent",
@@ -260,26 +265,120 @@ class Flow:
         
         return artifact
     
+    # 產生所有輸出文件
     def _generate_outputs(self, artifact: Dict[str, Any]):
-        # 產生所有輸出文件（在所有輪次結束後執行）
         if self.config.get("enable_documentor", True):
-            self.logger.info("\n最終階段: 產生文件")
+            generate_srs = input("\n是否要生成正式的需求規格書 (SRS)？(y/n)：").strip().lower()
             
-            # 1. Design Rationale (dr.md)
-            dr_md = self.documentor_agent.generate_design_rationale(self.mom_manager.get_mom_data())
-            self.store.save_markdown(dr_md, "dr.md")
-            self.logger.info("✓ 產生 dr.md (Design Rationale)")
+            if generate_srs == 'y':
+                self.logger.info("\n最終階段: 產生文件")
+                
+                # 先儲存並轉換 MoM
+                mom_data = self.store.load_mom()
+                mom_md = self.store.generate_markdown(mom_data)
+                self.store.save_markdown(mom_md, "mom.md")
+                self.logger.info("✓ 產生會議記錄 (mom.md)")
+                
+                # 1. Design Rationale (dr.md)
+                dr_md = self.documentor_agent.generate_design_rationale()
+                self.store.save_markdown(dr_md, "dr.md")
+                self.logger.info("✓ 產生 Design Rationale (dr.md)")
+
+                # 2. SRS (srs.json / srs.md)
+                spec_template = self.store.load_spec_template()
+                ieee_template = spec_template.get("ieee_29148")
+                
+                draft = self.store.load_draft()
+                srs_json = self.documentor_agent.generate_srs_json(draft, ieee_template)
+                self.store.save_srs(srs_json)
+                
+                srs_md = self.store.generate_markdown(srs_json)
+                self.store.save_markdown(srs_md, "srs.md")
+                
+                self.logger.info("✓ 產生 SRS (srs.json / srs.md)")
+            else:
+                self.logger.info("\n進入額外討論階段")
+                
+                # 選擇要使用的代理
+                print("\n請選擇要進行額外討論的代理(可多選，用逗號分隔)：")
+                print("0. 全部使用")
+                print("1. User Agent（利害關係人需求表達）")
+                print("2. Analyst Agent（需求分析）")
+                print("3. Expert Agent（專家建議）")
+                print("4. Mediator Agent（雜事處理）")
+                print("5. Modeler Agent（系統建模）")
+                print("6. Documentor Agent（文件產生）")
+                
+                while True:
+                    try:
+                        agent_input = input("\n請輸入 Agent 編號（例如：1,3,5 或 0）：").strip()
+                        agent_choices = [int(x.strip()) for x in agent_input.split(',') if x.strip()]
+                        
+                        if not agent_choices:
+                            print("錯誤：請至少選擇一個 Agent")
+                            continue
+                        
+                        # 檢查是否選擇 0（全部）
+                        if 0 in agent_choices:
+                            agent_choices = [1, 2, 3, 4, 5, 6]
+                            self.logger.info("✓ 已選擇全部 Agent")
+                        elif not all(1 <= x <= 6 for x in agent_choices):
+                            print("錯誤：請輸入有效的 Agent 編號（0-6）")
+                            continue
+                        
+                        # 如果選擇了 DocumentorAgent，自動同意生成 SRS
+                        if 6 in agent_choices:
+                            generate_srs = 'y'
+                            self.logger.info("✓ 已選擇 DocumentorAgent，將生成 SRS ...")
+                        
+                        break
+                    except ValueError:
+                        print("錯誤：輸入格式不正確，請輸入數字（用逗號分隔）")
+                
+                # 更新 config
+                agent_map = {
+                    1: "enable_user",
+                    2: "enable_analyst",
+                    3: "enable_expert",
+                    4: "enable_mediator",
+                    5: "enable_modeler",
+                    6: "enable_documentor"
+                }
+                
+                # 先禁用所有 Agent
+                for key in agent_map.values():
+                    self.config[key] = False
+                
+                # 啟用選擇的 Agent
+                for choice in agent_choices:
+                    self.config[agent_map[choice]] = True
+                
+                # 詢問額外回合數
+                if len(agent_choices) == 1:
+                    extra_rounds = 1
+                    self.logger.info("單一 Agent，將進行 1 輪額外討論")
+                else:
+                    while True:
+                        try:
+                            extra_rounds_input = input("\n請輸入額外討論的輪數：").strip()
+                            extra_rounds = int(extra_rounds_input)
+                            if extra_rounds < 1:
+                                print("錯誤：輪數必須大於 0")
+                                continue
+                            break
+                        except ValueError:
+                            print("錯誤：請輸入有效的數字")
+                
+                # 執行額外討論輪次
+                current_round = self.config.get("rounds", 1)
+                for i in range(1, extra_rounds + 1):
+                    round_num = current_round + i
+                    self.logger.info(f"\n{'='*60}")
+                    self.logger.info(f"額外討論 Round {i}/{extra_rounds} (總 Round {round_num})")
+                    self.logger.info(f"{'='*60}\n")
+                    
+                    self.mom_manager.start_round(round_num)
+                    artifact = self.run_single_round(artifact, round_num)
             
-            # 2. SRS (srs.json / srs.md)
-            spec_template = self.store.load_spec_template()
-            ieee_template = spec_template.get("ieee_29148")
-            
-            draft = self.store.load_draft()
-            srs_json = self.documentor_agent.generate_srs_json(draft, ieee_template)
-            self.store.save_srs(srs_json)
-            
-            srs_md = self.documentor_agent.generate_srs_markdown(srs_json)
-            self.store.save_markdown(srs_md, "srs.md")
-            self.logger.info("✓ 產生 srs.json / srs.md (SRS)")
         else:
             self.logger.info("\n最終階段: 跳過文件產生（Documentor 已停用）")

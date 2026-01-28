@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
+import json
 
 # 系統日誌管理
 class Logger:    
@@ -9,7 +10,7 @@ class Logger:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
-        # 每次執行產生新的 log 檔案（使用時間戳）
+        # 每次執行產生新的 log 檔案
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = self.log_dir / f"system_{timestamp}.log"
         
@@ -100,54 +101,140 @@ class MoMManager:
     def get_mom_data(self) -> Dict[str, Any]:
         """取得完整的 MoM 資料"""
         return self.mom_data
+
+# 收集使用者的選擇和決策
+class Collect: 
+    @staticmethod
+    # 收集使用者選擇的利害關係人
+    def user_selection(proposed: List[str]) -> List[str]:
+        """
+        Args:
+            proposed: 建議的利害關係人列表
+        
+        Returns:
+            List[str]: 人類選擇的利害關係人（name）
+        """
+        while True:
+            print("\n建議選擇的利害關係人：")
+            for i, sh in enumerate(proposed, 1):
+                print(f"{i}. {sh}")
+            
+            print("\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)")
+            user_input = input("\n請選擇利害關係人(最多選擇 5 位)：").strip()
+            
+            if not user_input:
+                print("\n❌ 錯誤：請至少選擇或輸入 1 個利害關係人")
+                continue
+            
+            try:
+                selected = []
+                parts = [x.strip() for x in user_input.split(',')]
+                
+                for part in parts:
+                    try:
+                        idx = int(part) - 1
+                        if 0 <= idx < len(proposed):
+                            # 只取 name（移除選擇理由）
+                            name = proposed[idx].split('，選擇理由:')[0] if '，選擇理由:' in proposed[idx] else proposed[idx]
+                            selected.append(name)
+                        else:
+                            print(f"\n⚠️  警告：編號 {part} 無效，已忽略")
+                    except ValueError:
+                        # 不是數字，當作自訂利害關係人
+                        if part:  # 確保不是空字串
+                            selected.append(part)
+                
+                # 驗證數量
+                if len(selected) > 5:
+                    print(f"\n⚠️  錯誤：選擇超過 5 個（已選 {len(selected)} 個），請重新選擇")
+                    continue
+                
+                if len(selected) == 0:
+                    print(f"\n❌ 錯誤：至少需要選擇 1 個利害關係人")
+                    continue
+                
+                # 顯示選擇結果
+                print(f"\n✓ 已選擇的利害關係人：")
+                for i, name in enumerate(selected, 1):
+                    print(f"  {i}. {name}")
+                
+                return selected
+                
+            except Exception as e:
+                print(f"\n❌ 錯誤：{str(e)}")
+                continue
     
-    def generate_markdown(self) -> str:
-        """生成 Markdown 格式的會議記錄"""
-        md = "# Minutes of Meeting (MoM)\n\n"
-        md += f"**產生時間**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        md += "---\n\n"
+    @staticmethod
+    # 收集使用者對衝突需求的決策
+    def user_decision(decision_option: Dict) -> Dict:
+        """        
+        Args:
+            decision_option: 決策選項
         
-        for round_data in self.mom_data["rounds"]:
-            md += f"## Round {round_data['round']}\n\n"
-            md += f"**開始時間**: {round_data['timestamp']}\n\n"
-            
-            # 階段記錄
-            md += "### 執行階段\n\n"
-            for i, stage in enumerate(round_data.get("stages", []), 1):
-                md += f"#### {i}. {stage['stage']} ({stage['agent']})\n\n"
-                md += f"- **時間**: {stage['timestamp']}\n"
-                
-                # 描述
-                if stage.get('description'):
-                    md += f"- **說明**: {stage['description']}\n"
-                
-                # 輸出數據
-                if stage.get('outputs'):
-                    md += "- **輸出**: "
-                    outputs = stage['outputs']
-                    if isinstance(outputs, dict):
-                        md += "\n"
-                        for key, value in outputs.items():
-                            if isinstance(value, list):
-                                md += f"  - {key}: {len(value)} 項\n"
-                            elif isinstance(value, str) and len(value) > 100:
-                                md += f"  - {key}: {value[:100]}...\n"
-                            else:
-                                md += f"  - {key}: {value}\n"
-                    else:
-                        md += f"{outputs}\n"
-                
-                md += "\n"
-            
-            # 衝突解決記錄
-            if "conflict_resolutions" in round_data:
-                md += "### 衝突解決\n\n"
-                for resolution in round_data["conflict_resolutions"]:
-                    md += f"#### {resolution['conflict_id']}\n"
-                    md += f"- **決策**: {resolution['decision']}\n"
-                    md += f"- **理由**: {resolution['rationale']}\n"
-                    md += f"- **時間**: {resolution['timestamp']}\n\n"
-            
-            md += "---\n\n"
+        Returns:
+            Dict: 包含 conflict_id, decision, rationale
+        """
+        print(f"\n衝突：{decision_option['conflict_title']}")
+        print(f"\n選項：")
+        print("0. 自行輸入解決方法")
+        for i, opt in enumerate(decision_option['options'], 1):
+            print(f"{i}. {opt}")
         
-        return md
+        print(f"\n建議：{decision_option['recommendation']}")
+        
+        user_input = input("\n請選擇方案(輸入編號或 skip)：").strip()
+        
+        if user_input.lower() == 'skip':
+            return {
+                "conflict_id": decision_option['conflict_id'],
+                "decision": "跳過決策",
+                "rationale": "人類選擇暫不處理此衝突"
+            }
+        
+        try:
+            choice_idx = int(user_input)
+            
+            # 自行輸入解決方法
+            if choice_idx == 0:
+                custom_solution = input("\n請輸入您的解決方法：").strip()
+                
+                if not custom_solution:
+                    print("未輸入解決方法，預設跳過")
+                    return {
+                        "conflict_id": decision_option['conflict_id'],
+                        "decision": "跳過決策",
+                        "rationale": "未輸入解決方法"
+                    }
+                
+                return {
+                    "conflict_id": decision_option['conflict_id'],
+                    "decision": "手動方案",
+                    "rationale": custom_solution
+                }
+            
+            # 預設方案
+            elif 1 <= choice_idx <= len(decision_option['options']):
+                chosen = decision_option['options'][choice_idx - 1]
+                
+                print("\n請說明選擇理由（可選，直接按 Enter 跳過）：")
+                rationale = input("> ").strip()
+                
+                return {
+                    "conflict_id": decision_option['conflict_id'],
+                    "decision": chosen,
+                    "rationale": decision_option['recommendation']
+                }
+            else:
+                print("無效的選項，預設跳過")
+                return {
+                    "conflict_id": decision_option['conflict_id'],
+                    "decision": "跳過決策",
+                    "rationale": "無效輸入"
+                }
+        except ValueError:
+            print("無效的輸入，預設跳過")
+            return {
+                "conflict_id": decision_option['conflict_id'],
+                "decision": "跳過決策",
+                "rationale": "無效輸入"
+            }
