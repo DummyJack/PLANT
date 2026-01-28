@@ -8,26 +8,27 @@ class DocumentorAgent:
         - 依 spec.json + 29148.json 產出 srs.json 和 srs.md
     """
     
-    def __init__(self, model):
+    def __init__(self, model, store):
         self.model = model
+        self.store = store
     
-    def generate_design_rationale(self, mom_data: Dict[str, Any]) -> str:
+    def generate_design_rationale(self) -> str:
         """
-        根據 MoM 產生 Design Rationale
-        
-        Args:
-            mom_data: 會議記錄資料
+        根據 MoM JSON 產生 Design Rationale
         
         Returns:
             str: Design Rationale (Markdown 格式)
         """
-        # 準備 MoM 摘要
-        mom = self._prepare_mom(mom_data)
-        
-        user_prompt = f"""請根據以下會議記錄整理 Design Rationale。
 
-                會議記錄：
-                {mom}
+        mom_data = self.store.load_mom()
+        
+        # 將 JSON 轉為字串當作 LLM 上下文
+        mom_json_str = json.dumps(mom_data, ensure_ascii=False, indent=2)
+        
+        user_prompt = f"""請根據以下會議記錄 JSON 整理 Design Rationale。
+
+                會議記錄：{mom_json_str}
+                
 
                 請整理出以下章節的 Design Rationale（只整理會議記錄中已有的資訊，不要額外假設）：
                 1. **決策理由**：整理每個重要決策的原因和考量因素
@@ -41,40 +42,21 @@ class DocumentorAgent:
         dr_content = self.model.generate(user_prompt)
         return dr_content
     
-    def _prepare_mom(self, mom_data: Dict[str, Any]) -> str:
-        """準備 MoM 摘要供 LLM 處理"""
-        summary = []
-        
-        rounds = mom_data.get("rounds")
-        for i, round_data in enumerate(rounds, 1):
-            summary.append(f"## Round {i}")
-            
-            stages = round_data.get("stages")
-            for stage in stages:
-                agent = stage.get("agent")
-                description = stage.get("description")
-                summary.append(f"- {agent}: {description}")
-        
-        # 添加衝突解決記錄（從每個 round 中提取）
-        all_resolutions = []
-        for round_data in rounds:
-            resolutions = round_data.get("conflict_resolutions", [])
-            all_resolutions.extend(resolutions)
-        
-        if all_resolutions:
-            summary.append("\n## 衝突解決記錄")
-            for cr in all_resolutions:
-                summary.append(f"- {cr['conflict_id']}: {cr['decision']}")
-                summary.append(f"  理由: {cr['rationale']}")
-        
-        return "\n".join(summary)
-    
     def generate_srs_json(
         self,
         draft: Dict[str, Any],
         ieee_template: List[Dict]
     ) -> Dict[str, Any]:
-        # 根據 draft.json 和 IEEE 29148 模板產生 srs.json
+        """
+        根據 draft.json 和 IEEE 29148 模板產生 srs.json
+        
+        Args:
+            draft: 需求草稿
+            ieee_template: IEEE 29148 標準模板
+        
+        Returns:
+            Dict[str, Any]: SRS JSON 資料
+        """
         draft_text = json.dumps(draft, ensure_ascii=False, indent=2)
         template_text = json.dumps(ieee_template, ensure_ascii=False, indent=2)
 
@@ -93,48 +75,3 @@ class DocumentorAgent:
         
         srs = self.model.generate_json(user_prompt, system_prompt)
         return srs
-
-    
-    def generate_srs_markdown(self, srs_json: Dict[str, Any]) -> str:
-        # 將 srs.json 轉換為 Markdown 格式
-        md = "# Software Requirements Specification (SRS)\n\n"
-        md += "---\n\n"
-        
-        # 遞迴處理 IEEE 結構
-        ieee_sections = srs_json.get("ieee_29148")
-        md += self._render_sections(ieee_sections, level=2)
-        
-        return md
-    
-    def _render_sections(self, sections: List[Dict], level: int) -> str:
-        # 遞迴渲染章節
-        md = ""
-        if sections is None:
-            return md
-        
-        for section in sections:
-            # 章節標題
-            section_title = section.get("section", "")
-            md += f"{'#' * level} {section_title}\n\n"
-            
-            # 注釋
-            if section.get("note"):
-                md += f"*{section['note']}*\n\n"
-            
-            # 內容
-            content = section.get("content", "")
-            if isinstance(content, str):
-                md += f"{content}\n\n"
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, str):
-                        md += f"- {item}\n"
-                    elif isinstance(item, dict):
-                        md += f"- **{item.get('id', '')}**: {item.get('content', '')}\n"
-                md += "\n"
-            
-            # 子章節
-            if section.get("subsection"):
-                md += self._render_sections(section["subsection"], level + 1)
-        
-        return md

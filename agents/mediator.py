@@ -39,52 +39,6 @@ class MediatorAgent:
         except Exception as e:
             raise RuntimeError(f"MediatorAgent 產生系統概述失敗，原因: {str(e)}")
     
-    # 收集人類選擇的利害關係人
-    def collect_stakeholder_selection(self, proposed: List[str]) -> List[str]:
-        """
-        收集人類選擇的利害關係人
-        
-        Args:
-            proposed: 建議的利害關係人列表
-        
-        Returns:
-            List[str]: 人類選擇的利害關係人
-        """
-        while True:
-            print("\n建議的利害關係人：")
-            for i, sh in enumerate(proposed, 1):
-                print(f"{i}. {sh}")
-            
-            user_input = input("\n請選擇利害關係人(最多選擇 5 位，輸入編號，用逗號分隔，例如：1,3,5)：").strip()
-            
-            try:
-                # 解析輸入
-                selected_indices = [int(x.strip()) - 1 for x in user_input.split(',')]
-                
-                # 驗證編號是否有效
-                invalid_indices = [i+1 for i in selected_indices if i < 0 or i >= len(proposed)]
-                if invalid_indices:
-                    print(f"\n❌ 錯誤：編號 {invalid_indices} 無效,請重新選擇")
-                    continue
-                
-                # 取得選擇的利害關係人
-                selected = [proposed[i] for i in selected_indices]
-                
-                # 驗證數量
-                if len(selected) > 5:
-                    print(f"\n⚠️  錯誤：選擇超過 5 個（已選 {len(selected)} 個）,請重新選擇")
-                    continue
-                
-                if len(selected) == 0:
-                    print(f"\n❌ 錯誤：至少需要選擇 1 個利害關係人,請重新選擇")
-                    continue
-                
-                return selected
-                
-            except ValueError:
-                print(f"\n❌ 錯誤：輸入格式不正確,請使用逗號分隔的數字（例如：1,3,5）")
-                continue
-    
     # 產生決策選項
     def generate_decision_options(
         self,
@@ -109,12 +63,12 @@ class MediatorAgent:
         
         return decision_options
     
+    # 為單一衝突產生決策選項
     def _generate_single_decision(
         self,
         conflict: Dict,
         feedback: List[Dict]
     ) -> Dict:
-        """為單一衝突產生決策選項"""
         # 準備專家建議
         feedback_text = "\n".join([
             f"- {fb['id']}: {'; '.join(fb['text'])}"
@@ -150,62 +104,6 @@ class MediatorAgent:
             "options": response.get("options"),
             "recommendation": response.get("recommendation")
         }
-    
-    # 收集人類決策
-    def collect_human_decision(self, decision_option: Dict) -> Dict:
-        """
-        收集人類對單一衝突的決策
-        
-        Args:
-            decision_option: 決策選項
-        
-        Returns:
-            Dict: 包含 conflict_id, decision, rationale
-        """
-        print(f"\n衝突：{decision_option['conflict_title']}")
-        print(f"\n選項：")
-        for i, opt in enumerate(decision_option['options'], 1):
-            print(f"{i}. {opt}")
-        
-        print(f"\n建議：{decision_option['recommendation']}")
-        print("\n請選擇方案（輸入編號，或輸入 'skip' 跳過）：")
-        
-        user_input = input("> ").strip()
-        
-        if user_input.lower() == 'skip':
-            return {
-                "conflict_id": decision_option['conflict_id'],
-                "decision": "跳過決策",
-                "rationale": "人類選擇暫不處理此衝突"
-            }
-        
-        try:
-            choice_idx = int(user_input) - 1
-            if 0 <= choice_idx < len(decision_option['options']):
-                chosen = decision_option['options'][choice_idx]
-                
-                print("\n請說明選擇理由（可選，直接按 Enter 跳過）：")
-                rationale = input("> ").strip()
-                
-                return {
-                    "conflict_id": decision_option['conflict_id'],
-                    "decision": chosen,
-                    "rationale": rationale if rationale else "人類選擇此方案"
-                }
-            else:
-                print("無效的選項，預設跳過")
-                return {
-                    "conflict_id": decision_option['conflict_id'],
-                    "decision": "跳過決策",
-                    "rationale": "無效輸入"
-                }
-        except ValueError:
-            print("無效的輸入，預設跳過")
-            return {
-                "conflict_id": decision_option['conflict_id'],
-                "decision": "跳過決策",
-                "rationale": "無效輸入"
-            }
     
     # 產生需求草稿
     def generate_draft(

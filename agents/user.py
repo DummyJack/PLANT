@@ -15,15 +15,12 @@ class UserAgent:
         # 準備利害關係人列表
         stakeholder_list = "\n".join([f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders)])
 
-        system_prompt = f"你會模擬的利害關係人:{stakeholder_list}，以他們的角度同時對系統提出想法"
+        system_prompt = f"你會模擬真實的利害關係人:{stakeholder_list}，用他們各自的角度對系統提出需求"
         
         user_prompt = f"""
                   系統概述：{system_description}
 
-                  對於每位利害關係人，請描述：
-                  1. 操作流程（他們如何使用系統）
-                  2. 期待的功能（他們需要什麼功能）
-                  3. 實際使用情境（具體的使用情境）
+                  對於每位利害關係人，請讓他們像真實的利害關係人一樣各自思考自己的需求，包含操作流程、期待的功能或使用情境
 
                   請以 JSON 格式回應：
                   {{{{
@@ -31,7 +28,7 @@ class UserAgent:
                       {{{{
                         "id": "SH-01",
                         "name": "利害關係人名稱",
-                        "text": "詳細的需求描述，包含操作流程、期待功能和使用情境"
+                        "text": "利害關係人需求描述"
                       }}}}
                     ]
                   }}}}"""

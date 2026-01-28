@@ -8,6 +8,7 @@ class ExpertAgent:
     Expert Agent: 領域專家
         - 根據外部文件提供專業建議
         - 支援 RAG（檢索增強生成）
+        - 支援文件格式：.txt, .md, .json, .pdf, .docx, .doc
         - 提供制度法規、資料安全與系統效能等領域建議
     """
     
@@ -24,23 +25,65 @@ class ExpertAgent:
         docs = []
         
         # 支援的文件格式
-        supported_formats = ['.txt', '.md', '.json']
+        text_formats = ['.txt', '.md', '.json']
         
         if not self.doc_dir.exists():
             return docs
         
         for file_path in self.doc_dir.iterdir():
-            if file_path.suffix in supported_formats and file_path.is_file():
-                try:
+            if not file_path.is_file():
+                continue
+            
+            try:
+                content = None
+                
+                # 處理文字格式
+                if file_path.suffix in text_formats:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
-                        docs.append({
-                            "filename": file_path.name,
-                            "content": content,
-                            "type": file_path.suffix[1:]  # 去掉點號
-                        })
-                except Exception as e:
-                    print(f"⚠️  無法載入文件 {file_path.name}: {str(e)}")
+                
+                # 處理 PDF
+                elif file_path.suffix == '.pdf':
+                    try:
+                        import PyPDF2
+                        with open(file_path, 'rb') as f:
+                            pdf_reader = PyPDF2.PdfReader(f)
+                            content = ""
+                            for page in pdf_reader.pages:
+                                content += page.extract_text() + "\n"
+                        print(f"✓ 載入 PDF: {file_path.name}")
+                    except ImportError:
+                        print(f"⚠️  需要安裝 PyPDF2 才能讀取 PDF 檔案")
+                        print(f"   執行: pip install PyPDF2")
+                        continue
+                    except Exception as e:
+                        print(f"⚠️  無法讀取 PDF {file_path.name}: {str(e)}")
+                        continue
+                
+                # 處理 Word 文件
+                elif file_path.suffix in ['.docx', '.doc']:
+                    try:
+                        from docx import Document
+                        doc = Document(file_path)
+                        content = "\n".join([para.text for para in doc.paragraphs])
+                        print(f"✓ 載入 Word: {file_path.name}")
+                    except ImportError:
+                        print(f"⚠️  需要安裝 python-docx 才能讀取 Word 檔案")
+                        print(f"   執行: pip install python-docx")
+                        continue
+                    except Exception as e:
+                        print(f"⚠️  無法讀取 Word {file_path.name}: {str(e)}")
+                        continue
+                
+                if content:
+                    docs.append({
+                        "filename": file_path.name,
+                        "content": content,
+                        "type": file_path.suffix[1:]  # 去掉點號
+                    })
+                    
+            except Exception as e:
+                print(f"⚠️  無法載入文件 {file_path.name}: {str(e)}")
         
         return docs
     
