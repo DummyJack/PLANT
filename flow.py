@@ -145,7 +145,7 @@ class Flow:
             # 3.3 產生 report.md（只在有衝突時產生）
             if conflicts:
                 system_description = artifact.get("system_description")
-                report_md = self.analyst_agent.generate_report_markdown(system_description, conflicts)
+                report_md = self.store.generate_report_markdown(conflicts)
                 self.store.save_markdown(report_md, "report.md")
                 self.logger.info("✓ 產生 report.md")
             else:
@@ -268,7 +268,7 @@ class Flow:
     # 產生所有輸出文件
     def _generate_outputs(self, artifact: Dict[str, Any]):
         if self.config.get("enable_documentor", True):
-            generate_srs = input("\n是否要生成正式的需求規格書 (SRS)？(y/n)：").strip().lower()
+            generate_srs = input("\n是否要生成正式的需求規格書，還是繼續討論(y/n)：").strip().lower()
             
             if generate_srs == 'y':
                 self.logger.info("\n最終階段: 產生文件")

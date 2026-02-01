@@ -166,25 +166,6 @@
             "content": ""
           }
         ]
-      },
-      {
-        "section": "7. System Modeling",
-        "subsection": [
-          {
-            "id": "7.1 ... Model",
-            "plantuml":"",
-            "ast": {
-              "type": "",
-              "children": [
-                {
-                  "type": "",
-                  "value": "",
-                  "visibility": ""
-                }
-              ]
-            }
-          }
-        ]
       }
     ]
 }

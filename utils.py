@@ -2,7 +2,6 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List
 from pathlib import Path
-import json
 
 # 系統日誌管理
 class Logger:    
@@ -215,9 +214,6 @@ class Collect:
             # 預設方案
             elif 1 <= choice_idx <= len(decision_option['options']):
                 chosen = decision_option['options'][choice_idx - 1]
-                
-                print("\n請說明選擇理由（可選，直接按 Enter 跳過）：")
-                rationale = input("> ").strip()
                 
                 return {
                     "conflict_id": decision_option['conflict_id'],

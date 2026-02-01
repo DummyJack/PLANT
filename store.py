@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
 
 # I/O 層：負責 JSON 和 Markdown 檔案的讀寫
@@ -100,6 +100,32 @@ class Store:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
     
+    # 產生衝突報告(report.md)
+    def generate_report_markdown(self, conflicts: List[Dict]) -> str:
+        """
+        Args:
+            conflicts: 衝突報告列表
+        
+        Returns:
+            str: Markdown 格式的報告
+        """
+        md = "# 需求衝突報告\n\n"
+        
+        if conflicts:
+            md += f"## 識別出的衝突（共 {len(conflicts)} 個）\n\n"
+            for conflict in conflicts:
+                md += f"### {conflict['id']}: {conflict['title']}\n\n"
+                md += f"**涉及利害關係人**: {', '.join(conflict['stakeholder_name'])}\n\n"
+                md += f"**衝突描述**:\n{conflict['description']}\n\n"
+                md += "**可能的解決方案**:\n"
+                for idx, solution in enumerate(conflict['solutions'], 1):
+                    md += f"{idx}. {solution}\n"
+                md += "\n---\n\n"
+        else:
+            md += "## 衝突分析\n\n未識別出明顯衝突。\n\n"
+        
+        return md
+
     # 將 JSON 資料轉換為 Markdown 格式
     def generate_markdown(self, json_data: Dict[str, Any]) -> str:
         md = ""
@@ -109,7 +135,7 @@ class Store:
     
     # ===== PlantUML 相關 =====
     
-    # 將模型中的 PlantUML 程式碼儲存為 .plantuml 檔案
+    # 將模型中的 PlantUML 程式碼儲存為 .plantuml
     def save_plantuml_files(self, model_data: Dict[str, Any]) -> None:
         models = model_data.get("models", [])
         
