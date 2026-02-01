@@ -8,7 +8,7 @@ class AnalystAgent:
         - 產出衝突報告(report.md)
     """
     
-    system_prompt = "你是系統分析師，擅長識別需求衝突並提供解決方案。"
+    system_prompt = "你是系統分析師，擅長需求分析、識別需求衝突並提供解決方案。"
     
     def __init__(self, model):
         self.model = model
@@ -45,8 +45,7 @@ class AnalystAgent:
                 利害關係人 B ({sh2['name']}):
                 {sh2['text']}
 
-                請分析這兩位利害關係人的需求是否存在衝突。
-                衝突定義：兩個需求無法同時滿足，或存在明顯的優先順序、資源分配、技術選擇等方面的矛盾。
+                請分析這兩位利害關係人的需求是否存在需求衝突。
 
                 請以 JSON 格式回應：
                 {{{{
@@ -138,32 +137,3 @@ class AnalystAgent:
             "description": response.get("description", pair.get('reason', '')),
             "solutions": response.get("solutions", ["需人類決策"])
         }
-    
-    def generate_report_markdown(self, system_description: str, conflicts: List[Dict]) -> str:
-        """
-        產生 Markdown 格式的衝突報告
-        
-        Args:
-            system_description: 系統概述
-            conflicts: 衝突報告列表
-        
-        Returns:
-            str: Markdown 格式的報告
-        """
-        md = "# 需求分析報告\n\n"
-        md += f"## 系統概述\n\n{system_description}\n\n"
-        
-        if conflicts:
-            md += f"## 識別出的衝突（共 {len(conflicts)} 個）\n\n"
-            for conflict in conflicts:
-                md += f"### {conflict['id']}: {conflict['title']}\n\n"
-                md += f"**涉及利害關係人**: {', '.join(conflict['stakeholder_name'])}\n\n"
-                md += f"**衝突描述**:\n{conflict['description']}\n\n"
-                md += "**可能的解決方案**:\n"
-                for idx, solution in enumerate(conflict['solutions'], 1):
-                    md += f"{idx}. {solution}\n"
-                md += "\n---\n\n"
-        else:
-            md += "## 衝突分析\n\n未識別出明顯衝突。\n\n"
-        
-        return md
