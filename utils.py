@@ -101,10 +101,10 @@ class MoMManager:
         """取得完整的 MoM 資料"""
         return self.mom_data
 
-# 收集使用者的選擇和決策
+# 人類的選擇和決策
 class Collect: 
     @staticmethod
-    # 收集使用者選擇的利害關係人
+    # 人類選擇的利害關係人
     def user_selection(proposed: List[Dict[str, str]]) -> List[int]:
         """
         Args:
@@ -165,7 +165,7 @@ class Collect:
                 continue
     
     @staticmethod
-    # 收集使用者對衝突需求的決策
+    # 人類對衝突需求的決策
     def user_decision(decision_option: Dict) -> Dict:
         """        
         Args:
@@ -235,3 +235,90 @@ class Collect:
                 "decision": "跳過決策",
                 "rationale": "無效輸入"
             }
+
+# Agent 選擇和回合數設置
+class AgentSelector:    
+    AGENT_MAP = {
+        1: ("enable_user", "User（模擬利害關係人提出需求）"),
+        2: ("enable_analyst", "Analyst（需求衝突分析）"),
+        3: ("enable_expert", "Expert（專家建議）"),
+        4: ("enable_mediator", "Mediator（調解）"),
+        5: ("enable_modeler", "Modeler（系統建模）"),
+        6: ("enable_documentor", "Documentor（文件產生）")
+    }
+    
+    # 選擇要使用的代理並更新配置
+    @staticmethod
+    def select_agents(config: Dict[str, Any], agent: str = "\n請輸入要使用的 Agent (例如：1,3,5 或 0)：") -> List[int]:
+        # 顯示代理選擇菜單
+        print()
+        print("Agent：")
+        for idx, (_, name) in AgentSelector.AGENT_MAP.items():
+            print(f"{idx}. {name}")
+        print("0. 全部使用")
+        
+        while True:
+            try:
+                agent_input = input(agent).strip()
+                
+                # 處理輸入
+                if agent_input == "0":
+                    agent_choices = [1, 2, 3, 4, 5, 6]
+                else:
+                    agent_choices = [
+                        int(x.strip()) for x in agent_input.split(",") if x.strip()
+                    ]
+                
+                # 驗證輸入
+                if not agent_choices:
+                    print("錯誤：請至少選擇一個 Agent")
+                    continue
+                
+                if not all(1 <= x <= 6 for x in agent_choices):
+                    print("錯誤：請輸入有效的 Agent（0-6）")
+                    continue
+                
+                # 更新配置：先禁用所有 Agent
+                for idx in range(1, 7):
+                    key = AgentSelector.AGENT_MAP[idx][0]
+                    config[key] = False
+                
+                # 啟用選擇的 Agent
+                selected_names = []
+                for choice in agent_choices:
+                    key, name = AgentSelector.AGENT_MAP[choice]
+                    config[key] = True
+                    selected_names.append(name)
+                
+                print(f"✓ 已選擇：{', '.join(selected_names)}")
+                return agent_choices
+                
+            except ValueError:
+                print("錯誤：輸入格式不正確，請輸入數字（用逗號分隔）")
+    
+    @staticmethod
+    def set_rounds(
+        round: str = "\n請輸入討論回合數：",
+        allow_empty: bool = False,
+    ) -> int:        
+        while True:
+            rounds_input = input(round).strip()
+            
+            # 處理空輸入
+            if not rounds_input:
+                if allow_empty:
+                    return 0
+                else:
+                    print("❌ 錯誤：請輸入回合數")
+                    continue
+            
+            # 驗證數字
+            try:
+                rounds = int(rounds_input)
+                if rounds < 1:
+                    print("❌ 錯誤：回合數必須大於 0，請重新輸入")
+                    continue
+                print(f"✓ 設定回合數：{rounds}")
+                return rounds
+            except ValueError:
+                print("❌ 錯誤：回合數必須是數字，請重新輸入")

@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flow import Flow
 from store import Store
-from utils import Logger
+from utils import Logger, AgentSelector
 
 # 主程式
 def main():
@@ -48,82 +48,11 @@ def main():
             sys.exit(1)
     
     # 選擇要使用的代理
-    print()
-    print("請選擇要使用的代理：")
-    print("0. 全部使用")
-    print("1. User Agent（利害關係人需求表達）")
-    print("2. Analyst Agent（需求分析）")
-    print("3. Expert Agent（專家建議）")
-    print("4. Mediator Agent（雜事處理）")
-    print("5. Modeler Agent（系統建模）")
-    print("6. Documentor Agent（文件產生）")
-    print()
-    
-    agent_input = input("請輸入編號(可多選，用逗號分隔，例如：1,2,3)：").strip()
-    
-    if agent_input == "0":
-        config["enable_user"] = True
-        config["enable_analyst"] = True
-        config["enable_expert"] = True
-        config["enable_mediator"] = True
-        config["enable_modeler"] = True
-        config["enable_documentor"] = True
-        print("✓ 已選擇全部代理")
-    else:
-        # 先全部設為 False
-        config["enable_user"] = False
-        config["enable_analyst"] = False
-        config["enable_expert"] = False
-        config["enable_mediator"] = False
-        config["enable_modeler"] = False
-        config["enable_documentor"] = False
-        
-        # 根據輸入啟用
-        try:
-            choices = [int(x.strip()) for x in agent_input.split(',')]
-            agent_map = {
-                1: ("enable_user", "User Agent"),
-                2: ("enable_analyst", "Analyst Agent"),
-                3: ("enable_expert", "Expert Agent"),
-                4: ("enable_mediator", "Mediator Agent"),
-                5: ("enable_modeler", "Modeler Agent"),
-                6: ("enable_documentor", "Documentor Agent")
-            }
-            
-            selected_agents = []
-            for choice in choices:
-                if choice in agent_map:
-                    key, name = agent_map[choice]
-                    config[key] = True
-                    selected_agents.append(name)
-            
-            if selected_agents:
-                print(f"✓ 已選擇：{', '.join(selected_agents)}")
-            else:
-                print("錯誤：未選擇任何有效的代理")
-                sys.exit(1)
-        except ValueError:
-            print("錯誤：輸入格式不正確")
-            sys.exit(1)
+    AgentSelector.select_agents(config)
     
     # 設置回合數
-    print()
-    while True:
-        rounds_input = input("請輸入討論回合數：").strip()
-        if not rounds_input:
-            print("❌ 錯誤：請輸入回合數")
-            continue
-        try:
-            rounds = int(rounds_input)
-            if rounds < 1:
-                print("❌ 錯誤：回合數必須大於 0，請重新輸入")
-                continue
-            config["rounds"] = rounds
-            print(f"✓ 設定回合數：{rounds}")
-            break
-        except ValueError:
-            print("❌ 錯誤：回合數必須是數字，請重新輸入")
-            continue
+    rounds = AgentSelector.set_rounds()
+    config["rounds"] = rounds
     
     # 儲存配置
     store.save_config(config)

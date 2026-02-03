@@ -9,7 +9,7 @@ from agents import (
 )
 from model import create_model
 from store import Store
-from utils import Logger, MoMManager, Collect
+from utils import Logger, MoMManager, Collect, AgentSelector
 
 
 # 流程
@@ -307,7 +307,7 @@ class Flow:
     def generate_srs(self, artifact: Dict[str, Any]):
         if self.config.get("enable_documentor", True):
             generate_srs = (
-                input("\n是否要生成正式的需求規格書，還是繼續討論(y/n)：")
+                input("\n是否要生成正式的需求規格書(y/n)：")
                 .strip()
                 .lower()
             )
@@ -339,83 +339,16 @@ class Flow:
 
                 self.logger.info("✓ 產生 SRS (srs.json / srs.md)")
             else:
-                self.logger.info("\n進入額外討論階段")
+                self.logger.info("\n進入額外的討論")
 
                 # 選擇要使用的代理
-                print("\n請選擇要進行額外討論的代理(可多選，用逗號分隔)：")
-                print("0. 全部使用")
-                print("1. User Agent（利害關係人需求表達）")
-                print("2. Analyst Agent（需求分析）")
-                print("3. Expert Agent（專家建議）")
-                print("4. Mediator Agent（雜事處理）")
-                print("5. Modeler Agent（系統建模）")
-                print("6. Documentor Agent（文件產生）")
-
-                while True:
-                    try:
-                        agent_input = input(
-                            "\n請輸入 Agent 編號（例如：1,3,5 或 0）："
-                        ).strip()
-                        agent_choices = [
-                            int(x.strip()) for x in agent_input.split(",") if x.strip()
-                        ]
-
-                        if not agent_choices:
-                            print("錯誤：請至少選擇一個 Agent")
-                            continue
-
-                        # 檢查是否選擇 0（全部）
-                        if 0 in agent_choices:
-                            agent_choices = [1, 2, 3, 4, 5, 6]
-                            self.logger.info("✓ 已選擇全部 Agent")
-                        elif not all(1 <= x <= 6 for x in agent_choices):
-                            print("錯誤：請輸入有效的 Agent 編號（0-6）")
-                            continue
-
-                        # 如果選擇了 DocumentorAgent，自動同意生成 SRS
-                        if 6 in agent_choices:
-                            generate_srs = "y"
-                            self.logger.info("✓ 已選擇 DocumentorAgent，將生成 SRS ...")
-
-                        break
-                    except ValueError:
-                        print("錯誤：輸入格式不正確，請輸入數字（用逗號分隔）")
-
-                # 更新 config
-                agent_map = {
-                    1: "enable_user",
-                    2: "enable_analyst",
-                    3: "enable_expert",
-                    4: "enable_mediator",
-                    5: "enable_modeler",
-                    6: "enable_documentor",
-                }
-
-                # 先禁用所有 Agent
-                for key in agent_map.values():
-                    self.config[key] = False
-
-                # 啟用選擇的 Agent
-                for choice in agent_choices:
-                    self.config[agent_map[choice]] = True
-
+                agent_choices = AgentSelector.select_agents(self.config)
+                
                 # 詢問額外回合數
-                if len(agent_choices) == 1:
-                    extra_rounds = 1
-                    self.logger.info("單一 Agent，將進行 1 輪額外討論")
-                else:
-                    while True:
-                        try:
-                            extra_rounds_input = input(
-                                "\n請輸入額外討論的輪數："
-                            ).strip()
-                            extra_rounds = int(extra_rounds_input)
-                            if extra_rounds < 1:
-                                print("錯誤：輪數必須大於 0")
-                                continue
-                            break
-                        except ValueError:
-                            print("錯誤：請輸入有效的數字")
+                extra_rounds = AgentSelector.set_rounds(
+                    single_agent_auto=True,
+                    selected_agents=agent_choices
+                )
 
                 # 執行額外討論輪次
                 current_round = self.config.get("rounds", 1)
