@@ -105,18 +105,19 @@ class MoMManager:
 class Collect: 
     @staticmethod
     # 收集使用者選擇的利害關係人
-    def user_selection(proposed: List[str]) -> List[str]:
+    def user_selection(proposed: List[Dict[str, str]]) -> List[int]:
         """
         Args:
-            proposed: 建議的利害關係人列表
+            proposed: 建議的利害關係人列表 (包含 name 和 reason)
         
         Returns:
-            List[str]: 人類選擇的利害關係人（name）
+            List[int]: 選擇的索引列表
         """
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
-                print(f"{i}. {sh}")
+                print(f"{i}. {sh['name']}")
+                print(f"   理由: {sh['reason']}")
             
             print("\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)")
             user_input = input("\n請選擇利害關係人(最多選擇 5 位)：").strip()
@@ -126,38 +127,38 @@ class Collect:
                 continue
             
             try:
-                selected = []
+                selected_indices = []
                 parts = [x.strip() for x in user_input.split(',')]
                 
                 for part in parts:
                     try:
                         idx = int(part) - 1
                         if 0 <= idx < len(proposed):
-                            # 只取 name（移除選擇理由）
-                            name = proposed[idx].split('，選擇理由:')[0] if '，選擇理由:' in proposed[idx] else proposed[idx]
-                            selected.append(name)
+                            selected_indices.append(idx)
                         else:
                             print(f"\n⚠️  警告：編號 {part} 無效，已忽略")
                     except ValueError:
                         # 不是數字，當作自訂利害關係人
                         if part:  # 確保不是空字串
-                            selected.append(part)
+                            # 新增自訂利害關係人到 proposed
+                            proposed.append({"name": part, "reason": "使用者自訂"})
+                            selected_indices.append(len(proposed) - 1)
                 
                 # 驗證數量
-                if len(selected) > 5:
-                    print(f"\n⚠️  錯誤：選擇超過 5 個（已選 {len(selected)} 個），請重新選擇")
+                if len(selected_indices) > 5:
+                    print(f"\n⚠️  錯誤：選擇超過 5 個（已選 {len(selected_indices)} 個），請重新選擇")
                     continue
                 
-                if len(selected) == 0:
+                if len(selected_indices) == 0:
                     print(f"\n❌ 錯誤：至少需要選擇 1 個利害關係人")
                     continue
                 
                 # 顯示選擇結果
                 print(f"\n✓ 已選擇的利害關係人：")
-                for i, name in enumerate(selected, 1):
-                    print(f"  {i}. {name}")
+                for i, idx in enumerate(selected_indices, 1):
+                    print(f"  {i}. {proposed[idx]['name']}")
                 
-                return selected
+                return selected_indices
                 
             except Exception as e:
                 print(f"\n❌ 錯誤：{str(e)}")
