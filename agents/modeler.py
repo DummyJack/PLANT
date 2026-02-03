@@ -1,47 +1,42 @@
-from typing import Dict, Any
 import json
 
+from typing import Dict, Any
 
 # 系統建模者，需求草稿產生系統模型（PlantUML 程式碼、AST 結構化資料）
 class ModelerAgent:
     def __init__(self, model):
         self.model = model
-        self.system_prompt = "你是系統建模專家，擅長將需求轉換為系統模型。"
+        self.system_prompt = "你是系統建模專家，任務是將需求轉換為系統模型。"
 
+    # 根據需求草稿產生系統模型
     def generate_system_model(self, draft: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        根據需求草稿產生系統模型
 
-        Args:
-            draft: 需求草稿
-
-        Returns:
-            Dict: 包含 plantuml 和 ast 的模型資料
-        """
         draft_text = json.dumps(draft, ensure_ascii=False, indent=2)
 
         user_prompt = f"""需求草稿：
-                {draft_text}
+{draft_text}
 
-                請根據需求產生 UML 系統模型，包含：
-                1. PlantUML 圖（Class Diagram, Use Case Diagram, ...）
-                2. AST 結構化
-                
-                請以 JSON 格式回應：
-                {{{{
-                "models": [
-                    {{{{
-                    "name": "title 加上什麼圖",
-                    "type": "class_diagram",
-                    "plantuml": "@startuml\\n...\\n@enduml"
-                    }}}}
-                ],
-                "ast": {{{{
-                    "components": [],
-                    "relationships": []
-                }}}}
-                }}}}"""
+請根據需求產生 UML 系統模型，包含：
+1. PlantUML 圖（Class Diagram, Use Case Diagram, ...）
+2. AST 結構化
 
+請以 JSON 格式回應：
+{{{{
+"models": [
+    {{{{
+    "name": "title 加上什麼圖",
+    "type": "class_diagram",
+    "plantuml": "@startuml\\n...\\n@enduml"
+    }}}}
+],
+"ast": {{{{
+    "components": [],
+    "relationships": []
+}}}}
+}}}}"""
+
+        print(user_prompt)
+        
         response = self.model.generate_json(user_prompt)
         return response
 

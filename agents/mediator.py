@@ -1,68 +1,80 @@
 from typing import Dict, List
 
-
 # 調解代理，協助人類
 class MediatorAgent:
 
-    system_prompt = "你是需求調解專家，擅長提供決策建議。"
+    system_prompt = "你是需求調解專家，任務是提供決策建議。"
 
     def __init__(self, model):
         self.model = model
 
     # 產生衝突報告
     def generate_conflict_report(self, conflict_groups: List[Dict]) -> List[Dict]:
-        if not conflict_groups:
-            return []
-
-        conflicts = []
+    
+        formatted_conflicts = []
         for idx, group in enumerate(conflict_groups, 1):
-            conflict_id = f"CR-{idx:02d}"
+            conflict_text = f"{idx}. "
+            
+            # 顯示利害關係人的發言內容
+            for stakeholder_name, text in group.get("texts", {}).items():
+                conflict_text += f"{stakeholder_name}: {text}\n"
+            
+            # 顯示衝突理由
+            conflict_text += f"\n衝突理由: {group.get('reason', '')}\n"
+            formatted_conflicts.append(conflict_text)
+        
+        conflicts_text = "\n".join(formatted_conflicts)
+        
+        # 動態生成範例格式
+        example_conflicts = []
+        for idx in range(1, min(len(conflict_groups) + 1, 3)):  # 最多顯示2個範例
+            example_conflicts.append(f"""{{{{
+"id": "CR-{idx:02d}",
+"stakeholder_names": ["利害關係人A", "利害關係人B"],
+"title": "衝突標題（對應衝突組合 {idx}）",
+"description": "詳細描述衝突組合 {idx} 的衝突內容",
+"conflict_type": "類型 vs 類型"
+}}}}""")
+        
+        examples_text = ",\n".join(example_conflicts)
+        if len(conflict_groups) > 2:
+            examples_text += ",\n...(依此類推，共 " + str(len(conflict_groups)) + " 個衝突)"
+        
+        user_prompt = f"""根據以下 {len(conflict_groups)} 個需求衝突分析結果，請為**每一個**衝突組合生成對應的衝突報告：
+{conflicts_text}
 
-            # 準備利害關係人發言內容
-            stakeholder_texts = "\n\n".join(
-                [
-                    f"利害關係人 {name} ({sid}):\n{group['texts'][sid]}"
-                    for sid, name in zip(
-                        group["stakeholder_ids"], group["stakeholder_names"]
-                    )
-                ]
-            )
+對每個衝突組合，生成對應的衝突報告：
+1. id: 衝突 ID（從 CR-01 開始編號，衝突組合 1 對應 CR-01，衝突組合 2 對應 CR-02，依此類推）
+2. stakeholder_names: 涉及的利害關係人名稱列表（從上面的發言中提取）
+3. title: 衝突標題（簡短概括該衝突的核心問題）
+4. description: 詳細的衝突描述（基於利害關係人的發言和衝突理由）
+5. conflict_type: 衝突類型（例如：效率 vs 成本、品質 vs 速度、彈性 vs 控制等）
 
-            user_prompt = f"""以下是分析師識別出的需求衝突。
+**重要**：必須為所有 {len(conflict_groups)} 個衝突組合都生成報告！
 
-            涉及的利害關係人：{', '.join(group['stakeholder_names'])}
-
-            發言內容：
-            {stakeholder_texts}
-
-            分析理由：
-            {group.get('reason', '')}
-
-            候選需求：
-            {group.get('candidates', [])}
-
-            請為這個衝突生成：
-            2. description: 詳細的衝突描述
-            3. conflict_type: 衝突類型(efficiency vs control)
-
-            請以 JSON 格式回應：
-            {{{{
-            "description": "衝突描述",
-            "conflict_type": "衝突類型"
-            }}}}"""
-
-            response = self.model.generate_json(user_prompt, self.system_prompt)
-
-            conflicts.append(
-                {
-                    "id": conflict_id,
-                    "stakeholder_names": group["stakeholder_names"],
-                    "description": response.get("description"),
-                    "conflict_type": response.get("conflict_type"),
-                }
-            )
-
-        return conflicts
+輸出 JSON 格式:
+{{{{
+"conflicts": [
+{examples_text}
+]
+}}}}"""
+        response = self.model.generate_json(user_prompt, self.system_prompt)
+        
+        # 提取 conflicts 陣列（處理模型返回包裝格式的情況）
+        if isinstance(response, dict) and "conflicts" in response:
+            conflicts_list = response["conflicts"]
+            # 驗證數量
+            if len(conflicts_list) != len(conflict_groups):
+                print(f"警告: 預期 {len(conflict_groups)} 個衝突報告，但收到 {len(conflicts_list)} 個")
+            return conflicts_list
+        elif isinstance(response, list):
+            if len(response) != len(conflict_groups):
+                print(f"警告: 預期 {len(conflict_groups)} 個衝突報告，但收到 {len(response)} 個")
+            return response
+        else:
+            # 如果格式不符合預期，返回空列表
+            print(f"警告: 無法從回應中提取衝突列表，收到的格式: {type(response)}")
+            return []
 
     # 產生決策選項
     def generate_decision_options(
@@ -71,42 +83,79 @@ class MediatorAgent:
         decision_options = []
 
         for conflict in conflicts:
-            option = self._generate_single_decision(conflict, feedback)
+            option = self.generate_decision(conflict, feedback)
             decision_options.append(option)
 
         return decision_options
 
-    # 為單一衝突產生決策選項
-    def _generate_single_decision(self, conflict: Dict, feedback: List[Dict]) -> Dict:
-        # 準備專家建議
-        feedback_text = "\n".join(
-            [f"- {fb['id']}: {'; '.join(fb['text'])}" for fb in feedback]
-        )
-
-        user_prompt = f"""衝突 {conflict['id']}: {conflict['title']}
-        
-                涉及利害關係人: {', '.join(conflict['stakeholder_names'])}
+    # 衝突產生決策選項
+    def generate_decision(self, conflict: Dict, feedback: List[Dict]) -> Dict:
+        conflict_text = f"""標題: {conflict.get('id', 'N/A')}: {conflict.get('title', 'N/A')}
+描述: {conflict.get('description', 'N/A')}
+涉及利害關係人: {', '.join(conflict.get('stakeholder_names', []))}
+衝突類型: {conflict.get('conflict_type', 'N/A')}
+"""
+        if feedback:
+            feedback_lines = []
+            for fb in feedback:
+                fb_id = fb.get('id', '')
+                fb_text = fb.get('text', [])
+                fb_ref = fb.get('ref', [])
                 
-                衝突類型: {conflict['conflict_type']}
+                feedback_lines.append(f"\n{fb_id}:")
+                for text in fb_text:
+                    feedback_lines.append(f"  • {text}")
+                if fb_ref:
+                    feedback_lines.append(f"參考來源: {', '.join(fb_ref)}")
+            
+            feedback_text = "\n".join(feedback_lines)
+        else:
+            feedback_text = "（無專家建議）"
 
-                衝突描述:
-                {conflict['description']}
+        user_prompt = f"""根據衝突報告: {conflict_text}和專家建議: {feedback_text}。
+請生成：
+1. 至少提供 3 個決策選項，看情況增加
+2. 每個選項都要包含：
+   - option: 選項描述（簡潔明確）
+   - rationale: 選擇該選項的理由
+3. recommendation: 總體推薦，說明推薦哪個選項及為什麼
 
-                專家建議:
-                {feedback_text}
-
-                請為這個衝突整理出清晰的決策選項（至少提供 3 個選項）,並提供建議。
-
-                請以 JSON 格式回應：
-                {{{{
-                "options": ["選項A: ...", "選項B: ...", "選項C: ..."],
-                "recommendation": "建議選擇哪個選項及理由"
-                }}}}"""
-
+請以 JSON 格式回應：
+{{{{
+"options": [
+    {{{{
+        "option": "選項1的描述",
+        "rationale": ""
+    }}}},
+    {{{{
+        "option": "選項2的描述",
+        "rationale": ""
+    }}}},
+    {{{{
+        "option": "選項3的描述",
+        "rationale": ""
+    }}}}...(依此類推)
+],
+"recommendation": "推薦選項X，理由是..."
+}}}}"""
+        
         response = self.model.generate_json(user_prompt, self.system_prompt)
+        
+        # 轉換選項格式以符合原有介面
+        options_list = []
+        rationales_list = []
+        for opt in response.get("options", []):
+            if isinstance(opt, dict):
+                options_list.append(opt.get("option", ""))
+                rationales_list.append(opt.get("rationale", ""))
+            else:
+                # 向下兼容舊格式
+                options_list.append(opt)
+                rationales_list.append("")
+        
         return {
-            "conflict_id": conflict["id"],
-            "conflict_title": conflict["title"],
-            "options": response.get("options"),
-            "recommendation": response.get("recommendation"),
+            "title": conflict.get("title", "N/A"),
+            "options": options_list,
+            "rationales": rationales_list,
+            "recommendation": response.get("recommendation", ""),
         }
