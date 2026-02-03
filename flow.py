@@ -35,7 +35,7 @@ class Flow:
             enable_web_search=config.get("enable_web_search", True)
         )
         self.mediator_agent = MediatorAgent(self.model)
-        self.modeler_agent = ModelerAgent(self.model)
+        self.modeler_agent = ModelerAgent(self.model, self.store)
         self.documentor_agent = DocumentorAgent(self.model, self.store)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
@@ -50,6 +50,7 @@ class Flow:
             "analyse": [],
             "reports": [],
             "feedback": [],
+            "options": [],
             "decisions": [],
             "additional_ideas": [],
         }
@@ -137,8 +138,8 @@ class Flow:
             self.store.save_artifact(artifact)
 
             self.mom_manager.add_stage(
+                "產生利害關係人",
                 "Mediator",
-                "MediatorAgent",
                 f"建議 {len(proposed)} 位利害關係人",
                 outputs={
                     "proposed_stakeholders": proposed,
@@ -153,7 +154,7 @@ class Flow:
             self.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
 
             self.mom_manager.add_stage(
-                "Human Selection",
+                "人類決策",
                 "Human",
                 f"選擇 {len(selected)} 位利害關係人",
                 outputs={"selected": selected},
@@ -170,10 +171,9 @@ class Flow:
                 )
             else:
                 # 多輪時精煉
-                previous_draft = self.store.load_draft()
                 additional_ideas = artifact.get("additional_ideas", [])
                 stakeholders = self.user_agent.refine_stakeholders(
-                    artifact["stakeholders"], previous_draft, additional_ideas
+                    artifact["stakeholders"], additional_ideas
                 )
                 self.logger.info(f"✓ 精煉 {len(stakeholders)} 位利害關係人需求")
 
@@ -182,8 +182,8 @@ class Flow:
             self.logger.info(f"✓ 產生 {len(stakeholders)} 位利害關係人需求")
 
             self.mom_manager.add_stage(
+                "利害關係人提出需求",
                 "User",
-                "UserAgent",
                 f"產生 {len(stakeholders)} 位利害關係人需求",
                 outputs={"stakeholders": stakeholders},
             )
@@ -212,12 +212,11 @@ class Flow:
             self.store.save_artifact(artifact)
 
             self.mom_manager.add_stage(
+                "衝突分析",
                 "Analyst",
-                "AnalystAgent",
                 f"識別 {len(conflict_groups)} 個衝突",
                 outputs={
-                    "total_groups": len(groups),
-                    "conflict_count": len(conflict_groups),
+                    "analyse": groups
                 },
             )
         else:
@@ -229,7 +228,7 @@ class Flow:
             report = self.mediator_agent.generate_conflict_report(conflict_groups)
             artifact["reports"] = report
             self.store.save_artifact(artifact)
-            self.logger.info(f"✓ 產生 {len(report)} 份衝突報告")
+            self.logger.info(f"✓ 產生 1 份衝突報告")
 
             # 產生 report.md
             report_md = self.store.generate_report_markdown(report)
@@ -237,9 +236,9 @@ class Flow:
             self.logger.info("✓ 產生 report.md")
 
             self.mom_manager.add_stage(
+                "產生衝突報告",
                 "Mediator",
-                "MediatorAgent",
-                f"產生 {len(report)} 份衝突報告",
+                f"產生 1 份衝突報告",
                 outputs={"report": report},
             )
         else:
@@ -261,7 +260,7 @@ class Flow:
                 previous_feedback = artifact.get("feedback", [])
                 additional_ideas = artifact.get("additional_ideas", [])
                 if previous_feedback:
-                    feedback = self.expert_agent.refine_feedback(previous_feedback, additional_ideas)
+                    feedback = self.expert_agent.refine_feedback(report, previous_feedback, additional_ideas)
                     self.logger.info(f"✓ 精煉 {len(feedback)} 則專家建議")
                 else:
                     feedback = self.expert_agent.provide_feedback(report, rough_idea)
@@ -269,8 +268,8 @@ class Flow:
             artifact["feedback"] = feedback
             self.store.save_artifact(artifact)
             self.mom_manager.add_stage(
+                "專家提供建議",
                 "Expert",
-                "ExpertAgent",
                 f"{'產生' if round_num == 1 else '精煉'} {len(feedback)} 則專家建議",
                 outputs={"feedback": feedback},
             )
@@ -285,21 +284,31 @@ class Flow:
                 report, feedback
             )
 
+            # 儲存決策選項到 artifact
+            artifact["options"] = decision_options
+            self.store.save_artifact(artifact)
+
+            self.mom_manager.add_stage(
+                "產生決策選項",
+                "Mediator",
+                f"產生 {len(decision_options)} 組決策選項",
+                outputs={"decision_options": decision_options}
+            )
+
             # 人類決策
             self.logger.info("請進行衝突裁決：")
             for option in decision_options:
                 decision = Collect.user_decision(option)
                 decisions.append(decision)
 
-                # 記錄到 MoM
                 self.mom_manager.add_stage(
-                    "Human Decision",
+                    "人類決策",
                     "Human",
-                    f"人類裁決 {decision['conflict_id']}",
+                    f"人類裁決: {decision['conflict_title']}",
                     outputs=decision,
                 )
                 self.mom_manager.add_conflict_resolution(
-                    decision["conflict_id"], decision["decision"], decision["rationale"]
+                    decision["conflict_title"], decision["decision"], decision["rationale"]
                 )
 
             artifact["decisions"] = decisions
@@ -322,9 +331,9 @@ class Flow:
             self.store.save_draft(draft)
             self.logger.info("✓ 產生 draft.json")
             self.mom_manager.add_stage(
-                "Analyst",
-                "AnalystAgent",
                 "產生需求草稿",
+                "Analyst",
+                "產生 draft.json",
                 outputs={"draft_generated": True},
             )
         else:
@@ -349,9 +358,9 @@ class Flow:
 
             self.logger.info("✓ 產生系統模型 (uml.json 和 .plantuml 檔案)")
             self.mom_manager.add_stage(
-                "Modeler",
-                "ModelerAgent",
                 "產生系統模型",
+                "Modeler",
+                "產生 uml.json 和 .plantuml 檔案",
                 outputs={"model_generated": True},
             )
         else:
@@ -373,7 +382,7 @@ class Flow:
 
                 # 產生 mom.md
                 mom_data = self.store.load_mom()
-                mom_md = self.store.generate_markdown(mom_data)
+                mom_md = self.store.generate_mom_markdown(mom_data)
                 self.store.save_markdown(mom_md, "mom.md")
                 self.logger.info("✓ 產生會議記錄 (mom.md)")
 
@@ -387,10 +396,11 @@ class Flow:
                 ieee_template = spec_template.get("ieee_29148")
 
                 draft = self.store.load_draft()
-                srs_json = self.documentor_agent.generate_srs_json(draft, ieee_template)
+                uml = self.store.load_uml()
+                srs_json = self.documentor_agent.generate_srs_json(draft, uml, ieee_template)
                 self.store.save_srs(srs_json)
 
-                srs_md = self.store.generate_markdown(srs_json)
+                srs_md = self.store.generate_draft_markdown(srs_json)
                 self.store.save_markdown(srs_md, "srs.md")
 
                 self.logger.info("✓ 產生 SRS (srs.json / srs.md)")

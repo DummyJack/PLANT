@@ -103,13 +103,13 @@ class ExpertAgent:
         # 準備文件上下文
         doc_context = ""
         if external_docs:
-            doc_context = "\n參考文件:"
+            doc_context = "參考文件:"
             for doc in external_docs:
                 doc_context += f"{doc['filename']}\n{doc['content']}"
         elif use_web_search:
             doc_context = ""
 
-        # 格式化衝突上下文，讓提示更清楚易讀
+        # 衝突報告上下文
         if conflicts:
             conflict_lines = []
             for c in conflicts:
@@ -125,10 +125,8 @@ class ExpertAgent:
             search_instruction = f"""根據粗略想法: {rough_idea} 和衝突報告: {conflict_text} 提供專業的建議。
 在 "ref" 欄位中，請提供可供查證的參考來源(必須是有效的網址)，例如: 官方文件網址(如 RFC、IEEE 標準、政府法規網站)、業界最佳實踐指南等"""
 
-        user_prompt = f"""{f'根據外部文件提供專業建議。{doc_context}' if external_docs else ""}
+        user_prompt = f"""{f'根據外部文件提供專業建議，{doc_context}' if external_docs else ""}
 {search_instruction}
-
-注意一個網址和外部文件對應一個或數個意見，不要重複。
 
 請以 JSON 格式回應：
 {{{{
@@ -137,7 +135,12 @@ class ExpertAgent:
     "id": "FB-01",
     "text": ["意見1", "意見2", "..."],
     "ref": ["參考來源：有效網址或外部文件名稱"]
-    }}}}
+    }}}},
+    {{{{
+    "id": "FB-XX",
+    "text": ["意見X", "意見Y", "..."],
+    "ref": ["參考來源：有效網址或外部文件名稱"]
+    }}}}...(依此類推，一個參考來源對應一個或數個意見。)
 ]
 }}}}"""
         response = self.model.generate_json(user_prompt, self.system_prompt)
@@ -165,8 +168,9 @@ class ExpertAgent:
     # 第二輪以上，原有基礎上繼續精煉專家建議
     def refine_feedback(
         self,
+        conflicts: List[Dict],
         previous_feedback: List[Dict],
-        additional_ideas: List[Dict] = None
+        additional_ideas: List[Dict] = None,
     ) -> List[Dict]:
         # 載入外部文件
         external_docs = self.load_external_docs()
@@ -177,26 +181,27 @@ class ExpertAgent:
         # 準備文件上下文
         doc_context = ""
         if external_docs:
-            doc_context = "\n\n參考文件：\n"
+            doc_context = "參考文件:"
             for doc in external_docs:
-                doc_context += f"\n【{doc['filename']}】\n{doc['content'][:500]}...\n"
+                doc_context += f"{doc['filename']}\n{doc['content']}"
         elif use_web_search:
-            doc_context = "\n\n注意：由於沒有外部文件，請根據網路上可查證的資料提供建議。"
+            doc_context = ""
 
-        # 準備額外想法的內容
-        additional_context = ""
-        if additional_ideas:
-            additional_context = "\n\n人類提出的額外想法：\n"
-            for item in additional_ideas:
-                additional_context += f"- Round {item['round']}: {item['idea']}\n"
-            additional_context += "\n請針對這些額外想法提供相關的專業建議和風險評估。"
+        # 衝突報告上下文
+        if conflicts:
+            conflict_lines = []
+            for c in conflicts:
+                conflict_lines.append(f"{c.get('id', 'N/A')}: {c.get('title', 'N/A')}")
+                conflict_lines.append(f"描述: {c.get('description', 'N/A')}")
+            conflict_text = ",".join(conflict_lines)
+        else:
+            conflict_text = "沒有衝突"
 
         # 根據是否使用網路搜索調整提示詞
         search_instruction = ""
         if use_web_search:
-            search_instruction = """
-                **重要**：請基於產業標準、法規和最佳實踐提供建議。
-                在 "ref" 欄位中，請提供可供查證的參考來源（有效網址或標準文件名稱）。
+            search_instruction = f"""根據額外想法: {additional_ideas} 和衝突報告: {conflict_text} 提供專業的建議。
+在 "ref" 欄位中，請提供可供查證的參考來源(必須是有效的網址)，例如: 官方文件網址(如 RFC、IEEE 標準、政府法規網站)、業界最佳實踐指南等
                 """
 
         feedback_text = json.dumps(previous_feedback, ensure_ascii=False, indent=2)
@@ -204,50 +209,49 @@ class ExpertAgent:
         user_prompt = f"""先前的專家建議：
                     {feedback_text}
                     
-                    {doc_context}
-                    {additional_context}
+                    {f'根據外部文件提供專業建議，{doc_context}' if external_docs else ""}
+{search_instruction}
 
-                    請執行以下任務：
-                    1. **回應額外想法**：如果有人類提出的額外想法，請針對這些想法提供專業建議：
-                       - 可行性評估
-                       - 潛在風險與挑戰
-                       - 相關的法規與標準
-                       - 實作建議
-                    2. **精煉原有建議**：根據新資訊優化、補充原有的專家建議
-                    3. **提出新建議**：在原有建議的基礎上，繼續提出新的專業意見，例如：
-                       - 針對新發現的風險點
-                       - 更深入的技術建議
-                       - 新的最佳實踐
-                       - 額外的合規性考量
+注意一個網址和外部文件對應一個或數個意見，不要重複。
+
+請執行以下任務：
+1. **回應額外想法**：如果有人類提出的額外想法，請針對這些想法提供專業建議：
+    - 可行性評估
+    - 潛在風險與挑戰
+    - 相關的法規與標準
+    - 實作建議
+2. **精煉原有建議**：根據新資訊優化、補充原有的專家建議
+3. **提出新建議**：在原有建議的基礎上，繼續提出新的專業意見，例如：
+    - 針對新發現的風險點
+    - 更深入的技術建議
+    - 新的最佳實踐
+    - 額外的合規性考量
                     
-                    請保留並優化原有建議的 ID，新建議使用新的 ID。
-                    
-                    {search_instruction}
+請保留並優化原有建議的 ID，新建議使用新的 ID。
 
-                    請以 JSON 格式回應：
-                    {{{{
-                    "feedback": [
-                        {{{{
-                        "id": "FB-01",
-                        "text": ["精煉後的原有意見", "補充說明"],
-                        "ref": ["參考來源：有效網址或文件名稱"]
-                        }}}},
-                        {{{{
-                        "id": "FB-XX",
-                        "text": ["新的專業意見"],
-                        "ref": ["參考來源：有效網址或文件名稱"]
-                        }}}}
-                    ]
-                    }}}}"""
-
+輸出 JSON:
+{{{{
+"feedback": [
+    {{{{
+    "id": "FB-01",
+    "text": ["精煉後的原有意見", "補充說明"],
+    "ref": ["參考來源：有效網址或外部文件名稱"]
+    }}}},
+    {{{{
+    "id": "FB-XX",
+    "text": ["新的專業意見"],
+    "ref": ["參考來源：有效網址或文件名稱"]
+    }}}}
+]
+}}}}"""
         try:
             response = self.model.generate_json(user_prompt, self.system_prompt)
 
             # 顯示資訊來源
             if external_docs:
-                print(f"\n✓ 已參考 {len(external_docs)} 份外部文件")
+                print(f"✓ 已參考 {len(external_docs)} 份外部文件")
             elif use_web_search:
-                print(f"\n✓ 已啟用網路搜索模式（基於產業知識提供建議）")
+                print(f"✓ 已啟用網路搜索模式")
 
             return response.get("feedback", previous_feedback)
         except Exception as e:

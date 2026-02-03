@@ -83,7 +83,7 @@ class MoMManager:
         current_round = self.mom_data["rounds"][-1]
         current_round["stages"].append(stage_data)
     
-    def add_conflict_resolution(self, conflict_id: str, decision: str, rationale: str):
+    def add_conflict_resolution(self, conflict_title: str, decision: str, rationale: str):
         """記錄衝突解決"""
         if not self.mom_data["rounds"]:
             raise ValueError("請先呼叫 start_round() 開始一輪")
@@ -93,7 +93,7 @@ class MoMManager:
             current_round["conflict_resolutions"] = []
         
         current_round["conflict_resolutions"].append({
-            "conflict_id": conflict_id,
+            "conflict_title": conflict_title,
             "decision": decision,
             "rationale": rationale,
             "timestamp": datetime.now().isoformat()
@@ -184,7 +184,7 @@ class Collect:
         
         if user_input.lower() == 'skip':
             return {
-                "conflict_id": decision_option['title'],
+                "conflict_title": decision_option['title'],
                 "decision": "跳過決策",
                 "rationale": "人類選擇暫不處理此衝突"
             }
@@ -199,13 +199,13 @@ class Collect:
                 if not custom_solution:
                     print("未輸入解決方法，預設跳過")
                     return {
-                        "conflict_id": decision_option['title'],
+                        "conflict_title": decision_option['title'],
                         "decision": "跳過決策",
                         "rationale": "未輸入解決方法"
                     }
                 
                 return {
-                    "conflict_id": decision_option['title'],
+                    "conflict_title": decision_option['title'],
                     "decision": "手動方案",
                     "rationale": custom_solution
                 }
@@ -216,21 +216,21 @@ class Collect:
                 chosen_rationale = rationales[choice_idx - 1] if rationales and choice_idx-1 < len(rationales) else decision_option.get('recommendation', '')
                 
                 return {
-                    "conflict_id": decision_option['title'],
+                    "conflict_title": decision_option['title'],
                     "decision": chosen,
                     "rationale": chosen_rationale
                 }
             else:
                 print("無效的選項，預設跳過")
                 return {
-                    "conflict_id": decision_option['title'],
+                    "conflict_title": decision_option['title'],
                     "decision": "跳過決策",
                     "rationale": "無效輸入"
                 }
         except ValueError:
             print("無效的輸入，預設跳過")
             return {
-                "conflict_id": decision_option['title'],
+                "conflict_title": decision_option['title'],
                 "decision": "跳過決策",
                 "rationale": "無效輸入"
             }

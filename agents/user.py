@@ -34,7 +34,7 @@ class UserAgent:
             [f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders)]
         )
 
-        user_prompt = f"""模擬的利害關係人有 {stakeholder_list}，請以第一人稱、口語方式描述自己的需求、期望或不滿，請不要使用專業術語與描述解決方案。
+        user_prompt = f"""模擬利害關係人有 {stakeholder_list}，請以第一人稱、口語方式從自己角度提出需求、期望。
 
 背景(僅供參考): {rough_idea}
 
@@ -45,7 +45,7 @@ class UserAgent:
 ]
 }}}}"""
         try:
-            response = self.model.generate_json(user_prompt)
+            response = self.model.generate_json(user_prompt, temperature=1.2)
             stakeholders = response.get("stakeholders", [])
 
             # 驗證格式
@@ -59,29 +59,13 @@ class UserAgent:
 
     # 第二輪以上，原有基礎上繼續提出需求
     def refine_stakeholders(
-        self, current_stakeholders: List[Dict], previous_draft: Dict, additional_ideas: List[Dict] = None
+        self, current_stakeholders: List[Dict], additional_ideas: List[Dict] = None
     ) -> List[Dict[str, str]]:
-        current_text = json.dumps(current_stakeholders, ensure_ascii=False, indent=2)
-        draft_text = json.dumps(previous_draft, ensure_ascii=False, indent=2)
-        stakeholder_names = [sh["name"] for sh in current_stakeholders]
-        stakeholder_list = "\n".join(
-            [f"{i+1}. {name}" for i, name in enumerate(stakeholder_names)]
-        )
 
-        # 準備額外想法的內容
-        additional_context = ""
-        if additional_ideas:
-            additional_context = "\n\n人類提出的額外想法：\n"
-            for item in additional_ideas:
-                additional_context += f"- Round {item['round']}: {item['idea']}\n"
-            additional_context += "\n請特別注意這些額外想法，並將其納入需求中。"
+        user_prompt = f"""根據目前的利害關係人需求：
+                    {current_stakeholders}
 
-        user_prompt = f"""目前的利害關係人需求：
-                    {current_text}
-
-                    上一輪的需求草稿摘要：
-                    {draft_text}
-                    {additional_context}
+                    {additional_ideas}
 
                     請根據上一輪的成果和額外想法，在原有需求的基礎上繼續提出新的需求。
                     
@@ -104,7 +88,7 @@ class UserAgent:
                         {{{{
                             "id": "SH-XX",
                             "name": "利害關係人名稱",
-                            "text": "原有需求 + 新增的需求描述（包含額外想法轉化的需求）"
+                            "text": ["原有需求", "新增的需求描述(包含額外想法轉化的需求"]
                         }}}}
                         ]
                     }}}}"""

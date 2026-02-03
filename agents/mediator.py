@@ -20,7 +20,7 @@ class MediatorAgent:
                 conflict_text += f"{stakeholder_name}: {text}\n"
             
             # 顯示衝突理由
-            conflict_text += f"\n衝突理由: {group.get('reason', '')}\n"
+            conflict_text += f"衝突理由: {group.get('reason', '')}\n"
             formatted_conflicts.append(conflict_text)
         
         conflicts_text = "\n".join(formatted_conflicts)
@@ -58,18 +58,13 @@ class MediatorAgent:
 {examples_text}
 ]
 }}}}"""
-        response = self.model.generate_json(user_prompt, self.system_prompt)
+        response = self.model.generate_json(user_prompt)
         
-        # 提取 conflicts 陣列（處理模型返回包裝格式的情況）
+        # 提取 conflicts 陣列
         if isinstance(response, dict) and "conflicts" in response:
             conflicts_list = response["conflicts"]
-            # 驗證數量
-            if len(conflicts_list) != len(conflict_groups):
-                print(f"警告: 預期 {len(conflict_groups)} 個衝突報告，但收到 {len(conflicts_list)} 個")
             return conflicts_list
         elif isinstance(response, list):
-            if len(response) != len(conflict_groups):
-                print(f"警告: 預期 {len(conflict_groups)} 個衝突報告，但收到 {len(response)} 個")
             return response
         else:
             # 如果格式不符合預期，返回空列表
@@ -90,10 +85,8 @@ class MediatorAgent:
 
     # 衝突產生決策選項
     def generate_decision(self, conflict: Dict, feedback: List[Dict]) -> Dict:
-        conflict_text = f"""標題: {conflict.get('id', 'N/A')}: {conflict.get('title', 'N/A')}
+        conflict_text = f"""{conflict.get('id', 'N/A')}: {conflict.get('title', 'N/A')}
 描述: {conflict.get('description', 'N/A')}
-涉及利害關係人: {', '.join(conflict.get('stakeholder_names', []))}
-衝突類型: {conflict.get('conflict_type', 'N/A')}
 """
         if feedback:
             feedback_lines = []
@@ -105,14 +98,12 @@ class MediatorAgent:
                 feedback_lines.append(f"\n{fb_id}:")
                 for text in fb_text:
                     feedback_lines.append(f"  • {text}")
-                if fb_ref:
-                    feedback_lines.append(f"參考來源: {', '.join(fb_ref)}")
             
             feedback_text = "\n".join(feedback_lines)
         else:
-            feedback_text = "（無專家建議）"
+            feedback_text = "無專家建議"
 
-        user_prompt = f"""根據衝突報告: {conflict_text}和專家建議: {feedback_text}。
+        user_prompt = f"""根據已有衝突報告: {conflict_text}和已有專家建議: {feedback_text}。
 請生成：
 1. 至少提供 3 個決策選項，看情況增加
 2. 每個選項都要包含：

@@ -6,7 +6,7 @@ from typing import Dict, List, Any
 # 分析師代理
 class AnalystAgent:
 
-    system_prompt = "你是一個專業的系統分析師，任務是進行需求分析、衝突辨識和草稿產生。"
+    system_prompt = "你是一個專業的系統分析師，任務有進行需求分析、衝突辨識和草稿產生。"
 
     def __init__(self, model):
         self.model = model
@@ -40,7 +40,6 @@ class AnalystAgent:
         # 根據是否為全部分析，決定是否產生候選需求
         if is_all_analysis:
             user_prompt = f"""請針對以下利害關係人的發言進行需求分析與衝突辨識。
-
 {stakeholder_texts}
 
 請輸出：
@@ -55,7 +54,6 @@ class AnalystAgent:
 }}}}"""
         else:
             user_prompt = f"""請針對以下利害關係人的發言進行需求衝突辨識。
-
 {stakeholder_texts}
 
 請輸出偵測到的需求衝突(若有衝突，標記 Conflict。反之，標記 Neutral)，並說明判斷理由
@@ -84,14 +82,34 @@ class AnalystAgent:
     def generate_draft(
         self, artifact: Dict[str, Any], draft_template: Dict[str, Any]
     ) -> Dict[str, Any]:
-        artifact_text = json.dumps(artifact, ensure_ascii=False, indent=2)
-        template_text = json.dumps(draft_template, ensure_ascii=False, indent=2)
 
-        user_prompt = f"""請根據中間產物內容:
-{artifact_text}
+        selected_artifact = {
+            "rough_idea": artifact.get("rough_idea", ""),
+            "stakeholders": artifact.get("stakeholders", []),
+            "candidates": self.extract_candidates(artifact.get("analyse", [])),
+            "reports": artifact.get("report", []),
+            "feedback": artifact.get("feedback", []),
+            "options": artifact.get("options", []),
+            "decisions": artifact.get("decisions", [])
+        }
 
-輸出 JSON，遵循以下需求草稿模板結構:
-{template_text}"""
+        selected_artifact_text = json.dumps(selected_artifact, ensure_ascii=False, indent=2)
+        draft_template_text = json.dumps(draft_template, ensure_ascii=False, indent=2)
+
+        user_prompt = f"""請根據以下中間產物內容產生需求草稿:
+中間產物內容:
+{selected_artifact_text}
+
+重要對應關係：
+1. "reports" 對應到模板中的 "4. Conflicting Requirements"
+   - reports 中的 id: title, stakeholder_names, description 應映射到 Conflicting Requirements 的 id, stakeholder_name, description
+   
+2. "options" 中的 options 對應到 "Conflicting Requirements" 的 solutions
+   - 每個衝突的決策選項 (options.options) 
+   - 應轉換為該衝突的可能解決方案 (solutions)
+
+請輸出 JSON，遵循以下結構:
+draft: {draft_template_text}"""
 
         print(user_prompt)
 
@@ -100,3 +118,11 @@ class AnalystAgent:
             return draft
         except Exception as e:
             raise RuntimeError(f"Analyst 產生草稿失敗: {str(e)}")
+    
+    # 從 analyse 中提取所有 candidates
+    def extract_candidates(self, analyse: list) -> list:
+        all_candidates = []
+        for group in analyse:
+            if "candidates" in group:
+                all_candidates.extend(group["candidates"])
+        return all_candidates

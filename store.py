@@ -133,6 +133,13 @@ class Store:
             return {}
         return self.load_json(draft_path)
     
+    def load_uml(self) -> Dict[str, Any]:
+        """載入 uml.json"""
+        uml_path = self.artifact_dir / "uml.json"
+        if not uml_path.exists():
+            return {}
+        return self.load_json(uml_path)
+    
     def save_draft(self, data: Dict[str, Any]):
         """儲存 draft.json"""
         self.save_json(data, self.artifact_dir / "draft.json")
@@ -183,10 +190,188 @@ class Store:
         
         return md
 
-    # 將 JSON 資料轉換為 Markdown 格式
-    def generate_markdown(self, json_data: Dict[str, Any]) -> str:
+    # 將 MoM 轉換為 Markdown 格式
+    def generate_mom_markdown(self, mom_data: Dict[str, Any]) -> str:
+        md = "# 會議記錄\n\n"
+        
+        rounds = mom_data.get("rounds", [])
+        
+        for round_data in rounds:
+            round_num = round_data.get("round", "?")
+            timestamp = round_data.get("timestamp", "")
+            
+            md += f"## Round {round_num}\n\n"
+            md += f"**時間**：{timestamp}\n\n"
+            
+            # 處理 stages
+            stages = round_data.get("stages", [])
+            if stages:
+                md += "### 階段流程\n\n"
+                
+                for idx, stage in enumerate(stages, 1):
+                    stage_name = stage.get("stage", "")
+                    agent = stage.get("agent", "")
+                    description = stage.get("description", "")
+                    stage_timestamp = stage.get("timestamp", "")
+                    
+                    md += f"#### {idx}. {stage_name}\n\n"
+                    md += f"- **執行代理**：{agent}\n"
+                    md += f"- **描述**：{description}\n"
+                    md += f"- **時間**：{stage_timestamp}\n"
+                    
+                    # 處理 outputs
+                    outputs = stage.get("outputs", {})
+                    if outputs:
+                        md += f"- **輸出**：\n"
+                        for key, value in outputs.items():
+                            if key == "decision_options" and isinstance(value, list):
+                                # 特殊處理 decision_options
+                                md += f"  - **決策選項**：\n"
+                                for opt in value:
+                                    options = opt.get('options', [])
+                                    rationales = opt.get('rationales', [])
+                                    recommendation = opt.get('recommendation', '')
+                                    
+                                    md += f"    選項：\n"
+                                    for i, option in enumerate(options, 1):
+                                        md += f"      {i}. {option}\n"
+                                        if rationales and i-1 < len(rationales) and rationales[i-1]:
+                                            md += f"         理由：{rationales[i-1]}\n"
+                                    if recommendation:
+                                        md += f"\n    💡 推薦：{recommendation}\n"
+                                    md += "\n"
+                            elif isinstance(value, list) and value and isinstance(value[0], dict):
+                                md += f"  - **{key}**：\n"
+                                for item in value:
+                                    if "name" in item:
+                                        md += f"    - {item.get('name', '')}"
+                                        if "reason" in item:
+                                            md += f"：{item.get('reason', '')}"
+                                        md += "\n"
+                                    elif "id" in item:
+                                        md += f"    - {item.get('id', '')}"
+                                        if "title" in item:
+                                            md += f"：{item.get('title', '')}"
+                                        md += "\n"
+                            elif isinstance(value, bool):
+                                md += f"  - **{key}**：{'是' if value else '否'}\n"
+                            elif isinstance(value, list):
+                                md += f"  - **{key}**：{', '.join(str(v) for v in value)}\n"
+                            else:
+                                md += f"  - **{key}**：{value}\n"
+                    
+                    md += "\n"
+            
+            # 處理 conflict_resolutions
+            resolutions = round_data.get("conflict_resolutions", [])
+            if resolutions:
+                md += "### 衝突決策記錄\n\n"
+                
+                for idx, resolution in enumerate(resolutions, 1):
+                    conflict_title = resolution.get("conflict_title", "N/A")
+                    decision = resolution.get("decision", "")
+                    rationale = resolution.get("rationale", "")
+                    res_timestamp = resolution.get("timestamp", "")
+                    
+                    md += f"#### 決策 {idx}：{conflict_title}\n\n"
+                    md += f"- **決定**：{decision}\n"
+                    md += f"- **理由**：{rationale}\n"
+                    md += f"- **時間**：{res_timestamp}\n\n"
+        return md
+    
+    # 將 SRS 轉換為 Markdown 格式
+    def generate_srs_markdown(self, srs_data: Dict[str, Any]) -> str:
+        md = "# Software Requirements Specification (SRS)\n\n"
+        
+        sections = srs_data.get("SRS", [])
+        
+        def process_subsection(subsection, level=3):
+            nonlocal md
+            subsection_id = subsection.get("id", "")
+            content = subsection.get("content", "")
+            nested_subsections = subsection.get("subsection", [])
+            
+            # 標題
+            md += f"{'#' * level} {subsection_id}\n\n"
+            
+            # 內容
+            if isinstance(content, list):
+                for item in content:
+                    md += f"- {item}\n"
+                md += "\n"
+            elif content:
+                md += f"{content}\n\n"
+            
+            # 處理巢狀子章節
+            if nested_subsections:
+                for nested in nested_subsections:
+                    process_subsection(nested, level + 1)
+        
+        # 處理每個主要章節
+        for section_data in sections:
+            section_title = section_data.get("section", "")
+            subsections = section_data.get("subsection", [])
+            
+            md += f"## {section_title}\n\n"
+            
+            # 處理子章節
+            for subsection in subsections:
+                process_subsection(subsection)
+        
+        return md
+    
+    # 將 draft 轉換為 Markdown 格式
+    def generate_draft_markdown(self, draft: Dict[str, Any]) -> str:
         md = ""
-        md += json.dumps(json_data, ensure_ascii=False, indent=2)
+        
+        sections = draft.get("draft", [])
+        
+        for section_data in sections:
+            section_title = section_data.get("section", "")
+            md += f"\n## {section_title}\n\n"
+            
+            # 處理直接的 content
+            if "content" in section_data:
+                content = section_data["content"]
+                if isinstance(content, str):
+                    md += f"{content}\n\n"
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, str):
+                            md += f"- {item}\n"
+                        elif isinstance(item, dict):
+                            # 處理 System Stakeholders 格式
+                            if "stakeholder_name" in item:
+                                md += f"### {item.get('stakeholder_name', '')}\n"
+                                md += f"**關注點**: {item.get('concern', '')}\n"
+                                md += f"**需求**:\n"
+                                for req in item.get('requirement', []):
+                                    md += f"  - {req}\n"
+                                md += "\n"
+                            # 處理 Conflicting Requirements 格式
+                            elif "id" in item and "stakeholder_name" in item:
+                                md += f"### {item.get('id', '')}\n"
+                                md += f"**涉及利害關係人**: {', '.join(item.get('stakeholder_name', []))}\n"
+                                md += f"**描述**: {item.get('description', '')}\n"
+                                md += f"**解決方案**: {item.get('solutions', '')}\n\n"
+                    md += "\n"
+            
+            # 處理 subsection
+            if "subsection" in section_data:
+                for subsection in section_data["subsection"]:
+                    subsection_id = subsection.get("id", "")
+                    md += f"### {subsection_id}\n\n"
+                    
+                    sub_content = subsection.get("content", [])
+                    if isinstance(sub_content, list):
+                        for item in sub_content:
+                            if isinstance(item, str):
+                                md += f"- {item}\n"
+                            elif isinstance(item, dict):
+                                item_id = item.get("id", "")
+                                item_content = item.get("content", "")
+                                md += f"**{item_id}**\n{item_content}\n\n"
+                    md += "\n"
         
         return md
     
