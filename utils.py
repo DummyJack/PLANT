@@ -1,7 +1,9 @@
 import logging
+
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
+from store import Store
 
 # 系統日誌管理
 class Logger:    
@@ -10,7 +12,7 @@ class Logger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
         # 每次執行產生新的 log 檔案
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%H%M%S")
         log_file = self.log_dir / f"system_{timestamp}.log"
         
         logging.basicConfig(
@@ -116,8 +118,7 @@ class Collect:
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
-                print(f"{i}. {sh['name']}")
-                print(f"   理由: {sh['reason']}")
+                print(f"{i}. {sh['name']}，理由: {sh['reason']}")
             
             print("\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)")
             user_input = input("\n請選擇利害關係人(最多選擇 5 位)：").strip()
@@ -167,26 +168,23 @@ class Collect:
     @staticmethod
     # 人類對衝突需求的決策
     def user_decision(decision_option: Dict) -> Dict:
-        """        
-        Args:
-            decision_option: 決策選項
+        print(f"衝突標題: {decision_option.get('title', 'N/A')}")
+        print(f"\n決策選項(0. 自行輸入解決方法)：")
         
-        Returns:
-            Dict: 包含 conflict_id, decision, rationale
-        """
-        print(f"\n衝突：{decision_option['conflict_title']}")
-        print(f"\n選項：")
-        print("0. 自行輸入解決方法")
+        # 顯示選項及其理由
+        rationales = decision_option.get('rationales', [])
         for i, opt in enumerate(decision_option['options'], 1):
-            print(f"{i}. {opt}")
+            print(f"\n{i}. {opt}")
+            if rationales and i-1 < len(rationales) and rationales[i-1]:
+                print(f"理由：{rationales[i-1]}")
         
-        print(f"\n建議：{decision_option['recommendation']}")
+        print(f"\n💡 推薦：{decision_option.get('recommendation', '無')}")
         
         user_input = input("\n請選擇方案(輸入編號或 skip)：").strip()
         
         if user_input.lower() == 'skip':
             return {
-                "conflict_id": decision_option['conflict_id'],
+                "conflict_id": decision_option['title'],
                 "decision": "跳過決策",
                 "rationale": "人類選擇暫不處理此衝突"
             }
@@ -201,13 +199,13 @@ class Collect:
                 if not custom_solution:
                     print("未輸入解決方法，預設跳過")
                     return {
-                        "conflict_id": decision_option['conflict_id'],
+                        "conflict_id": decision_option['title'],
                         "decision": "跳過決策",
                         "rationale": "未輸入解決方法"
                     }
                 
                 return {
-                    "conflict_id": decision_option['conflict_id'],
+                    "conflict_id": decision_option['title'],
                     "decision": "手動方案",
                     "rationale": custom_solution
                 }
@@ -215,29 +213,46 @@ class Collect:
             # 預設方案
             elif 1 <= choice_idx <= len(decision_option['options']):
                 chosen = decision_option['options'][choice_idx - 1]
+                chosen_rationale = rationales[choice_idx - 1] if rationales and choice_idx-1 < len(rationales) else decision_option.get('recommendation', '')
                 
                 return {
-                    "conflict_id": decision_option['conflict_id'],
+                    "conflict_id": decision_option['title'],
                     "decision": chosen,
-                    "rationale": decision_option['recommendation']
+                    "rationale": chosen_rationale
                 }
             else:
                 print("無效的選項，預設跳過")
                 return {
-                    "conflict_id": decision_option['conflict_id'],
+                    "conflict_id": decision_option['title'],
                     "decision": "跳過決策",
                     "rationale": "無效輸入"
                 }
         except ValueError:
             print("無效的輸入，預設跳過")
             return {
-                "conflict_id": decision_option['conflict_id'],
+                "conflict_id": decision_option['title'],
                 "decision": "跳過決策",
                 "rationale": "無效輸入"
             }
+    # 人類的額外想法
+    def additional_idea(self, round_num: int) -> str:
+        print(f"\n{'='*60}")
+        print(f"Round {round_num} - 額外想法輸入")
+        print("="*60)
+        print("您是否有新的想法(例如：新功能、新的利害關係人、調整需求優先級等)，若無，請直接按 Enter 跳過")
+        print()
+        
+        additional_idea = input("請輸入額外想法：").strip()
+        
+        if additional_idea:
+            print(f"\n✓ 已接收額外想法")
+            return additional_idea
+        else:
+            print("\n跳過額外想法輸入")
+            return ""
 
 # Agent 選擇和回合數設置
-class AgentSelector:    
+class AgentSelector:
     AGENT_MAP = {
         1: ("enable_user", "User（模擬利害關係人提出需求）"),
         2: ("enable_analyst", "Analyst（需求衝突分析）"),
@@ -251,7 +266,6 @@ class AgentSelector:
     @staticmethod
     def select_agents(config: Dict[str, Any], agent: str = "\n請輸入要使用的 Agent (例如：1,3,5 或 0)：") -> List[int]:
         # 顯示代理選擇菜單
-        print()
         print("Agent：")
         for idx, (_, name) in AgentSelector.AGENT_MAP.items():
             print(f"{idx}. {name}")
@@ -325,24 +339,19 @@ class AgentSelector:
 
 # 處理專案選擇和創建
 class ProjectManager:
-    # 選擇現有專案或創建新專案
     @staticmethod
-    def select_or_create_project(store) -> Tuple[str, bool]:
-        from store import Store
-        
+    # 選擇現有專案或創建新專案
+    def select_or_create_project(store) -> Tuple[str, bool]:        
         # 列出所有專案
         temp_store = Store(store.base_dir)
         projects = temp_store.list_projects()
         
         if not projects:
-            # 沒有專案，直接創建新專案
             print("\n目前沒有任何專案，將創建新專案")
             return None, False
         
-        # 顯示專案列表
         print("\n" + "="*60)
         print("現有專案列表")
-        print("="*60)
         print()
         
         for i, project in enumerate(projects, 1):
@@ -362,6 +371,7 @@ class ProjectManager:
             print(f"   初始想法: {rough_idea}")
             print()
         
+        print("="*60)
         print("0. 創建新專案")
         print()
         
@@ -385,18 +395,18 @@ class ProjectManager:
                     project_id = selected_project["project_id"]
                     
                     print(f"\n✓ 已選擇專案：{project_id}")
-                    print("將繼續此專案的討論（視為額外討論輪數）\n")
+                    print("將繼續此專案的討論 (視為額外討論輪數)\n")
                     
                     return project_id, True
                 else:
-                    print(f"❌ 錯誤：請輸入有效的專案編號（0-{len(projects)}）")
+                    print(f"❌ 錯誤：請輸入有效的專案編號 (0-{len(projects)})")
                     
             except ValueError:
                 print("❌ 錯誤：請輸入數字")
     
     @staticmethod
+    # 顯示專案資訊
     def display_project_info(store, project_id: str):
-        """顯示專案資訊"""
         # 從 artifact 載入資訊
         artifact = store.load_artifact()
         

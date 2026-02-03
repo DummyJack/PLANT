@@ -1,17 +1,14 @@
-from typing import Dict, Optional
-from abc import ABC, abstractmethod
-from openai import OpenAI
-
 import ollama
 import json
 import os
 
+from typing import Dict, Optional
+from abc import ABC, abstractmethod
+from openai import OpenAI
 
 # 支援多種 LLM 的統一介面
 # 支援：OpenAI, Anthropic, Gemini, Ollama
 class BaseLLM(ABC):
-    # LLM 基礎類別
-
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
         self.kwargs = kwargs

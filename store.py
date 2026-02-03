@@ -1,4 +1,5 @@
 import json
+
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
@@ -65,8 +66,8 @@ class Store:
     def create_project(self) -> str:
         """創建新專案，返回 project_id"""
         # 使用時間戳作為 project_id
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        project_id = f"project_{timestamp}"
+        timestamp = datetime.now().strftime("%H%M%S")
+        project_id = f"{timestamp}"
         
         # 創建專案目錄
         project_dir = self.projects_dir / project_id
@@ -169,28 +170,16 @@ class Store:
             f.write(content)
     
     # 產生衝突報告(report.md)
-    def generate_report_markdown(self, conflicts: List[Dict]) -> str:
-        """
-        Args:
-            conflicts: 衝突報告列表
-        
-        Returns:
-            str: Markdown 格式的報告
-        """
+    def generate_report_markdown(self, reports: List[Dict]) -> str:
         md = "# 需求衝突報告\n\n"
-        
-        if conflicts:
-            md += f"## 識別出的衝突（共 {len(conflicts)} 個）\n\n"
-            for conflict in conflicts:
-                md += f"### {conflict['id']}: {conflict['title']}\n\n"
-                md += f"**涉及利害關係人**: {', '.join(conflict['stakeholder_name'])}\n\n"
-                md += f"**衝突描述**:\n{conflict['description']}\n\n"
-                md += "**可能的解決方案**:\n"
-                for idx, solution in enumerate(conflict['solutions'], 1):
-                    md += f"{idx}. {solution}\n"
-                md += "\n---\n\n"
+        if reports:
+            for report in reports:
+                md += f"### {report['id']}: {report['title']}\n\n"
+                md += f"衝突描述: {report['description']}\n\n"
+                md += f"涉及利害關係人: {', '.join(report['stakeholder_names'])}\n\n"
+                md += f"衝突類型: {report.get('conflict_type', '未分類')}\n\n"
         else:
-            md += "## 衝突分析\n\n未識別出明顯衝突。\n\n"
+            md += "## 衝突分析\n\n未識別出明顯衝突。"
         
         return md
 

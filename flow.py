@@ -11,7 +11,6 @@ from model import create_model
 from store import Store
 from utils import Logger, MoMManager, Collect, AgentSelector
 
-
 # 流程
 class Flow:
     def __init__(self, config: Dict[str, Any], store: Store, logger: Logger):
@@ -48,9 +47,11 @@ class Flow:
             "rough_idea": rough_idea,
             "proposed_stakeholders": [],
             "stakeholders": [],
-            "analyse": {"groups": [], "conflict_groups": [], "report": []},
+            "analyse": [],
+            "reports": [],
             "feedback": [],
             "decisions": [],
+            "additional_ideas": [],
         }
 
         # 建立初始 artifact
@@ -58,47 +59,70 @@ class Flow:
         self.logger.info("創建中間產物(artifact.json)")
 
         for round_num in range(start_round, rounds + 1):
-            self.logger.info(f"\n{'='*60}")
             self.logger.info(f"Round {round_num}/{rounds}")
-            self.logger.info(f"{'='*60}\n")
+
+            # 第二輪以後，詢問是否有額外想法
+            if round_num > 1:
+                additional_idea = Collect.additional_idea(round_num)
+                if additional_idea:
+                    artifact["additional_ideas"].append({
+                        "round": round_num,
+                        "idea": additional_idea
+                    })
+                    self.store.save_artifact(artifact)
+                    self.logger.info(f"✓ 已記錄 Round {round_num} 的額外想法")
 
             self.mom_manager.start_round(round_num)
-            artifact = self.run_single_round(artifact, round_num)
+            artifact = self.run_flow(artifact, round_num)
 
-            self.logger.info(f"\nRound {round_num} 完成\n")
+            self.logger.info(f"Round {round_num} 完成\n")
 
         self.generate_srs(artifact)
 
         self.logger.info("流程完成！")
         return artifact
     
-    def run_continue(self, rough_idea: str, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
-        """繼續現有專案的討論"""
+    # 繼續現有專案的討論
+    def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
         start_round = self.config.get("start_round", 1)
         
         # 使用現有的 artifact
         artifact = existing_artifact
         
+        # 確保 additional_ideas 欄位存在
+        if "additional_ideas" not in artifact:
+            artifact["additional_ideas"] = []
+        
         self.logger.info("繼續現有專案的討論")
         self.logger.info(f"從 Round {start_round} 開始")
 
         for round_num in range(start_round, rounds + 1):
-            self.logger.info(f"\n{'='*60}")
+            self.logger.info(f"{'='*60}")
             self.logger.info(f"Round {round_num}/{rounds}")
             self.logger.info(f"{'='*60}\n")
 
-            self.mom_manager.start_round(round_num)
-            artifact = self.run_single_round(artifact, round_num)
+            # 詢問是否有額外想法
+            additional_idea = Collect.additional_idea(round_num)
+            if additional_idea:
+                artifact["additional_ideas"].append({
+                    "round": round_num,
+                    "idea": additional_idea
+                })
+                self.store.save_artifact(artifact)
+                self.logger.info(f"✓ 已記錄 Round {round_num} 的額外想法")
 
-            self.logger.info(f"\nRound {round_num} 完成\n")
+            self.mom_manager.start_round(round_num)
+            artifact = self.run_flow(artifact, round_num)
+
+            self.logger.info(f"Round {round_num} 完成\n")
 
         self.generate_srs(artifact)
 
         self.logger.info("流程完成！")
         return artifact
 
-    def run_single_round(
+    def run_flow(
         self, artifact: Dict[str, Any], round_num: int
     ) -> Dict[str, Any]:
         rough_idea = artifact["rough_idea"]
@@ -122,9 +146,10 @@ class Flow:
             )
 
             # 人類選擇利害關係人
-            self.logger.info("\n請選擇利害關係人")
+            self.logger.info("請選擇利害關係人")
             selected_indices = Collect.user_selection(proposed)
             selected = [proposed[i]["name"] for i in selected_indices]
+            print()
             self.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
 
             self.mom_manager.add_stage(
@@ -137,7 +162,7 @@ class Flow:
             selected = [sh["name"] for sh in artifact.get("stakeholders", [])]
 
         if self.config.get("enable_user", True):
-            self.logger.info("\nStage 2: 利害關係人提出需求")
+            self.logger.info("Stage 2: 利害關係人提出需求")
 
             if round_num == 1:
                 stakeholders = self.user_agent.generate_stakeholder_requirements(
@@ -146,8 +171,9 @@ class Flow:
             else:
                 # 多輪時精煉
                 previous_draft = self.store.load_draft()
+                additional_ideas = artifact.get("additional_ideas", [])
                 stakeholders = self.user_agent.refine_stakeholders(
-                    artifact["stakeholders"], previous_draft
+                    artifact["stakeholders"], previous_draft, additional_ideas
                 )
                 self.logger.info(f"✓ 精煉 {len(stakeholders)} 位利害關係人需求")
 
@@ -162,22 +188,25 @@ class Flow:
                 outputs={"stakeholders": stakeholders},
             )
         else:
-            self.logger.info("\nStage 2 跳過 (User 已停用)")
+            self.logger.info("Stage 2 跳過 (User 已停用)")
             stakeholders = artifact.get("stakeholders", [])
 
         if self.config.get("enable_analyst", True):
-            self.logger.info("\nStage 3: 衝突分析")
+            self.logger.info("Stage 3: 衝突分析")
 
-            # 衝突分析
+            # 衝突分析（兩兩分析 + 全部分析）
             groups = self.analyst_agent.analyze_groups(stakeholders)
-            artifact["analyse"]["groups"] = groups
+            artifact["analyse"] = groups
 
             # 濾出衝突組合
-            conflict_groups = self.analyst_agent.filter_conflicts(groups)
-            artifact["analyse"]["conflict_groups"] = conflict_groups
+            conflict_groups = [g for g in groups if g["label"] == "Conflict"]
 
+            num_stakeholders = len(stakeholders)
+            pairwise_count = num_stakeholders * (num_stakeholders - 1) // 2 if num_stakeholders >= 2 else 0
+            all_together_count = 1 if num_stakeholders > 2 else 0
+            
             self.logger.info(
-                f"✓ 完成 {len(groups)} 組分析，識別出 {len(conflict_groups)} 個衝突"
+                f"✓ 完成 {pairwise_count} 組兩兩分析 + {all_together_count} 組全部分析，識別出 {len(conflict_groups)} 個衝突"
             )
 
             self.store.save_artifact(artifact)
@@ -192,50 +221,50 @@ class Flow:
                 },
             )
         else:
-            self.logger.info("\nStage 3 跳過 (Analyst 已停用)")
-            conflict_groups = artifact.get("analyse", {}).get("conflict_groups", [])
+            self.logger.info("Stage 3 跳過 (Analyst 已停用)")
+            conflict_groups = artifact.get("analyse", {})
 
-        conflicts = []
         if self.config.get("enable_mediator", True) and conflict_groups:
-            self.logger.info("\nStage 4: 產生衝突報告")
-            conflicts = self.mediator_agent.generate_conflict_report(conflict_groups)
-            artifact["analyse"]["report"] = conflicts
+            self.logger.info("Stage 4: 產生衝突報告")
+            report = self.mediator_agent.generate_conflict_report(conflict_groups)
+            artifact["reports"] = report
             self.store.save_artifact(artifact)
-            self.logger.info(f"✓ 產生 {len(conflicts)} 份衝突報告")
+            self.logger.info(f"✓ 產生 {len(report)} 份衝突報告")
 
             # 產生 report.md
-            report_md = self.store.generate_report_markdown(conflicts)
+            report_md = self.store.generate_report_markdown(report)
             self.store.save_markdown(report_md, "report.md")
             self.logger.info("✓ 產生 report.md")
 
             self.mom_manager.add_stage(
                 "Mediator",
                 "MediatorAgent",
-                f"產生 {len(conflicts)} 份衝突報告",
-                outputs={"conflicts": conflicts},
+                f"產生 {len(report)} 份衝突報告",
+                outputs={"report": report},
             )
         else:
             if not self.config.get("enable_mediator", True):
-                self.logger.info("\nStage 4 跳過 (Mediator 已停用)")
+                self.logger.info("Stage 4 跳過 (Mediator 已停用)")
             else:
-                self.logger.info("\nStage 4 無衝突，跳過衝突報告產生")
-            conflicts = artifact.get("analyse", {}).get("report", [])
+                self.logger.info("Stage 4 無衝突，跳過衝突報告產生")
+            report = artifact.get("report", [])
 
         feedback = []
         if self.config.get("enable_expert", True):
-            self.logger.info("\nStage 5: 專家提供建議")
+            self.logger.info("Stage 5: 專家提供建議")
 
             if round_num == 1:
                 # 第一輪：產生新的專家建議
-                feedback = self.expert_agent.provide_feedback(rough_idea, conflicts)
+                feedback = self.expert_agent.provide_feedback(report, rough_idea)
             else:
                 # 多輪：精煉先前的專家建議
                 previous_feedback = artifact.get("feedback", [])
+                additional_ideas = artifact.get("additional_ideas", [])
                 if previous_feedback:
-                    feedback = self.expert_agent.refine_feedback(previous_feedback)
+                    feedback = self.expert_agent.refine_feedback(previous_feedback, additional_ideas)
                     self.logger.info(f"✓ 精煉 {len(feedback)} 則專家建議")
                 else:
-                    feedback = self.expert_agent.provide_feedback(rough_idea, conflicts)
+                    feedback = self.expert_agent.provide_feedback(report, rough_idea)
 
             artifact["feedback"] = feedback
             self.store.save_artifact(artifact)
@@ -246,18 +275,18 @@ class Flow:
                 outputs={"feedback": feedback},
             )
         else:
-            self.logger.info("\nStage 5 跳過 (Expert 已停用)")
+            self.logger.info("Stage 5 跳過 (Expert 已停用)")
 
         decisions = []
-        if self.config.get("enable_mediator", True) and conflicts:
-            self.logger.info("\nStage 6: 產生決策選項並由人類選擇")
+        if self.config.get("enable_mediator", True) and report:
+            self.logger.info("Stage 6: 產生決策選項並由人類選擇")
 
             decision_options = self.mediator_agent.generate_decision_options(
-                conflicts, feedback
+                report, feedback
             )
 
             # 人類決策
-            self.logger.info("\n請進行衝突裁決：")
+            self.logger.info("請進行衝突裁決：")
             for option in decision_options:
                 decision = Collect.user_decision(option)
                 decisions.append(decision)
@@ -278,14 +307,14 @@ class Flow:
             self.logger.info(f"✓ 完成 {len(decisions)} 個決策")
         else:
             if not self.config.get("enable_mediator", True):
-                self.logger.info("\nStage 4 跳過 (Mediator 已停用)")
+                self.logger.info("Stage 4 跳過 (Mediator 已停用)")
             else:
-                self.logger.info("\nStage 6: 無衝突需要裁決")
+                self.logger.info("Stage 6: 無衝突需要裁決")
 
         # 產生需求草稿 (draft.json)
         if self.config.get("enable_analyst", True):
             # spec.json 必須存在
-            self.logger.info("\nStage 7: 產生需求草稿")
+            self.logger.info("Stage 7: 產生需求草稿")
             spec_template = self.store.load_spec_template()
             draft_template = spec_template.get("draft", [])
 
@@ -299,21 +328,21 @@ class Flow:
                 outputs={"draft_generated": True},
             )
         else:
-            self.logger.info("\nStage 7 跳過 (Analyst 已停用)")
+            self.logger.info("Stage 7 跳過 (Analyst 已停用)")
             draft = self.store.load_draft()
 
         if self.config.get("enable_modeler", True):
-            self.logger.info("\nStage 8: 建立系統模型")
+            self.logger.info("Stage 8: 建立系統模型")
 
             if round_num == 1:
                 # 第一輪：產生新模型
                 uml_json = self.modeler_agent.generate_system_model(draft)
             else:
                 # 多輪：調整現有模型
-                current_uml = self.store.load_json("artifact/uml.json")
+                current_uml = self.store.load_json(self.store.artifact_dir / "uml.json")
                 uml_json = self.modeler_agent.refine_model(current_uml, draft)
 
-            self.store.save_json(uml_json, "artifact/uml.json")
+            self.store.save_json(uml_json, self.store.artifact_dir / "uml.json")
 
             # 產生 PlantUML 檔案
             self.store.save_plantuml_files(uml_json)
@@ -326,7 +355,7 @@ class Flow:
                 outputs={"model_generated": True},
             )
         else:
-            self.logger.info("\nStage 8 跳過 (Modeler 已停用)")
+            self.logger.info("Stage 8 跳過 (Modeler 已停用)")
 
         # 每輪結束後保存 MoM
         self.store.save_mom(self.mom_manager.get_mom_data())
@@ -337,14 +366,10 @@ class Flow:
     # 最終階段: 產生 SRS
     def generate_srs(self, artifact: Dict[str, Any]):
         if self.config.get("enable_documentor", True):
-            generate_srs = (
-                input("\n是否要生成正式的需求規格書(y/n)：")
-                .strip()
-                .lower()
-            )
+            generate_srs = input("是否要生成正式的需求規格書(y/n)：").strip().lower()
 
             if generate_srs == "y":
-                self.logger.info("\n最終階段: 產生文件")
+                self.logger.info("最終階段: 產生文件")
 
                 # 產生 mom.md
                 mom_data = self.store.load_mom()
@@ -370,7 +395,7 @@ class Flow:
 
                 self.logger.info("✓ 產生 SRS (srs.json / srs.md)")
             else:
-                self.logger.info("\n進入額外的討論")
+                self.logger.info("進入額外的討論")
 
                 # 選擇要使用的代理
                 AgentSelector.select_agents(self.config)
@@ -382,14 +407,14 @@ class Flow:
                 current_round = self.config.get("rounds", 1)
                 for i in range(1, extra_rounds + 1):
                     round_num = current_round + i
-                    self.logger.info(f"\n{'='*60}")
+                    self.logger.info(f"{'='*60}")
                     self.logger.info(
                         f"額外討論 Round {i}/{extra_rounds} (總 Round {round_num})"
                     )
                     self.logger.info(f"{'='*60}\n")
 
                     self.mom_manager.start_round(round_num)
-                    artifact = self.run_single_round(artifact, round_num)
+                    artifact = self.run_flow(artifact, round_num)
 
         else:
-            self.logger.info("\nFinal Stage 跳過 (Documentor 已停用)")
+            self.logger.info("Final Stage 跳過 (Documentor 已停用)")

@@ -1,13 +1,13 @@
 import os
 import sys
 import traceback
+
 from pathlib import Path
 from dotenv import load_dotenv
 from flow import Flow
 from store import Store
 from utils import Logger, AgentSelector, ProjectManager
 
-# 主程式
 def main():
     print("=" * 60)
     print("Plant 系統")
@@ -65,11 +65,9 @@ def main():
         print(f"\n✓ 已創建專案：{project_id}\n")
         
         # 選擇要使用的代理
-        print()
         AgentSelector.select_agents(config)
         
         # 設置回合數
-        print()
         rounds = AgentSelector.set_rounds()
         config["rounds"] = rounds
         config["start_round"] = 1
@@ -118,9 +116,6 @@ def main():
     store = Store(base_dir, project_id)
     logger = Logger(store.log_dir)
     
-    logger.info(f"專案 ID: {project_id}")
-    logger.info(f"載入配置：provider={config.get('provider')}, model={config.get('model')}")
-    
     print()
     print("開始執行...")
     print()
@@ -131,7 +126,7 @@ def main():
         
         if is_continue:
             # 繼續現有專案
-            flow.run_continue(rough_idea, artifact)
+            flow.run_continue(artifact)
         else:
             # 新專案
             flow.run(rough_idea)
