@@ -1,139 +1,106 @@
-from typing import Dict, List
-import itertools
+from typing import Dict, List, Any
 
+import itertools
+import json
+
+
+# 分析師代理
 class AnalystAgent:
     """
-    Analyst Agent: 分析師代理
-        - 對利害關係人需求做衝突分析
-        - 產出衝突報告(report.md)
+    - 對利害關係人需求做衝突分析
+    - 產出衝突報告(report.md)、需求草稿(draft.json)
     """
-    
-    system_prompt = "你是系統分析師，擅長需求分析、識別需求衝突並提供解決方案。"
-    
+
+    system_prompt = """你是一位系統分析師，負責進行需求分析與需求衝突檢測。
+
+    你的任務包括：
+    - 從利害關係人發言中整理候選需求
+    - 分析需求的意圖與類型
+    - 偵測並描述需求之間的潛在衝突
+
+    請注意：
+    - 你不得解決或裁決衝突
+    - 你不得引入新的需求
+    - 你不得套用領域規則（需交由專家）
+    """
+
     def __init__(self, model):
         self.model = model
-    
-    def analyze_pairs(self, stakeholders: List[Dict]) -> List[Dict]:
-        """
-        對利害關係人需求進行衝突分析
-        
-        Args:
-            stakeholders: 利害關係人列表
-        
-        Returns:
-            List[Dict]: 配對分析結果，每個包含 id, text1, text2, label
-        """
-        pairs = []
-        stakeholder_combinations = list(itertools.combinations(stakeholders, 2))
-        
-        for sh1, sh2 in stakeholder_combinations:
-            pair_analysis = self._analyze_single_pair(sh1, sh2)
-            pairs.append(pair_analysis)
-        
-        return pairs
-    
-    def _analyze_single_pair(self, sh1: Dict, sh2: Dict) -> Dict:
-        """
-        衝突分析
-        
-        Returns:
-            Dict: {"id": [id1, id2], "text1": str, "text2": str, "label": "Conflict"/"Neutral"}
-        """
-        user_prompt = f"""利害關係人 A ({sh1['name']}):
-                {sh1['text']}
 
-                利害關係人 B ({sh2['name']}):
-                {sh2['text']}
+    # 對利害關係人需求進行衝突分析（支援多人組合）
+    def analyze_groups(self, stakeholders: List[Dict]) -> List[Dict]:
+        groups = []
 
-                請分析這兩位利害關係人的需求是否存在需求衝突。
+        # 生成 2 人以上的所有組合
+        for size in range(2, len(stakeholders) + 1):
+            for combo in itertools.combinations(stakeholders, size):
+                group_analysis = self.analyze_conflict(list(combo))
+                groups.append(group_analysis)
 
-                請以 JSON 格式回應：
-                {{{{
-                "label": "Conflict" or "Neutral",
-                "reason": "判斷理由"
-                }}}}"""
-        
+        return groups
+
+    # 衝突分析（支援多人）
+    def analyze_conflict(self, stakeholder_group: List[Dict]) -> Dict:
+        # 建立利害關係人發言列表
+        stakeholder_texts = "\n\n".join(
+            [
+                f"利害關係人 {sh['name']} ({sh['id']}):\n{sh['text']}"
+                for sh in stakeholder_group
+            ]
+        )
+
+        user_prompt = f"""請針對以下利害關係人的發言進行需求分析與衝突辨識。
+
+        {stakeholder_texts}
+
+        請輸出：
+        1. 候選需求
+        2. 偵測到的需求衝突（若有，標記 Conflict，若無，標記 Neutral，請說明判斷理由）
+
+        請以 JSON 格式回應：
+        {{{{
+        "candidates": [{{"id": "R-01", "text": "需求描述", "source": ["stakeholders_id"]}}],
+        "label": "Conflict" or "Neutral",
+        "reason": "判斷理由"
+        }}}}"""
+
         response = self.model.generate_json(user_prompt, self.system_prompt)
+
         return {
-            "id": [sh1['id'], sh2['id']],
-            "text1": sh1['text'],
-            "text2": sh2['text'],
+            "stakeholder_ids": [sh["id"] for sh in stakeholder_group],
+            "stakeholder_names": [sh["name"] for sh in stakeholder_group],
+            "texts": {sh["id"]: sh["text"] for sh in stakeholder_group},
+            "candidates": response.get("candidates"),
             "label": response.get("label"),
-            "reason": response.get("reason")
+            "reason": response.get("reason"),
         }
 
-    
-    def generate_conflict_report(self, pairs: List[Dict], stakeholders: List[Dict]) -> List[Dict]:
-        """
-        結構化衝突報告
-        
-        Args:
-            pairs: 配對分析結果
-            stakeholders: 利害關係人列表
-        
-        Returns:
-            List[Dict]: 衝突報告，每個包含 id, title, stakeholder_name, description, solutions
-        """
-        conflict_pairs = [p for p in pairs if p['label'] == 'Conflict']
-        
-        if not conflict_pairs:
-            return []
-        
-        # 建立 stakeholder id 到 name 的映射
-        sh_map = {sh['id']: sh['name'] for sh in stakeholders}
-        
-        # 為每個衝突生成報告
-        conflicts = []
-        for idx, pair in enumerate(conflict_pairs, 1):
-            conflict_id = f"CR-{idx:02d}"
-            
-            # 取得利害關係人名稱
-            stakeholder_names = [sh_map.get(sid, sid) for sid in pair['id']]
-            
-            # 生成衝突描述和解決方案
-            conflict_detail = self._generate_conflict_detail(pair, stakeholder_names)
-            
-            conflicts.append({
-                "id": conflict_id,
-                "title": conflict_detail['title'],
-                "stakeholder_name": stakeholder_names,
-                "description": conflict_detail['description'],
-                "solutions": conflict_detail['solutions']
-            })
-        
-        return conflicts
-    
-    def _generate_conflict_detail(self, pair: Dict, stakeholder_names: List[str]) -> Dict:
-        """
-        生成衝突報告解決方案
-        """
-        user_prompt = f"""衝突配對：
-                利害關係人：{stakeholder_names[0]} vs {stakeholder_names[1]}
+    # 過濾衝突組合（僅返回標記為 Conflict 的）
+    def filter_conflicts(self, groups: List[Dict]) -> List[Dict]:
+        """過濾並返回有衝突的組合"""
+        return [g for g in groups if g["label"] == "Conflict"]
 
-                需求 A:
-                {pair['text1']}
+    # 產生需求草稿
+    def generate_draft(
+        self, artifact: Dict[str, Any], draft_template: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        artifact_text = json.dumps(artifact, ensure_ascii=False, indent=2)
+        template_text = json.dumps(draft_template, ensure_ascii=False, indent=2)
 
-                需求 B:
-                {pair['text2']}
+        prompt = f"""請根據以下 artifact 資訊產生需求草稿（Draft）：
 
-                分析理由：
-                {pair.get('reason', '')}
+                Artifact：
+                {artifact_text}
 
-                請為這個衝突生成：
-                1. 簡短標題（10 字內）
-                2. 詳細的衝突描述
-                3. 2-3 個可能的解決方案
+                草稿格式範本：
+                {template_text}
 
-                請以 JSON 格式回應：
-                {{{{
-                "title": "衝突標題",
-                "description": "詳細描述",
-                "solutions": ["方案1", "方案2", "方案3"]
-                }}}}"""
-        
-        response = self.model.generate_json(user_prompt, self.system_prompt)
-        return {
-            "title": response.get("title"),
-            "description": response.get("description", pair.get('reason', '')),
-            "solutions": response.get("solutions", ["需人類決策"])
-        }
+                請按照範本結構產生完整的需求草稿，將 artifact 中的資訊對應到範本中。
+
+                請以 JSON 格式回應，遵循範本結構。"""
+
+        try:
+            draft = self.model.generate_json(prompt, self.system_prompt)
+            return draft
+        except Exception as e:
+            raise RuntimeError(f"Analyst 產生草稿失敗: {str(e)}")

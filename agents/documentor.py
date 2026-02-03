@@ -1,30 +1,26 @@
 from typing import Dict, List, Any
 import json
 
+
+# 文件代理
 class DocumentorAgent:
     """
-    Documentor Agent: srs 產生代理
-        - 依 mom.json 產出 Design Rationale (dr.md)
-        - 依 spec.json + 29148.json 產出 srs.json 和 srs.md
+    - 依 mom.json 產出 Design Rationale (dr.md)
+    - 依 spec.json + 29148.json 產出 srs.json 和 srs.md
     """
-    
+
     def __init__(self, model, store):
         self.model = model
         self.store = store
-    
+
+    # 根據 MoM JSON 產生 Design Rationale
     def generate_design_rationale(self) -> str:
-        """
-        根據 MoM JSON 產生 Design Rationale
-        
-        Returns:
-            str: Design Rationale (Markdown 格式)
-        """
 
         mom_data = self.store.load_mom()
-        
+
         # 將 JSON 轉為字串當作 LLM 上下文
         mom_json_str = json.dumps(mom_data, ensure_ascii=False, indent=2)
-        
+
         user_prompt = f"""請根據以下會議記錄 JSON 整理 Design Rationale。
 
                 會議記錄：{mom_json_str}
@@ -38,30 +34,21 @@ class DocumentorAgent:
 
                 請以完整的 Markdown 格式輸出，使用清晰的章節結構和要點列表。
                 重要：只整理會議記錄中已有的內容，不要添加額外的建議或假設。"""
-        
+
         dr_content = self.model.generate(user_prompt)
         return dr_content
-    
+
+    # 根據 draft.json 和 IEEE 29148 模板產生 srs.json
     def generate_srs_json(
-        self,
-        draft: Dict[str, Any],
-        ieee_template: List[Dict]
+        self, draft: Dict[str, Any], ieee_template: List[Dict]
     ) -> Dict[str, Any]:
-        """
-        根據 draft.json 和 IEEE 29148 模板產生 srs.json
-        
-        Args:
-            draft: 需求草稿
-            ieee_template: IEEE 29148 標準模板
-        
-        Returns:
-            Dict[str, Any]: SRS JSON 資料
-        """
         draft_text = json.dumps(draft, ensure_ascii=False, indent=2)
         template_text = json.dumps(ieee_template, ensure_ascii=False, indent=2)
 
-        system_prompt = "你是軟體需求規格書撰寫專家，擅長撰寫符合 IEEE 29148 標準的 SRS 文件。"
-        
+        system_prompt = (
+            "你是軟體需求規格書撰寫專家，擅長撰寫符合 IEEE 29148 標準的 SRS 文件。"
+        )
+
         user_prompt = f"""需求草稿（Draft）：
                 {draft_text}
 
@@ -72,6 +59,6 @@ class DocumentorAgent:
                 將 draft 中的內容對應到 IEEE 29148 的章節結構中。
 
                 請以 JSON 格式回應，遵循 IEEE 29148 結構。"""
-        
+
         srs = self.model.generate_json(user_prompt, system_prompt)
         return srs

@@ -1,29 +1,25 @@
 from typing import Dict, Any
 import json
 
+
+# 系統建模者，需求草稿產生系統模型（PlantUML 程式碼、AST 結構化資料）
 class ModelerAgent:
-    """
-    Modeler Agent: 系統建模者
-        - 根據需求草稿產生系統模型（PlantUML、AST）
-        - 支援多輪調整（新增、刪除、修改）
-    """
-    
     def __init__(self, model):
         self.model = model
         self.system_prompt = "你是系統建模專家，擅長將需求轉換為系統模型。"
-    
+
     def generate_system_model(self, draft: Dict[str, Any]) -> Dict[str, Any]:
         """
         根據需求草稿產生系統模型
-        
+
         Args:
             draft: 需求草稿
-        
+
         Returns:
             Dict: 包含 plantuml 和 ast 的模型資料
         """
         draft_text = json.dumps(draft, ensure_ascii=False, indent=2)
-        
+
         user_prompt = f"""需求草稿：
                 {draft_text}
 
@@ -45,28 +41,17 @@ class ModelerAgent:
                     "relationships": []
                 }}}}
                 }}}}"""
-        
-        response = self.model.generate_json(user_prompt, self.system_prompt)
+
+        response = self.model.generate_json(user_prompt)
         return response
-    
+
+    # 第二輪以上，原有基礎上繼續調整模型
     def refine_model(
-        self,
-        current_model: Dict[str, Any],
-        draft: Dict[str, Any]
+        self, current_model: Dict[str, Any], draft: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        評估並調整現有模型（僅在必要時修改）
-        
-        Args:
-            current_model: 目前的系統模型
-            draft: 新的需求草稿
-        
-        Returns:
-            Dict: 評估後的系統模型（可能維持原狀或更新）
-        """
         current_text = json.dumps(current_model, ensure_ascii=False, indent=2)
         draft_text = json.dumps(draft, ensure_ascii=False, indent=2)
-        
+
         user_prompt = f"""目前的系統模型：
                 {current_text}
 
@@ -88,7 +73,6 @@ class ModelerAgent:
 
                 請以 JSON 格式回應，保持相同結構。"""
 
-        
         try:
             response = self.model.generate_json(user_prompt, self.system_prompt)
             return response
