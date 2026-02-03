@@ -30,13 +30,18 @@ class Flow:
         # 初始化 Agents
         self.user_agent = UserAgent(self.model)
         self.analyst_agent = AnalystAgent(self.model)
-        self.expert_agent = ExpertAgent(self.model, doc_dir="doc")
+        self.expert_agent = ExpertAgent(
+            self.model, 
+            doc_dir="doc",
+            enable_web_search=config.get("enable_web_search", True)
+        )
         self.mediator_agent = MediatorAgent(self.model)
         self.modeler_agent = ModelerAgent(self.model)
         self.documentor_agent = DocumentorAgent(self.model, self.store)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
+        start_round = self.config.get("start_round", 1)
 
         # artifact.json 初始化
         artifact = {
@@ -52,7 +57,33 @@ class Flow:
         self.store.save_artifact(artifact)
         self.logger.info("創建中間產物(artifact.json)")
 
-        for round_num in range(1, rounds + 1):
+        for round_num in range(start_round, rounds + 1):
+            self.logger.info(f"\n{'='*60}")
+            self.logger.info(f"Round {round_num}/{rounds}")
+            self.logger.info(f"{'='*60}\n")
+
+            self.mom_manager.start_round(round_num)
+            artifact = self.run_single_round(artifact, round_num)
+
+            self.logger.info(f"\nRound {round_num} 完成\n")
+
+        self.generate_srs(artifact)
+
+        self.logger.info("流程完成！")
+        return artifact
+    
+    def run_continue(self, rough_idea: str, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """繼續現有專案的討論"""
+        rounds = self.config.get("rounds", 1)
+        start_round = self.config.get("start_round", 1)
+        
+        # 使用現有的 artifact
+        artifact = existing_artifact
+        
+        self.logger.info("繼續現有專案的討論")
+        self.logger.info(f"從 Round {start_round} 開始")
+
+        for round_num in range(start_round, rounds + 1):
             self.logger.info(f"\n{'='*60}")
             self.logger.info(f"Round {round_num}/{rounds}")
             self.logger.info(f"{'='*60}\n")
@@ -342,13 +373,10 @@ class Flow:
                 self.logger.info("\n進入額外的討論")
 
                 # 選擇要使用的代理
-                agent_choices = AgentSelector.select_agents(self.config)
+                AgentSelector.select_agents(self.config)
                 
                 # 詢問額外回合數
-                extra_rounds = AgentSelector.set_rounds(
-                    single_agent_auto=True,
-                    selected_agents=agent_choices
-                )
+                extra_rounds = AgentSelector.set_rounds()
 
                 # 執行額外討論輪次
                 current_round = self.config.get("rounds", 1)

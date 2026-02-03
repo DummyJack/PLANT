@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
 # 系統日誌管理
@@ -322,3 +322,101 @@ class AgentSelector:
                 return rounds
             except ValueError:
                 print("❌ 錯誤：回合數必須是數字，請重新輸入")
+
+# 處理專案選擇和創建
+class ProjectManager:
+    # 選擇現有專案或創建新專案
+    @staticmethod
+    def select_or_create_project(store) -> Tuple[str, bool]:
+        from store import Store
+        
+        # 列出所有專案
+        temp_store = Store(store.base_dir)
+        projects = temp_store.list_projects()
+        
+        if not projects:
+            # 沒有專案，直接創建新專案
+            print("\n目前沒有任何專案，將創建新專案")
+            return None, False
+        
+        # 顯示專案列表
+        print("\n" + "="*60)
+        print("現有專案列表")
+        print("="*60)
+        print()
+        
+        for i, project in enumerate(projects, 1):
+            created_at = project.get("created_at", "未知")
+            if "T" in created_at:
+                # 格式化日期時間
+                try:
+                    dt = datetime.fromisoformat(created_at)
+                    created_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    pass
+            
+            rough_idea = project.get("rough_idea", "未知")
+            
+            print(f"{i}. 專案 ID: {project['project_id']}")
+            print(f"   創建時間: {created_at}")
+            print(f"   初始想法: {rough_idea}")
+            print()
+        
+        print("0. 創建新專案")
+        print()
+        
+        # 讓使用者選擇
+        while True:
+            try:
+                choice = input("請選擇專案編號 (或輸入 0 創建新專案)：").strip()
+                
+                if not choice:
+                    print("❌ 錯誤：請輸入專案編號")
+                    continue
+                
+                choice_num = int(choice)
+                
+                if choice_num == 0:
+                    # 創建新專案
+                    return None, False
+                elif 1 <= choice_num <= len(projects):
+                    # 選擇現有專案
+                    selected_project = projects[choice_num - 1]
+                    project_id = selected_project["project_id"]
+                    
+                    print(f"\n✓ 已選擇專案：{project_id}")
+                    print("將繼續此專案的討論（視為額外討論輪數）\n")
+                    
+                    return project_id, True
+                else:
+                    print(f"❌ 錯誤：請輸入有效的專案編號（0-{len(projects)}）")
+                    
+            except ValueError:
+                print("❌ 錯誤：請輸入數字")
+    
+    @staticmethod
+    def display_project_info(store, project_id: str):
+        """顯示專案資訊"""
+        # 從 artifact 載入資訊
+        artifact = store.load_artifact()
+        
+        # 從 mom.json 計算完成的輪數
+        completed_rounds = 0
+        mom_data = store.load_mom()
+        if mom_data and "rounds" in mom_data:
+            completed_rounds = len(mom_data["rounds"])
+        
+        # 獲取創建時間
+        created_at = "未知"
+        if store.project_dir.exists():
+            created_at = datetime.fromtimestamp(store.project_dir.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+        
+        print("\n" + "="*60)
+        print(f"專案資訊：{project_id}")
+        print("="*60)
+        print(f"創建時間: {created_at}")
+        if artifact:
+            print(f"初始想法: {artifact.get('rough_idea', '未知')}")
+        print(f"已完成輪數: {completed_rounds}")
+        print("="*60)
+        print()

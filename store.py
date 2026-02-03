@@ -1,19 +1,87 @@
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
+from datetime import datetime
 
 # I/O 層：負責 JSON 和 Markdown 檔案的讀寫
 class Store:
-    def __init__(self, base_dir: str = "."):
+    def __init__(self, base_dir: str = ".", project_id: Optional[str] = None):
         self.base_dir = Path(base_dir)
-        self.artifact_dir = self.base_dir / "artifact"
-        self.config_dir = self.base_dir / "config"
-        self.output_dir = self.base_dir / "output"
-        self.log_dir = self.base_dir / "log"
+        self.project_id = project_id
         
-        # 確保目錄存在
-        for dir_path in [self.artifact_dir, self.config_dir, self.output_dir, self.log_dir]:
+        # 基礎目錄
+        self.config_dir = self.base_dir / "config"
+        self.projects_dir = self.base_dir / "projects"
+        self.log_dir = self.base_dir / "log"  # log 統一放在外面
+        
+        # 如果沒有 project_id，只初始化基礎目錄（用於專案管理）
+        if not project_id:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            self.projects_dir.mkdir(parents=True, exist_ok=True)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            return
+        
+        # 設置專案特定目錄
+        self.project_dir = self.projects_dir / project_id
+        self.artifact_dir = self.project_dir / "artifact"
+        self.output_dir = self.project_dir / "output"
+        
+        # 確保所有目錄存在
+        for dir_path in [self.config_dir, self.artifact_dir, self.output_dir, self.log_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
+    
+    # ===== 專案管理 =====
+    
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """列出所有專案"""
+        projects = []
+        if not self.projects_dir.exists():
+            return projects
+        
+        for project_path in sorted(self.projects_dir.iterdir()):
+            if project_path.is_dir():
+                # 讀取 artifact.json 獲取專案資訊
+                artifact_file = project_path / "artifact" / "artifact.json"
+                rough_idea = "未知"
+                
+                if artifact_file.exists():
+                    try:
+                        with open(artifact_file, 'r', encoding='utf-8') as f:
+                            artifact = json.load(f)
+                            rough_idea = artifact.get("rough_idea", "未知")
+                            if len(rough_idea) > 50:
+                                rough_idea = rough_idea[:50] + "..."
+                    except:
+                        pass
+                
+                projects.append({
+                    "project_id": project_path.name,
+                    "created_at": datetime.fromtimestamp(project_path.stat().st_ctime).isoformat(),
+                    "rough_idea": rough_idea
+                })
+        
+        return projects
+    
+    def create_project(self) -> str:
+        """創建新專案，返回 project_id"""
+        # 使用時間戳作為 project_id
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_id = f"project_{timestamp}"
+        
+        # 創建專案目錄
+        project_dir = self.projects_dir / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
+        return project_id
+    
+    def load_artifact(self) -> Optional[Dict[str, Any]]:
+        """載入當前專案的 artifact"""
+        artifact_file = self.artifact_dir / "artifact.json"
+        if not artifact_file.exists():
+            return None
+        
+        with open(artifact_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
     
     # ===== JSON 讀寫 =====
     
