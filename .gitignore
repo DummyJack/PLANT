@@ -2,15 +2,14 @@
 __pycache__/
 venv/
 
-# Logs
-log/
-
 # 環境變數
 config/.env
 
-# 輸出檔案
-output/
-artifact/
+# 日誌
+log/
+
+# 專案資料夾（包含 artifact、output）
+projects/
 
 # macOS
 .DS_Store
