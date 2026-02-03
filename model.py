@@ -12,6 +12,7 @@ class BaseLLM(ABC):
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
         self.default_temperature = kwargs.pop("temperature", None)
+        self.default_max_tokens = kwargs.pop("max_tokens", None)
         self.kwargs = kwargs
 
     @abstractmethod
@@ -19,7 +20,8 @@ class BaseLLM(ABC):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> str:
         # 生成回應
         pass
@@ -29,7 +31,8 @@ class BaseLLM(ABC):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> Dict:
         # 生成 JSON 格式回應
         pass
@@ -49,7 +52,8 @@ class OpenAIModel(BaseLLM):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> str:
         messages = []
         if system_prompt:
@@ -62,6 +66,12 @@ class OpenAIModel(BaseLLM):
             kwargs["temperature"] = temperature
         elif self.default_temperature is not None:
             kwargs["temperature"] = self.default_temperature
+        
+        # 使用傳入的 max_tokens，若無則使用預設值
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        elif self.default_max_tokens is not None:
+            kwargs["max_tokens"] = self.default_max_tokens
 
         response = self.client.chat.completions.create(
             model=self.model_name, messages=messages, **kwargs
@@ -72,7 +82,8 @@ class OpenAIModel(BaseLLM):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> Dict:
         messages = []
         if system_prompt:
@@ -85,6 +96,12 @@ class OpenAIModel(BaseLLM):
             kwargs["temperature"] = temperature
         elif self.default_temperature is not None:
             kwargs["temperature"] = self.default_temperature
+        
+        # 使用傳入的 max_tokens，若無則使用預設值
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        elif self.default_max_tokens is not None:
+            kwargs["max_tokens"] = self.default_max_tokens
 
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -111,7 +128,8 @@ class OllamaModel(BaseLLM):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> str:
         messages = []
         if system_prompt:
@@ -124,6 +142,12 @@ class OllamaModel(BaseLLM):
             options["temperature"] = temperature
         elif self.default_temperature is not None:
             options["temperature"] = self.default_temperature
+        
+        # Ollama 使用 num_predict 參數來限制輸出 token 數量
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        elif self.default_max_tokens is not None:
+            options["num_predict"] = self.default_max_tokens
 
         response = self.client.chat(
             model=self.model_name, 
@@ -136,9 +160,10 @@ class OllamaModel(BaseLLM):
         self, 
         user_prompt: Optional[str] = None, 
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ) -> Dict:
-        content = self.generate(user_prompt, system_prompt, temperature)
+        content = self.generate(user_prompt, system_prompt, temperature, max_tokens)
         try:
             return json.loads(content)
         except json.JSONDecodeError:
