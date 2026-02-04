@@ -123,7 +123,7 @@ class Store:
         return self.load_json(mom_path)
     
     def save_mom(self, data: Dict[str, Any]):
-        """儲存 mom.json"""
+        """儲存 mom.json（只保存最新版本）"""
         self.save_json(data, self.artifact_dir / "mom.json")
     
     def load_draft(self) -> Dict[str, Any]:
@@ -140,9 +140,15 @@ class Store:
             return {}
         return self.load_json(uml_path)
     
-    def save_draft(self, data: Dict[str, Any]):
-        """儲存 draft.json"""
-        self.save_json(data, self.artifact_dir / "draft.json")
+    def save_uml(self, data: Dict[str, Any], round_num: int):
+        """儲存 uml.json（從 uml_1.json 開始）"""
+        # 只保存帶輪次的版本（uml_1.json, uml_2.json, ...）
+        self.save_json(data, self.artifact_dir / f"uml_{round_num}.json")
+    
+    def save_draft(self, data: Dict[str, Any], round_num: int):
+        """儲存 draft.json（從 draft_1.json 開始）"""
+        # 只保存帶輪次的版本（draft_1.json, draft_2.json, ...）
+        self.save_json(data, self.artifact_dir / f"draft_{round_num}.json")
     
     def save_srs(self, data: Dict[str, Any]):
         """儲存 srs.json"""
@@ -203,12 +209,22 @@ class Store:
             md += f"## Round {round_num}\n\n"
             md += f"**時間**：{timestamp}\n\n"
             
-            # 處理 stages
+            # 整合人類決策：將 stages 中的 Human 決策統一收集
             stages = round_data.get("stages", [])
-            if stages:
+            human_decisions = []
+            other_stages = []
+            
+            for stage in stages:
+                if stage.get("agent") == "Human":
+                    human_decisions.append(stage)
+                else:
+                    other_stages.append(stage)
+            
+            # 顯示非人類決策的階段
+            if other_stages:
                 md += "### 階段流程\n\n"
                 
-                for idx, stage in enumerate(stages, 1):
+                for idx, stage in enumerate(other_stages, 1):
                     stage_name = stage.get("stage", "")
                     agent = stage.get("agent", "")
                     description = stage.get("description", "")
@@ -219,71 +235,46 @@ class Store:
                     md += f"- **描述**：{description}\n"
                     md += f"- **時間**：{stage_timestamp}\n"
                     
-                    # 處理 outputs
+                    # 處理 outputs - 使用 JSON 格式
                     outputs = stage.get("outputs", {})
                     if outputs:
-                        md += f"- **輸出**：\n"
-                        for key, value in outputs.items():
-                            if key == "decision_options" and isinstance(value, list):
-                                # 特殊處理 decision_options
-                                md += f"  - **決策選項**：\n"
-                                for opt in value:
-                                    options = opt.get('options', [])
-                                    rationales = opt.get('rationales', [])
-                                    recommendation = opt.get('recommendation', '')
-                                    
-                                    md += f"    選項：\n"
-                                    for i, option in enumerate(options, 1):
-                                        md += f"      {i}. {option}\n"
-                                        if rationales and i-1 < len(rationales) and rationales[i-1]:
-                                            md += f"         理由：{rationales[i-1]}\n"
-                                    if recommendation:
-                                        md += f"\n    💡 推薦：{recommendation}\n"
-                                    md += "\n"
-                            elif isinstance(value, list) and value and isinstance(value[0], dict):
-                                md += f"  - **{key}**：\n"
-                                for item in value:
-                                    if "name" in item:
-                                        md += f"    - {item.get('name', '')}"
-                                        if "reason" in item:
-                                            md += f"：{item.get('reason', '')}"
-                                        md += "\n"
-                                    elif "id" in item:
-                                        md += f"    - {item.get('id', '')}"
-                                        if "title" in item:
-                                            md += f"：{item.get('title', '')}"
-                                        md += "\n"
-                            elif isinstance(value, bool):
-                                md += f"  - **{key}**：{'是' if value else '否'}\n"
-                            elif isinstance(value, list):
-                                md += f"  - **{key}**：{', '.join(str(v) for v in value)}\n"
-                            else:
-                                md += f"  - **{key}**：{value}\n"
+                        md += f"- **輸出**：\n\n"
+                        md += "```json\n"
+                        md += json.dumps(outputs, ensure_ascii=False, indent=2)
+                        md += "\n```\n"
                     
                     md += "\n"
             
-            # 處理 conflict_resolutions
-            resolutions = round_data.get("conflict_resolutions", [])
-            if resolutions:
-                md += "### 衝突決策記錄\n\n"
+            # 統一顯示人類決策
+            if human_decisions:
+                md += "### 人類決策\n\n"
                 
-                for idx, resolution in enumerate(resolutions, 1):
-                    conflict_title = resolution.get("conflict_title", "N/A")
-                    decision = resolution.get("decision", "")
-                    rationale = resolution.get("rationale", "")
-                    res_timestamp = resolution.get("timestamp", "")
+                for idx, decision in enumerate(human_decisions, 1):
+                    stage_name = decision.get("stage", "")
+                    description = decision.get("description", "")
+                    stage_timestamp = decision.get("timestamp", "")
                     
-                    md += f"#### 決策 {idx}：{conflict_title}\n\n"
-                    md += f"- **決定**：{decision}\n"
-                    md += f"- **理由**：{rationale}\n"
-                    md += f"- **時間**：{res_timestamp}\n\n"
+                    md += f"#### {idx}. {stage_name}\n\n"
+                    md += f"- **描述**：{description}\n"
+                    md += f"- **時間**：{stage_timestamp}\n"
+                    
+                    # 輸出使用 JSON 格式
+                    outputs = decision.get("outputs", {})
+                    if outputs:
+                        md += f"- **輸出**：\n\n"
+                        md += "```json\n"
+                        md += json.dumps(outputs, ensure_ascii=False, indent=2)
+                        md += "\n```\n"
+                    
+                    md += "\n"
+        
         return md
     
     # 將 SRS 轉換為 Markdown 格式
     def generate_srs_markdown(self, srs_data: Dict[str, Any]) -> str:
         md = "# Software Requirements Specification (SRS)\n\n"
         
-        sections = srs_data.get("SRS", [])
+        sections = srs_data.get("ieee_29148", [])
         
         def process_subsection(subsection, level=3):
             nonlocal md
@@ -310,13 +301,40 @@ class Store:
         # 處理每個主要章節
         for section_data in sections:
             section_title = section_data.get("section", "")
+            section_content = section_data.get("content", None)
             subsections = section_data.get("subsection", [])
             
             md += f"## {section_title}\n\n"
             
+            # 處理直接的 content（如果有）
+            if section_content is not None:
+                if isinstance(section_content, list):
+                    # 檢查是否為 Appendices（content 是字典陣列）
+                    if section_content and isinstance(section_content[0], dict):
+                        # 處理 Appendices
+                        for item in section_content:
+                            item_id = item.get("id", "")
+                            plantuml_code = item.get("plantuml", "")
+                            
+                            md += f"### {item_id}\n\n"
+                            
+                            # 插入 PlantUML 圖表
+                            if plantuml_code:
+                                md += "```plantuml\n"
+                                md += plantuml_code
+                                md += "\n```\n\n"
+                    else:
+                        # 一般的字串陣列
+                        for item in section_content:
+                            md += f"- {item}\n"
+                        md += "\n"
+                elif isinstance(section_content, str):
+                    md += f"{section_content}\n\n"
+            
             # 處理子章節
-            for subsection in subsections:
-                process_subsection(subsection)
+            if subsections:
+                for subsection in subsections:
+                    process_subsection(subsection)
         
         return md
     
@@ -350,10 +368,20 @@ class Store:
                                 md += "\n"
                             # 處理 Conflicting Requirements 格式
                             elif "id" in item and "stakeholder_name" in item:
-                                md += f"### {item.get('id', '')}\n"
-                                md += f"**涉及利害關係人**: {', '.join(item.get('stakeholder_name', []))}\n"
-                                md += f"**描述**: {item.get('description', '')}\n"
-                                md += f"**解決方案**: {item.get('solutions', '')}\n\n"
+                                md += f"### {item.get('id', '')}\n\n"
+                                md += f"**涉及利害關係人**: {', '.join(item.get('stakeholder_name', []))}\n\n"
+                                md += f"**描述**: {item.get('description', '')}\n\n"
+                                md += f"**解決方案**:\n"
+                                solutions = item.get('solutions', [])
+                                if isinstance(solutions, list):
+                                    for sol in solutions:
+                                        md += f"  - {sol}\n"
+                                else:
+                                    md += f"  {solutions}\n"
+                                md += "\n"
+                            # 處理其他字典格式（如果有的話）
+                            else:
+                                md += f"- {json.dumps(item, ensure_ascii=False)}\n"
                     md += "\n"
             
             # 處理 subsection
@@ -363,7 +391,11 @@ class Store:
                     md += f"### {subsection_id}\n\n"
                     
                     sub_content = subsection.get("content", [])
-                    if isinstance(sub_content, list):
+                    if isinstance(sub_content, str):
+                        # content 是字串
+                        md += f"{sub_content}\n\n"
+                    elif isinstance(sub_content, list):
+                        # content 是陣列
                         for item in sub_content:
                             if isinstance(item, str):
                                 md += f"- {item}\n"
@@ -371,7 +403,7 @@ class Store:
                                 item_id = item.get("id", "")
                                 item_content = item.get("content", "")
                                 md += f"**{item_id}**\n{item_content}\n\n"
-                    md += "\n"
+                        md += "\n"
         
         return md
     

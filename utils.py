@@ -234,8 +234,9 @@ class Collect:
                 "decision": "跳過決策",
                 "rationale": "無效輸入"
             }
+    @staticmethod
     # 人類的額外想法
-    def additional_idea(self, round_num: int) -> str:
+    def additional_idea(round_num: int) -> str:
         print(f"\n{'='*60}")
         print(f"Round {round_num} - 額外想法輸入")
         print("="*60)

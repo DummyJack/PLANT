@@ -172,8 +172,17 @@ class Flow:
             else:
                 # 多輪時精煉
                 additional_ideas = artifact.get("additional_ideas", [])
+                
+                # 載入前一輪的 draft 並轉換為文字
+                try:
+                    prev_round = round_num - 1
+                    previous_draft = self.store.load_json(self.store.artifact_dir / f"draft_{prev_round}.json")
+                    draft_text = self.store.generate_draft_markdown(previous_draft)
+                except:
+                    draft_text = None
+                
                 stakeholders = self.user_agent.refine_stakeholders(
-                    artifact["stakeholders"], additional_ideas
+                    artifact["stakeholders"], additional_ideas, draft_text
                 )
                 self.logger.info(f"✓ 精煉 {len(stakeholders)} 位利害關係人需求")
 
@@ -280,8 +289,17 @@ class Flow:
         if self.config.get("enable_mediator", True) and report:
             self.logger.info("Stage 6: 產生決策選項並由人類選擇")
 
+            # 如果是第二輪以後，傳入前幾輪的所有決策
+            previous_decisions = None
+            if round_num > 1:
+                # 從 all_decisions 讀取前幾輪的決策
+                previous_decisions = artifact.get("all_decisions", [])
+                # 如果沒有 all_decisions，回退到 decisions
+                if not previous_decisions:
+                    previous_decisions = artifact.get("decisions", [])
+            
             decision_options = self.mediator_agent.generate_decision_options(
-                report, feedback
+                report, feedback, previous_decisions
             )
 
             # 儲存決策選項到 artifact
@@ -311,6 +329,16 @@ class Flow:
                     decision["conflict_title"], decision["decision"], decision["rationale"]
                 )
 
+            # 將當前輪的決策標記輪次並保存
+            for dec in decisions:
+                dec["round"] = round_num
+            
+            # 保留所有輪次的決策（使用 all_decisions）
+            if "all_decisions" not in artifact:
+                artifact["all_decisions"] = []
+            artifact["all_decisions"].extend(decisions)
+            
+            # 當前輪的決策（用於 draft 生成）
             artifact["decisions"] = decisions
             self.store.save_artifact(artifact)
             self.logger.info(f"✓ 完成 {len(decisions)} 個決策")
@@ -328,8 +356,14 @@ class Flow:
             draft_template = spec_template.get("draft", [])
 
             draft = self.analyst_agent.generate_draft(artifact, draft_template)
-            self.store.save_draft(draft)
-            self.logger.info("✓ 產生 draft.json")
+            self.store.save_draft(draft, round_num)
+            
+            # 生成 draft markdown
+            draft_md = self.store.generate_draft_markdown(draft)
+            self.store.save_markdown(draft_md, f"draft_{round_num}.md")
+            
+            self.logger.info(f"✓ 產生 draft.json、draft_{round_num}.json 和 draft_{round_num}.md")
+            
             self.mom_manager.add_stage(
                 "產生需求草稿",
                 "Analyst",
@@ -347,28 +381,30 @@ class Flow:
                 # 第一輪：產生新模型
                 uml_json = self.modeler_agent.generate_system_model(draft)
             else:
-                # 多輪：調整現有模型
-                current_uml = self.store.load_json(self.store.artifact_dir / "uml.json")
+                # 多輪：調整現有模型（載入前一輪的 uml）
+                prev_round = round_num - 1
+                current_uml = self.store.load_json(self.store.artifact_dir / f"uml_{prev_round}.json")
                 uml_json = self.modeler_agent.refine_model(current_uml, draft)
 
-            self.store.save_json(uml_json, self.store.artifact_dir / "uml.json")
+            # 保存帶輪次的 uml
+            self.store.save_uml(uml_json, round_num)
 
             # 產生 PlantUML 檔案
             self.store.save_plantuml_files(uml_json)
 
-            self.logger.info("✓ 產生系統模型 (uml.json 和 .plantuml 檔案)")
+            self.logger.info(f"✓ 產生系統模型 (uml_{round_num}.json 和 .plantuml 檔案)")
             self.mom_manager.add_stage(
                 "產生系統模型",
                 "Modeler",
-                "產生 uml.json 和 .plantuml 檔案",
+                f"產生 uml_{round_num}.json 和 .plantuml 檔案",
                 outputs={"model_generated": True},
             )
         else:
             self.logger.info("Stage 8 跳過 (Modeler 已停用)")
 
-        # 每輪結束後保存 MoM
+        # 每輪結束後保存 MoM（只保存最新版本）
         self.store.save_mom(self.mom_manager.get_mom_data())
-        self.logger.info(f"✓ 儲存 Round {round_num} 的會議記錄")
+        self.logger.info(f"✓ 儲存 Round {round_num} 的會議記錄 (mom.json)")
 
         return artifact
 
@@ -391,16 +427,37 @@ class Flow:
                 self.store.save_markdown(dr_md, "dr.md")
                 self.logger.info("✓ 產生 Design Rationale (dr.md)")
 
+                # 找出最新的 draft 和 uml（數字最大的）
+                import glob
+                draft_files = glob.glob(str(self.store.artifact_dir / "draft_*.json"))
+                uml_files = glob.glob(str(self.store.artifact_dir / "uml_*.json"))
+                
+                if draft_files:
+                    # 提取數字並找最大的
+                    latest_draft_file = max(draft_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                    draft = self.store.load_json(latest_draft_file)
+                    self.logger.info(f"✓ 使用最新草稿: {latest_draft_file.split('/')[-1]}")
+                else:
+                    self.logger.warning("未找到 draft 文件")
+                    draft = {}
+                
+                if uml_files:
+                    # 提取數字並找最大的
+                    latest_uml_file = max(uml_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                    uml = self.store.load_json(latest_uml_file)
+                    self.logger.info(f"✓ 使用最新模型: {latest_uml_file.split('/')[-1]}")
+                else:
+                    self.logger.warning("未找到 uml 文件")
+                    uml = {}
+
                 # 產生 SRS (srs.json / srs.md)
                 spec_template = self.store.load_spec_template()
                 ieee_template = spec_template.get("ieee_29148")
 
-                draft = self.store.load_draft()
-                uml = self.store.load_uml()
                 srs_json = self.documentor_agent.generate_srs_json(draft, uml, ieee_template)
                 self.store.save_srs(srs_json)
 
-                srs_md = self.store.generate_draft_markdown(srs_json)
+                srs_md = self.store.generate_srs_markdown(srs_json)
                 self.store.save_markdown(srs_md, "srs.md")
 
                 self.logger.info("✓ 產生 SRS (srs.json / srs.md)")
