@@ -43,8 +43,6 @@ class DocumentorAgent:
 請以完整的 Markdown 格式輸出，使用清晰的章節結構和要點列表。
 重要：只整理提供的資料中已有的內容，不要添加額外的建議或假設。"""
 
-        print(user_prompt)
-
         dr_content = self.model.generate(user_prompt)
         return dr_content
     
@@ -97,7 +95,7 @@ UML 系統模型:
 {uml_text}
 
 輸出 JSON，遵循以下結構:
-{template_text}"""
+ieee_29148:{template_text}"""
 
         srs = self.model.generate_json(user_prompt, system_prompt)
         return srs

@@ -73,18 +73,18 @@ class MediatorAgent:
 
     # 產生決策選項
     def generate_decision_options(
-        self, conflicts: List[Dict], feedback: List[Dict]
+        self, conflicts: List[Dict], feedback: List[Dict], previous_decisions: List[Dict] = None
     ) -> List[Dict]:
         decision_options = []
 
         for conflict in conflicts:
-            option = self.generate_decision(conflict, feedback)
+            option = self.generate_decision(conflict, feedback, previous_decisions)
             decision_options.append(option)
 
         return decision_options
 
     # 衝突產生決策選項
-    def generate_decision(self, conflict: Dict, feedback: List[Dict]) -> Dict:
+    def generate_decision(self, conflict: Dict, feedback: List[Dict], previous_decisions: List[Dict] = None) -> Dict:
         conflict_text = f"""{conflict.get('id', 'N/A')}: {conflict.get('title', 'N/A')}
 描述: {conflict.get('description', 'N/A')}
 """
@@ -102,8 +102,22 @@ class MediatorAgent:
             feedback_text = "\n".join(feedback_lines)
         else:
             feedback_text = "無專家建議"
+        
+        # 準備前一輪決策的說明
+        previous_decisions_text = ""
+        if previous_decisions:
+            previous_decisions_text = "前一輪的決策記錄:\n"
+            for prev_dec in previous_decisions:
+                prev_title = prev_dec.get('conflict_title', '')
+                prev_decision = prev_dec.get('decision', '')
+                prev_rationale = prev_dec.get('rationale', '')
+                previous_decisions_text += f"\n衝突: {prev_title}\n決策: {prev_decision}\n理由: {prev_rationale}\n"
+            
+            previous_decisions_text += "\n 重要: 請參考前一輪的決策，避免提出完全相同的選項。如果當前衝突與前一輪相似，請提出更深入或不同角度的解決方案。"
 
         user_prompt = f"""根據已有衝突報告: {conflict_text}和已有專家建議: {feedback_text}。
+{previous_decisions_text}
+
 請生成：
 1. 至少提供 3 個決策選項，看情況增加
 2. 每個選項都要包含：
@@ -130,7 +144,7 @@ class MediatorAgent:
 "recommendation": "推薦選項X，理由是..."
 }}}}"""
         
-        response = self.model.generate_json(user_prompt, self.system_prompt)
+        response = self.model.generate_json(user_prompt, self.system_prompt, temperature=1)
         
         # 轉換選項格式以符合原有介面
         options_list = []

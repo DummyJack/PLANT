@@ -4,7 +4,7 @@ from store import Store
 # 系統建模者，需求草稿產生系統模型（PlantUML 程式碼、AST 結構化資料）
 class ModelerAgent:
 
-    system_prompt = "你是系統建模專家，任務使根據需求草稿轉換系統模型。"
+    system_prompt = "你是系統建模專家，任務根據需求草稿轉換系統模型。"
 
     def __init__(self, model, store):
         self.model = model
@@ -75,8 +75,6 @@ class ModelerAgent:
 }}}}
 }}}}"""
         
-        print(user_prompt)
-        
         response = self.model.generate_json(user_prompt, self.system_prompt)
         return response
 
@@ -87,8 +85,17 @@ class ModelerAgent:
         
         # 格式化需求草稿
         formatted_draft = self.store.generate_draft_markdown(draft)
+        
+        # 格式化當前模型
+        import json
+        current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
 
-        user_prompt = f"""##
+        user_prompt = f"""## 當前系統模型（uml.json）
+
+```json
+{current_model_json}
+```
+
 ## 新的需求草稿
 
 {formatted_draft}
@@ -98,7 +105,7 @@ class ModelerAgent:
 請評估新的需求草稿，判斷是否需要調整系統模型：
 
 ### 評估步驟
-1. **分析變更**：比較新需求草稿與現有模型
+1. **分析變更**：比較新需求草稿與當前模型（uml.json）
 2. **識別影響**：找出哪些模型元素需要調整
 3. **判斷必要性**：只在真正需要時才修改
 4. **執行調整**：
@@ -126,9 +133,6 @@ class ModelerAgent:
     "relationships": [...]
 }}}}
 }}}}"""
-
-        print(user_prompt)
-
         try:
             response = self.model.generate_json(user_prompt, self.system_prompt)
             return response

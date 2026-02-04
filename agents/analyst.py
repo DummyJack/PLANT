@@ -36,10 +36,29 @@ class AnalystAgent:
                 for sh in stakeholder_group
             ]
         )
+        
+        # 檢測是否為第二輪精煉後的需求（包含 KEEP/REVISE/ADD 格式）
+        is_refined = any("[KEEP]" in sh.get("text", "") or "[REVISE]" in sh.get("text", "") or "[ADD]" in sh.get("text", "") 
+                        for sh in stakeholder_group)
+        
+        # 如果是精煉後的需求，提供特別說明
+        refined_note = ""
+        if is_refined:
+            refined_note = """這是第二輪精煉後的需求，格式如下：
+- [KEEP]: 利害關係人希望保留的需求（已在草稿中反映）
+- [REVISE]: 利害關係人希望修正的需求（對草稿的調整意見）
+- [ADD]: 利害關係人希望新增的需求（草稿中未包含）
+
+請特別注意：
+1. REVISE 和 ADD 部分更容易產生新的衝突
+2. 如果不同利害關係人對同一需求有不同的 REVISE 意見，這是明顯的衝突
+3. KEEP 部分通常不會產生衝突，除非不同利害關係人的 KEEP 互相矛盾
+"""
 
         # 根據是否為全部分析，決定是否產生候選需求
         if is_all_analysis:
             user_prompt = f"""請針對以下利害關係人的發言進行需求分析與衝突辨識。
+{refined_note}
 {stakeholder_texts}
 
 請輸出：
@@ -54,6 +73,7 @@ class AnalystAgent:
 }}}}"""
         else:
             user_prompt = f"""請針對以下利害關係人的發言進行需求衝突辨識。
+{refined_note}
 {stakeholder_texts}
 
 請輸出偵測到的需求衝突(若有衝突，標記 Conflict。反之，標記 Neutral)，並說明判斷理由
@@ -64,7 +84,7 @@ class AnalystAgent:
 "reason": "判斷理由"
 }}}}"""
 
-        response = self.model.generate_json(user_prompt, self.system_prompt)
+        response = self.model.generate_json(user_prompt, self.system_prompt, temperature=1)
 
         result = {
             "texts": {sh["name"]: sh["text"] for sh in stakeholder_group},
@@ -110,8 +130,6 @@ class AnalystAgent:
 
 請輸出 JSON，遵循以下結構:
 draft: {draft_template_text}"""
-
-        print(user_prompt)
 
         try:
             draft = self.model.generate_json(user_prompt, self.system_prompt)
