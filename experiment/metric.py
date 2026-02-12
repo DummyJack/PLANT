@@ -24,14 +24,3 @@ class Metric:
             "recall": round(recall, 4),
             "f1": round(f1, 4),
         }
-
-    # 計算 pass@k
-    # n: 總生成次數, c: 正確次數, k: 取樣數
-    @staticmethod
-    def pass_at_k(n: int, c: int, k: int) -> float:
-        if n - c < k:
-            return 1.0
-        result = 1.0
-        for i in range(k):
-            result *= (n - c - i) / (n - i)
-        return round(1.0 - result, 4)
