@@ -3,3 +3,5 @@ openai>=1.12.0
 PyPDF2
 python-docx
 ollama
+tavily-python>=0.3.0
+requests>=2.31.0

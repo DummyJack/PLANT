@@ -1,16 +1,10 @@
-# Agents 模組
-from .user import UserAgent
-from .analyst import AnalystAgent
-from .expert import ExpertAgent
-from .mediator import MediatorAgent
-from .modeler import ModelerAgent
-from .documentor import DocumentorAgent
+# Agents 基礎模組 — 核心基礎設施（BaseAgent、Memory、Registry、Tools）
+from .base import BaseAgent
+from .memory import Memory
+from .registry import AgentRegistry
 
 __all__ = [
-    'UserAgent',
-    'AnalystAgent',
-    'ExpertAgent',
-    'MediatorAgent',
-    'ModelerAgent',
-    'DocumentorAgent'
+    'BaseAgent',
+    'Memory',
+    'AgentRegistry',
 ]

@@ -1,5 +1,5 @@
 {
-  "rounds": 1,
+  "rounds": 2,
   "provider": "openai",
   "model": "gpt-4o-mini",
   "temperature": 0,
@@ -10,5 +10,8 @@
   "enable_modeler": true,
   "enable_documentor": true,
   "enable_web_search": true,
-  "start_round": 1
+  "start_round": 1,
+  "enable_reflection": true,
+  "enable_agent_communication": true,
+  "plantuml_server": "http://www.plantuml.com/plantuml"
 }

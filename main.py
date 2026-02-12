@@ -99,11 +99,8 @@ def main():
         print()
         extra_rounds = AgentSelector.set_rounds()
         
-        # 計算已完成的輪數（從 mom.json）
-        completed_rounds = 0
-        mom_data = project_store.load_mom()
-        if mom_data and "rounds" in mom_data:
-            completed_rounds = len(mom_data["rounds"])
+        # 計算已完成的輪數（從 draft 檔案數量）
+        completed_rounds = len(list(project_store.artifact_dir.glob("draft_*.json")))
         
         # 設置總輪數（已完成 + 額外）
         config["rounds"] = completed_rounds + extra_rounds

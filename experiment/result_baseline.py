@@ -12,8 +12,7 @@ BENCHMARK_DIR = Path(__file__).parent / "benchmark"
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
-# 執行 cn_pairs 衝突偵測測試
-# count: 要做幾筆，0 為全做
+# 衝突測試
 def run_conflict(model: BaselineModel, count: int = 0):
     csv_path = BENCHMARK_DIR / "cn_pairs.csv"
     data = []
@@ -81,8 +80,7 @@ def run_conflict(model: BaselineModel, count: int = 0):
     return result
 
 
-# 執行 PlantUCD 類別圖生成測試
-# count: 要做幾筆，0 為全做
+# PlantUCD 類別圖生成測試
 def run_plantuml(model: BaselineModel, count: int = 0):
     json_path = BENCHMARK_DIR / "PlantUCD_dataset_test.json"
     with open(json_path, "r", encoding="utf-8") as f:
