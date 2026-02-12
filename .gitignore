@@ -11,5 +11,7 @@ log/
 # 專案資料夾（包含 artifact、output）
 projects/
 
+# 實驗結果
+experiment/results/
 # macOS
 .DS_Store
