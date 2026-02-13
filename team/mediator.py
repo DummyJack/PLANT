@@ -7,62 +7,33 @@ from agents.memory import Memory
 
 
 class MediatorAgent(BaseAgent):
-    """需求調解主持人 — 會議主持、衝突報告、決策選項、草稿生成"""
+    """需求調解主持人 — 會議主持、衝突報告、草稿生成"""
 
     name = "mediator"
 
     system_prompt = """你是需求調解主持人（Mediator Agent），負責主持需求討論會議。
 
 核心職責：
-1. 建立專案目標 — 從初始想法提煉系統要解決的核心問題
-2. 議題管理 — 分析需求規格，識別需要討論的議題
-3. 討論主持 — 決定討論模式（逐一/同時），維持討論秩序
-4. 共識促成 — 綜合各方意見，嘗試達成共識
-5. 衝突報告 — 將衝突結構化為報告
-6. 草稿生成 — 將討論結果轉化為需求草稿
+1. 議題管理 — 分析需求規格，識別需要討論的議題
+2. 討論主持 — 決定討論模式（逐一/同時），維持討論秩序
+3. 共識促成 — 綜合各方意見，嘗試達成共識
+4. 衝突報告 — 將衝突結構化為報告
+5. 草稿生成 — 將討論結果轉化為需求草稿
 
 核心原則：
 - 中立客觀 — 不偏袒任何利害關係人，不提出自己的技術觀點
 - 忠於資料 — 只根據已有的分析結果和討論內容做出綜合判斷
 - 無法共識時升級 — 先請 Expert 裁決，Expert 也無法時才升級至人類"""
 
-    reflection_criteria = "衝突報告必須涵蓋所有已識別的衝突，每個衝突有明確的標題、描述和涉及的利害關係人。決策選項必須具體可執行。"
+    reflection_criteria = "衝突報告必須涵蓋所有已識別的衝突，每個衝突有明確的標題、描述和涉及的利害關係人。"
 
     def __init__(self, model, tools: Optional[list] = None,
                  memory: Optional[Memory] = None, registry=None):
         super().__init__(model, tools=tools, memory=memory, registry=registry)
 
-    # Phase 0
-
-    def establish_project_goal(self, rough_idea: str) -> str:
-        self.memory.clear_short_term()
-
-        user_prompt = f"""# 任務
-根據以下初始想法，用 1-2 句話精準描述這個系統要解決的核心問題。
-
-# 初始想法
-{rough_idea}
-
-# 要求
-- 涵蓋系統要解決的關鍵問題
-- 簡潔明確，點出「為誰」「解決什麼問題」
-- 不涉及具體技術方案
-
-# 輸出 JSON
-{{{{
-    "project_goal": "描述系統要解決的核心問題"
-}}}}"""
-
-        self.memory.add("user", f"建立專案目標: {rough_idea[:80]}...")
-        messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-        goal = response.get("project_goal", rough_idea)
-        self.memory.add("assistant", f"已建立專案目標: {goal}")
-        return goal
-
     # Round 2+: 議題生成
 
-    def generate_topics(self, current_spec: Dict, project_goal: str,
+    def generate_topics(self, current_spec: Dict, rough_idea: str,
                         previous_meetings: List[Dict] = None) -> List[Dict]:
         self.memory.clear_short_term()
 
@@ -70,7 +41,7 @@ class MediatorAgent(BaseAgent):
         if len(spec_text) > 3000:
             spec_text = spec_text[:3000] + "\n... (已截斷)"
 
-        goal_text = project_goal if isinstance(project_goal, str) else str(project_goal)
+        idea_text = rough_idea if isinstance(rough_idea, str) else str(rough_idea)
 
         prev_meetings_text = ""
         if previous_meetings:
@@ -86,8 +57,8 @@ class MediatorAgent(BaseAgent):
         user_prompt = f"""# 任務
 分析現有需求規格，識別本輪需要討論的議題。
 
-# 專案目標
-{goal_text}
+# 初始想法
+{idea_text}
 
 # 現有需求規格
 {spec_text}
@@ -248,22 +219,22 @@ class MediatorAgent(BaseAgent):
 
     # 每個章節對應的 artifact 資料
     DRAFT_SECTION_DATA_MAP = {
-        "1. System Overview": ["rough_idea", "project_goal"],
+        "1. System Overview": ["rough_idea"],
         "2. Requirement Engineering": ["candidates", "stakeholders"],
         "3. System Stakeholders": ["stakeholders"],
-        "4. Conflicting Requirements": ["reports", "options", "decisions"],
+        "4. Conflicting Requirements": ["reports", "decisions"],
         "5. Functional Requirements": ["candidates", "feedback", "decisions"],
         "6. Non-Functional Requirements": ["candidates", "feedback"],
     }
 
     # 每個章節的額外提示
     DRAFT_SECTION_HINTS = {
-        "1. System Overview": "根據 rough_idea 和 project_goal 撰寫系統概述。",
+        "1. System Overview": "根據 rough_idea 撰寫系統概述。",
         "2. Requirement Engineering": "從 candidates 整理使用者需求和系統需求。",
         "3. System Stakeholders": "列出每位利害關係人的關注點和需求。",
         "4. Conflicting Requirements": (
             "將 reports 轉為衝突需求：reports 的 id, title, stakeholder_names, description → 此章節的 id, stakeholder_name, description。"
-            "options 中的選項 → solutions。decisions 為已裁決的結果。"
+            "decisions 為討論後的決策結果。"
         ),
         "5. Functional Requirements": "從 candidates 和 decisions 中提取功能性需求。",
         "6. Non-Functional Requirements": "從 candidates 中提取非功能性需求（效能、安全、可用性等）。",
@@ -272,12 +243,10 @@ class MediatorAgent(BaseAgent):
     def generate_draft(self, artifact: Dict[str, Any], draft_template: list) -> Dict[str, Any]:
         full_artifact = {
             "rough_idea": artifact.get("rough_idea", ""),
-            "project_goal": artifact.get("project_goal", ""),
             "stakeholders": artifact.get("stakeholders", []),
             "candidates": self.extract_candidates(artifact.get("analyse", [])),
             "reports": artifact.get("reports", []),
             "feedback": artifact.get("feedback", []),
-            "options": artifact.get("options", []),
             "decisions": artifact.get("decisions", []),
         }
 
@@ -329,8 +298,7 @@ class MediatorAgent(BaseAgent):
                 all_candidates.extend(group["candidates"])
         return all_candidates
 
-    # Round 1: 衝突報告
-
+    # 衝突報告
     def generate_conflict_report(self, conflict_groups: List[Dict]) -> List[Dict]:
         formatted_conflicts = []
         for idx, group in enumerate(conflict_groups, 1):
@@ -383,83 +351,3 @@ class MediatorAgent(BaseAgent):
         elif isinstance(response, list):
             return response
         return []
-
-    # 決策選項
-
-    def generate_decision_options(self, conflicts: List[Dict], feedback: List[Dict],
-                                  previous_decisions: List[Dict] = None) -> List[Dict]:
-        return [self.generate_decision(c, feedback, previous_decisions) for c in conflicts]
-
-    def generate_decision(self, conflict: Dict, feedback: List[Dict],
-                          previous_decisions: List[Dict] = None) -> Dict:
-        conflict_text = (
-            f"ID: {conflict.get('id', 'N/A')}\n"
-            f"標題: {conflict.get('title', 'N/A')}\n"
-            f"描述: {conflict.get('description', 'N/A')}\n"
-            f"涉及: {', '.join(conflict.get('stakeholder_names', []))}"
-        )
-
-        feedback_text = "無專家建議"
-        if feedback:
-            feedback_lines = []
-            for fb in feedback:
-                fb_id = fb.get('id', '')
-                fb_texts = fb.get('text', [])
-                binding = "🔒 拘束性" if fb.get('binding') else "💡 建議性"
-                feedback_lines.append(f"\n{fb_id} ({binding}):")
-                for text in fb_texts:
-                    feedback_lines.append(f"  • {text}")
-            feedback_text = "\n".join(feedback_lines)
-
-        previous_decisions_text = ""
-        if previous_decisions:
-            previous_decisions_text = "\n# 前一輪決策記錄\n"
-            for prev_dec in previous_decisions:
-                previous_decisions_text += f"衝突: {prev_dec.get('conflict_title', '')}\n決策: {prev_dec.get('decision', '')}\n"
-            previous_decisions_text += "請參考前一輪決策，避免完全相同的選項。"
-
-        user_prompt = f"""# 任務
-為以下衝突生成決策選項。
-
-# 衝突資訊
-{conflict_text}
-
-# 專家建議
-{feedback_text}
-{previous_decisions_text}
-
-# 要求
-1. 至少 3 個可行的決策選項
-2. 每個選項包含具體描述和理由
-3. 給出整體推薦，必須標明推薦的是選項幾（從 1 開始編號）
-
-# 約束
-- 選項必須是具體可執行的方案，不能是「再討論」
-- 若有 binding 建議，必須在選項中體現
-
-# 輸出 JSON
-{{{{
-    "options": [
-        {{{{"option": "選項描述", "rationale": "理由"}}}}
-    ],
-    "recommendation": "推薦選項 N：推薦理由（N 為選項編號，從 1 開始）"
-}}}}"""
-
-        self.memory.add("user", f"為衝突 {conflict.get('title', '')} 生成決策選項")
-        response = self.generate_with_reflection(user_prompt, temperature=1)
-
-        options_list, rationales_list = [], []
-        for opt in response.get("options", []):
-            if isinstance(opt, dict):
-                options_list.append(opt.get("option", ""))
-                rationales_list.append(opt.get("rationale", ""))
-            else:
-                options_list.append(opt)
-                rationales_list.append("")
-
-        return {
-            "title": conflict.get("title", "N/A"),
-            "options": options_list,
-            "rationales": rationales_list,
-            "recommendation": response.get("recommendation", ""),
-        }

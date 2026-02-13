@@ -13,5 +13,7 @@
   "start_round": 1,
   "enable_reflection": true,
   "enable_agent_communication": true,
+  "react_max_steps": 3,
+  "reflection_max_retries": 1,
   "plantuml_server": "http://www.plantuml.com/plantuml"
 }

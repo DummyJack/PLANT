@@ -34,18 +34,23 @@ class BaseAgent:
         self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
         self.memory = memory or Memory()
         self.registry = registry
+        self.react_max_steps: int = 3
+        self.reflection_max_retries: int = 1
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
     # ReAct Loop
 
     def run(self, task: str, context: Optional[Dict] = None,
-            max_steps: int = 3, output_format: str = "json",
-            min_tool_uses: int = 0, max_reflection_retries: int = 1) -> Any:
+            max_steps: int = None, output_format: str = "json",
+            min_tool_uses: int = 0, max_reflection_retries: int = None) -> Any:
         """ReAct 推理迴圈：Think → Act → Observe → Repeat
 
         行動步數（use_tool / 格式錯誤）與 Reflection 重試分開計數，
         Reflection 失敗不消耗行動步數。
         """
+        max_steps = max_steps if max_steps is not None else self.react_max_steps
+        max_reflection_retries = max_reflection_retries if max_reflection_retries is not None else self.reflection_max_retries
+
         task_prompt = self.build_task_prompt(task, context)
         self.memory.add("user", task_prompt)
 
@@ -211,12 +216,14 @@ class BaseAgent:
     # Generate with Reflection
 
     def generate_with_reflection(self, task: str, context=None,
-                                  output_format="json", max_retries=1,
+                                  output_format="json", max_retries=None,
                                   **model_kwargs) -> Any:
         """生成 + 反思 + 修正：所有 agent 通用的品質把關方法
 
         對設了 reflection_criteria 的 agent 自動執行「生成 → 反思 → 修正」迴圈。
         """
+        max_retries = max_retries if max_retries is not None else self.reflection_max_retries
+
         messages = self.build_direct_messages(task, context)
         if output_format == "json":
             response = self.model.chat_json(messages, **model_kwargs)

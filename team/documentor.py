@@ -37,10 +37,9 @@ class DocumentorAgent(BaseAgent):
 {mom_json_str}
 
 # 整理結構
-## 1. 決策理由 — 從 conflict_resolutions 提取每個衝突的最終決策及其理由
-## 2. 方案取捨過程 — 從 options 提取曾考慮的方案及選擇/放棄原因
-## 3. 替代方案 — 未採用的方案及其優缺點
-## 4. 依據與參考 — 從 feedback 提取引用的法規、標準、文件
+## 1. 決策理由 — 從會議討論中提取每個議題的決策及其理由
+## 2. 替代方案 — 討論中提出但未採用的方案及其優缺點
+## 3. 依據與參考 — 從 feedback 提取引用的法規、標準、文件
 
 # 約束
 - 只整理已有資料，禁止推測或添加不存在的決策
@@ -54,18 +53,19 @@ class DocumentorAgent(BaseAgent):
         return dr_content
 
     def extract_dr_data(self, mom_data: Dict[str, Any]) -> Dict[str, Any]:
-        extracted = {"feedback": [], "options": [], "conflict_resolutions": []}
+        extracted = {"feedback": [], "meetings": []}
 
         for round_data in mom_data.get("rounds", []):
-            if "conflict_resolutions" in round_data:
-                extracted["conflict_resolutions"].extend(round_data["conflict_resolutions"])
-
             for stage in round_data.get("stages", []):
                 outputs = stage.get("outputs", {})
                 if "feedback" in outputs:
                     extracted["feedback"].extend(outputs["feedback"])
-                if "decision_options" in outputs:
-                    extracted["options"].extend(outputs["decision_options"])
+
+            for meeting in round_data.get("meetings", []):
+                extracted["meetings"].append({
+                    "topic": meeting.get("topic", {}),
+                    "resolution": meeting.get("resolution", {}),
+                })
 
         return extracted
 

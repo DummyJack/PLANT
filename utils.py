@@ -65,21 +65,6 @@ class MoMManager:
 
         self.mom_data["rounds"][-1]["stages"].append(stage_data)
 
-    def add_conflict_resolution(self, conflict_title: str, decision: str, rationale: str):
-        if not self.mom_data["rounds"]:
-            raise ValueError("請先呼叫 start_round()")
-
-        current_round = self.mom_data["rounds"][-1]
-        if "conflict_resolutions" not in current_round:
-            current_round["conflict_resolutions"] = []
-
-        current_round["conflict_resolutions"].append({
-            "conflict_title": conflict_title,
-            "decision": decision,
-            "rationale": rationale,
-            "timestamp": datetime.now().isoformat()
-        })
-
     def add_meeting(self, round_num: int, topic: Dict, contributions: List[Dict],
                     resolution: Dict, escalated_to_human: bool = False):
         if not self.mom_data["rounds"]:
@@ -176,60 +161,6 @@ class Collect:
             except Exception as e:
                 print(f"\n❌ 錯誤：{e}")
                 continue
-
-    @staticmethod
-    def user_decision(decision_option: Dict) -> Dict:
-        print(f"衝突標題: {decision_option.get('title', 'N/A')}")
-        print(f"\n決策選項(0. 自行輸入解決方法)：")
-
-        rationales = decision_option.get('rationales', [])
-        for i, opt in enumerate(decision_option['options'], 1):
-            print(f"\n{i}. {opt}")
-            if rationales and i-1 < len(rationales) and rationales[i-1]:
-                print(f"理由：{rationales[i-1]}")
-
-        print(f"\n💡 推薦：{decision_option.get('recommendation', '無')}")
-
-        user_input = input("\n請選擇方案(輸入編號或 skip)：").strip()
-
-        if user_input.lower() == 'skip':
-            return {
-                "conflict_title": decision_option['title'],
-                "decision": "跳過決策",
-                "rationale": "人類選擇暫不處理此衝突"
-            }
-
-        try:
-            choice_idx = int(user_input)
-
-            if choice_idx == 0:
-                custom_solution = input("\n請輸入您的解決方法：").strip()
-                if not custom_solution:
-                    return {
-                        "conflict_title": decision_option['title'],
-                        "decision": "跳過決策",
-                        "rationale": "未輸入解決方法"
-                    }
-                return {
-                    "conflict_title": decision_option['title'],
-                    "decision": "手動方案",
-                    "rationale": custom_solution
-                }
-
-            elif 1 <= choice_idx <= len(decision_option['options']):
-                chosen = decision_option['options'][choice_idx - 1]
-                chosen_rationale = rationales[choice_idx - 1] if rationales and choice_idx-1 < len(rationales) else decision_option.get('recommendation', '')
-                return {
-                    "conflict_title": decision_option['title'],
-                    "decision": chosen,
-                    "rationale": chosen_rationale
-                }
-            else:
-                print("無效的選項，預設跳過")
-                return {"conflict_title": decision_option['title'], "decision": "跳過決策", "rationale": "無效輸入"}
-        except ValueError:
-            print("無效的輸入，預設跳過")
-            return {"conflict_title": decision_option['title'], "decision": "跳過決策", "rationale": "無效輸入"}
 
     @staticmethod
     def human_decision_on_topic(topic: Dict, contributions: List[Dict]) -> Dict:

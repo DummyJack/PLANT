@@ -28,6 +28,8 @@ class Flow:
 
         self.enable_reflection = config.get("enable_reflection", True)
         self.enable_agent_communication = config.get("enable_agent_communication", True)
+        self.react_max_steps = config.get("react_max_steps", 3)
+        self.reflection_max_retries = config.get("reflection_max_retries", 1)
 
         self.registry = AgentRegistry() if self.enable_agent_communication else None
 
@@ -82,6 +84,12 @@ class Flow:
             self.registry.register("modeler", self.modeler_agent, "系統建模專家，負責 UML 模型")
             self.registry.register("documentor", self.documentor_agent, "文件撰寫專家，負責 SRS")
 
+        # 設定 ReAct / Reflection 次數
+        for agent in [self.user_agent, self.analyst_agent, self.expert_agent,
+                       self.mediator_agent, self.modeler_agent, self.documentor_agent]:
+            agent.react_max_steps = self.react_max_steps
+            agent.reflection_max_retries = self.reflection_max_retries
+
         self.logger.info(f"Agent 系統初始化完成")
 
     def summarize_memories(self, round_num: int):
@@ -95,24 +103,15 @@ class Flow:
 
         artifact = {
             "rough_idea": rough_idea,
-            "project_goal": "",
             "proposed_stakeholders": [],
             "stakeholders": [],
             "analyse": [],
             "reports": [],
             "feedback": [],
-            "options": [],
             "decisions": [],
         }
 
         self.store.save_artifact(artifact)
-
-        # Phase 0: 建立專案目標
-        self.logger.info("Phase 0: 建立專案目標")
-        project_goal = self.mediator_agent.establish_project_goal(rough_idea)
-        artifact["project_goal"] = project_goal
-        self.store.save_artifact(artifact)
-        self.logger.info(f"✓ 專案目標: {project_goal}")
 
         for round_num in range(start_round, rounds + 1):
             self.logger.info(f"Round {round_num}/{rounds}")
@@ -129,13 +128,6 @@ class Flow:
         rounds = self.config.get("rounds", 1)
         start_round = self.config.get("start_round", 1)
         artifact = existing_artifact
-
-        if not artifact.get("project_goal"):
-            self.logger.info("Phase 0: 補建專案目標")
-            rough_idea = artifact.get("rough_idea", "")
-            if rough_idea:
-                artifact["project_goal"] = self.mediator_agent.establish_project_goal(rough_idea)
-                self.store.save_artifact(artifact)
 
         self.logger.info(f"繼續現有專案，從 Round {start_round} 開始")
 
@@ -223,34 +215,9 @@ class Flow:
             self.store.save_artifact(artifact)
             self.mom_manager.add_stage("專家提供建議", "Expert", f"{len(feedback)} 則", outputs={"feedback": feedback})
 
-        # Stage 6: 決策
-        decisions = []
-        if self.config.get("enable_mediator", True) and report:
-            self.logger.info("Stage 6: 產生決策選項")
-            decision_options = self.mediator_agent.generate_decision_options(report, feedback)
-            artifact["options"] = decision_options
-            self.store.save_artifact(artifact)
-            self.mom_manager.add_stage("產生決策選項", "Mediator", f"{len(decision_options)} 組")
-
-            self.logger.info("請進行衝突裁決：")
-            for option in decision_options:
-                decision = Collect.user_decision(option)
-                decisions.append(decision)
-                self.mom_manager.add_stage("人類決策", "Human", f"{decision['conflict_title']}", outputs=decision)
-                self.mom_manager.add_conflict_resolution(decision["conflict_title"], decision["decision"], decision["rationale"])
-
-            for dec in decisions:
-                dec["round"] = round_num
-            if "all_decisions" not in artifact:
-                artifact["all_decisions"] = []
-            artifact["all_decisions"].extend(decisions)
-            artifact["decisions"] = decisions
-            self.store.save_artifact(artifact)
-            self.logger.info(f"✓ 完成 {len(decisions)} 個決策")
-
-        # Stage 7: 草稿
+        # Stage 6: 草稿
         if self.config.get("enable_mediator", True):
-            self.logger.info("Stage 7: 產生需求草稿")
+            self.logger.info("Stage 6: 產生需求草稿")
             spec_template = self.store.load_spec_template()
             draft_template = spec_template.get("draft", [])
             draft = self.mediator_agent.generate_draft(artifact, draft_template)
@@ -263,9 +230,9 @@ class Flow:
         else:
             draft = self.store.load_draft()
 
-        # Stage 8: UML
+        # Stage 7: UML
         if self.config.get("enable_modeler", True):
-            self.logger.info("Stage 8: 建立系統模型")
+            self.logger.info("Stage 7: 建立系統模型")
             uml_data = self.modeler_agent.generate_system_model(draft)
             draft["uml"] = uml_data
             self.store.save_draft(draft, round_num)
@@ -279,8 +246,6 @@ class Flow:
     # Round 2+
 
     def run_discussion_round(self, artifact: Dict[str, Any], round_num: int) -> Dict[str, Any]:
-        project_goal = artifact.get("project_goal", "")
-
         prev_round = round_num - 1
         try:
             current_spec = self.store.load_json(self.store.artifact_dir / f"draft_{prev_round}.json")
@@ -292,7 +257,8 @@ class Flow:
 
         # Step 1: 生成議題
         self.logger.info("Step 1: Mediator 生成議題清單")
-        topics = self.mediator_agent.generate_topics(current_spec, project_goal, previous_meetings)
+        rough_idea = artifact.get("rough_idea", "")
+        topics = self.mediator_agent.generate_topics(current_spec, rough_idea, previous_meetings)
         self.logger.info(f"✓ 生成 {len(topics)} 個議題")
 
         print(f"\n{'='*60}")
