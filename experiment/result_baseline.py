@@ -13,7 +13,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 
 
 # 衝突測試
-def run_conflict(model: BaselineModel, count: int = 0):
+def run_conflict(model: BaselineModel, count: int = 0, mode: str = "macro"):
     csv_path = BENCHMARK_DIR / "cn_pairs.csv"
     data = []
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -48,31 +48,35 @@ def run_conflict(model: BaselineModel, count: int = 0):
 
     print()
 
-    # 計算指標
-    # Macro: Conflict 和 Neutral 各自算再取平均
-    metrics_conflict = Metric.precision_recall_f1(y_true, y_pred, positive="Conflict")
-    metrics_neutral = Metric.precision_recall_f1(y_true, y_pred, positive="Neutral")
-    macro = {
-        "precision": round((metrics_conflict["precision"] + metrics_neutral["precision"]) / 2, 4),
-        "recall": round((metrics_conflict["recall"] + metrics_neutral["recall"]) / 2, 4),
-        "f1": round((metrics_conflict["f1"] + metrics_neutral["f1"]) / 2, 4),
+    # 計算指標：conflict 永遠算，overall 根據 mode 決定
+    conflict_metrics = Metric.precision_recall_f1(y_true, y_pred, positive="Conflict")
+    if mode == "macro":
+        overall = Metric.macro(y_true, y_pred)["macro"]
+    elif mode == "micro":
+        overall = Metric.micro(y_true, y_pred)
+
+    metrics = {
+        "mode": mode,
+        "overall": overall,
+        "conflict": conflict_metrics,
     }
 
     result = {
         "task": "conflict_detection",
         "model": model.model_name,
         "total": total,
-        "metrics": {
-            "macro": macro,
-            "conflict": metrics_conflict,
+        "count": {
+            "conflict": y_true.count("Conflict"),
+            "neutral": y_true.count("Neutral"),
         },
+        "metrics": metrics,
         "records": records,
     }
 
     # 儲存
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%H%M%S")
-    filepath = RESULTS_DIR / f"conflict_{model.model_name}_{ts}.json"
+    filepath = RESULTS_DIR / f"baseline_conflict_{model.model_name}_{ts}.json"
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"  已儲存: {filepath}")
@@ -128,11 +132,11 @@ def run_plantuml(model: BaselineModel, count: int = 0):
 if __name__ == "__main__":
     model = BaselineModel()
 
-    task = input("選擇以下實驗: ").strip()
-    print()
-    print("1. 做需求衝突")
-    print("2. 做 UML Model")
+    print("1. 需求衝突")
+    print("2. PlantUML 類別圖生成")
     print("0. 全部都要做")
+    print()
+    task = input("選擇實驗: ").strip()
 
     if task in ("0", "1"):
         count = int(input("實驗幾筆資料 (0:全做): ").strip() or "0")
