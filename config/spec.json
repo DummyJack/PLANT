@@ -1,161 +1,75 @@
 {
-  "ieee_29148": [
+  "spec": [
     {
-      "section": "1. Introduction",
+      "section": "1. System Overview",
+      "content": ""
+    },
+    {
+      "section": "2. Requirement Engineering",
       "subsection": [
         {
-          "id": "1.1 Purpose",
-          "content": ""
+          "id": "2.1 User Requirements",
+          "content": ["UR-01: stakeholder requirement"]
         },
         {
-          "id": "1.2 Scope",
-          "content": ""
-        },
-        {
-          "id": "1.3 Product overview",
-          "subsection": [
+          "id": "2.2 System Requirements",
+          "content": [
             {
-              "id": "1.3.1 Product perspective",
-              "content": ""
-            },
-            {
-              "id": "1.3.2 Product functions",
-              "content": ["",""]
-            },
-            {
-              "id": "1.3.3 User characteristics",
-              "content": ["", ""]
-            },
-            {
-              "id": "1.3.4 Limitations",
-              "content": ["", ""]
-            }
-          ]
-        },
-        {
-          "id": "1.4 Definitions",
-          "content": ""
-        }
-      ]
-    },
-    {
-      "section": "2. References",
-      "note":"本章節列出所有對本 SRS 中需求具有約束力或解釋作用的外部文件與標準，作為需求理解與一致性的依據",
-      "content": ["",""]
-    },
-    {
-      "section": "3. Requirements",
-      "subsection": [
-        {
-          "id": "3.1 Functions",
-          "content": ["FR-01: function requirement"]
-        },
-        {
-          "id": "3.2 Performance requirements",
-          "content": ["PR-01: performance requirement"]
-        },
-        {
-          "id": "3.3 Usability requirements",
-          "content": ["UR-01: usability requirement"]
-        },
-        {
-          "id": "3.4 Interface requirements",
-          "content": ["IR-01: interface requirement"]
-        },
-        {
-          "id": "3.5 Logical database requirements",
-          "content": ["LDR-01: logical database requirement"]
-        },
-        {
-          "id": "3.6 Design constraints",
-          "content": [""]
-        },
-        {
-          "id": "3.7 Software system attributes",
-          "content": [""]
-        },
-        {
-          "id": "3.8 Supporting information",
-          "content": [""]
-        }
-      ]
-    },
-    {
-      "section": "4. Verification",
-      "note":"本章節說明用於驗證第 3 章需求是否被正確實現的方法與原則，並確保所有需求皆為可驗證",
-      "content": [""]
-    },
-    {
-      "section": "5. Appendices",
-      "content": [
-        {
-          "id": "5.1 ... Model",
-          "plantuml":""
-        }
-      ]
-    }
-  ],
-  "draft": [
-      {
-        "section": "1. System Overview",
-        "content": ""
-      },
-      {
-        "section": "2. Requirement Engineering",
-        "subsection": [
-          {
-            "id": "2.1 User Requirements",
-            "content": ["UR-01: stakeholder requirement"]
-          },
-          {
-            "id": "2.2 System Requirements",
-            "content": [
-              {
               "id": "SR-01: title",
               "content": ""
             }
           ]
-          }
-        ]
-      },
-      {
-        "section": "3. System Stakeholders",
-        "content": [
-          {
-            "stakeholder_name": "",
-            "concern": "",
-            "requirement": [""]
         }
-        ]
-      },
-      {
-        "section": "4. Conflicting Requirements",
-        "content": [
-          {
-            "id": "CR-01: title",
-            "stakeholder_name": ["",""],
-            "description": "conflict description",
-            "solutions": ""
-          }
-        ]
-      },
-      {
-        "section": "5. Functional Requirements",
-        "subsection": [
-          {
-            "id": "FR-01: title",
-            "content": ""
-          }
-        ]
-      },
-      {
-        "section": "6. Non-Functional Requirements",
-        "subsection": [
-          {
-            "id": "NFR-01: title",
-            "content": ""
-          }
-        ]
-      }
-    ]
+      ]
+    },
+    {
+      "section": "3. System Stakeholders",
+      "content": [
+        {
+          "stakeholder_name": "",
+          "concern": "",
+          "requirement": [""]
+        }
+      ]
+    },
+    {
+      "section": "4. Conflicting Requirements",
+      "content": [
+        {
+          "id": "CR-01: title",
+          "stakeholder_name": ["", ""],
+          "description": "conflict description",
+          "solutions": ""
+        }
+      ]
+    },
+    {
+      "section": "5. Functional Requirements",
+      "subsection": [
+        {
+          "id": "FR-01: title",
+          "content": ""
+        }
+      ]
+    },
+    {
+      "section": "6. Non-Functional Requirements",
+      "subsection": [
+        {
+          "id": "NFR-01: title",
+          "content": ""
+        }
+      ]
+    },
+    {
+      "section": "7. Appendices",
+      "subsection": [
+        {
+          "id": "7.1 ... Model",
+          "plantuml": "",
+          "ast": ""
+        }
+      ]
+    }
+  ]
 }

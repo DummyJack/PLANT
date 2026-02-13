@@ -8,15 +8,12 @@ from agents.tools.base import BaseTool
 
 GLOBAL_GUARDRAILS = """
 # 全域約束
-1. 只根據已提供的資料回應，禁止捏造不存在的需求、來源或數據
-2. 若資訊不足，明確指出「資訊不足」，不得推測
-3. 嚴格遵守指定的 JSON 輸出格式
-4. 回應語言：繁體中文"""
+1. 嚴格遵守指定的 JSON 輸出格式
+2. 回應語言：繁體中文"""
 
-
+# Agent 基礎類別
 class BaseAgent:
-    """Agent 基礎類別
-
+    """
     四大核心能力：
     1. Tool Use   — self.tools
     2. Memory     — self.memory (短期/長期)
@@ -38,8 +35,7 @@ class BaseAgent:
         self.reflection_max_retries: int = 1
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
-    # ReAct Loop
-
+    # ReAct
     def run(self, task: str, context: Optional[Dict] = None,
             max_steps: int = None, output_format: str = "json",
             min_tool_uses: int = 0, max_reflection_retries: int = None) -> Any:
@@ -122,17 +118,16 @@ class BaseAgent:
         return self.direct_generate(task, context, output_format)
 
     # Reflection
-
     def reflect(self, output: Any, original_task: str) -> Dict:
         output_text = json.dumps(output, ensure_ascii=False, indent=2) if isinstance(output, dict) else str(output)
 
         prompt = f"""請嚴格評估以下輸出是否符合任務要求和品質標準。
 
 # 原始任務
-{original_task[:500]}
+{original_task}
 
 # 輸出內容
-{output_text[:1000]}
+{output_text}
 
 # 評估標準
 {self.reflection_criteria}
@@ -155,7 +150,6 @@ class BaseAgent:
             return {"acceptable": True, "feedback": "反思機制執行失敗，預設通過"}
 
     # Topic Discussion
-
     def respond_to_topic(self, topic: Dict, previous_responses: List[Dict] = None) -> Dict:
         """回應議題討論（供 Mediator 主持使用），子類別應覆寫以提供角色特化回應"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}\n類型: {topic.get('type', '')}"
@@ -179,6 +173,7 @@ class BaseAgent:
 1. position: 從你的角色出發的明確立場
 2. arguments: 支持你立場的具體論點（至少 2 個）
 3. suggestions: 可行的具體建議（至少 2 個）
+4. questions_to_others: 想請其他角色回答的問題（可為空陣列）
 
 # 約束
 - 只從你的角色專業角度發言，不要代替其他角色
@@ -188,7 +183,8 @@ class BaseAgent:
 {{{{
     "position": "你的立場",
     "arguments": ["論點1", "論點2"],
-    "suggestions": ["建議1", "建議2"]
+    "suggestions": ["建議1", "建議2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題內容"}}}}]
 }}}}"""
 
         self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
@@ -200,6 +196,7 @@ class BaseAgent:
             "position": response.get("position", ""),
             "arguments": response.get("arguments", []),
             "suggestions": response.get("suggestions", []),
+            "questions_to_others": response.get("questions_to_others", []),
         }
         self.memory.add("assistant", f"已回應議題: {result['position'][:50]}...")
         return result
@@ -214,14 +211,7 @@ class BaseAgent:
         return self.model.chat(messages)
 
     # Generate with Reflection
-
-    def generate_with_reflection(self, task: str, context=None,
-                                  output_format="json", max_retries=None,
-                                  **model_kwargs) -> Any:
-        """生成 + 反思 + 修正：所有 agent 通用的品質把關方法
-
-        對設了 reflection_criteria 的 agent 自動執行「生成 → 反思 → 修正」迴圈。
-        """
+    def generate_with_reflection(self, task: str, context=None,output_format="json", max_retries=None,**model_kwargs) -> Any:
         max_retries = max_retries if max_retries is not None else self.reflection_max_retries
 
         messages = self.build_direct_messages(task, context)
@@ -231,18 +221,29 @@ class BaseAgent:
             response = self.model.chat(messages, **model_kwargs)
 
         if self.reflection_criteria and max_retries > 0:
+            # 將首次回答加入對話歷史
+            response_text = json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response)
+            messages.append({"role": "assistant", "content": response_text})
+
             for attempt in range(max_retries):
                 reflection = self.reflect(response, task)
                 if reflection.get("acceptable", True):
                     break
                 feedback = reflection.get("feedback", "品質不足")
                 self.memory.add("system", f"[Reflection] 請改進: {feedback}")
-                retry_task = f"{task}\n\n注意：上次的問題是: {feedback}\n請改進。"
-                messages = self.build_direct_messages(retry_task, context)
+
+                # 將 feedback 作為新的 user 訊息追加，LLM 可看到完整對話
+                retry_msg = f"[Reflection] 你的回答不符合品質標準。\n問題：{feedback}\n請根據以上問題修正你的回答，重新輸出。"
+                messages.append({"role": "user", "content": retry_msg})
+
                 if output_format == "json":
                     response = self.model.chat_json(messages, **model_kwargs)
                 else:
                     response = self.model.chat(messages, **model_kwargs)
+
+                # 將修正後的回答也加入對話歷史（供下一輪 reflection 使用）
+                response_text = json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response)
+                messages.append({"role": "assistant", "content": response_text})
 
         self.memory.add("assistant",
             json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response))

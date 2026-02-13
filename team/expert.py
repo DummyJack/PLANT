@@ -12,11 +12,9 @@ from agents.tools.web_search import WebSearchTool
 
 
 class ExpertAgent(BaseAgent):
-    """領域專家 Agent — Tool Use (WebSearch) + ReAct + Reflection"""
-
     name = "expert"
 
-    system_prompt = """你是領域專家（Expert Agent），提供基於客觀證據的專業建議。
+    system_prompt = """你是領域專家，提供基於客觀證據的專業建議。
 
 你的建議分為兩類：
 1. 非拘束性建議（binding=false）— 一般性的專業建議、風險提醒、最佳實務參考
@@ -25,11 +23,11 @@ class ExpertAgent(BaseAgent):
 核心原則：
 1. Evidence-first — 只根據外部文件或 web_search 結果提供建議，禁止捏造
 2. Traceable — 每條建議須附可查證的來源（URL 或文件名），嚴禁虛構 URL
-3. binding 門檻 — binding=true 僅限「法規 / 安全 / 技術硬性限制」，必須附 reason
+3. binding 門檻 — binding=true 僅限「法規 / 安全 / 技術硬性限制」
 4. 無證據不建議 — 若無法找到支持證據，明確標註「資訊不足」，不得臆測
-5. 裁決角色 — 討論無法達成共識時，可基於客觀證據提供拘束性裁決"""
+5. 來源分組 — 同一來源（同一 URL 或文件）的多條建議應合併在同一筆 feedback"""
 
-    reflection_criteria = "每條建議必須有可查證的參考來源（URL 或文件名），禁止虛構。binding=true 的建議必須附明確的法規或技術依據。"
+    reflection_criteria = "每條建議必須有可查證的參考來源（URL 或文件名），禁止虛構。同一來源的建議應合併為同一筆 feedback。"
 
     def __init__(self, model, tools: Optional[list] = None,
                  memory: Optional[Memory] = None, registry=None,
@@ -138,8 +136,9 @@ class ExpertAgent(BaseAgent):
 
 # 約束
 - {ref_instruction}
-- 每條建議的 text 可以有多條，用 list 表示
-- binding=true 必須附 reason（法規條文或技術限制說明）"""
+- 每筆 feedback 的 ref 是單一來源（一個 URL 或文件名）
+- 同一來源產生的多條建議，全部寫在同一筆的 text 陣列中
+- 不同來源的建議分成不同筆 feedback"""
 
     # 提供專家建議
 
@@ -165,102 +164,25 @@ class ExpertAgent(BaseAgent):
     "action": "respond",
     "output": {{
         "feedback": [
-            {{"id": "FB-01", "binding": false, "text": ["建議內容"], "ref": ["URL"], "reason": "原因"}}
+            {{"id": "FB-01", "binding": false, "ref": "URL", "text": ["從此來源得出的建議1", "建議2"]}}
         ]
     }}
 }}"""
-            result = self.run(task, max_steps=3, min_tool_uses=1)
+            result = self.run(task, min_tool_uses=1)
         else:
             task = f"""{base_prompt}
 
 輸出 JSON:
 {{
     "feedback": [
-        {{"id": "FB-01", "binding": false, "text": ["建議內容"], "ref": ["來源"], "reason": "原因"}}
+        {{"id": "FB-01", "binding": false, "ref": "來源名稱或URL", "text": ["從此來源得出的建議1", "建議2"]}}
     ]
 }}"""
             result = self.direct_generate(task, output_format="json")
 
         return self.extract_feedback(result)
 
-    # 拘束性裁決
-
-    def provide_binding_ruling(self, topic: Dict, contributions: List[Dict]) -> Dict:
-        self.memory.clear_short_term()
-
-        discussion_text = ""
-        for c in contributions:
-            agent = c.get("agent", "?")
-            resp = c.get("response", {})
-            content = resp.get("content", resp.get("position", json.dumps(resp, ensure_ascii=False)))
-            discussion_text += f"\n【{agent}】\n{content}\n"
-
-        has_tools = bool(self.tools)
-
-        ruling_prompt = f"""# 任務
-對以下無法達成共識的議題提供拘束性專業裁決。
-
-# 議題
-標題: {topic.get('title', '')}
-描述: {topic.get('description', '')}
-
-# 各方討論
-{discussion_text}
-
-# 裁決原則
-- 裁決必須基於客觀證據（法規、標準、技術限制）
-- 若無客觀依據支持裁決，必須回傳 resolved=false
-- 禁止基於主觀偏好做出裁決"""
-
-        if has_tools:
-            task = f"""{ruling_prompt}
-
-# 步驟
-1. 使用 web_search 搜尋相關法規、標準
-2. 判斷是否有客觀依據做出裁決
-3. 輸出裁決（無依據則 resolved=false）
-
-輸出格式（action=respond 的 output 中）:
-{{
-    "action": "respond",
-    "output": {{
-        "resolved": true/false,
-        "ruling": "裁決內容",
-        "binding_advice": [{{"text": "...", "ref": "URL", "reason": "依據"}}],
-        "resolution": "agreed/partial",
-        "summary": "摘要",
-        "decision": "決策"
-    }}
-}}"""
-            result = self.run(task, max_steps=3, min_tool_uses=1)
-        else:
-            task = f"""{ruling_prompt}
-
-輸出 JSON:
-{{
-    "resolved": true/false,
-    "ruling": "裁決內容",
-    "binding_advice": [{{"text": "...", "ref": "來源", "reason": "依據"}}],
-    "resolution": "agreed/partial",
-    "summary": "摘要",
-    "decision": "決策"
-}}"""
-            result = self.direct_generate(task, output_format="json")
-
-        if not isinstance(result, dict):
-            result = {}
-
-        return {
-            "resolved": result.get("resolved", False),
-            "ruling": result.get("ruling", ""),
-            "binding_advice": result.get("binding_advice", []),
-            "resolution": result.get("resolution", "partial"),
-            "summary": result.get("summary", ""),
-            "decision": result.get("decision", ""),
-        }
-
     # 覆寫：議題討論回應
-
     def respond_to_topic(self, topic, previous_responses=None):
         """從法規/標準/技術可行性角度回應議題，若有工具則先搜尋"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
@@ -293,11 +215,12 @@ class ExpertAgent(BaseAgent):
     "output": {{
         "position": "基於[來源]，我認為...",
         "arguments": ["論點1（附來源）", "論點2"],
-        "suggestions": ["建議1", "建議2"]
+        "suggestions": ["建議1", "建議2"],
+        "questions_to_others": [{{"to": "agent名稱", "question": "問題"}}]
     }}
 }}"""
             self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
-            result = self.run(task, max_steps=3, min_tool_uses=1)
+            result = self.run(task, min_tool_uses=1)
 
             if not isinstance(result, dict):
                 result = {}
@@ -307,6 +230,7 @@ class ExpertAgent(BaseAgent):
                 "position": result.get("position", ""),
                 "arguments": result.get("arguments", []),
                 "suggestions": result.get("suggestions", []),
+                "questions_to_others": result.get("questions_to_others", []),
             }
         else:
             user_prompt = f"""你正在以領域專家的身份參與需求討論。
@@ -318,6 +242,7 @@ class ExpertAgent(BaseAgent):
 1. position: 基於法規、標準或技術可行性的專業立場
 2. arguments: 有客觀依據的論點（標明來源或註明「資訊不足」）
 3. suggestions: 符合法規/標準的具體建議
+4. questions_to_others: 想請其他角色（user/analyst）回答的問題
 
 # 約束
 - 論點必須有客觀依據，無依據則標註「資訊不足」
@@ -327,7 +252,8 @@ class ExpertAgent(BaseAgent):
 {{{{
     "position": "基於...標準，我認為...",
     "arguments": ["論點1", "論點2"],
-    "suggestions": ["建議1", "建議2"]
+    "suggestions": ["建議1", "建議2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
             self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
@@ -339,11 +265,11 @@ class ExpertAgent(BaseAgent):
                 "position": response.get("position", ""),
                 "arguments": response.get("arguments", []),
                 "suggestions": response.get("suggestions", []),
+                "questions_to_others": response.get("questions_to_others", []),
             }
 
     def extract_feedback(self, result) -> List[Dict]:
         if isinstance(result, dict):
-            # 直接取 feedback，或從 ReAct 巢狀格式 {output: {feedback: [...]}} 取
             feedback_list = result.get("feedback", [])
             if not feedback_list and "output" in result:
                 output = result["output"]
@@ -362,10 +288,10 @@ class ExpertAgent(BaseAgent):
                 continue
             if not isinstance(fb["text"], list):
                 fb["text"] = [fb["text"]]
-            if not isinstance(fb["ref"], list):
-                fb["ref"] = [fb["ref"]] if fb["ref"] else []
+            # ref 為單一字串（一個來源）
+            if isinstance(fb["ref"], list):
+                fb["ref"] = fb["ref"][0] if fb["ref"] else ""
             fb.setdefault("binding", False)
-            fb.setdefault("reason", "")
             validated.append(fb)
 
         return validated

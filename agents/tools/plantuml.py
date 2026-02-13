@@ -7,10 +7,8 @@ from .base import BaseTool
 
 logger = logging.getLogger("Plant.PlantUMLValidatorTool")
 
-
+# PlantUML 語法驗證工具
 class PlantUMLValidatorTool(BaseTool):
-    """PlantUML 語法驗證工具 — 透過 PlantUML Server API 驗證"""
-
     name = "plantuml_validate"
     description = "驗證 PlantUML 程式碼語法是否正確，回傳驗證結果或語法錯誤訊息"
     parameters = {

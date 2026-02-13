@@ -1,3 +1,4 @@
+import re
 import json
 
 from typing import Dict, Any, List, Optional
@@ -93,7 +94,7 @@ class Store:
         self.save_json(data, self.artifact_dir / "artifact.json")
 
     def save_round_mom(self, round_data: Dict):
-        """Round 1: 全部 stage 合併成一份 md；Round 2+: 每個議題各一個 md"""
+        """Round 1: 全部 stage 合併成一份 md（Round 2+ 議題 md 已在討論迴圈中即時儲存）"""
         round_num = round_data.get("round", 1)
 
         # Round 1: 合併成一份
@@ -106,15 +107,6 @@ class Store:
                 md += self.generate_stage_markdown(stage, stage_id)
                 md += "\n---\n\n"
             self.save_markdown(md, f"R{round_num}-Spec.md")
-
-        # Round 2+: 每個議題各一個 md
-        meetings = round_data.get("meetings", [])
-        for meeting in meetings:
-            meeting_id = meeting.get("meeting_id", "unknown")
-            topic_title = meeting.get("topic", {}).get("title", "未命名")
-            md = self.generate_meeting_markdown(meeting)
-            filename = self.safe_mom_filename(f"{meeting_id} {topic_title}")
-            self.save_markdown(md, f"{filename}.md")
 
     def generate_stage_markdown(self, stage: Dict, stage_id: str) -> str:
         """產生單一 Round 1 stage 的 markdown"""
@@ -139,29 +131,46 @@ class Store:
 
         md = f"#### {meeting.get('meeting_id', '?')}: {topic.get('title', '')}\n\n"
         md += f"- **議題類型**：{topic.get('type', '')}\n"
-        md += f"- **討論模式**：{meeting.get('discussion_mode', '?')}\n"
-        md += f"- **參與者**：{', '.join(meeting.get('participants', []))}\n"
         md += f"- **時間**：{meeting.get('timestamp', '')}\n\n"
 
-        for c in meeting.get("contributions", []):
-            resp = c.get("response", {})
-            md += f"**{c.get('agent', '?')}**：\n"
-            position = resp.get("position", resp.get("content", ""))
-            if position:
-                md += f"- 立場：{position}\n"
-            for arg in resp.get("arguments", []):
-                md += f"  - {arg}\n"
-            for sug in resp.get("suggestions", []):
-                md += f"  - 建議：{sug}\n"
-            md += "\n"
+        # 發言紀錄
+        contributions = meeting.get("contributions", [])
+        if contributions:
+            md += "---\n\n"
+            md += "##### 討論紀錄\n\n"
+            for c in contributions:
+                agent = c.get("agent", "?")
+                resp = c.get("response", {})
 
-        md += f"**決議**：{resolution.get('status', '?')}\n\n"
+                md += f"**{agent}**：\n"
+                position = resp.get("position", resp.get("content", ""))
+                if position:
+                    md += f"- 立場：{position}\n"
+                for arg in resp.get("arguments", []):
+                    md += f"  - {arg}\n"
+                for sug in resp.get("suggestions", []):
+                    md += f"  - 建議：{sug}\n"
+                for q in resp.get("questions_to_others", []):
+                    md += f"  - 提問 → {q.get('to', '?')}：{q.get('question', '')}\n"
+                md += "\n"
+
+            md += "---\n\n"
+
+        # 決議
+        md += f"### 決議：{resolution.get('status', '?')}\n\n"
         if resolution.get("summary"):
-            md += f"- 摘要：{resolution['summary']}\n"
+            md += f"- **摘要**：{resolution['summary']}\n"
         if resolution.get("decision"):
-            md += f"- 決策：{resolution['decision']}\n"
+            md += f"- **決策**：{resolution['decision']}\n"
         for issue in resolution.get("remaining_issues", []):
-            md += f"  - {issue}\n"
+            md += f"  - 剩餘：{issue}\n"
+
+        # Action items
+        for ai in resolution.get("action_items", []):
+            assignee = ai.get("assignee", "?") if isinstance(ai, dict) else "?"
+            task = ai.get("task", str(ai)) if isinstance(ai, dict) else str(ai)
+            md += f"- **待辦** ({assignee})：{task}\n"
+
         if resolution.get("escalated_to_human"):
             md += f"- **已升級至人類裁決**\n"
 
@@ -174,23 +183,58 @@ class Store:
             name = name.replace(ch, '_')
         return name.strip()
 
-    def load_draft(self) -> Dict[str, Any]:
-        draft_path = self.artifact_dir / "draft.json"
-        if not draft_path.exists():
-            return {}
-        return self.load_json(draft_path)
+    def save_spec_md(self, md: str, round_num: int):
+        filepath = self.output_dir / f"spec_{round_num}.md"
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(md)
 
-    def load_uml(self) -> Dict[str, Any]:
-        uml_path = self.artifact_dir / "uml.json"
-        if not uml_path.exists():
-            return {}
-        return self.load_json(uml_path)
+    def load_spec_md(self, round_num: int) -> str:
+        filepath = self.output_dir / f"spec_{round_num}.md"
+        if not filepath.exists():
+            return ""
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
 
-    def save_uml(self, data: Dict[str, Any], round_num: int):
-        self.save_json(data, self.artifact_dir / f"uml_{round_num}.json")
+    def append_uml_to_spec(self, spec_md: str, uml_data: Dict[str, Any]) -> str:
+        uml_section = "## 附錄 — UML 系統模型\n\n"
 
-    def save_draft(self, data: Dict[str, Any], round_num: int):
-        self.save_json(data, self.artifact_dir / f"draft_{round_num}.json")
+        models = uml_data.get("models", [])
+        for model in models:
+            name = model.get("name", "Unnamed")
+            model_type = model.get("type", "")
+            plantuml = model.get("plantuml", "")
+            uml_section += f"### {name} ({model_type})\n\n"
+            if plantuml:
+                uml_section += f"```plantuml\n{plantuml}\n```\n\n"
+
+        ast = uml_data.get("ast", {})
+        components = ast.get("components", [])
+        relationships = ast.get("relationships", [])
+
+        if components:
+            uml_section += "### 系統元件\n\n"
+            for c in components:
+                uml_section += f"- **{c.get('name', '')}** ({c.get('type', '')})\n"
+                attrs = c.get("attributes", [])
+                methods = c.get("methods", [])
+                if attrs:
+                    uml_section += f"  - 屬性: {', '.join(str(a) for a in attrs)}\n"
+                if methods:
+                    uml_section += f"  - 方法: {', '.join(str(m) for m in methods)}\n"
+            uml_section += "\n"
+
+        if relationships:
+            uml_section += "### 元件關係\n\n"
+            for r in relationships:
+                uml_section += f"- {r.get('from', '')} → {r.get('to', '')} ({r.get('type', '')}): {r.get('description', '')}\n"
+            uml_section += "\n"
+
+        # 若 spec_md 已有附錄章節，替換之（支援中英文標題）
+        appendix_pattern = r'##\s+(?:附錄|7\.\s*Appendices).*$'
+        if re.search(appendix_pattern, spec_md, flags=re.DOTALL):
+            spec_md = re.sub(appendix_pattern, '', spec_md, flags=re.DOTALL).rstrip()
+
+        return spec_md + "\n\n" + uml_section.strip() + "\n"
 
     def save_srs(self, data: Dict[str, Any]):
         self.save_json(data, self.artifact_dir / "srs.json")
@@ -244,7 +288,7 @@ class Store:
             for nested in subsection.get("subsection", []):
                 process_subsection(nested, level + 1)
 
-        for section_data in srs_data.get("ieee_29148", []):
+        for section_data in srs_data.get("srs", []):
             md += f"## {section_data.get('section', '')}\n\n"
 
             section_content = section_data.get("content", None)
@@ -273,56 +317,6 @@ class Store:
 
             for subsection in section_data.get("subsection", []):
                 process_subsection(subsection)
-
-        return md
-
-    def generate_draft_markdown(self, draft: Dict[str, Any]) -> str:
-        md = ""
-        for section_data in draft.get("draft", []):
-            md += f"\n## {section_data.get('section', '')}\n\n"
-
-            if "content" in section_data:
-                content = section_data["content"]
-                if isinstance(content, str):
-                    md += f"{content}\n\n"
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, str):
-                            md += f"- {item}\n"
-                        elif isinstance(item, dict):
-                            if "stakeholder_name" in item and "concern" in item:
-                                md += f"### {item.get('stakeholder_name', '')}\n"
-                                md += f"**關注點**: {item.get('concern', '')}\n**需求**:\n"
-                                for req in item.get('requirement', []):
-                                    md += f"  - {req}\n"
-                                md += "\n"
-                            elif "id" in item and "description" in item:
-                                md += f"### {item.get('id', '')}\n\n"
-                                md += f"**涉及利害關係人**: {', '.join(item.get('stakeholder_name', []))}\n\n"
-                                md += f"**描述**: {item.get('description', '')}\n\n**解決方案**:\n"
-                                solutions = item.get('solutions', [])
-                                if isinstance(solutions, list):
-                                    for sol in solutions:
-                                        md += f"  - {sol}\n"
-                                else:
-                                    md += f"  {solutions}\n"
-                                md += "\n"
-                            else:
-                                md += f"- {json.dumps(item, ensure_ascii=False)}\n"
-                    md += "\n"
-
-            for subsection in section_data.get("subsection", []):
-                md += f"### {subsection.get('id', '')}\n\n"
-                sub_content = subsection.get("content", [])
-                if isinstance(sub_content, str):
-                    md += f"{sub_content}\n\n"
-                elif isinstance(sub_content, list):
-                    for item in sub_content:
-                        if isinstance(item, str):
-                            md += f"- {item}\n"
-                        elif isinstance(item, dict):
-                            md += f"**{item.get('id', '')}**\n{item.get('content', '')}\n\n"
-                    md += "\n"
 
         return md
 

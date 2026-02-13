@@ -1,7 +1,6 @@
 import json
 
 from typing import Dict, Any, Optional, List
-from store import Store
 
 from agents.base import BaseAgent
 from agents.memory import Memory
@@ -13,12 +12,12 @@ class ModelerAgent(BaseAgent):
 
     name = "modeler"
 
-    system_prompt = """你是系統建模專家（Modeler Agent），負責將需求草稿轉換為 UML 系統模型。
+    system_prompt = """你是系統建模專家，負責將需求規格轉換為 UML 系統模型。
 
 核心原則：
 1. UML 2.x 規範 — 嚴格遵守 UML 2.x 標準語法和語意
 2. PlantUML 語法 — 生成的程式碼必須通過 plantuml_validate 驗證
-3. 完整性 — 模型必須涵蓋需求草稿中所有主要 Actor 和 Use Case
+3. 完整性 — 模型必須涵蓋需求規格中所有主要 Actor 和 Use Case
 4. 一致性 — 不同圖表之間的元素命名必須一致
 5. 最小變動 — 精煉時只修改受影響的部分，保留未變動的元素
 
@@ -28,25 +27,75 @@ class ModelerAgent(BaseAgent):
 - Class: PascalCase（如 UserAccount, OrderService）
 - 關係標籤: 使用描述性文字"""
 
-    reflection_criteria = "UML 模型必須涵蓋需求草稿中所有主要 Actor 和 Use Case，PlantUML 語法必須正確，不同圖表的元素命名必須一致。"
+    reflection_criteria = "UML 模型必須涵蓋需求規格中所有主要 Actor 和 Use Case，PlantUML 語法必須正確，不同圖表的元素命名必須一致。"
 
-    def __init__(self, model, store: Store, tools: Optional[list] = None,
+    def __init__(self, model, tools: Optional[list] = None,
                  memory: Optional[Memory] = None, registry=None,
                  plantuml_server: str = "http://www.plantuml.com/plantuml"):
         agent_tools = list(tools or [])
         agent_tools.append(PlantUMLValidatorTool(server_url=plantuml_server))
         super().__init__(model, tools=agent_tools, memory=memory, registry=registry)
-        self.store = store
 
-    def generate_system_model(self, draft: Dict[str, Any]) -> Dict[str, Any]:
-        formatted_draft = self.store.generate_draft_markdown(draft)
+    # 覆寫：議題討論回應
+
+    def respond_to_topic(self, topic, previous_responses=None):
+        """以系統建模專家身份回應議題"""
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+
+        prev_text = ""
+        if previous_responses:
+            parts = []
+            for r in previous_responses:
+                agent = r.get("agent", "?")
+                resp = r.get("response", {})
+                content = resp.get("content", resp.get("position", ""))
+                parts.append(f"【{agent}】{content}")
+            prev_text = "\n# 前面的發言\n" + "\n".join(parts)
+
+        user_prompt = f"""你正在以系統建模專家的身份參與需求討論。
+
+{topic_text}
+{prev_text}
+
+# 回應要求
+1. position: 從系統架構和建模角度，這個議題的影響和你的立場
+2. arguments: 基於 UML 建模、系統設計、元件關係等面向的論點
+3. suggestions: 從系統架構角度提出的建議（如何影響 Use Case、Class、元件關係等）
+4. questions_to_others: 想請其他角色回答的問題（可為空陣列）
+
+# 約束
+- 聚焦於系統架構、建模、元件設計的觀點
+- 評估需求變更對 UML 模型的影響
+- 指出可能的架構風險或設計矛盾
+
+輸出 JSON:
+{{{{
+    "position": "從系統架構角度，我認為...",
+    "arguments": ["論點1", "論點2"],
+    "suggestions": ["建議1", "建議2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
+}}}}"""
+
+        self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages)
+
+        return {
+            "agent": self.name,
+            "position": response.get("position", ""),
+            "arguments": response.get("arguments", []),
+            "suggestions": response.get("suggestions", []),
+            "questions_to_others": response.get("questions_to_others", []),
+        }
+
+    def generate_system_model(self, spec_md: str) -> Dict[str, Any]:
         self.memory.clear_short_term()
 
         task = f"""# 任務
-根據以下需求草稿產生 UML 系統模型。
+根據以下需求規格產生 UML 系統模型。
 
-# 需求草稿
-{formatted_draft}
+# 需求規格
+{spec_md}
 
 # 產出要求
 1. **Use Case Diagram**（必要）
@@ -63,7 +112,7 @@ class ModelerAgent(BaseAgent):
    - relationships: 元件間關係
 
 # 步驟
-1. 分析需求草稿，提取 Actor、Use Case、Entity
+1. 分析需求規格，提取 Actor、Use Case、Entity
 2. 生成 PlantUML 程式碼
 3. 使用 plantuml_validate 驗證每段 PlantUML 語法（必須驗證，嚴禁跳過）
 4. 若有語法錯誤，修正後重新驗證
@@ -88,28 +137,27 @@ class ModelerAgent(BaseAgent):
     }}
 }}"""
 
-        result = self.run(task, max_steps=3, min_tool_uses=1)
+        result = self.run(task, min_tool_uses=1)
         return self.ensure_model_format(result)
 
-    def refine_model(self, draft: Dict[str, Any]) -> Dict[str, Any]:
-        current_model = draft.get("uml", {})
-        formatted_draft = self.store.generate_draft_markdown(draft)
+    def refine_model(self, spec_md: str, prev_uml: Dict[str, Any] = None) -> Dict[str, Any]:
+        current_model = prev_uml or {}
         current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
         self.memory.clear_short_term()
 
         task = f"""# 任務
-根據新的需求草稿，評估並更新現有系統模型。
+根據新的需求規格，評估並更新現有系統模型。
 
 # 當前系統模型
 ```json
 {current_model_json}
 ```
 
-# 新的需求草稿
-{formatted_draft}
+# 新的需求規格
+{spec_md}
 
 # 分析步驟
-1. 比較新草稿與當前模型，識別差異
+1. 比較新規格與當前模型，識別差異
 2. 判斷哪些元素需要新增、修改或移除
 3. 只修改受影響的部分，保留未變動的元素
 4. 確保修改後各圖表間的元素命名一致
@@ -127,7 +175,7 @@ class ModelerAgent(BaseAgent):
 }}"""
 
         try:
-            result = self.run(task, max_steps=3, min_tool_uses=1)
+            result = self.run(task, min_tool_uses=1)
             return self.ensure_model_format(result)
         except Exception as e:
             print(f"警告: 模型精煉失敗，保留原有模型。錯誤: {e}")

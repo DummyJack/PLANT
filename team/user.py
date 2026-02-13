@@ -20,6 +20,7 @@ class UserAgent(BaseAgent):
     def __init__(self, model, tools: Optional[list] = None,
                  memory: Optional[Memory] = None, registry=None):
         super().__init__(model, tools=tools, memory=memory, registry=registry)
+        self.stakeholders: List[Dict] = []
 
     def propose_stakeholders(self, rough_idea: str) -> List[str]:
         user_prompt = f"""# 任務
@@ -114,8 +115,21 @@ class UserAgent(BaseAgent):
     # 覆寫：議題討論回應
 
     def respond_to_topic(self, topic, previous_responses=None):
-        """以利害關係人身份回應議題"""
+        """以選定的利害關係人角色參與議題討論"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+
+        # 組裝角色資訊
+        roles_text = ""
+        if self.stakeholders:
+            role_parts = []
+            for sh in self.stakeholders:
+                name = sh.get("name", "")
+                texts = sh.get("text", [])
+                needs = "\n".join(f"  - {t}" for t in texts) if texts else "  （無具體需求）"
+                role_parts.append(f"【{name}】\n{needs}")
+            roles_text = "\n# 你代表的利害關係人角色\n" + "\n\n".join(role_parts)
+        else:
+            roles_text = "\n# 你代表的角色\n一般使用者"
 
         prev_text = ""
         if previous_responses:
@@ -125,27 +139,31 @@ class UserAgent(BaseAgent):
                 resp = r.get("response", {})
                 content = resp.get("content", resp.get("position", ""))
                 parts.append(f"【{agent}】{content}")
-            prev_text = "\n前面的發言:\n" + "\n".join(parts)
+            prev_text = "\n# 前面的發言\n" + "\n".join(parts)
 
         user_prompt = f"""你正在以利害關係人代表的身份參與需求討論。
+{roles_text}
 
 {topic_text}
 {prev_text}
 
 # 回應要求
-1. position: 這個議題對利害關係人的影響和立場（以第一人稱表達）
-2. arguments: 從使用者實際使用情境出發的論點
-3. suggestions: 從使用者角度提出的期望（不涉及技術方案）
+1. position: 這個議題對你代表的利害關係人的影響和立場（以第一人稱表達）
+2. arguments: 從利害關係人的實際使用情境出發的論點
+3. suggestions: 從利害關係人角度提出的期望（不涉及技術方案）
+4. questions_to_others: 想請其他角色（analyst/expert）回答的問題
 
 # 約束
-- 使用第一人稱，以利害關係人的日常經驗為基礎
+- 必須以你代表的利害關係人角色立場發言
+- 使用第一人稱，以該角色的日常經驗為基礎
 - 禁止提出技術解決方案，只表達「需要什麼」
 
 輸出 JSON:
 {{{{
-    "position": "作為使用者，我認為...",
+    "position": "作為...，我認為...",
     "arguments": ["論點1", "論點2"],
-    "suggestions": ["期望1", "期望2"]
+    "suggestions": ["期望1", "期望2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
         self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
@@ -157,4 +175,5 @@ class UserAgent(BaseAgent):
             "position": response.get("position", ""),
             "arguments": response.get("arguments", []),
             "suggestions": response.get("suggestions", []),
+            "questions_to_others": response.get("questions_to_others", []),
         }

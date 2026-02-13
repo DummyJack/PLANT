@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Dict, Any
 from agents import Memory, AgentRegistry
 from team import (
@@ -63,7 +64,7 @@ class Flow:
             self.model, memory=self.memories["mediator"], registry=self.registry,
         )
         self.modeler_agent = ModelerAgent(
-            self.model, self.store, memory=self.memories["modeler"], registry=self.registry,
+            self.model, memory=self.memories["modeler"], registry=self.registry,
             plantuml_server=config.get("plantuml_server", "http://www.plantuml.com/plantuml"),
         )
         if not self.enable_reflection:
@@ -107,8 +108,7 @@ class Flow:
             "stakeholders": [],
             "analyse": [],
             "reports": [],
-            "feedback": [],
-            "decisions": [],
+            "feedback": []
         }
 
         self.store.save_artifact(artifact)
@@ -171,12 +171,14 @@ class Flow:
             self.logger.info("Stage 2: 利害關係人提出需求")
             stakeholders = self.user_agent.generate_stakeholder_requirements(rough_idea, selected)
             artifact["stakeholders"] = stakeholders
+            self.user_agent.stakeholders = stakeholders
             self.store.save_artifact(artifact)
             self.logger.info(f"✓ 產生 {len(stakeholders)} 位利害關係人需求")
             self.mom_manager.add_stage("利害關係人提出需求", "User", f"{len(stakeholders)} 位", outputs={"stakeholders": stakeholders})
         else:
             selected = [sh["name"] for sh in artifact.get("stakeholders", [])]
             stakeholders = artifact.get("stakeholders", [])
+            self.user_agent.stakeholders = stakeholders
 
         # Stage 3: 衝突分析
         conflict_groups = []
@@ -215,30 +217,25 @@ class Flow:
             self.store.save_artifact(artifact)
             self.mom_manager.add_stage("專家提供建議", "Expert", f"{len(feedback)} 則", outputs={"feedback": feedback})
 
-        # Stage 6: 草稿
+        # Stage 6: 規格
+        spec_md = ""
         if self.config.get("enable_mediator", True):
             self.logger.info("Stage 6: 產生需求草稿")
-            spec_template = self.store.load_spec_template()
-            draft_template = spec_template.get("draft", [])
-            draft = self.mediator_agent.generate_draft(artifact, draft_template)
-            self.store.save_draft(draft, round_num)
-
-            draft_md = self.store.generate_draft_markdown(draft)
-            self.store.save_markdown(draft_md, f"draft_{round_num}.md")
-            self.logger.info(f"✓ 產生 draft_{round_num}.json")
-            self.mom_manager.add_stage("產生需求草稿", "Mediator", "draft.json", outputs={"draft_generated": True})
-        else:
-            draft = self.store.load_draft()
+            spec_md = self.mediator_agent.generate_draft(artifact)
+            self.store.save_spec_md(spec_md, round_num)
+            self.logger.info(f"✓ 產生 spec_{round_num}.md")
+            self.mom_manager.add_stage("產生需求規格", "Mediator", f"spec_{round_num}.md", outputs={"spec_generated": True})
 
         # Stage 7: UML
         if self.config.get("enable_modeler", True):
             self.logger.info("Stage 7: 建立系統模型")
-            uml_data = self.modeler_agent.generate_system_model(draft)
-            draft["uml"] = uml_data
-            self.store.save_draft(draft, round_num)
+            uml_data = self.modeler_agent.generate_system_model(spec_md)
+            spec_md = self.store.append_uml_to_spec(spec_md, uml_data)
+            self.store.save_spec_md(spec_md, round_num)
             self.store.save_plantuml_files(uml_data)
-            self.logger.info(f"✓ 系統模型已整合至 draft_{round_num}.json")
-            self.mom_manager.add_stage("產生系統模型", "Modeler", f"draft_{round_num}.json", outputs={"model_generated": True})
+            artifact["uml"] = uml_data
+            self.logger.info(f"✓ 系統模型已寫入 spec_{round_num}.md 附錄")
+            self.mom_manager.add_stage("產生系統模型", "Modeler", f"spec_{round_num}.md", outputs={"model_generated": True})
 
         self.store.save_round_mom(self.mom_manager.get_current_round())
         return artifact
@@ -247,90 +244,180 @@ class Flow:
 
     def run_discussion_round(self, artifact: Dict[str, Any], round_num: int) -> Dict[str, Any]:
         prev_round = round_num - 1
-        try:
-            current_spec = self.store.load_json(self.store.artifact_dir / f"draft_{prev_round}.json")
-        except FileNotFoundError:
-            self.logger.warning(f"找不到 draft_{prev_round}.json，使用空 Spec")
-            current_spec = {}
+        spec_md = self.store.load_spec_md(prev_round)
+        if not spec_md:
+            self.logger.warning(f"找不到 spec_{prev_round}.md，使用空 Spec")
 
-        previous_meetings = self.mom_manager.get_meetings()
+        # Step 0: Analyst 重新檢視上一輪衝突分析，經討論後決定是否修正
+        if self.config.get("enable_analyst", True) and artifact.get("analyse"):
+            self.logger.info("Step 0: Analyst 重新檢視上一輪衝突分析")
+            concerns = self.analyst_agent.review_analysis(artifact["analyse"])
+
+            if concerns:
+                self.logger.info(f"  Analyst 提出 {len(concerns)} 項疑慮，進入討論")
+
+                # 將每項疑慮包裝成議題進行討論
+                corrections = []
+                for ci, concern in enumerate(concerns, 1):
+                    idx = concern.get("index", "?")
+                    original = concern.get("original_label", "?")
+                    suggested = concern.get("suggested_label", "?")
+                    reason = concern.get("reason", "")
+
+                    topic = {
+                        "id": f"R{round_num}-Review-{ci:02d}",
+                        "title": f"衝突分析檢視：第 {idx} 筆（{original} → {suggested}?）",
+                        "description": f"Analyst 認為第 {idx} 筆分析結果可能有誤。\n原判斷: {original}\n建議修正為: {suggested}\n理由: {reason}",
+                        "type": "refinement",
+                        "discussion_mode": "sequential",
+                        "participants": ["user", "analyst", "expert"],
+                        "speaking_order": ["user", "analyst", "expert"],
+                    }
+
+                    self.logger.info(f"  討論疑慮 [{idx}] {original} → {suggested}?")
+                    contrib = self.mediator_agent.moderate_sequential(topic, self.registry)
+                    resolution = self.mediator_agent.synthesize_and_resolve(topic, contrib)
+
+                    # 若決議同意修正
+                    if resolution.get("resolution") == "agreed":
+                        corrections.append({
+                            "index": idx,
+                            "corrected_label": suggested,
+                            "corrected_reason": resolution.get("summary", reason),
+                        })
+                        self.logger.info(f"    ✓ 同意修正 → {suggested}")
+                    else:
+                        self.logger.info(f"    ✗ 維持原判斷 {original}")
+
+                    # 記錄 MOM
+                    self.mom_manager.add_meeting(round_num, topic, contrib, resolution, escalated_to_human=False)
+
+                # 套用修正
+                if corrections:
+                    artifact["analyse"] = self.analyst_agent.apply_corrections(artifact["analyse"], corrections)
+                    self.store.save_artifact(artifact)
+
+                    # 重新提取衝突 + 重新生成報告
+                    conflict_groups = [g for g in artifact["analyse"] if g.get("label") == "Conflict"]
+                    if self.config.get("enable_mediator", True):
+                        report = self.mediator_agent.generate_conflict_report(conflict_groups) if conflict_groups else []
+                        artifact["reports"] = report
+                        self.store.save_artifact(artifact)
+
+                        report_md = self.store.generate_report_markdown(report)
+                        self.store.save_markdown(report_md, "report.md")
+                        self.logger.info(f"  ✓ 已更新 report.md（{len(report)} 份衝突報告）")
+
+                        spec_md = self.mediator_agent.generate_draft(artifact)
+                        self.store.save_spec_md(spec_md, prev_round)
+                        self.logger.info(f"  ✓ 已更新 spec_{prev_round}.md")
+                else:
+                    self.logger.info("  討論後無需修正")
+            else:
+                self.logger.info("  ✓ 分析結果無疑慮")
 
         # Step 1: 生成議題
         self.logger.info("Step 1: Mediator 生成議題清單")
         rough_idea = artifact.get("rough_idea", "")
-        topics = self.mediator_agent.generate_topics(current_spec, rough_idea, previous_meetings)
+        topics = self.mediator_agent.generate_topics(spec_md, rough_idea, registry=self.registry)
         self.logger.info(f"✓ 生成 {len(topics)} 個議題")
 
         print(f"\n{'='*60}")
         print(f"Round {round_num} 議題清單")
         print(f"{'='*60}")
         for t in topics:
-            mode_label = "逐一發言" if t["discussion_mode"] == "sequential" else "同時發言"
-            print(f"  [{t['id']}] {t['title']} ({t['type']}) — {mode_label}")
+            print(f"  [{t['id']}] {t['title']} ({t['type']})")
         print(f"{'='*60}\n")
 
-        # Step 2: 逐一討論
+        # Step 2: 逐 topic 討論（先不進行人類裁決）
         all_resolutions = []
-        for topic in topics:
+        pending_human = []  # 需要人類裁決的議題
+        for idx, topic in enumerate(topics, 1):
             self.logger.info(f"討論議題 [{topic['id']}] {topic['title']}")
 
-            if topic["discussion_mode"] == "sequential":
-                contributions = self.mediator_agent.moderate_sequential(topic, self.registry)
-            else:
+            # 2a: 根據 discussion_mode 選擇發言方式
+            mode = topic.get("discussion_mode", "sequential")
+            if mode == "simultaneous":
                 contributions = self.mediator_agent.moderate_simultaneous(topic, self.registry)
+            else:
+                contributions = self.mediator_agent.moderate_sequential(topic, self.registry)
 
-            result = self.mediator_agent.synthesize_and_resolve(topic, contributions)
-            self.logger.info(f"  結果: {result['resolution']}")
+            # 2b: 綜合結果
+            resolution = self.mediator_agent.synthesize_and_resolve(topic, contributions)
+            self.logger.info(f"  決議: {resolution['resolution']}")
 
-            escalated_to_human = False
+            # 2c: 若 Mediator 無法決定，先記錄待裁決，稍後統一處理
+            needs_human = resolution["resolution"] == "unresolved" or resolution.get("escalation_needed")
+            if needs_human:
+                self.logger.info(f"  Mediator 無法達成共識，標記待人類裁決")
+                options = self.mediator_agent.prepare_human_options(topic, contributions)
+                pending_human.append({"idx": idx, "topic": topic, "contributions": contributions, "options": options})
 
-            # 升級路徑
-            if result["resolution"] == "unresolved" or result.get("escalation_needed"):
-                self.logger.info(f"  升級至 Expert 拘束性裁決")
-                expert_ruling = self.expert_agent.provide_binding_ruling(topic, contributions)
+            # 2d: 記錄 MOM + 即時存 MD（未裁決的先以 unresolved 記錄）
+            self.mom_manager.add_meeting(round_num, topic, contributions, resolution, escalated_to_human=needs_human)
+            meeting_data = self.mom_manager.get_latest_meeting()
+            topic_title = topic.get("title", "未命名")
+            meeting_id = meeting_data.get("meeting_id", f"R{round_num}-M{idx:02d}")
+            md = self.store.generate_meeting_markdown(meeting_data)
+            filename = self.store.safe_mom_filename(f"{meeting_id} {topic_title}")
+            self.store.save_markdown(md, f"{filename}.md")
+            self.logger.info(f"  ✓ 已存 {filename}.md")
 
-                if expert_ruling.get("resolved"):
-                    result = expert_ruling
-                else:
-                    self.logger.info(f"  Expert 無法裁決，升級至人類")
-                    result = Collect.human_decision_on_topic(topic, contributions)
-                    escalated_to_human = True
+            all_resolutions.append({"idx": idx, "topic": topic, "resolution": resolution})
 
-            self.mom_manager.add_meeting(round_num, topic, contributions, result, escalated_to_human)
-            all_resolutions.append({"topic": topic, "resolution": result})
+        # Step 2e: 統一人類裁決
+        if pending_human:
+            self.logger.info(f"Step 2e: 統一人類裁決（{len(pending_human)} 個待決議題）")
+            print(f"\n{'='*60}")
+            print(f"Round {round_num} — 共 {len(pending_human)} 個議題需要人類裁決")
+            print(f"{'='*60}")
 
-        # Step 3: 更新 Draft
-        self.logger.info("Step 3: Mediator 更新 Draft")
+            for item in pending_human:
+                topic = item["topic"]
+                options = item["options"]
+                human_resolution = Collect.human_decision_on_topic(topic, options)
+
+                # 更新 all_resolutions 中對應的 resolution
+                for r in all_resolutions:
+                    if r["idx"] == item["idx"]:
+                        r["resolution"] = human_resolution
+                        break
+
+                # 更新 MOM 並重新存 MD
+                self.mom_manager.update_meeting_resolution(round_num, item["idx"], human_resolution)
+                meeting_data = self.mom_manager.get_meeting_by_index(round_num, item["idx"])
+                if meeting_data:
+                    topic_title = topic.get("title", "未命名")
+                    meeting_id = meeting_data.get("meeting_id", f"R{round_num}-M{item['idx']:02d}")
+                    md = self.store.generate_meeting_markdown(meeting_data)
+                    filename = self.store.safe_mom_filename(f"{meeting_id} {topic_title}")
+                    self.store.save_markdown(md, f"{filename}.md")
+                    self.logger.info(f"  ✓ 已更新 {filename}.md")
+
+        # Step 3: 更新 Spec
+        self.logger.info("Step 3: Mediator 更新 Spec")
         resolutions_context = []
         for r in all_resolutions:
             t, res = r["topic"], r["resolution"]
             resolutions_context.append({
                 "topic_id": t.get("id", ""), "topic_title": t.get("title", ""),
                 "decision": res.get("decision", ""), "summary": res.get("summary", ""),
+                "action_items": res.get("action_items", []),
             })
 
-        artifact["decisions"] = resolutions_context
-        if "all_decisions" not in artifact:
-            artifact["all_decisions"] = []
-        artifact["all_decisions"].extend(resolutions_context)
-
-        spec_template = self.store.load_spec_template()
-        draft_template = spec_template.get("draft", [])
-        draft = self.mediator_agent.generate_draft(artifact, draft_template)
-        self.store.save_draft(draft, round_num)
-
-        draft_md = self.store.generate_draft_markdown(draft)
-        self.store.save_markdown(draft_md, f"draft_{round_num}.md")
-        self.logger.info(f"✓ 更新 draft_{round_num}.json")
+        spec_md = self.mediator_agent.generate_draft(artifact)
+        self.store.save_spec_md(spec_md, round_num)
+        self.logger.info(f"✓ 更新 spec_{round_num}.md")
 
         # Step 4: 更新 UML
         if self.config.get("enable_modeler", True):
             self.logger.info("Step 4: Modeler 更新 UML")
-            draft["uml"] = current_spec.get("uml", {})
-            uml_data = self.modeler_agent.refine_model(draft)
-            draft["uml"] = uml_data
-            self.store.save_draft(draft, round_num)
+            prev_uml = artifact.get("uml", {})
+            uml_data = self.modeler_agent.refine_model(spec_md, prev_uml)
+            spec_md = self.store.append_uml_to_spec(spec_md, uml_data)
+            self.store.save_spec_md(spec_md, round_num)
             self.store.save_plantuml_files(uml_data)
+            artifact["uml"] = uml_data
 
         self.store.save_artifact(artifact)
         self.store.save_round_mom(self.mom_manager.get_current_round())
@@ -348,19 +435,18 @@ class Flow:
         self.store.save_markdown(dr_md, "dr.md")
 
         import glob
-        draft_files = glob.glob(str(self.store.artifact_dir / "draft_*.json"))
-        if draft_files:
-            latest_draft_file = max(draft_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            draft = self.store.load_json(latest_draft_file)
+        spec_files = glob.glob(str(self.store.output_dir / "spec_*.md"))
+        if spec_files:
+            latest_round = max(int(Path(f).stem.split('_')[-1]) for f in spec_files)
+            spec_md = self.store.load_spec_md(latest_round)
         else:
-            self.logger.warning("未找到 draft 文件")
-            draft = {}
+            self.logger.warning("未找到 spec 文件")
+            spec_md = ""
 
-        uml = draft.get("uml", {})
-        spec_template = self.store.load_spec_template()
-        ieee_template = spec_template.get("ieee_29148")
+        template = self.store.load_spec_template()
+        srs_template = template.get("spec", [])
 
-        srs_json = self.documentor_agent.generate_srs_json(draft, uml, ieee_template)
+        srs_json = self.documentor_agent.generate_srs_json(spec_md, srs_template)
         self.store.save_srs(srs_json)
 
         srs_md = self.store.generate_srs_markdown(srs_json)

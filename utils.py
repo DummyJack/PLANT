@@ -83,26 +83,52 @@ class MoMManager:
                 "title": topic.get("title", ""),
                 "type": topic.get("type", ""),
             },
-            "discussion_mode": topic.get("discussion_mode", "simultaneous"),
-            "participants": topic.get("participants", []),
             "contributions": contributions,
             "resolution": {
                 "status": resolution.get("resolution", "unresolved"),
                 "summary": resolution.get("summary", ""),
                 "decision": resolution.get("decision", ""),
                 "remaining_issues": resolution.get("remaining_issues", []),
+                "action_items": resolution.get("action_items", []),
                 "escalated_to_human": escalated_to_human,
             },
             "timestamp": datetime.now().isoformat(),
         })
 
-    def get_meetings(self, round_num: int = None) -> List[Dict]:
-        all_meetings = []
-        for r in self.mom_data.get("rounds", []):
-            if round_num is not None and r.get("round") != round_num:
-                continue
-            all_meetings.extend(r.get("meetings", []))
-        return all_meetings
+    def get_latest_meeting(self) -> Dict:
+        """取得最近一次新增的 meeting"""
+        if not self.mom_data["rounds"]:
+            return {}
+        current_round = self.mom_data["rounds"][-1]
+        meetings = current_round.get("meetings", [])
+        return meetings[-1] if meetings else {}
+
+    def update_meeting_resolution(self, round_num: int, meeting_idx: int, resolution: Dict):
+        """更新指定 meeting 的 resolution（用於人類統一裁決後回填）"""
+        for round_data in self.mom_data["rounds"]:
+            if round_data.get("round") == round_num:
+                meetings = round_data.get("meetings", [])
+                idx = meeting_idx - 1  # meeting_idx 從 1 開始
+                if 0 <= idx < len(meetings):
+                    meetings[idx]["resolution"] = {
+                        "status": resolution.get("resolution", "unresolved"),
+                        "summary": resolution.get("summary", ""),
+                        "decision": resolution.get("decision", ""),
+                        "remaining_issues": resolution.get("remaining_issues", []),
+                        "action_items": resolution.get("action_items", []),
+                        "escalated_to_human": True,
+                    }
+                return
+
+    def get_meeting_by_index(self, round_num: int, meeting_idx: int) -> Dict:
+        """根據 round 和 meeting 索引取得 meeting 資料"""
+        for round_data in self.mom_data["rounds"]:
+            if round_data.get("round") == round_num:
+                meetings = round_data.get("meetings", [])
+                idx = meeting_idx - 1
+                if 0 <= idx < len(meetings):
+                    return meetings[idx]
+        return {}
 
     def get_current_round(self) -> Dict:
         if self.mom_data["rounds"]:
@@ -163,37 +189,38 @@ class Collect:
                 continue
 
     @staticmethod
-    def human_decision_on_topic(topic: Dict, contributions: List[Dict]) -> Dict:
+    def human_decision_on_topic(topic: Dict, options: Dict) -> Dict:
+        """人類裁決：顯示 Mediator 篩選的 3 個最佳方案 + 1 個折衷方案"""
         print(f"\n{'='*60}")
         print(f"需要人類裁決: {topic.get('title', '')}")
         print(f"議題描述: {topic.get('description', '')}")
         print(f"{'='*60}")
 
-        # 收集各方建議作為選項
-        options = []
-        print("\n各方意見:")
-        for c in contributions:
-            agent = c.get("agent", "?")
-            resp = c.get("response", {})
-            position = resp.get("position", resp.get("content", ""))
-            suggestions = resp.get("suggestions", [])
-            print(f"\n  [{agent}] {position}")
-            if suggestions:
-                for sug in suggestions:
-                    print(f"    • {sug}")
+        best_options = options.get("best_options", [])
+        compromise = options.get("compromise", {})
 
-            # 將每個 agent 的立場加入可選選項
-            if position:
-                options.append({"agent": agent, "text": position})
-            for sug in suggestions:
-                options.append({"agent": agent, "text": sug})
+        # 顯示 3 個最佳方案
+        print("\nMediator 推薦方案：")
+        all_options = []
+        for opt in best_options:
+            idx = opt.get("id", len(all_options) + 1)
+            print(f"\n  方案 {idx}. {opt.get('title', '')}")
+            print(f"     來源: {opt.get('source', '?')}")
+            print(f"     內容: {opt.get('description', '')}")
+            all_options.append(opt)
+
+        # 顯示折衷方案
+        if compromise:
+            c_idx = compromise.get("id", 4)
+            print(f"\n  方案 {c_idx}. [折衷] {compromise.get('title', '')}")
+            print(f"     內容: {compromise.get('description', '')}")
+            print(f"     理由: {compromise.get('rationale', '')}")
+            all_options.append(compromise)
 
         print(f"\n{'─'*40}")
-        print("裁決選項（0. 自行輸入）：")
-        for i, opt in enumerate(options, 1):
-            print(f"  {i}. [{opt['agent']}] {opt['text']}")
+        print("  0. 自行輸入裁決")
 
-        user_input = input("\n請選擇方案（輸入編號，或 Enter 跳過）：").strip()
+        user_input = input("\n請選擇方案編號（或 Enter 跳過）：").strip()
 
         if not user_input:
             return {
@@ -201,13 +228,14 @@ class Collect:
                 "summary": "人類選擇暫不裁決",
                 "decision": "暫緩處理",
                 "remaining_issues": [topic.get("title", "")],
+                "action_items": [],
                 "escalated_to_human": True,
             }
 
         try:
-            choice_idx = int(user_input)
+            choice = int(user_input)
 
-            if choice_idx == 0:
+            if choice == 0:
                 custom = input("\n請輸入您的裁決：").strip()
                 if not custom:
                     return {
@@ -215,6 +243,7 @@ class Collect:
                         "summary": "人類未輸入裁決",
                         "decision": "暫緩處理",
                         "remaining_issues": [topic.get("title", "")],
+                        "action_items": [],
                         "escalated_to_human": True,
                     }
                 return {
@@ -222,16 +251,27 @@ class Collect:
                     "summary": f"由人類裁決: {custom}",
                     "decision": custom,
                     "remaining_issues": [],
+                    "action_items": [],
                     "escalated_to_human": True,
                 }
 
-            elif 1 <= choice_idx <= len(options):
-                chosen = options[choice_idx - 1]
+            # 在 all_options 中找到對應 id 的方案
+            chosen = None
+            for opt in all_options:
+                if opt.get("id") == choice:
+                    chosen = opt
+                    break
+
+            if chosen:
+                title = chosen.get("title", "")
+                desc = chosen.get("description", "")
+                source = chosen.get("source", "折衷方案")
                 return {
                     "resolution": "agreed",
-                    "summary": f"人類採納 {chosen['agent']} 的建議",
-                    "decision": chosen["text"],
+                    "summary": f"人類採納方案 {choice}（{source}）: {title}",
+                    "decision": desc,
                     "remaining_issues": [],
+                    "action_items": [],
                     "escalated_to_human": True,
                 }
             else:
@@ -241,6 +281,7 @@ class Collect:
                     "summary": "無效輸入",
                     "decision": "暫緩處理",
                     "remaining_issues": [topic.get("title", "")],
+                    "action_items": [],
                     "escalated_to_human": True,
                 }
         except ValueError:
@@ -250,6 +291,7 @@ class Collect:
                 "summary": "無效輸入",
                 "decision": "暫緩處理",
                 "remaining_issues": [topic.get("title", "")],
+                "action_items": [],
                 "escalated_to_human": True,
             }
 

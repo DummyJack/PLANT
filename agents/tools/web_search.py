@@ -5,14 +5,8 @@ from .base import BaseTool
 
 logger = logging.getLogger("Plant.WebSearchTool")
 
-
+# 網路搜尋工具
 class WebSearchTool(BaseTool):
-    """網路搜尋工具，使用 Tavily API
-
-    專為 AI Agent 設計的搜尋 API，回傳結構化的搜尋結果。
-    ExpertAgent 在 ReAct 迴圈中使用此工具搜尋法規、標準、最佳實務。
-    """
-
     name = "web_search"
     description = "搜尋網路上的法規、標準、技術文件、最佳實務等公開資訊"
     parameters = {

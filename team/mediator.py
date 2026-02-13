@@ -1,7 +1,6 @@
 import json
 
 from typing import Dict, List, Any, Optional
-
 from agents.base import BaseAgent
 from agents.memory import Memory
 
@@ -11,19 +10,19 @@ class MediatorAgent(BaseAgent):
 
     name = "mediator"
 
-    system_prompt = """你是需求調解主持人（Mediator Agent），負責主持需求討論會議。
+    system_prompt = """你是需求調解主持人，負責主持需求討論會議。
 
 核心職責：
 1. 議題管理 — 分析需求規格，識別需要討論的議題
-2. 討論主持 — 決定討論模式（逐一/同時），維持討論秩序
+2. 討論主持 — 決定討論模式（逐一發言/同時發言），維持討論秩序
 3. 共識促成 — 綜合各方意見，嘗試達成共識
 4. 衝突報告 — 將衝突結構化為報告
-5. 草稿生成 — 將討論結果轉化為需求草稿
+5. 草稿生成 — 將中間產物轉化為需求草稿
 
 核心原則：
 - 中立客觀 — 不偏袒任何利害關係人，不提出自己的技術觀點
 - 忠於資料 — 只根據已有的分析結果和討論內容做出綜合判斷
-- 無法共識時升級 — 先請 Expert 裁決，Expert 也無法時才升級至人類"""
+- 無法共識時升級 — 無法達成共識時直接升級至人類裁決"""
 
     reflection_criteria = "衝突報告必須涵蓋所有已識別的衝突，每個衝突有明確的標題、描述和涉及的利害關係人。"
 
@@ -33,42 +32,27 @@ class MediatorAgent(BaseAgent):
 
     # Round 2+: 議題生成
 
-    def generate_topics(self, current_spec: Dict, rough_idea: str,
-                        previous_meetings: List[Dict] = None) -> List[Dict]:
+    def generate_topics(self, spec_md: str, rough_idea: str, registry=None) -> List[Dict]:
         self.memory.clear_short_term()
 
-        spec_text = json.dumps(current_spec, ensure_ascii=False, indent=2)
-        if len(spec_text) > 3000:
-            spec_text = spec_text[:3000] + "\n... (已截斷)"
-
-        idea_text = rough_idea if isinstance(rough_idea, str) else str(rough_idea)
-
-        prev_meetings_text = ""
-        if previous_meetings:
-            summaries = []
-            for m in previous_meetings[-5:]:
-                topic = m.get("topic", {})
-                resolution = m.get("resolution", {})
-                summaries.append(
-                    f"- {topic.get('title', '?')}: {resolution.get('status', '?')} — {resolution.get('summary', '')[:100]}"
-                )
-            prev_meetings_text = f"\n# 前次會議記錄\n" + "\n".join(summaries)
+        # 從 registry 取得已註冊的可選參與者（排除 mediator/documentor 本身）
+        exclude = {"mediator", "documentor"}
+        if registry:
+            registered = [n for n in registry.get_names() if n not in exclude]
+        else:
+            registered = ["user", "analyst", "expert", "modeler"]
+        registered_text = ", ".join(registered)
 
         user_prompt = f"""# 任務
-分析現有需求規格，識別本輪需要討論的議題。
+依據需求草稿，提出需要討論的議題。
 
-# 初始想法
-{idea_text}
-
-# 現有需求規格
-{spec_text}
-{prev_meetings_text}
+# 需求草稿
+{spec_md}
 
 # 議題類型
-- conflict: 需求衝突，需要解決
+- conflict: 需要解決需求衝突
 - requirement_gap: 需求缺口，需要補充
 - refinement: 需求不夠明確，需要精煉
-- new_concern: 新發現的關注點
 
 # 討論模式選擇
 - sequential（逐一發言）：爭議性高的議題，讓各方充分表達並回應
@@ -77,7 +61,7 @@ class MediatorAgent(BaseAgent):
 # 約束
 - 避免與前次會議已解決的議題重複
 - 每個議題必須有明確的預期結果
-- 可選參與者: user, analyst, expert
+- 只能從以下已註冊的參與者中選擇: {registered_text}
 
 # 輸出 JSON
 {{{{
@@ -86,7 +70,7 @@ class MediatorAgent(BaseAgent):
             "id": "T-01",
             "title": "議題標題",
             "description": "議題描述",
-            "type": "conflict/requirement_gap/refinement/new_concern",
+            "type": "conflict/requirement_gap/refinement",
             "discussion_mode": "sequential/simultaneous",
             "participants": ["agent名稱"],
             "speaking_order": ["agent名稱"],
@@ -106,9 +90,12 @@ class MediatorAgent(BaseAgent):
                 continue
             t.setdefault("type", "refinement")
             t.setdefault("discussion_mode", "simultaneous")
-            t.setdefault("participants", ["user", "analyst", "expert"])
+            t.setdefault("participants", registered)
             t.setdefault("speaking_order", t["participants"])
             t.setdefault("expected_outcome", "")
+            # 過濾掉未註冊的 agent
+            t["participants"] = [p for p in t["participants"] if p in registered]
+            t["speaking_order"] = [p for p in t["speaking_order"] if p in registered]
             validated.append(t)
 
         self.memory.add("assistant", f"已生成 {len(validated)} 個議題")
@@ -137,7 +124,74 @@ class MediatorAgent(BaseAgent):
                 self.logger.warning(f"  {agent_name} 發言失敗: {e}")
                 contributions.append({"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}})
 
+        # 收集所有 questions_to_others，讓被點名且尚未回應該問題的 agent 補充回應
+        pending_questions = self.collect_pending_questions(contributions, speaking_order)
+        if pending_questions:
+            self.logger.info(f"[{topic['id']}] 追加回應 {len(pending_questions)} 位被點名 agent")
+            for target_name, questions in pending_questions.items():
+                agent = registry.get(target_name)
+                if not agent:
+                    continue
+                try:
+                    response = agent.respond_to_topic(
+                        self.build_question_topic(topic, questions),
+                        previous_responses=contributions,
+                    )
+                    contributions.append({
+                        "agent": target_name,
+                        "response": response if isinstance(response, dict) else {"content": str(response)},
+                        "is_reply": True,
+                    })
+                except Exception as e:
+                    self.logger.warning(f"  {target_name} 追加回應失敗: {e}")
+
         return contributions
+
+    def collect_pending_questions(self, contributions: List[Dict], speaking_order: list) -> Dict[str, list]:
+        """收集 contributions 中 questions_to_others 指向的、尚未在後續發言中回應的 agent"""
+        spoken = set()
+        questions_by_target: Dict[str, list] = {}
+
+        for c in contributions:
+            agent_name = c.get("agent", "")
+            spoken.add(agent_name)
+            resp = c.get("response", {})
+            for q in resp.get("questions_to_others", []):
+                target = q.get("to", "")
+                question = q.get("question", "")
+                if target and question:
+                    questions_by_target.setdefault(target, []).append({
+                        "from": agent_name,
+                        "question": question,
+                    })
+
+        # 只保留已經發言過但被後面的人點名的（需要追加回應），或不在 speaking_order 中但被點名的
+        # 排除已經在該 agent 發言之後才被點名的情況 → 簡化為：被點名的 agent 若已發言，則需追加
+        pending = {}
+        for target, qs in questions_by_target.items():
+            # 過濾：只保留在 target 發言之後才提出的問題
+            target_spoken = target in spoken
+            if not target_spoken:
+                continue
+            late_questions = []
+            target_idx = next((i for i, c in enumerate(contributions) if c.get("agent") == target), -1)
+            for q in qs:
+                asker = q["from"]
+                asker_idx = next((i for i, c in enumerate(contributions) if c.get("agent") == asker), -1)
+                if asker_idx > target_idx:
+                    late_questions.append(q)
+            if late_questions:
+                pending[target] = late_questions
+
+        return pending
+
+    def build_question_topic(self, original_topic: Dict, questions: list) -> Dict:
+        """將被點名的問題包裝成追加議題"""
+        q_text = "\n".join(f"- {q['from']} 問：{q['question']}" for q in questions)
+        return {
+            **original_topic,
+            "description": f"{original_topic.get('description', '')}\n\n# 其他參與者向你提出的問題\n{q_text}",
+        }
 
     def moderate_simultaneous(self, topic: Dict, registry) -> List[Dict]:
         """同時發言模式：所有 Agent 獨立作答"""
@@ -198,6 +252,9 @@ class MediatorAgent(BaseAgent):
     "summary": "綜合摘要",
     "decision": "具體決策內容",
     "remaining_issues": ["剩餘爭議"],
+    "action_items": [
+        {{{{"assignee": "agent名稱", "task": "待辦事項描述"}}}}
+    ],
     "escalation_needed": false/true
 }}}}"""
 
@@ -210,37 +267,87 @@ class MediatorAgent(BaseAgent):
             "summary": response.get("summary", ""),
             "decision": response.get("decision", ""),
             "remaining_issues": response.get("remaining_issues", []),
+            "action_items": response.get("action_items", []),
             "escalation_needed": response.get("escalation_needed", False),
         }
         self.memory.add("assistant", f"議題 {topic.get('id', '')}: {result['resolution']}")
         return result
 
-    # 產生需求草稿（逐章節）
+    # Round 2+: 人類裁決篩選
 
-    # 每個章節對應的 artifact 資料
-    DRAFT_SECTION_DATA_MAP = {
-        "1. System Overview": ["rough_idea"],
-        "2. Requirement Engineering": ["candidates", "stakeholders"],
-        "3. System Stakeholders": ["stakeholders"],
-        "4. Conflicting Requirements": ["reports", "decisions"],
-        "5. Functional Requirements": ["candidates", "feedback", "decisions"],
-        "6. Non-Functional Requirements": ["candidates", "feedback"],
-    }
+    def prepare_human_options(self, topic: Dict, contributions: List[Dict]) -> Dict:
+        discussion_text = ""
+        for c in contributions:
+            agent = c.get("agent", "?")
+            resp = c.get("response", {})
+            position = resp.get("position", "")
+            arguments = resp.get("arguments", [])
+            suggestions = resp.get("suggestions", [])
+            discussion_text += f"\n【{agent}】\n立場: {position}\n"
+            if arguments:
+                discussion_text += "論點:\n" + "\n".join(f"  - {a}" for a in arguments) + "\n"
+            if suggestions:
+                discussion_text += "建議:\n" + "\n".join(f"  - {s}" for s in suggestions) + "\n"
 
-    # 每個章節的額外提示
-    DRAFT_SECTION_HINTS = {
-        "1. System Overview": "根據 rough_idea 撰寫系統概述。",
-        "2. Requirement Engineering": "從 candidates 整理使用者需求和系統需求。",
-        "3. System Stakeholders": "列出每位利害關係人的關注點和需求。",
-        "4. Conflicting Requirements": (
-            "將 reports 轉為衝突需求：reports 的 id, title, stakeholder_names, description → 此章節的 id, stakeholder_name, description。"
-            "decisions 為討論後的決策結果。"
-        ),
-        "5. Functional Requirements": "從 candidates 和 decisions 中提取功能性需求。",
-        "6. Non-Functional Requirements": "從 candidates 中提取非功能性需求（效能、安全、可用性等）。",
-    }
+        user_prompt = f"""# 任務
+從以下議題討論中，篩選出 3 個最佳方案和 1 個折衷方案，供人類做最終裁決。
 
-    def generate_draft(self, artifact: Dict[str, Any], draft_template: list) -> Dict[str, Any]:
+# 議題資訊
+標題: {topic.get('title', '')}
+描述: {topic.get('description', '')}
+
+# 各方討論內容
+{discussion_text}
+
+# 要求
+1. 從討論中提取 3 個最具體、可行性最高的方案（best_options）
+2. 另外設計 1 個折衷方案（compromise），結合各方觀點的優點
+
+# 輸出 JSON
+{{{{
+    "best_options": [
+        {{{{
+            "id": 1,
+            "title": "方案標題",
+            "description": "方案內容",
+            "source": "提出此方案的 agent 名稱"
+        }}}},
+        {{{{
+            "id": 2,
+            "title": "方案標題",
+            "description": "方案內容",
+            "source": "提出此方案的 agent 名稱"
+        }}}},
+        {{{{
+            "id": 3,
+            "title": "方案標題",
+            "description": "方案內容",
+            "source": "提出此方案的 agent 名稱"
+        }}}}
+    ],
+    "compromise": {{{{
+        "id": 4,
+        "title": "折衷方案標題",
+        "description": "折衷方案內容",
+        "rationale": "為何此方案能平衡各方需求"
+    }}}}
+}}}}"""
+
+        self.memory.add("user", f"篩選議題 {topic.get('id', '')} 的人類裁決選項")
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages)
+
+        best = response.get("best_options", [])[:3]
+        compromise = response.get("compromise", {})
+        if compromise:
+            compromise.setdefault("id", 4)
+
+        self.memory.add("assistant", f"已篩選 {len(best)} 個最佳方案 + 1 個折衷方案")
+        return {"best_options": best, "compromise": compromise}
+
+    # 產生需求規格（Markdown）
+
+    def generate_draft(self, artifact: Dict[str, Any]) -> str:
         full_artifact = {
             "rough_idea": artifact.get("rough_idea", ""),
             "stakeholders": artifact.get("stakeholders", []),
@@ -249,47 +356,43 @@ class MediatorAgent(BaseAgent):
             "feedback": artifact.get("feedback", []),
             "decisions": artifact.get("decisions", []),
         }
+        artifact_text = json.dumps(full_artifact, ensure_ascii=False, indent=2)
 
-        generated_sections = []
+        user_prompt = f"""# 任務
+將以下中間產物整理成需求草稿 Markdown 文件。
 
-        for section_template in draft_template:
-            section_name = section_template.get("section", "")
-            self.logger.info(f"  生成草稿章節: {section_name}")
+# 中間產物（JSON 格式，僅供參考，不要照搬格式）
+{artifact_text}
 
-            # 取得該章節對應的 artifact 子集
-            relevant_keys = self.DRAFT_SECTION_DATA_MAP.get(section_name, list(full_artifact.keys()))
-            section_artifact = {k: full_artifact[k] for k in relevant_keys if k in full_artifact}
-            section_artifact_text = json.dumps(section_artifact, ensure_ascii=False, indent=2)
-
-            section_template_text = json.dumps(section_template, ensure_ascii=False, indent=2)
-            hint = self.DRAFT_SECTION_HINTS.get(section_name, "")
-
-            user_prompt = f"""# 任務
-根據中間產物產生需求草稿的「{section_name}」章節。
-
-# 提示
-{hint}
-
-# 相關資料
-{section_artifact_text}
+# 輸出格式要求
+- 必須輸出純 Markdown 格式（使用 #, ##, ###, -, 表格等 Markdown 語法）
+- 禁止輸出 JSON 格式，禁止使用 ```json 代碼塊包裝整份文件
+- 需求要有編號（如 UR-xx, FR-xx, NFR-xx, CR-xx）
+- 結構由你依據資料內容彈性安排，涵蓋系統概述、利害關係人、需求、衝突等重點即可
+- 最後預留一個「## 附錄」章節（內容留空，UML 模型將由 Modeler 後續補充）
 
 # 約束
-- 嚴格遵循模板結構
 - 只根據已提供的資料填寫，禁止捏造
+- 輸出第一行必須是 Markdown 標題（以 # 開頭）"""
 
-# 輸出 JSON（只輸出此章節）
-{section_template_text}"""
+        self.memory.add("user", "整理 artifact 為需求草稿 Markdown")
+        messages = self.build_direct_messages(user_prompt)
+        spec_md = self.model.chat(messages)
+        spec_md = self.strip_code_fences(spec_md)
+        self.memory.add("assistant", "已產生需求草稿 Markdown")
+        return spec_md
 
-            try:
-                section_result = self.generate_with_reflection(user_prompt)
-                generated_sections.append(section_result)
-            except Exception as e:
-                self.logger.warning(f"  章節 {section_name} 生成失敗: {e}，使用空模板")
-                generated_sections.append(section_template)
-
-        draft = {"draft": generated_sections}
-        self.memory.add("assistant", f"draft generated ({len(generated_sections)} sections)")
-        return draft
+    @staticmethod
+    def strip_code_fences(text: str) -> str:
+        """移除 LLM 輸出可能包裹的 code fence"""
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            first_newline = stripped.find("\n")
+            if first_newline != -1:
+                stripped = stripped[first_newline + 1:]
+            if stripped.endswith("```"):
+                stripped = stripped[:-3]
+        return stripped.strip()
 
     def extract_candidates(self, analyse: list) -> list:
         all_candidates = []

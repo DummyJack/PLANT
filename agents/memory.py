@@ -1,14 +1,12 @@
 import json
 import logging
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 logger = logging.getLogger("Plant.Memory")
 
-
+# Agent 記憶系統(短期（當前任務對話）+ 長期（跨輪次摘要）)
 class Memory:
-    """Agent 記憶系統 — 短期（當前任務對話）+ 長期（跨輪次摘要）"""
-
     def __init__(self, model=None):
         self.messages: List[Dict[str, str]] = []
         self.history: List[Dict[str, Any]] = []
@@ -16,21 +14,6 @@ class Memory:
 
     def add(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})
-
-    def get_messages(self, max_recent: int = 20) -> List[Dict[str, str]]:
-        context = []
-
-        if self.history:
-            context.append({"role": "system", "content": self.get_context_prompt()})
-
-        recent = self.messages[-max_recent:] if len(self.messages) > max_recent else self.messages
-        for msg in recent:
-            role = msg["role"]
-            if role not in ("system", "user", "assistant"):
-                role = "user"
-            context.append({"role": role, "content": msg["content"]})
-
-        return context
 
     def get_context_prompt(self) -> str:
         if not self.history:
@@ -72,7 +55,7 @@ class Memory:
     def format_messages(self) -> str:
         lines = []
         for msg in self.messages:
-            content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
+            content = msg["content"]
             lines.append(f"[{msg['role'].upper()}] {content}")
         return "\n".join(lines)
 
@@ -80,16 +63,6 @@ class Memory:
         parts = []
         for msg in self.messages:
             if msg["role"] == "assistant":
-                content = msg["content"][:200] + "..." if len(msg["content"]) > 200 else msg["content"]
+                content = msg["content"]
                 parts.append(content)
         return " | ".join(parts) if parts else "（無有效記錄）"
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"messages": self.messages, "history": self.history}
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any], model=None) -> "Memory":
-        memory = cls(model=model)
-        memory.messages = data.get("messages", [])
-        memory.history = data.get("history", [])
-        return memory

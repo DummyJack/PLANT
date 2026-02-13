@@ -3,17 +3,8 @@ import json
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-
+# Agent 工具的抽象基礎類別
 class BaseTool(ABC):
-    """Agent 工具的抽象基礎類別
-
-    所有工具必須實作：
-    - name: 工具名稱（供 Agent 在 ReAct 中引用）
-    - description: 工具功能描述
-    - parameters: JSON Schema 格式的參數描述
-    - execute(): 執行工具並回傳結果字串
-    """
-
     name: str = ""
     description: str = ""
     parameters: Dict[str, Any] = {}

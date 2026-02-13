@@ -1,8 +1,7 @@
-import itertools
 import json
+import itertools
 
 from typing import Dict, List, Optional
-
 from agents.base import BaseAgent
 from agents.memory import Memory
 
@@ -12,15 +11,20 @@ class AnalystAgent(BaseAgent):
 
     name = "analyst"
 
-    system_prompt = """你是系統分析師（Analyst Agent），專責需求分析與衝突辨識。
+    system_prompt = """你是需求分析師，專門辨識利害關係人之間的需求衝突。
 
-核心原則：
-1. 逐條比對 — 針對利害關係人的每條需求逐一交叉比對，找出矛盾
-2. 引用具體條目 — 判斷衝突時必須指出是哪些具體需求項目之間的矛盾
-3. 中立立場 — 不偏袒任何利害關係人，不提出解決方案
-4. 寧嚴勿漏 — 寧可標記為潛在衝突，也不要遺漏明顯矛盾"""
+在需求工程中，當不同利害關係人對同一系統的描述存在不一致時即為衝突，包括但不限於：
+- 術語衝突：對同一元件使用不同名稱或定義
+- 範圍衝突：對系統組成、功能範圍的描述不同（增減元件、功能）
+- 數值衝突：對數量、規格、限制條件的描述不同
+- 行為衝突：對系統行為或流程的期望不同
 
-    reflection_criteria = "衝突判斷必須引用具體的需求條目，說明哪條與哪條矛盾、為什麼矛盾。若標記為 Neutral，需確認確實不存在任何衝突。"
+只有當兩方描述完全一致、或各自描述不相關的獨立需求時，才判定為 Neutral。"""
+
+    reflection_criteria = (
+        "檢查是否遺漏了術語、範圍、數值或行為上的不一致。"
+        "兩方描述有任何差異都應仔細考慮是否構成需求衝突。"
+    )
 
     def __init__(self, model, tools: Optional[list] = None,
                  memory: Optional[Memory] = None, registry=None):
@@ -75,55 +79,35 @@ class AnalystAgent(BaseAgent):
             f"{sh['name']}:\n{self.format_text(sh['text'])}" for sh in stakeholder_group
         )
 
-        is_refined = any(
-            (isinstance(sh.get("text"), list) and any("[KEEP]" in t or "[REVISE]" in t or "[ADD]" in t for t in sh["text"]))
-            or (isinstance(sh.get("text"), str) and ("[KEEP]" in sh["text"] or "[REVISE]" in sh["text"] or "[ADD]" in sh["text"]))
-            for sh in stakeholder_group
-        )
-
-        refined_note = ""
-        if is_refined:
-            refined_note = """# 特別注意
-這是精煉後的需求，每條標記 [KEEP] 保留、[REVISE] 修正、[ADD] 新增。
-請特別比對 [REVISE] 和 [ADD] 部分是否與其他利害關係人產生新衝突。
-"""
-
         if is_all_analysis:
-            user_prompt = f"""# 任務
-針對所有利害關係人的需求進行全面分析：辨識整體衝突 + 提取候選需求。
-{refined_note}
-# 利害關係人發言
+            user_prompt = f"""# 利害關係人發言
 {stakeholder_texts}
 
-# 分析步驟
-1. 先逐條交叉比對所有利害關係人的需求，判斷整體是否存在矛盾或衝突
-2. 根據比對結果，明確判定 label 為 "Conflict"（存在任何衝突）或 "Neutral"（完全無衝突）
-3. 在 reason 中具體說明哪些需求之間存在矛盾，或為何判定無衝突
-4. 從每位利害關係人的發言中提取候選需求（去重、合併相似項）
+# 任務
+1. 比較各方發言，找出術語、範圍、數值或行為上的任何不一致
+2. 有不一致 → label="Conflict"；完全一致或各自獨立 → label="Neutral"
+3. 提取候選需求（去重、合併相似項）
 
-# 輸出 JSON（所有欄位皆為必填，不可為 null）
+# 輸出 JSON
 {{{{
-    "label": "Conflict" 或 "Neutral"（必填，不可為 null）,
-    "reason": "整體判斷理由，須引用具體需求條目（必填，不可為 null）",
+    "label": "Conflict 或 Neutral",
+    "reason": "簡述不一致之處",
     "candidates": [
         {{{{"id": "R-01", "text": "需求描述", "source": ["stakeholder_name"]}}}}
     ]
 }}}}"""
         else:
-            user_prompt = f"""# 任務
-針對以下兩位利害關係人的需求進行衝突辨識。
-{refined_note}
-# 利害關係人發言
+            user_prompt = f"""# 利害關係人發言
 {stakeholder_texts}
 
-# 分析步驟
-1. 逐條比對兩位利害關係人的每條需求
-2. 識別是否存在矛盾、衝突或不相容
+# 任務
+比較兩方發言，找出術語、範圍、數值或行為上的任何不一致。
+有不一致 → label="Conflict"；完全一致或各自獨立 → label="Neutral"。
 
 # 輸出 JSON
 {{{{
-    "label": "Conflict" 或 "Neutral",
-    "reason": "判斷理由"
+    "label": "Conflict 或 Neutral",
+    "reason": "簡述不一致之處"
 }}}}"""
 
         self.memory.add("user", user_prompt)
@@ -137,6 +121,66 @@ class AnalystAgent(BaseAgent):
         if is_all_analysis:
             result["candidates"] = response.get("candidates", [])
         return result
+
+    # 重新檢視上一輪衝突分析
+
+    def review_analysis(self, analyse_groups: List[Dict]) -> Dict:
+        """重新檢視上一輪的衝突分析結果，提出疑慮供討論"""
+        review_items = []
+        for i, g in enumerate(analyse_groups):
+            texts = g.get("texts", {})
+            label = g.get("label", "")
+            reason = g.get("reason", "")
+            stakeholder_text = "\n".join(f"  {name}: {t}" for name, t in texts.items())
+            review_items.append(
+                f"[{i}] label={label}\n{stakeholder_text}\nreason: {reason}"
+            )
+
+        review_text = "\n\n".join(review_items)
+
+        user_prompt = f"""重新檢視以下第一輪的衝突分析結果，找出可能有辨識錯誤的項目。
+
+# 上一輪分析結果
+{review_text}
+
+# 檢查重點
+1. 標記為 Conflict 的是否真的有衝突？是否存在誤判？
+2. 標記為 Neutral 的是否真的沒有衝突？是否有遺漏？
+3. reason 是否合理、具體？
+
+# 輸出 JSON
+{{{{
+    "concerns": [
+        {{{{
+            "index": 0,
+            "original_label": "原本的 label",
+            "suggested_label": "建議修正為的 label（Conflict / Neutral）",
+            "reason": "為何認為原判斷有誤"
+        }}}}
+    ]
+}}}}
+
+# 約束
+- 只列出有疑慮的項目，全部正確則 concerns 為空陣列
+- 理由必須具體說明為何認為原判斷有誤"""
+
+        self.memory.add("user", "重新檢視上一輪衝突分析")
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages)
+
+        concerns = response.get("concerns", [])
+        self.memory.add("assistant", f"檢視完畢，提出 {len(concerns)} 項疑慮")
+        return concerns
+
+    def apply_corrections(self, analyse_groups: List[Dict], corrections: List[Dict]) -> List[Dict]:
+        """根據討論結果套用修正"""
+        updated = [dict(g) for g in analyse_groups]
+        for c in corrections:
+            idx = c.get("index")
+            if idx is not None and 0 <= idx < len(updated):
+                updated[idx]["label"] = c.get("corrected_label", updated[idx].get("label"))
+                updated[idx]["reason"] = c.get("corrected_reason", updated[idx].get("reason"))
+        return updated
 
     # 覆寫：議題討論回應
 
@@ -163,6 +207,7 @@ class AnalystAgent(BaseAgent):
 1. position: 從需求一致性與完整性角度的分析結論
 2. arguments: 基於需求分析的客觀論點（標明衝突風險、遺漏風險等）
 3. suggestions: 降低衝突或提升需求完整性的建議
+4. questions_to_others: 想請其他角色（user/expert）回答的問題
 
 # 約束
 - 保持中立，不偏袒任何利害關係人
@@ -172,7 +217,8 @@ class AnalystAgent(BaseAgent):
 {{{{
     "position": "從分析角度...",
     "arguments": ["論點1", "論點2"],
-    "suggestions": ["建議1", "建議2"]
+    "suggestions": ["建議1", "建議2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
         self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
@@ -184,4 +230,5 @@ class AnalystAgent(BaseAgent):
             "position": response.get("position", ""),
             "arguments": response.get("arguments", []),
             "suggestions": response.get("suggestions", []),
+            "questions_to_others": response.get("questions_to_others", []),
         }
