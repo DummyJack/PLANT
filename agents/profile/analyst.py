@@ -1,4 +1,3 @@
-import json
 import itertools
 
 from typing import Dict, List, Optional
@@ -114,64 +113,6 @@ class AnalystAgent(BaseAgent):
         if is_all_analysis:
             result["candidates"] = response.get("candidates", [])
         return result
-
-    # 重新檢視上一輪衝突分析
-
-    def review_analysis(self, analyse_groups: List[Dict]) -> Dict:
-        """重新檢視上一輪的衝突分析結果，提出疑慮供討論"""
-        review_items = []
-        for i, g in enumerate(analyse_groups):
-            texts = g.get("texts", {})
-            label = g.get("label", "")
-            reason = g.get("reason", "")
-            stakeholder_text = "\n".join(f"  {name}: {t}" for name, t in texts.items())
-            review_items.append(
-                f"[{i}] label={label}\n{stakeholder_text}\nreason: {reason}"
-            )
-
-        review_text = "\n\n".join(review_items)
-
-        user_prompt = f"""重新檢視以下第一輪的衝突分析結果，找出可能有辨識錯誤的項目。
-
-# 上一輪分析結果
-{review_text}
-
-# 檢查重點
-1. 標記為 Conflict 的是否真的有衝突？是否存在誤判？
-2. 標記為 Neutral 的是否真的沒有衝突？是否有遺漏？
-3. reason 是否合理、具體？
-
-# 輸出 JSON
-{{{{
-    "concerns": [
-        {{{{
-            "index": 0,
-            "original_label": "原本的 label",
-            "suggested_label": "建議修正為的 label（Conflict / Neutral）",
-            "reason": "為何認為原判斷有誤"
-        }}}}
-    ]
-}}}}
-
-# 約束
-- 只列出有疑慮的項目，全部正確則 concerns 為空陣列
-- 理由必須具體說明為何認為原判斷有誤"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-
-        concerns = response.get("concerns", [])
-        return concerns
-
-    def apply_corrections(self, analyse_groups: List[Dict], corrections: List[Dict]) -> List[Dict]:
-        """根據討論結果套用修正"""
-        updated = [dict(g) for g in analyse_groups]
-        for c in corrections:
-            idx = c.get("index")
-            if idx is not None and 0 <= idx < len(updated):
-                updated[idx]["label"] = c.get("corrected_label", updated[idx].get("label"))
-                updated[idx]["reason"] = c.get("corrected_reason", updated[idx].get("reason"))
-        return updated
 
     # 覆寫：議題討論回應
 

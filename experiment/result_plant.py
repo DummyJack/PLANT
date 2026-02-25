@@ -119,59 +119,8 @@ def run_conflict(system: dict, data: list, mode: str = "macro"):
         r1_overall = Metric.micro(y_true, y_pred_r1)
     print(f"  R1 Overall F1={r1_overall['f1']:.4f}  Conflict F1={r1_conflict['f1']:.4f}")
 
-    # Round 2 Step 0: Analyst 重新檢視 + 多方討論修正
-    print("\nRound 2 Step 0: Analyst 重新檢視 + 多方討論")
-    concerns = analyst.review_analysis(round1_groups)
-    corrections = []
-
-    if concerns:
-        print(f"  Analyst 提出 {len(concerns)} 項疑慮，進入討論")
-
-        for ci, concern in enumerate(concerns, 1):
-            idx = concern.get("index", "?")
-            original = concern.get("original_label", "?")
-            suggested = concern.get("suggested_label", "?")
-            reason = concern.get("reason", "")
-
-            print(f"\r  R2 討論: {ci}/{len(concerns)} [{idx}] {original}→{suggested}", end="", flush=True)
-
-            topic = {
-                "id": f"Review-{ci:02d}",
-                "title": f"衝突分析檢視：第 {idx} 筆（{original} → {suggested}?）",
-                "description": (
-                    f"Analyst 認為第 {idx} 筆分析結果可能有誤。\n"
-                    f"原判斷: {original}\n建議修正為: {suggested}\n理由: {reason}"
-                ),
-                "type": "refinement",
-                "discussion_mode": "sequential",
-                "participants": ["user", "analyst", "expert"],
-                "speaking_order": ["user", "analyst", "expert"],
-            }
-
-            try:
-                contrib = mediator.moderate_sequential(topic, registry)
-                resolution = mediator.synthesize_and_resolve(topic, contrib)
-
-                if resolution.get("resolution") == "agreed":
-                    corrections.append({
-                        "index": idx,
-                        "corrected_label": suggested,
-                        "corrected_reason": resolution.get("summary", reason),
-                    })
-            except Exception as e:
-                print(f"\n  [Error] Discussion {ci}: {e}")
-
-        print()
-    else:
-        print("  Analyst 無疑慮")
-
-    # 套用修正
-    if corrections:
-        final_groups = analyst.apply_corrections(round1_groups, corrections)
-        print(f"  套用 {len(corrections)} 筆修正")
-    else:
-        final_groups = round1_groups
-        print("  無修正")
+    # 以 Round 1 分析結果為最終結果（無檢視修正）
+    final_groups = round1_groups
 
     # 更新 records
     for i, g in enumerate(final_groups):
@@ -198,8 +147,6 @@ def run_conflict(system: dict, data: list, mode: str = "macro"):
             "overall": final_overall,
             "conflict": final_conflict,
         },
-        "corrections_count": len(corrections),
-        "concerns_count": len(concerns) if concerns else 0,
     }
 
     result = {

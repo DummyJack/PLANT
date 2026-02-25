@@ -5,8 +5,8 @@
 ```
 Plant/
 ├── main.py                 # 程式入口點
-├── flow.py                 # 流程控制器（Phase 0 + Round 1 探索 + Round 2+ 議題式討論）
-├── model.py                # LLM 整合層（OpenAI, Anthropic, Gemini, Ollama）
+├── flow.py                 # 流程控制器（Round 1 探索 + Round 2+ 議題式討論）
+├── model.py                # LLM 整合層（OpenAI, Ollama）
 ├── store.py                # I/O 層：JSON / Markdown 讀寫
 ├── utils.py                # Logger、MoMManager、Collect、AgentSelector
 │
@@ -35,16 +35,15 @@ Plant/
 │
 └── projects/<id>/          # 專案資料（每個專案獨立目錄）
     ├── artifact/
-    │   ├── artifact.json   # 核心中間產物（含 project_goal）
-    │   ├── draft_N.json    # 需求草稿（含 UML 模型，N = 輪次）
-    │   ├── srs.json        # 正式 SRS
-    │   └── mom.json        # 會議記錄（Round 1: stages / Round 2+: meetings）
+    │   ├── artifact.json   # 核心中間產物（rough_idea, stakeholders, analyse, reports, feedback）
+    │   └── srs.json        # 正式 SRS（JSON）
     ├── output/
     │   ├── report.md       # 衝突報告
-    │   ├── draft_N.md      # 需求草稿 Markdown
+    │   ├── spec_N.md       # 需求草稿 Markdown（N = 輪次，含 UML 附錄）
     │   ├── dr.md           # Design Rationale
     │   ├── srs.md          # 正式 SRS Markdown
-    │   ├── mom.md          # 會議記錄 Markdown
+    │   ├── R*-Spec.md      # Round 1 會議記錄（stages）
+    │   ├── *.md            # Round 2+ 各議題會議記錄
     │   └── *.plantuml      # PlantUML 圖表檔案
     └── log/
         └── system.log
@@ -68,38 +67,22 @@ Plant/
 人類輸入 rough_idea
     │
     ▼
-Phase 0: Mediator 建立專案目標 → 人類確認
-    │
-    ▼
-Round 1: 探索階段（Stage 1-8，現有線性流程）
-    │
-    ▼
-draft_1.json（含 UML）
+Round 1: 探索階段（Stage 1～7）
+    ├─ User 建議利害關係人 → 人類選擇 → User 產生需求
+    ├─ Analyst 衝突分析 → Mediator 衝突報告 → Expert 建議
+    ├─ Mediator 產生需求草稿（spec_1.md）
+    └─ Modeler 產生 UML，寫入 spec 附錄
     │
     ▼
 Round 2+: 議題式討論
     ├─ Mediator 分析 Spec → 生成議題清單
-    ├─ For each 議題:
-    │   ├─ Mediator 決定模式（逐一發言 / 同時發言）
-    │   ├─ Agent 們討論
-    │   ├─ Mediator 綜合結果
-    │   ├─ 未解決 → Expert 拘束性裁決
-    │   └─ 仍未解決 → 人類介入
-    ├─ Mediator 更新 Draft
+    ├─ For each 議題: 討論（sequential/simultaneous）→ Mediator 綜合
+    ├─ 未解決 → Mediator 篩選方案 → 人類裁決
+    ├─ Mediator 更新 Spec
     └─ Modeler 更新 UML
     │
     ▼
-最終: DocumentorAgent → SRS / Design Rationale
-```
-
-### Phase 0: 專案目標建立
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Phase 0: MediatorAgent                                      │
-│ ├─ 分析 rough_idea，用一句話描述系統核心目標                │
-│ └─ 人類確認（可修改）後存入 artifact["project_goal"]        │
-└─────────────────────────────────────────────────────────────┘
+最終: DocumentorAgent → dr.md、srs.json、srs.md
 ```
 
 ### Round 1: 探索階段
@@ -120,47 +103,37 @@ Round 2+: 議題式討論
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 3: AnalystAgent                  [Reflection]         │
-│ ├─ 兩兩配對分析利害關係人需求                               │
-│ ├─ 全體分析並萃取候選需求                                   │
-│ └─ 識別需求衝突（Conflict / Neutral）                       │
+│ Stage 3: AnalystAgent                                       │
+│ ├─ 兩兩配對 + 全體分析利害關係人需求                         │
+│ └─ 識別需求衝突（Conflict / Neutral）、萃取候選需求          │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 4: MediatorAgent           [Agent Communication]      │
-│ ├─ 諮詢 AnalystAgent 取得補充觀點                           │
+│ Stage 4: MediatorAgent                                       │
 │ └─ 產生衝突報告 → report.md                                 │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 5: ExpertAgent     [Tool Use]                          │
-│ ├─ 載入外部文件（doc/ 資料夾 RAG）                          │
-│ ├─ 使用 web_search 搜尋法規、標準、最佳實務                 │
-│ └─ 提供專家建議（含 binding 拘束性 + advisory 非拘束性）    │
+│ Stage 5: ExpertAgent     [Tool Use]                         │
+│ ├─ 載入外部文件（doc/）                                     │
+│ ├─ 可選 web_search 搜尋法規、標準、最佳實務                  │
+│ └─ 提供專家建議（binding 拘束性 + 非拘束性）                 │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 6: MediatorAgent           [Agent Communication]      │
-│ ├─ 諮詢 ExpertAgent 取得專業建議                            │
-│ ├─ 根據衝突報告和專家建議產生決策選項                       │
-│ └─ 人類裁決每個衝突的解決方案                               │
+│ Stage 6: MediatorAgent                                       │
+│ └─ 整合中間產物，產生需求草稿 → spec_N.md                   │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 7: MediatorAgent                                      │
-│ └─ 整合所有中間產物，產生需求草稿 → draft_N.json            │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Stage 8: ModelerAgent    [Tool Use]                         │
+│ Stage 7: ModelerAgent                                       │
 │ ├─ 根據草稿產生 Use Case / Class / Sequence Diagram         │
-│ ├─ PlantUML 模型輸出                                        │
-│ └─ 將模型整合至 draft_N.json（含 .plantuml 輸出）           │
+│ ├─ PlantUML 模型寫入 spec 附錄、輸出 .plantuml 檔            │
+│ └─ 更新 artifact["uml"]                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -171,9 +144,8 @@ Round 2+: 議題式討論
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Step 1: MediatorAgent 分析 Spec → 生成議題清單              │
-│ ├─ 議題類型: conflict / requirement_gap / refinement /      │
-│ │            new_concern                                    │
-│ └─ 為每個議題決定討論模式 + 參與者 + 發言順序               │
+│ ├─ 議題類型: conflict / requirement_gap / refinement       │
+│ └─ 為每個議題決定 discussion_mode、participants、speaking_order │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼  For each 議題
@@ -192,9 +164,9 @@ Round 2+: 議題式討論
     │
     ▼  若 unresolved
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 2c: 升級路徑                                           │
-│ ├─ ExpertAgent 提供拘束性裁決（基於法規/標準/技術限制）     │
-│ └─ 仍無法解決 → 人類介入裁決                                │
+│ Step 2c: 未達成共識時                                       │
+│ ├─ MediatorAgent.prepare_human_options() 篩選方案與折衷     │
+│ └─ Collect.human_decision_on_topic() 人類裁決               │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -218,21 +190,17 @@ Round 2+: 議題式討論
 ### 升級路徑
 
 ```
-Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
+Mediator 綜合 → agreed/partial? ──Yes──→ 記錄決策，下個議題
                   │
-                  No
+                  No (unresolved)
                   ▼
-          Expert 拘束性裁決 → resolved? ──Yes──→ 記錄決策
-                  │
-                  No
-                  ▼
-           人類介入裁決 → 記錄決策
+     Mediator 篩選 best_options + compromise → 人類選擇 → 記錄決策
 ```
 
 ### 會議記錄結構
 
-- **Round 1**：使用 `stages` 結構（每個 Stage 一筆記錄）
-- **Round 2+**：使用 `meetings` 結構（每個議題一筆會議記錄），包含參與者、發言記錄、決議結果
+- **Round 1**：MoM 使用 `stages`，輸出合併為 `R{round_num}-Spec.md`
+- **Round 2+**：每個議題一筆會議記錄（`meetings`），即時存為獨立 MD；含參與者、發言、決議
 
 ## Agent Prompt 設計
 
@@ -244,18 +212,17 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 - 分析需求規格識別議題，決定討論模式
 - 綜合各方意見，促成共識
 
-**主要方法與 Prompt：**
+**主要方法：**
 
-| 方法 | 觸發時機 | Prompt 重點 |
+| 方法 | 觸發時機 | 說明 |
 | --- | --- | --- |
-| `establish_project_goal()` | Phase 0 | 從 rough_idea 提取一句話核心目標（project_goal 字串） |
-| `generate_draft()` | Round 1 Stage 7 / Round 2+ Step 3 | 根據 artifact 中間產物和 spec 模板產生需求草稿 |
-| `generate_topics()` | Round 2+ 開頭 | 分析 Spec 識別衝突/缺口/精煉/新關注點，決定 discussion_mode 和 participants |
-| `moderate_sequential()` | 議題討論 | 按 speaking_order 依序呼叫 Agent 的 `respond_to_topic()`，傳遞 previous_responses |
-| `moderate_simultaneous()` | 議題討論 | 同時呼叫所有 Agent 的 `respond_to_topic()`，不傳遞 previous_responses |
-| `synthesize_and_resolve()` | 討論結束 | 綜合各方意見，判斷 agreed/partial/unresolved |
-| `generate_conflict_report()` | Round 1 Stage 4 | 保留原有的衝突報告生成邏輯 |
-| `generate_decision_options()` | Round 1 Stage 6 | 保留原有的決策選項生成邏輯 |
+| `generate_draft(artifact)` | Round 1 Stage 6 / Round 2+ Step 3 | 依 artifact 中間產物產生需求草稿 Markdown |
+| `generate_topics(spec_md, rough_idea, registry)` | Round 2+ Step 1 | 分析 Spec 產生議題清單（type、discussion_mode、participants） |
+| `moderate_sequential(topic, registry)` | 議題討論 | 依 speaking_order 依序呼叫各 Agent 的 `respond_to_topic()` |
+| `moderate_simultaneous(topic, registry)` | 議題討論 | 同時呼叫各 Agent 的 `respond_to_topic()` |
+| `synthesize_and_resolve(topic, contributions)` | 討論結束 | 綜合發言，判斷 agreed / partial / unresolved |
+| `generate_conflict_report(conflict_groups)` | Round 1 Stage 4 | 將衝突分析結果結構化為報告 |
+| `prepare_human_options(topic, contributions)` | 議題 unresolved 時 | 篩選 3 個最佳方案 + 1 個折衷方案，供人類裁決 |
 
 ### UserAgent（利害關係人模擬）
 
@@ -270,7 +237,7 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 5. 對其他角色的看法：可能的衝突點
 6. 額外想法：補充內容
 
-**輸出格式：** `{"id": "SH-01", "name": "...", "text": "..."}` — 自然口語文字，不使用結構化格式
+**輸出格式：** 建議名單 `{"proposed_stakeholders": [{name, reason}]}`；需求 `{"stakeholders": [{id, name, text: []}]}`
 
 ### ExpertAgent（領域專家）
 
@@ -285,32 +252,18 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 {
   "id": "FB-01",
   "binding": false,
-  "text": ["具體建議"],
-  "ref": ["來源 URL"],
-  "reason": "為何是 advisory 或 binding"
+  "text": ["具體建議1", "建議2"],
+  "ref": "來源 URL 或文件名或「資訊不足」"
 }
 ```
 
-**binding 判斷標準：**
-
-| binding | 適用情境 | 範例 |
-| --- | --- | --- |
-| `true` | 法規強制、安全標準、技術硬性限制 | GDPR 合規、資料加密標準 |
-| `false` | 一般建議、最佳實務、風險提醒 | 建議使用快取、考慮效能 |
-
-**新增方法：`provide_binding_ruling(topic, contributions)`**
-- 議題無法達成共識時，由 Expert 基於客觀證據做出拘束性裁決
-- 若無客觀依據，`resolved` 設為 `false`，升級至人類
+**binding 判斷標準：** `true` 僅限法規/安全/技術硬性限制；其餘為 `false`。無外部文件時 ref 填「無外部文件」或「領域常識」，一律 binding=false。
 
 ### AnalystAgent（分析師）
 
 **System Prompt 核心指令：**
-- 進行需求分析與衝突辨識（不負責草稿生成，草稿由 MediatorAgent 負責）
-
-**Reflection 標準：**
-- 衝突判斷必須有明確理由
-- 不得遺漏明顯的需求矛盾
-- Neutral 需確認確實不存在衝突
+- 辨識利害關係人需求間的衝突（術語、範圍、數值、行為不一致為 Conflict；一致或無關為 Neutral）
+- 兩兩配對 + 全體分析，輸出 label、reason；全體時可萃取 candidates
 
 ### ModelerAgent（系統建模）
 
@@ -320,27 +273,14 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 ### DocumentorAgent（文件撰寫）
 
 **System Prompt 核心指令：**
-- 撰寫符合 IEEE 29148 標準的 SRS 文件
-
-**Reflection 標準：**
-- SRS 必須涵蓋所有需求草稿中的需求項目
-- 格式必須符合 IEEE 29148 標準結構
+- 依會議記錄產生 Design Rationale（dr.md）
+- 依 spec 與模板產生 SRS（srs.json、srs.md），結構符合 spec 範本
 
 ### BaseAgent（議題回應介面）
 
 所有 Agent 繼承的 `respond_to_topic()` 方法：
 
-**輸出格式：**
-
-```json
-{
-  "position": "對議題的立場或看法",
-  "arguments": ["支持論點1", "支持論點2"],
-  "suggestions": ["具體建議1", "具體建議2"]
-}
-```
-
-子類別可覆寫此方法，提供角色特化的回應邏輯。
+**輸出格式：** `position`、`arguments`、`suggestions`、`questions_to_others`。子類別可覆寫以提供角色特化回應。
 
 ## 配置說明
 
@@ -348,12 +288,14 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 
 | 設定                                                                         | 說明                  | 預設值                               |
 | ---------------------------------------------------------------------------- | --------------------- | ------------------------------------ |
-| `provider`                                                                   | LLM 供應商            | `"openai"`                           |
+| `provider`                                                                   | LLM 供應商            | `"openai"`（支援 openai, ollama）    |
 | `model`                                                                      | 模型名稱              | `"gpt-4o-mini"`                      |
+| `temperature`                                                                | 生成溫度              | `0`                                  |
 | `rounds`                                                                     | 討論輪數              | `1`                                  |
+| `start_round`                                                                | 起始輪次（繼續專案用）| `1`                                  |
 | `enable_user` / `analyst` / `expert` / `mediator` / `modeler` / `documentor` | 各 Agent 開關         | `true`                               |
-| `enable_web_search`                                                          | 是否啟用網路搜尋      | `true`                               |
-| `enable_agent_communication`                                                 | 是否啟用跨 Agent 溝通 | `true`                               |
+| `enable_web_search`                                                          | Expert 是否啟用網路搜尋 | `true`                             |
+| `enable_agent_communication`                                                 | 是否啟用 Registry（跨 Agent 調度） | `true`                      |
 
 ## 快速開始
 
