@@ -1,6 +1,5 @@
 from typing import Dict, List, Optional
 from agents.base import BaseAgent
-from agents.memory import Memory
 
 
 class UserAgent(BaseAgent):
@@ -17,9 +16,8 @@ class UserAgent(BaseAgent):
 4. 衝突自然 — 不同角色的需求可能矛盾，如實表達，不要預先調和
 5. 禁止越權 — 不要提出技術解決方案，只描述「想要什麼」和「為什麼」"""
 
-    def __init__(self, model, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None):
-        super().__init__(model, tools=tools, memory=memory, registry=registry)
+    def __init__(self, model, tools: Optional[list] = None, registry=None):
+        super().__init__(model, tools=tools, registry=registry)
         self.stakeholders: List[Dict] = []
 
     def propose_stakeholders(self, rough_idea: str) -> List[str]:
@@ -42,11 +40,9 @@ class UserAgent(BaseAgent):
     ]
 }}}}"""
 
-        self.memory.add("user", f"為 '{rough_idea[:50]}...' 提出利害關係人建議")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
         result = response.get("proposed_stakeholders", [])
-        self.memory.add("assistant", f"建議了 {len(result)} 位利害關係人")
         return result
 
     def generate_stakeholder_requirements(self, rough_idea: str, selected_stakeholders: List[str]) -> List[Dict]:
@@ -90,7 +86,6 @@ class UserAgent(BaseAgent):
     ]
 }}}}"""
 
-        self.memory.add("user", f"為 {len(selected_stakeholders)} 位利害關係人生成需求")
         try:
             messages = self.build_direct_messages(user_prompt)
             response = self.model.chat_json(messages, temperature=1.2)
@@ -107,7 +102,6 @@ class UserAgent(BaseAgent):
                 elif len(sh["text"]) > 5:
                     sh["text"] = sh["text"][:5]
 
-            self.memory.add("assistant", f"已生成 {len(stakeholders)} 位利害關係人需求")
             return stakeholders
         except Exception as e:
             raise RuntimeError(f"User 生成失敗: {e}")
@@ -166,7 +160,6 @@ class UserAgent(BaseAgent):
     "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
-        self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 

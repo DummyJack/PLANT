@@ -2,7 +2,6 @@ import json
 
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
-from agents.memory import Memory
 
 
 class DocumentorAgent(BaseAgent):
@@ -16,11 +15,8 @@ class DocumentorAgent(BaseAgent):
 3. 完整性 — 不遺漏需求規格中的任何需求項目
 4. 忠實記錄 — 只整理已有資料，禁止添加資料中不存在的需求或決策"""
 
-    reflection_criteria = "SRS 文件必須涵蓋需求規格中所有需求項目，格式符合 spec 範本結構。"
-
-    def __init__(self, model, store, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None):
-        super().__init__(model, tools=tools, memory=memory, registry=registry)
+    def __init__(self, model, store, tools: Optional[list] = None, registry=None):
+        super().__init__(model, tools=tools, registry=registry)
         self.store = store
 
     def generate_design_rationale(self, mom_data: Dict[str, Any]) -> str:
@@ -43,10 +39,8 @@ class DocumentorAgent(BaseAgent):
 - 若某個章節沒有對應資料，標註「本輪無相關資料」
 - 以 Markdown 格式輸出"""
 
-        self.memory.add("user", "生成 Design Rationale")
         messages = self.build_direct_messages(user_prompt)
         dr_content = self.model.chat(messages)
-        self.memory.add("assistant", "已生成 Design Rationale")
         return dr_content
 
     def extract_dr_data(self, mom_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -127,12 +121,12 @@ class DocumentorAgent(BaseAgent):
 {section_template_text}"""
 
             try:
-                section_result = self.generate_with_reflection(user_prompt)
+                messages = self.build_direct_messages(user_prompt)
+                section_result = self.model.chat_json(messages)
                 generated_sections.append(section_result)
             except Exception as e:
                 self.logger.warning(f"  SRS 章節 {section_name} 生成失敗: {e}，使用空模板")
                 generated_sections.append(section_template)
 
         srs = {"srs": generated_sections}
-        self.memory.add("assistant", f"已生成 SRS 文件（{len(generated_sections)} 章節）")
         return srs

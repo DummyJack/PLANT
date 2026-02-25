@@ -29,14 +29,6 @@ class BaseLLM(ABC):
         return kwargs
 
     @abstractmethod
-    def generate(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                 temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str: ...
-
-    @abstractmethod
-    def generate_json(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                      temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Dict: ...
-
-    @abstractmethod
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None) -> str: ...
 
@@ -52,22 +44,6 @@ class OpenAIModel(BaseLLM):
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment")
         self.client = OpenAI(api_key=api_key)
-
-    def generate(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                 temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
-        return self.chat(messages, temperature, max_tokens)
-
-    def generate_json(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                      temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Dict:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
-        return self.chat_json(messages, temperature, max_tokens)
 
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None) -> str:
@@ -110,22 +86,6 @@ class OllamaModel(BaseLLM):
         elif self.default_max_tokens is not None:
             options["num_predict"] = self.default_max_tokens
         return options
-
-    def generate(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                 temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
-        return self.chat(messages, temperature, max_tokens)
-
-    def generate_json(self, user_prompt: Optional[str] = None, system_prompt: Optional[str] = None,
-                      temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Dict:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
-        return self.chat_json(messages, temperature, max_tokens)
 
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None) -> str:

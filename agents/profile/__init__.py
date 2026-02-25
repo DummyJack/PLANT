@@ -1,4 +1,4 @@
-# Team 模組 — 各 Agent 角色的具體實作
+# Profile 模組 — 各 Agent 角色的具體實作
 from .user import UserAgent
 from .analyst import AnalystAgent
 from .expert import ExpertAgent

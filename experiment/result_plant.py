@@ -14,8 +14,8 @@ sys.path.insert(0, str(BASE_DIR))
 load_dotenv(dotenv_path=BASE_DIR / "config" / ".env")
 
 from model import create_model
-from agents import Memory, AgentRegistry
-from team import UserAgent, AnalystAgent, ExpertAgent, MediatorAgent
+from agents import AgentRegistry
+from agents.profile import UserAgent, AnalystAgent, ExpertAgent, MediatorAgent
 from metric import Metric
 
 BENCHMARK_DIR = Path(__file__).parent / "benchmark"
@@ -41,34 +41,18 @@ def create_system(model_name="gpt-4o-mini", temperature=0):
     model = create_model(provider="openai", model_name=model_name, temperature=temperature)
     registry = AgentRegistry()
 
-    memories = {
-        "user": Memory(model),
-        "analyst": Memory(model),
-        "expert": Memory(model),
-        "mediator": Memory(model),
-    }
-
-    user_agent = UserAgent(model, memory=memories["user"], registry=registry)
-    analyst = AnalystAgent(model, memory=memories["analyst"], registry=registry)
+    user_agent = UserAgent(model, registry=registry)
+    analyst = AnalystAgent(model, registry=registry)
     expert = ExpertAgent(
-        model, memory=memories["expert"], registry=registry,
+        model, registry=registry,
         doc_dir="doc", enable_web_search=False,
     )
-    mediator = MediatorAgent(model, memory=memories["mediator"], registry=registry)
+    mediator = MediatorAgent(model, registry=registry)
 
-    registry.register("user", user_agent, "利害關係人模擬專家")
-    registry.register("analyst", analyst, "需求分析師，負責衝突分析")
-    registry.register("expert", expert, "領域專家")
-    registry.register("mediator", mediator, "需求調解主持人")
-
-    # 讀取 config 中的 reflection 設定
-    config_path = BASE_DIR / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        for agent in [user_agent, analyst, expert, mediator]:
-            agent.react_max_steps = config.get("react_max_steps", 3)
-            agent.reflection_max_retries = config.get("reflection_max_retries", 1)
+    registry.register("user", user_agent)
+    registry.register("analyst", analyst)
+    registry.register("expert", expert)
+    registry.register("mediator", mediator)
 
     return {
         "analyst": analyst,
@@ -98,7 +82,6 @@ def run_conflict(system: dict, data: list, mode: str = "macro"):
         label = row["Class"]
 
         print(f"\r  R1: {i + 1}/{total}", end="", flush=True)
-        analyst.memory.clear_short_term()
 
         stakeholder_group = [
             {"name": "Stakeholder_A", "text": text1},
@@ -138,7 +121,6 @@ def run_conflict(system: dict, data: list, mode: str = "macro"):
 
     # Round 2 Step 0: Analyst 重新檢視 + 多方討論修正
     print("\nRound 2 Step 0: Analyst 重新檢視 + 多方討論")
-    analyst.memory.clear_short_term()
     concerns = analyst.review_analysis(round1_groups)
     corrections = []
 

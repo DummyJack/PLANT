@@ -3,7 +3,6 @@ import itertools
 
 from typing import Dict, List, Optional
 from agents.base import BaseAgent
-from agents.memory import Memory
 
 
 class AnalystAgent(BaseAgent):
@@ -21,14 +20,8 @@ class AnalystAgent(BaseAgent):
 
 只有當兩方描述完全一致、或各自描述不相關的獨立需求時，才判定為 Neutral。"""
 
-    reflection_criteria = (
-        "檢查是否遺漏了術語、範圍、數值或行為上的不一致。"
-        "兩方描述有任何差異都應仔細考慮是否構成需求衝突。"
-    )
-
-    def __init__(self, model, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None):
-        super().__init__(model, tools=tools, memory=memory, registry=registry)
+    def __init__(self, model, tools: Optional[list] = None, registry=None):
+        super().__init__(model, tools=tools, registry=registry)
 
     @staticmethod
     def format_text(text) -> str:
@@ -110,8 +103,8 @@ class AnalystAgent(BaseAgent):
     "reason": "簡述不一致之處"
 }}}}"""
 
-        self.memory.add("user", user_prompt)
-        response = self.generate_with_reflection(user_prompt, temperature=1)
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages, temperature=1)
 
         result = {
             "texts": {sh["name"]: sh["text"] for sh in stakeholder_group},
@@ -164,12 +157,10 @@ class AnalystAgent(BaseAgent):
 - 只列出有疑慮的項目，全部正確則 concerns 為空陣列
 - 理由必須具體說明為何認為原判斷有誤"""
 
-        self.memory.add("user", "重新檢視上一輪衝突分析")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
         concerns = response.get("concerns", [])
-        self.memory.add("assistant", f"檢視完畢，提出 {len(concerns)} 項疑慮")
         return concerns
 
     def apply_corrections(self, analyse_groups: List[Dict], corrections: List[Dict]) -> List[Dict]:
@@ -221,7 +212,6 @@ class AnalystAgent(BaseAgent):
     "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
-        self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 

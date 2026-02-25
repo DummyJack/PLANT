@@ -9,12 +9,11 @@ class AgentRegistry:
     def __init__(self):
         self._agents: Dict[str, Dict] = {}
 
-    def register(self, name: str, agent, description: str):
-        self._agents[name] = {"agent": agent, "description": description}
+    def register(self, name: str, agent):
+        self._agents[name] = agent
 
     def get(self, agent_name: str):
-        entry = self._agents.get(agent_name)
-        return entry["agent"] if entry else None
+        return self._agents.get(agent_name)
 
     def get_names(self) -> list:
         return list(self._agents.keys())

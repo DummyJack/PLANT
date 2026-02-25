@@ -11,23 +11,20 @@ Plant/
 ├── utils.py                # Logger、MoMManager、Collect、AgentSelector
 │
 ├── agents/                 # Agent 基礎設施
-│   ├── __init__.py         # 匯出 BaseAgent, Memory, AgentRegistry
-│   ├── base.py             # BaseAgent：ReAct 迴圈、工具調度、反思、Agent 溝通、議題回應
-│   ├── memory.py           # Memory：短期對話記憶 + 長期跨輪次摘要
+│   ├── __init__.py         # 匯出 BaseAgent, AgentRegistry
+│   ├── base.py             # BaseAgent：工具、議題回應
 │   ├── registry.py         # AgentRegistry：Agent 註冊中心，跨 Agent 諮詢
+│   ├── profile/            # Agent 角色實作
+│   │   ├── __init__.py
+│   │   ├── user.py         # UserAgent：模擬利害關係人（自然口語發言）
+│   │   ├── analyst.py      # AnalystAgent：需求衝突分析
+│   │   ├── expert.py       # ExpertAgent：拘束性 + 非拘束性專業建議
+│   │   ├── mediator.py     # MediatorAgent：會議主持人（議題管理、討論模式、草稿生成）
+│   │   ├── modeler.py      # ModelerAgent：系統建模（PlantUML + AST）
+│   │   └── documentor.py   # DocumentorAgent：SRS / Design Rationale 生成
 │   └── tools/              # 外部工具
 │       ├── base.py         # BaseTool 抽象介面
-│       ├── web_search.py   # WebSearchTool（Tavily API）
-│       └── plantuml.py     # PlantUMLValidatorTool（語法驗證）
-│
-├── team/                   # Agent 角色實作
-│   ├── __init__.py
-│   ├── user.py             # UserAgent：模擬利害關係人（自然口語發言）
-│   ├── analyst.py          # AnalystAgent：需求衝突分析
-│   ├── expert.py           # ExpertAgent：拘束性 + 非拘束性專業建議
-│   ├── mediator.py         # MediatorAgent：會議主持人（議題管理、討論模式、草稿生成）
-│   ├── modeler.py          # ModelerAgent：系統建模（PlantUML + AST）
-│   └── documentor.py       # DocumentorAgent：SRS / Design Rationale 生成
+│       └── web_search.py   # WebSearchTool（Tavily API）
 │
 ├── config/
 │   ├── config.json         # 系統配置（模型、Agent 開關、能力開關）
@@ -59,10 +56,7 @@ Plant/
 
 | 能力                    | 說明                               | 使用的 Agent                                                 |
 | ----------------------- | ---------------------------------- | ------------------------------------------------------------ |
-| **Tool Use**            | 呼叫外部工具取得資訊或驗證結果     | ExpertAgent（web_search）、ModelerAgent（plantuml_validate） |
-| **Memory**              | 短期對話記憶 + 長期跨輪次摘要      | 全部 Agent                                                   |
-| **ReAct**               | Think → Act → Observe 多步推理迴圈 | ExpertAgent、ModelerAgent                                    |
-| **Reflection**          | 自我評估輸出品質，不合格則重試     | AnalystAgent、ExpertAgent、ModelerAgent、DocumentorAgent     |
+| **Tool Use**            | 呼叫外部工具取得資訊或驗證結果     | ExpertAgent（web_search）                                   |
 | **Agent Communication** | 透過 Registry 諮詢其他 Agent       | MediatorAgent → Analyst/Expert、DocumentorAgent → Analyst    |
 | **Topic Discussion**    | `respond_to_topic()` 議題回應介面  | 全部 Agent（Round 2+ 由 Mediator 調度）                      |
 
@@ -141,7 +135,7 @@ Round 2+: 議題式討論
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 5: ExpertAgent     [ReAct + Tool Use + Reflection]    │
+│ Stage 5: ExpertAgent     [Tool Use]                          │
 │ ├─ 載入外部文件（doc/ 資料夾 RAG）                          │
 │ ├─ 使用 web_search 搜尋法規、標準、最佳實務                 │
 │ └─ 提供專家建議（含 binding 拘束性 + advisory 非拘束性）    │
@@ -163,9 +157,9 @@ Round 2+: 議題式討論
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 8: ModelerAgent    [ReAct + Tool Use + Reflection]    │
+│ Stage 8: ModelerAgent    [Tool Use]                         │
 │ ├─ 根據草稿產生 Use Case / Class / Sequence Diagram         │
-│ ├─ 使用 plantuml_validate 驗證語法                          │
+│ ├─ PlantUML 模型輸出                                        │
 │ └─ 將模型整合至 draft_N.json（含 .plantuml 輸出）           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -323,10 +317,6 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 **System Prompt 核心指令：**
 - 根據需求草稿轉換系統模型
 
-**Reflection 標準：**
-- UML 必須涵蓋所有主要角色和使用案例
-- PlantUML 語法必須正確（透過 plantuml_validate 工具驗證）
-
 ### DocumentorAgent（文件撰寫）
 
 **System Prompt 核心指令：**
@@ -363,10 +353,7 @@ Mediator 綜合 → agreed? ──Yes──→ 記錄決策，下個議題
 | `rounds`                                                                     | 討論輪數              | `1`                                  |
 | `enable_user` / `analyst` / `expert` / `mediator` / `modeler` / `documentor` | 各 Agent 開關         | `true`                               |
 | `enable_web_search`                                                          | 是否啟用網路搜尋      | `true`                               |
-| `enable_reflection`                                                          | 是否啟用反思機制      | `true`                               |
 | `enable_agent_communication`                                                 | 是否啟用跨 Agent 溝通 | `true`                               |
-| `agent_max_steps`                                                            | ReAct 迴圈最大步數    | `5`                                  |
-| `plantuml_server`                                                            | PlantUML 驗證伺服器   | `"http://www.plantuml.com/plantuml"` |
 
 ## 快速開始
 

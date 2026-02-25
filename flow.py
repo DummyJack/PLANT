@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Dict, Any
-from agents import Memory, AgentRegistry
-from team import (
+from agents import AgentRegistry
+from agents.profile import (
     UserAgent,
     AnalystAgent,
     ExpertAgent,
@@ -27,76 +27,33 @@ class Flow:
             temperature=config.get("temperature"),
         )
 
-        self.enable_reflection = config.get("enable_reflection", True)
         self.enable_agent_communication = config.get("enable_agent_communication", True)
-        self.react_max_steps = config.get("react_max_steps", 3)
-        self.reflection_max_retries = config.get("reflection_max_retries", 1)
 
         self.registry = AgentRegistry() if self.enable_agent_communication else None
 
-        self.memories = {
-            "user": Memory(self.model),
-            "analyst": Memory(self.model),
-            "expert": Memory(self.model),
-            "mediator": Memory(self.model),
-            "modeler": Memory(self.model),
-            "documentor": Memory(self.model),
-        }
-
         # 初始化 Agents
-        self.user_agent = UserAgent(
-            self.model, memory=self.memories["user"], registry=self.registry,
-        )
-        self.analyst_agent = AnalystAgent(
-            self.model, memory=self.memories["analyst"], registry=self.registry,
-        )
-        if not self.enable_reflection:
-            self.analyst_agent.reflection_criteria = ""
-
+        self.user_agent = UserAgent(self.model, registry=self.registry)
+        self.analyst_agent = AnalystAgent(self.model, registry=self.registry)
         self.expert_agent = ExpertAgent(
-            self.model, memory=self.memories["expert"], registry=self.registry,
+            self.model, registry=self.registry,
             doc_dir="doc", enable_web_search=config.get("enable_web_search", True),
         )
-        if not self.enable_reflection:
-            self.expert_agent.reflection_criteria = ""
-
-        self.mediator_agent = MediatorAgent(
-            self.model, memory=self.memories["mediator"], registry=self.registry,
-        )
-        self.modeler_agent = ModelerAgent(
-            self.model, memory=self.memories["modeler"], registry=self.registry,
-            plantuml_server=config.get("plantuml_server", "http://www.plantuml.com/plantuml"),
-        )
-        if not self.enable_reflection:
-            self.modeler_agent.reflection_criteria = ""
-
+        self.mediator_agent = MediatorAgent(self.model, registry=self.registry)
+        self.modeler_agent = ModelerAgent(self.model, registry=self.registry)
         self.documentor_agent = DocumentorAgent(
-            self.model, self.store, memory=self.memories["documentor"], registry=self.registry,
+            self.model, self.store, registry=self.registry,
         )
-        if not self.enable_reflection:
-            self.documentor_agent.reflection_criteria = ""
 
         # 註冊到 Registry
         if self.registry:
-            self.registry.register("user", self.user_agent, "利害關係人模擬專家")
-            self.registry.register("analyst", self.analyst_agent, "需求分析師，負責衝突分析")
-            self.registry.register("expert", self.expert_agent, "領域專家，提供法規/標準/最佳實務建議")
-            self.registry.register("mediator", self.mediator_agent, "需求調解主持人，負責衝突報告、決策和草稿")
-            self.registry.register("modeler", self.modeler_agent, "系統建模專家，負責 UML 模型")
-            self.registry.register("documentor", self.documentor_agent, "文件撰寫專家，負責 SRS")
-
-        # 設定 ReAct / Reflection 次數
-        for agent in [self.user_agent, self.analyst_agent, self.expert_agent,
-                       self.mediator_agent, self.modeler_agent, self.documentor_agent]:
-            agent.react_max_steps = self.react_max_steps
-            agent.reflection_max_retries = self.reflection_max_retries
+            self.registry.register("user", self.user_agent)
+            self.registry.register("analyst", self.analyst_agent)
+            self.registry.register("expert", self.expert_agent)
+            self.registry.register("mediator", self.mediator_agent)
+            self.registry.register("modeler", self.modeler_agent)
+            self.registry.register("documentor", self.documentor_agent)
 
         self.logger.info(f"Agent 系統初始化完成")
-
-    def summarize_memories(self, round_num: int):
-        for memory in self.memories.values():
-            if memory.messages:
-                memory.summarize_round(round_num)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
@@ -117,7 +74,6 @@ class Flow:
             self.logger.info(f"Round {round_num}/{rounds}")
             self.mom_manager.start_round(round_num)
             artifact = self.run_flow(artifact, round_num)
-            self.summarize_memories(round_num)
             self.logger.info(f"Round {round_num} 完成\n")
 
         self.generate_srs(artifact)
@@ -135,7 +91,6 @@ class Flow:
             self.logger.info(f"Round {round_num}/{rounds}")
             self.mom_manager.start_round(round_num)
             artifact = self.run_flow(artifact, round_num)
-            self.summarize_memories(round_num)
             self.logger.info(f"Round {round_num} 完成\n")
 
         self.generate_srs(artifact)

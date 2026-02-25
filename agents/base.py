@@ -1,153 +1,23 @@
 import json
 import logging
 
-from typing import Dict, List, Any, Optional
-from agents.memory import Memory
+from typing import Dict, List, Optional
 from agents.tools.base import BaseTool
-
-
-GLOBAL_GUARDRAILS = """
-# 全域約束
-1. 嚴格遵守指定的 JSON 輸出格式
-2. 回應語言：繁體中文"""
 
 # Agent 基礎類別
 class BaseAgent:
     """
-    四大核心能力：
-    1. Tool Use   — self.tools
-    2. Memory     — self.memory (短期/長期)
-    3. ReAct      — self.run() 多步推理迴圈
-    4. Reflection — self.reflect() 自我評估
+    核心能力：Tool Use（self.tools）、議題回應（respond_to_topic）。
     """
 
     name: str = ""
     system_prompt: str = ""
-    reflection_criteria: str = ""
 
-    def __init__(self, model, tools: Optional[List[BaseTool]] = None,
-                 memory: Optional[Memory] = None, registry=None):
+    def __init__(self, model, tools: Optional[List[BaseTool]] = None, registry=None):
         self.model = model
         self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
-        self.memory = memory or Memory()
         self.registry = registry
-        self.react_max_steps: int = 3
-        self.reflection_max_retries: int = 1
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
-
-    # ReAct
-    def run(self, task: str, context: Optional[Dict] = None,
-            max_steps: int = None, output_format: str = "json",
-            min_tool_uses: int = 0, max_reflection_retries: int = None) -> Any:
-        """ReAct 推理迴圈：Think → Act → Observe → Repeat
-
-        行動步數（use_tool / 格式錯誤）與 Reflection 重試分開計數，
-        Reflection 失敗不消耗行動步數。
-        """
-        max_steps = max_steps if max_steps is not None else self.react_max_steps
-        max_reflection_retries = max_reflection_retries if max_reflection_retries is not None else self.reflection_max_retries
-
-        task_prompt = self.build_task_prompt(task, context)
-        self.memory.add("user", task_prompt)
-
-        tool_use_count = 0
-        step = 0
-        reflection_retries = 0
-
-        while step < max_steps:
-            self.logger.debug(f"ReAct step {step + 1}/{max_steps}")
-            messages = self.build_react_messages()
-
-            try:
-                response = self.model.chat_json(messages)
-            except Exception as e:
-                self.logger.warning(f"ReAct step {step + 1} LLM 呼叫失敗: {e}")
-                break
-
-            thought = response.get("thought", "")
-            action = response.get("action", "respond")
-
-            if thought:
-                self.logger.debug(f"Thought: {thought}")
-                self.memory.add("assistant", f"[Thought] {thought}")
-
-            if action == "use_tool":
-                tool_name = response.get("tool_name", "")
-                tool_args = response.get("tool_args", {})
-                result = self.execute_tool(tool_name, tool_args)
-                self.memory.add("observation", f"[Tool: {tool_name}] {result}")
-                tool_use_count += 1
-                step += 1
-
-            elif action == "respond":
-                if min_tool_uses > 0 and tool_use_count < min_tool_uses:
-                    remaining = min_tool_uses - tool_use_count
-                    self.memory.add("system",
-                        f"[System] 你還需要使用工具至少 {remaining} 次才能輸出最終回應。")
-                    step += 1
-                    continue
-
-                output = response.get("output", response)
-
-                # Reflection 失敗不消耗行動步數，有獨立重試上限
-                if self.reflection_criteria:
-                    reflection = self.reflect(output, task)
-                    if not reflection.get("acceptable", True):
-                        reflection_retries += 1
-                        if reflection_retries <= max_reflection_retries:
-                            feedback = reflection.get("feedback", "品質不足")
-                            self.memory.add("system", f"[Reflection] 請改進: {feedback}")
-                            continue
-                        # 重試次數已達上限，接受當前輸出
-                        self.logger.warning(f"Reflection 重試已達上限（{max_reflection_retries}），接受當前輸出")
-
-                self.memory.add("assistant", json.dumps(output, ensure_ascii=False) if isinstance(output, dict) else str(output))
-                return output
-
-            else:
-                if min_tool_uses > 0 and tool_use_count < min_tool_uses:
-                    self.memory.add("system",
-                        f"[System] 回應格式不正確，需包含 action 欄位。還需使用工具 {min_tool_uses - tool_use_count} 次。")
-                    step += 1
-                    continue
-
-                self.logger.warning(f"未知 action: {action}，視為 respond")
-                return response.get("output", response)
-
-        self.logger.warning(f"ReAct 步數用盡（{max_steps}），降級為直接生成")
-        return self.direct_generate(task, context, output_format)
-
-    # Reflection
-    def reflect(self, output: Any, original_task: str) -> Dict:
-        output_text = json.dumps(output, ensure_ascii=False, indent=2) if isinstance(output, dict) else str(output)
-
-        prompt = f"""請嚴格評估以下輸出是否符合任務要求和品質標準。
-
-# 原始任務
-{original_task}
-
-# 輸出內容
-{output_text}
-
-# 評估標準
-{self.reflection_criteria}
-
-# 評估重點
-1. 輸出是否完整涵蓋任務要求的所有項目？
-2. 內容是否有捏造、模糊或缺乏依據的部分？
-3. JSON 格式是否符合要求的 Schema？
-
-輸出 JSON:
-{{
-    "acceptable": true 或 false,
-    "feedback": "具體改進建議（若可接受填 '符合標準'）"
-}}"""
-
-        try:
-            return self.model.generate_json(prompt, self.system_prompt)
-        except Exception as e:
-            self.logger.warning(f"反思失敗: {e}")
-            return {"acceptable": True, "feedback": "反思機制執行失敗，預設通過"}
 
     # Topic Discussion
     def respond_to_topic(self, topic: Dict, previous_responses: List[Dict] = None) -> Dict:
@@ -187,7 +57,6 @@ class BaseAgent:
     "questions_to_others": [{{{{"to": "agent名稱", "question": "問題內容"}}}}]
 }}}}"""
 
-        self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
@@ -198,122 +67,19 @@ class BaseAgent:
             "suggestions": response.get("suggestions", []),
             "questions_to_others": response.get("questions_to_others", []),
         }
-        self.memory.add("assistant", f"已回應議題: {result['position'][:50]}...")
         return result
-
-    # Direct Generate
-
-    def direct_generate(self, task: str, context: Optional[Dict] = None,
-                         output_format: str = "json") -> Any:
-        messages = self.build_direct_messages(task, context)
-        if output_format == "json":
-            return self.model.chat_json(messages)
-        return self.model.chat(messages)
-
-    # Generate with Reflection
-    def generate_with_reflection(self, task: str, context=None,output_format="json", max_retries=None,**model_kwargs) -> Any:
-        max_retries = max_retries if max_retries is not None else self.reflection_max_retries
-
-        messages = self.build_direct_messages(task, context)
-        if output_format == "json":
-            response = self.model.chat_json(messages, **model_kwargs)
-        else:
-            response = self.model.chat(messages, **model_kwargs)
-
-        if self.reflection_criteria and max_retries > 0:
-            # 將首次回答加入對話歷史
-            response_text = json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response)
-            messages.append({"role": "assistant", "content": response_text})
-
-            for attempt in range(max_retries):
-                reflection = self.reflect(response, task)
-                if reflection.get("acceptable", True):
-                    break
-                feedback = reflection.get("feedback", "品質不足")
-                self.memory.add("system", f"[Reflection] 請改進: {feedback}")
-
-                # 將 feedback 作為新的 user 訊息追加，LLM 可看到完整對話
-                retry_msg = f"[Reflection] 你的回答不符合品質標準。\n問題：{feedback}\n請根據以上問題修正你的回答，重新輸出。"
-                messages.append({"role": "user", "content": retry_msg})
-
-                if output_format == "json":
-                    response = self.model.chat_json(messages, **model_kwargs)
-                else:
-                    response = self.model.chat(messages, **model_kwargs)
-
-                # 將修正後的回答也加入對話歷史（供下一輪 reflection 使用）
-                response_text = json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response)
-                messages.append({"role": "assistant", "content": response_text})
-
-        self.memory.add("assistant",
-            json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else str(response))
-        return response
 
     # Internal Helpers
 
-    def build_task_prompt(self, task: str, context: Optional[Dict] = None) -> str:
-        parts = [task]
-        if context:
-            parts.append(f"\n上下文資料:\n{json.dumps(context, ensure_ascii=False, indent=2)}")
-        return "\n".join(parts)
-
-    def build_react_messages(self) -> List[Dict]:
-        messages = []
-        system_parts = [self.system_prompt, GLOBAL_GUARDRAILS]
-
-        memory_context = self.memory.get_context_prompt()
-        if memory_context:
-            system_parts.append(memory_context)
-
-        action_prompt = self.build_action_prompt()
-        if action_prompt:
-            system_parts.append(action_prompt)
-
-        messages.append({"role": "system", "content": "\n\n".join(system_parts)})
-
-        for msg in self.memory.messages:
-            role = msg["role"]
-            if role not in ("user", "assistant"):
-                role = "user"
-            messages.append({"role": role, "content": msg["content"]})
-
-        return messages
-
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []
-        system_parts = [self.system_prompt, GLOBAL_GUARDRAILS]
-        memory_context = self.memory.get_context_prompt()
-        if memory_context:
-            system_parts.append(memory_context)
+        messages.append({"role": "system", "content": self.system_prompt})
 
-        messages.append({"role": "system", "content": "\n\n".join(system_parts)})
-        messages.append({"role": "user", "content": self.build_task_prompt(task, context)})
+        task_parts = [task]
+        if context:
+            task_parts.append(f"\n上下文資料:\n{json.dumps(context, ensure_ascii=False, indent=2)}")
+        messages.append({"role": "user", "content": "\n".join(task_parts)})
         return messages
-
-    def build_action_prompt(self) -> str:
-        if not self.tools:
-            return ""
-
-        parts = ["\n# 可用行動\n"]
-
-        parts.append("工具:")
-        for tool in self.tools.values():
-            parts.append(tool.to_prompt_description())
-
-        parts.append("""
-# 回應格式（必須嚴格遵守）
-
-每次回應必須是合法 JSON，且包含 "action" 欄位（use_tool / respond）。
-
-【use_tool】:
-{"thought": "...", "action": "use_tool", "tool_name": "工具名稱", "tool_args": {"參數名": "參數值"}}
-
-【respond】:
-{"thought": "...", "action": "respond", "output": { ... }}
-
-規則：每次只能選一個 action，output 只在 respond 時使用。""")
-
-        return "\n".join(parts)
 
     def execute_tool(self, tool_name: str, tool_args: Dict) -> str:
         if tool_name not in self.tools:

@@ -3,12 +3,10 @@ import json
 from typing import Dict, Any, Optional, List
 
 from agents.base import BaseAgent
-from agents.memory import Memory
-from agents.tools.plantuml import PlantUMLValidatorTool
 
 
 class ModelerAgent(BaseAgent):
-    """系統建模 Agent — Tool Use (PlantUML) + ReAct + Reflection"""
+    """系統建模 Agent — 產生 UML 系統模型（PlantUML 格式）"""
 
     name = "modeler"
 
@@ -16,7 +14,7 @@ class ModelerAgent(BaseAgent):
 
 核心原則：
 1. UML 2.x 規範 — 嚴格遵守 UML 2.x 標準語法和語意
-2. PlantUML 語法 — 生成的程式碼必須通過 plantuml_validate 驗證
+2. PlantUML 語法 — 生成的程式碼須符合 PlantUML 語法
 3. 完整性 — 模型必須涵蓋需求規格中所有主要 Actor 和 Use Case
 4. 一致性 — 不同圖表之間的元素命名必須一致
 5. 最小變動 — 精煉時只修改受影響的部分，保留未變動的元素
@@ -27,14 +25,8 @@ class ModelerAgent(BaseAgent):
 - Class: PascalCase（如 UserAccount, OrderService）
 - 關係標籤: 使用描述性文字"""
 
-    reflection_criteria = "UML 模型必須涵蓋需求規格中所有主要 Actor 和 Use Case，PlantUML 語法必須正確，不同圖表的元素命名必須一致。"
-
-    def __init__(self, model, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None,
-                 plantuml_server: str = "http://www.plantuml.com/plantuml"):
-        agent_tools = list(tools or [])
-        agent_tools.append(PlantUMLValidatorTool(server_url=plantuml_server))
-        super().__init__(model, tools=agent_tools, memory=memory, registry=registry)
+    def __init__(self, model, tools: Optional[list] = None, registry=None):
+        super().__init__(model, tools=tools or [], registry=registry)
 
     # 覆寫：議題討論回應
 
@@ -76,7 +68,6 @@ class ModelerAgent(BaseAgent):
     "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
-        self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
@@ -89,8 +80,6 @@ class ModelerAgent(BaseAgent):
         }
 
     def generate_system_model(self, spec_md: str) -> Dict[str, Any]:
-        self.memory.clear_short_term()
-
         task = f"""# 任務
 根據以下需求規格產生 UML 系統模型。
 
@@ -113,37 +102,27 @@ class ModelerAgent(BaseAgent):
 
 # 步驟
 1. 分析需求規格，提取 Actor、Use Case、Entity
-2. 生成 PlantUML 程式碼
-3. 使用 plantuml_validate 驗證每段 PlantUML 語法（必須驗證，嚴禁跳過）
-4. 若有語法錯誤，修正後重新驗證
-5. 全部通過後輸出
+2. 生成 PlantUML 程式碼（每段以 @startuml 開頭、@enduml 結尾）
+3. Actor 使用 actor 關鍵字，避免使用中文作為元素 ID（label 可用中文）
 
-# PlantUML 注意事項
-- 每段程式碼必須以 @startuml 開頭、@enduml 結尾
-- Actor 使用 actor 關鍵字
-- 避免使用中文作為元素 ID（但 label 可以用中文）
-
-# 輸出格式（action=respond 的 output 中）
+# 輸出格式（直接輸出以下 JSON）
 {{
-    "action": "respond",
-    "output": {{
-        "models": [
-            {{"name": "名稱", "type": "use_case_diagram/class_diagram/sequence_diagram", "plantuml": "@startuml\\n...\\n@enduml"}}
-        ],
-        "ast": {{
-            "components": [{{"id": "C-01", "name": "...", "type": "entity/service/interface", "attributes": [...], "methods": [...]}}],
-            "relationships": [{{"from": "C-01", "to": "C-02", "type": "association/inheritance/dependency", "description": "..."}}]
-        }}
+    "models": [
+        {{"name": "名稱", "type": "use_case_diagram/class_diagram/sequence_diagram", "plantuml": "@startuml\\n...\\n@enduml"}}
+    ],
+    "ast": {{
+        "components": [{{"id": "C-01", "name": "...", "type": "entity/service/interface", "attributes": [...], "methods": [...]}}],
+        "relationships": [{{"from": "C-01", "to": "C-02", "type": "association/inheritance/dependency", "description": "..."}}]
     }}
 }}"""
 
-        result = self.run(task, min_tool_uses=1)
+        messages = self.build_direct_messages(task)
+        result = self.model.chat_json(messages)
         return self.ensure_model_format(result)
 
     def refine_model(self, spec_md: str, prev_uml: Dict[str, Any] = None) -> Dict[str, Any]:
         current_model = prev_uml or {}
         current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
-        self.memory.clear_short_term()
 
         task = f"""# 任務
 根據新的需求規格，評估並更新現有系統模型。
@@ -162,20 +141,15 @@ class ModelerAgent(BaseAgent):
 3. 只修改受影響的部分，保留未變動的元素
 4. 確保修改後各圖表間的元素命名一致
 
-# 驗證
-修改後的 PlantUML 必須使用 plantuml_validate 驗證（嚴禁跳過）
-
-# 輸出格式（action=respond 的 output 中）
+# 輸出格式（直接輸出以下 JSON）
 {{
-    "action": "respond",
-    "output": {{
-        "models": [{{"name": "...", "type": "...", "plantuml": "@startuml\\n...\\n@enduml"}}],
-        "ast": {{"components": [...], "relationships": [...]}}
-    }}
+    "models": [{{"name": "...", "type": "...", "plantuml": "@startuml\\n...\\n@enduml"}}],
+    "ast": {{"components": [...], "relationships": [...]}}
 }}"""
 
         try:
-            result = self.run(task, min_tool_uses=1)
+            messages = self.build_direct_messages(task)
+            result = self.model.chat_json(messages)
             return self.ensure_model_format(result)
         except Exception as e:
             print(f"警告: 模型精煉失敗，保留原有模型。錯誤: {e}")

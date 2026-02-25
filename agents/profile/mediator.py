@@ -2,7 +2,6 @@ import json
 
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
-from agents.memory import Memory
 
 
 class MediatorAgent(BaseAgent):
@@ -24,17 +23,12 @@ class MediatorAgent(BaseAgent):
 - 忠於資料 — 只根據已有的分析結果和討論內容做出綜合判斷
 - 無法共識時升級 — 無法達成共識時直接升級至人類裁決"""
 
-    reflection_criteria = "衝突報告必須涵蓋所有已識別的衝突，每個衝突有明確的標題、描述和涉及的利害關係人。"
-
-    def __init__(self, model, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None):
-        super().__init__(model, tools=tools, memory=memory, registry=registry)
+    def __init__(self, model, tools: Optional[list] = None, registry=None):
+        super().__init__(model, tools=tools, registry=registry)
 
     # Round 2+: 議題生成
 
     def generate_topics(self, spec_md: str, rough_idea: str, registry=None) -> List[Dict]:
-        self.memory.clear_short_term()
-
         # 從 registry 取得已註冊的可選參與者（排除 mediator/documentor 本身）
         exclude = {"mediator", "documentor"}
         if registry:
@@ -79,7 +73,6 @@ class MediatorAgent(BaseAgent):
     ]
 }}}}"""
 
-        self.memory.add("user", "分析 Spec 生成議題清單")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
@@ -98,7 +91,6 @@ class MediatorAgent(BaseAgent):
             t["speaking_order"] = [p for p in t["speaking_order"] if p in registered]
             validated.append(t)
 
-        self.memory.add("assistant", f"已生成 {len(validated)} 個議題")
         return validated
 
     # Round 2+: 主持討論
@@ -258,7 +250,6 @@ class MediatorAgent(BaseAgent):
     "escalation_needed": false/true
 }}}}"""
 
-        self.memory.add("user", f"綜合議題 {topic.get('id', '')} 的討論結果")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
@@ -270,7 +261,6 @@ class MediatorAgent(BaseAgent):
             "action_items": response.get("action_items", []),
             "escalation_needed": response.get("escalation_needed", False),
         }
-        self.memory.add("assistant", f"議題 {topic.get('id', '')}: {result['resolution']}")
         return result
 
     # Round 2+: 人類裁決篩選
@@ -333,7 +323,6 @@ class MediatorAgent(BaseAgent):
     }}}}
 }}}}"""
 
-        self.memory.add("user", f"篩選議題 {topic.get('id', '')} 的人類裁決選項")
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
@@ -342,7 +331,6 @@ class MediatorAgent(BaseAgent):
         if compromise:
             compromise.setdefault("id", 4)
 
-        self.memory.add("assistant", f"已篩選 {len(best)} 個最佳方案 + 1 個折衷方案")
         return {"best_options": best, "compromise": compromise}
 
     # 產生需求規格（Markdown）
@@ -375,11 +363,9 @@ class MediatorAgent(BaseAgent):
 - 只根據已提供的資料填寫，禁止捏造
 - 輸出第一行必須是 Markdown 標題（以 # 開頭）"""
 
-        self.memory.add("user", "整理 artifact 為需求草稿 Markdown")
         messages = self.build_direct_messages(user_prompt)
         spec_md = self.model.chat(messages)
         spec_md = self.strip_code_fences(spec_md)
-        self.memory.add("assistant", "已產生需求草稿 Markdown")
         return spec_md
 
     @staticmethod
@@ -446,8 +432,8 @@ class MediatorAgent(BaseAgent):
     ]
 }}}}"""
 
-        self.memory.add("user", f"產生 {len(conflict_groups)} 個衝突報告")
-        response = self.generate_with_reflection(user_prompt)
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages)
 
         if isinstance(response, dict) and "conflicts" in response:
             return response["conflicts"]

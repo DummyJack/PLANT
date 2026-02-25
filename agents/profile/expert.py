@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 from agents.base import BaseAgent
-from agents.memory import Memory
 from agents.tools.web_search import WebSearchTool
 
 
@@ -27,10 +26,7 @@ class ExpertAgent(BaseAgent):
 4. 無證據不建議 — 若無法找到支持證據，明確標註「資訊不足」，不得臆測
 5. 來源分組 — 同一來源（同一 URL 或文件）的多條建議應合併在同一筆 feedback"""
 
-    reflection_criteria = "每條建議必須有可查證的參考來源（URL 或文件名），禁止虛構。同一來源的建議應合併為同一筆 feedback。"
-
-    def __init__(self, model, tools: Optional[list] = None,
-                 memory: Optional[Memory] = None, registry=None,
+    def __init__(self, model, tools: Optional[list] = None, registry=None,
                  doc_dir: str = "doc", enable_web_search: bool = True):
         agent_tools = list(tools or [])
 
@@ -41,7 +37,7 @@ class ExpertAgent(BaseAgent):
             else:
                 logging.getLogger("Plant.ExpertAgent").warning("TAVILY_API_KEY 未設定")
 
-        super().__init__(model, tools=agent_tools, memory=memory, registry=registry)
+        super().__init__(model, tools=agent_tools, registry=registry)
         self.doc_dir = Path(doc_dir)
         self.doc_dir.mkdir(exist_ok=True)
         self.enable_web_search = enable_web_search
@@ -150,7 +146,6 @@ class ExpertAgent(BaseAgent):
         if external_docs:
             print(f"✓ 已參考 {len(external_docs)} 份外部文件")
 
-        self.memory.clear_short_term()
         has_tools = bool(self.tools)
 
         extra = f"# 任務\n針對以下需求衝突，提供專家建議。\n\n背景: {rough_idea}"
@@ -159,16 +154,14 @@ class ExpertAgent(BaseAgent):
         if has_tools:
             task = f"""{base_prompt}
 
-輸出格式（action=respond 的 output 中）:
+輸出 JSON:
 {{
-    "action": "respond",
-    "output": {{
-        "feedback": [
-            {{"id": "FB-01", "binding": false, "ref": "URL", "text": ["從此來源得出的建議1", "建議2"]}}
-        ]
-    }}
+    "feedback": [
+        {{"id": "FB-01", "binding": false, "ref": "URL 或來源名稱", "text": ["從此來源得出的建議1", "建議2"]}}
+    ]
 }}"""
-            result = self.run(task, min_tool_uses=1)
+            messages = self.build_direct_messages(task)
+            result = self.model.chat_json(messages)
         else:
             task = f"""{base_prompt}
 
@@ -178,7 +171,8 @@ class ExpertAgent(BaseAgent):
         {{"id": "FB-01", "binding": false, "ref": "來源名稱或URL", "text": ["從此來源得出的建議1", "建議2"]}}
     ]
 }}"""
-            result = self.direct_generate(task, output_format="json")
+            messages = self.build_direct_messages(task)
+            result = self.model.chat_json(messages)
 
         return self.extract_feedback(result)
 
@@ -200,27 +194,26 @@ class ExpertAgent(BaseAgent):
         has_tools = bool(self.tools)
 
         if has_tools:
-            task = f"""你正在以領域專家的身份參與需求討論。請先搜尋相關資訊再回應。
+            task = f"""你正在以領域專家的身份參與需求討論。請根據你的專業知識回應（可參考法規、標準、最佳實務）。
 
 {topic_text}
 {prev_text}
 
-# 步驟
-1. 使用 web_search 搜尋與議題相關的法規、標準、最佳實務
-2. 根據搜尋結果提供專業意見
+# 回應要求
+1. position: 基於法規、標準或技術可行性的專業立場
+2. arguments: 有客觀依據的論點（標明來源或註明「資訊不足」）
+3. suggestions: 符合法規/標準的具體建議
+4. questions_to_others: 想請其他角色（user/analyst）回答的問題
 
-輸出格式（action=respond 的 output 中）:
-{{
-    "action": "respond",
-    "output": {{
-        "position": "基於[來源]，我認為...",
-        "arguments": ["論點1（附來源）", "論點2"],
-        "suggestions": ["建議1", "建議2"],
-        "questions_to_others": [{{"to": "agent名稱", "question": "問題"}}]
-    }}
-}}"""
-            self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
-            result = self.run(task, min_tool_uses=1)
+輸出 JSON:
+{{{{
+    "position": "基於...標準，我認為...",
+    "arguments": ["論點1", "論點2"],
+    "suggestions": ["建議1", "建議2"],
+    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
+}}}}"""
+            messages = self.build_direct_messages(task)
+            result = self.model.chat_json(messages)
 
             if not isinstance(result, dict):
                 result = {}
@@ -256,7 +249,6 @@ class ExpertAgent(BaseAgent):
     "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
 }}}}"""
 
-            self.memory.add("user", f"回應議題: {topic.get('title', '')[:50]}")
             messages = self.build_direct_messages(user_prompt)
             response = self.model.chat_json(messages)
 
