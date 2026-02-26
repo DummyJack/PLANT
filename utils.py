@@ -1,7 +1,7 @@
 import logging
 
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 from store import Store
 
@@ -35,108 +35,6 @@ class Logger:
 
     def debug(self, message: str):
         self.logger.debug(message)
-
-
-class MoMManager:
-    def __init__(self):
-        self.current_round = 0
-        self.mom_data = {"rounds": []}
-
-    def start_round(self, round_number: int):
-        self.current_round = round_number
-        self.mom_data["rounds"].append({
-            "round": round_number,
-            "timestamp": datetime.now().isoformat(),
-            "stages": []
-        })
-
-    def add_stage(self, stage_name: str, agent: str, description: str = "", outputs: Any = None):
-        if not self.mom_data["rounds"]:
-            raise ValueError("請先呼叫 start_round()")
-
-        stage_data = {
-            "stage": stage_name,
-            "agent": agent,
-            "description": description,
-            "timestamp": datetime.now().isoformat()
-        }
-        if outputs is not None:
-            stage_data["outputs"] = outputs
-
-        self.mom_data["rounds"][-1]["stages"].append(stage_data)
-
-    def add_meeting(self, round_num: int, topic: Dict, contributions: List[Dict],
-                    resolution: Dict, escalated_to_human: bool = False):
-        if not self.mom_data["rounds"]:
-            raise ValueError("請先呼叫 start_round()")
-
-        current_round = self.mom_data["rounds"][-1]
-        if "meetings" not in current_round:
-            current_round["meetings"] = []
-
-        meeting_count = len(current_round["meetings"]) + 1
-
-        current_round["meetings"].append({
-            "meeting_id": f"R{round_num}-M{meeting_count:02d}",
-            "topic": {
-                "id": topic.get("id", ""),
-                "title": topic.get("title", ""),
-                "type": topic.get("type", ""),
-            },
-            "contributions": contributions,
-            "resolution": {
-                "status": resolution.get("resolution", "unresolved"),
-                "summary": resolution.get("summary", ""),
-                "decision": resolution.get("decision", ""),
-                "remaining_issues": resolution.get("remaining_issues", []),
-                "action_items": resolution.get("action_items", []),
-                "escalated_to_human": escalated_to_human,
-            },
-            "timestamp": datetime.now().isoformat(),
-        })
-
-    def get_latest_meeting(self) -> Dict:
-        """取得最近一次新增的 meeting"""
-        if not self.mom_data["rounds"]:
-            return {}
-        current_round = self.mom_data["rounds"][-1]
-        meetings = current_round.get("meetings", [])
-        return meetings[-1] if meetings else {}
-
-    def update_meeting_resolution(self, round_num: int, meeting_idx: int, resolution: Dict):
-        """更新指定 meeting 的 resolution（用於人類統一裁決後回填）"""
-        for round_data in self.mom_data["rounds"]:
-            if round_data.get("round") == round_num:
-                meetings = round_data.get("meetings", [])
-                idx = meeting_idx - 1  # meeting_idx 從 1 開始
-                if 0 <= idx < len(meetings):
-                    meetings[idx]["resolution"] = {
-                        "status": resolution.get("resolution", "unresolved"),
-                        "summary": resolution.get("summary", ""),
-                        "decision": resolution.get("decision", ""),
-                        "remaining_issues": resolution.get("remaining_issues", []),
-                        "action_items": resolution.get("action_items", []),
-                        "escalated_to_human": True,
-                    }
-                return
-
-    def get_meeting_by_index(self, round_num: int, meeting_idx: int) -> Dict:
-        """根據 round 和 meeting 索引取得 meeting 資料"""
-        for round_data in self.mom_data["rounds"]:
-            if round_data.get("round") == round_num:
-                meetings = round_data.get("meetings", [])
-                idx = meeting_idx - 1
-                if 0 <= idx < len(meetings):
-                    return meetings[idx]
-        return {}
-
-    def get_current_round(self) -> Dict:
-        if self.mom_data["rounds"]:
-            return self.mom_data["rounds"][-1]
-        return {}
-
-    def get_mom_data(self) -> Dict[str, Any]:
-        return self.mom_data
 
 
 class Collect:
@@ -190,7 +88,6 @@ class Collect:
 
     @staticmethod
     def human_decision_on_topic(topic: Dict, options: Dict) -> Dict:
-        """人類裁決：顯示 Mediator 篩選的 3 個最佳方案 + 1 個折衷方案"""
         print(f"\n{'='*60}")
         print(f"需要人類裁決: {topic.get('title', '')}")
         print(f"議題描述: {topic.get('description', '')}")
@@ -199,7 +96,6 @@ class Collect:
         best_options = options.get("best_options", [])
         compromise = options.get("compromise", {})
 
-        # 顯示 3 個最佳方案
         print("\nMediator 推薦方案：")
         all_options = []
         for opt in best_options:
@@ -209,7 +105,6 @@ class Collect:
             print(f"     內容: {opt.get('description', '')}")
             all_options.append(opt)
 
-        # 顯示折衷方案
         if compromise:
             c_idx = compromise.get("id", 4)
             print(f"\n  方案 {c_idx}. [折衷] {compromise.get('title', '')}")
@@ -227,9 +122,6 @@ class Collect:
                 "resolution": "unresolved",
                 "summary": "人類選擇暫不裁決",
                 "decision": "暫緩處理",
-                "remaining_issues": [topic.get("title", "")],
-                "action_items": [],
-                "escalated_to_human": True,
             }
 
         try:
@@ -242,20 +134,13 @@ class Collect:
                         "resolution": "unresolved",
                         "summary": "人類未輸入裁決",
                         "decision": "暫緩處理",
-                        "remaining_issues": [topic.get("title", "")],
-                        "action_items": [],
-                        "escalated_to_human": True,
                     }
                 return {
                     "resolution": "agreed",
                     "summary": f"由人類裁決: {custom}",
                     "decision": custom,
-                    "remaining_issues": [],
-                    "action_items": [],
-                    "escalated_to_human": True,
                 }
 
-            # 在 all_options 中找到對應 id 的方案
             chosen = None
             for opt in all_options:
                 if opt.get("id") == choice:
@@ -270,9 +155,6 @@ class Collect:
                     "resolution": "agreed",
                     "summary": f"人類採納方案 {choice}（{source}）: {title}",
                     "decision": desc,
-                    "remaining_issues": [],
-                    "action_items": [],
-                    "escalated_to_human": True,
                 }
             else:
                 print("無效的選項，暫緩處理")
@@ -280,88 +162,40 @@ class Collect:
                     "resolution": "unresolved",
                     "summary": "無效輸入",
                     "decision": "暫緩處理",
-                    "remaining_issues": [topic.get("title", "")],
-                    "action_items": [],
-                    "escalated_to_human": True,
                 }
         except ValueError:
             print("無效的輸入，暫緩處理")
             return {
-                "resolution": "unresolved",
-                "summary": "無效輸入",
-                "decision": "暫緩處理",
-                "remaining_issues": [topic.get("title", "")],
-                "action_items": [],
-                "escalated_to_human": True,
-            }
-
-class AgentSelector:
-    AGENT_MAP = {
-        1: ("enable_user", "User（模擬利害關係人）"),
-        2: ("enable_analyst", "Analyst（衝突分析）"),
-        3: ("enable_expert", "Expert（專家建議）"),
-        4: ("enable_mediator", "Mediator（調解）"),
-        5: ("enable_modeler", "Modeler（系統建模）"),
-        6: ("enable_documentor", "Documentor（文件產生）")
-    }
+                    "resolution": "unresolved",
+                    "summary": "無效輸入",
+                    "decision": "暫緩處理",
+                }
 
     @staticmethod
-    def select_agents(config: Dict[str, Any], agent: str = "\n請輸入要使用的 Agent (例如：1,3,5 或 0)：") -> List[int]:
-        print("Agent：")
-        for idx, (_, name) in AgentSelector.AGENT_MAP.items():
-            print(f"{idx}. {name}")
-        print("0. 全部使用")
-
-        while True:
+    def choose_stakeholders_for_turn(stakeholders: List[Dict]) -> List[Dict]:
+        """議程發言前讓使用者選擇本輪以哪些利害關係人角度發言（可多位）。回傳選取的 stakeholder 列表，若跳過則回傳空列表（由模型自行擇一）。輸入方式由使用者自行決定。"""
+        if not stakeholders:
+            return []
+        if len(stakeholders) == 1:
+            return stakeholders
+        print("\n本輪輪到你（user）發言。")
+        for i, sh in enumerate(stakeholders, 1):
+            name = sh.get("name", "?")
+            print(f"  {i}. {name}")
+        raw = input("\n請輸入要發言的身份（直接 Enter 不指定）：").strip()
+        if not raw or raw == "0":
+            return []
+        selected = []
+        for part in raw.replace(",", " ").split():
             try:
-                agent_input = input(agent).strip()
-
-                if agent_input == "0":
-                    agent_choices = [1, 2, 3, 4, 5, 6]
-                else:
-                    agent_choices = [int(x.strip()) for x in agent_input.split(",") if x.strip()]
-
-                if not agent_choices:
-                    print("請至少選擇一個 Agent")
-                    continue
-                if not all(1 <= x <= 6 for x in agent_choices):
-                    print("請輸入有效的 Agent（0-6）")
-                    continue
-
-                for idx in range(1, 7):
-                    config[AgentSelector.AGENT_MAP[idx][0]] = False
-                selected_names = []
-                for choice in agent_choices:
-                    key, name = AgentSelector.AGENT_MAP[choice]
-                    config[key] = True
-                    selected_names.append(name)
-
-                print(f"✓ 已選擇：{', '.join(selected_names)}")
-                return agent_choices
-
+                idx = int(part)
+                if 1 <= idx <= len(stakeholders) and stakeholders[idx - 1] not in selected:
+                    selected.append(stakeholders[idx - 1])
             except ValueError:
-                print("輸入格式不正確，請輸入數字（用逗號分隔）")
-
-    @staticmethod
-    def set_rounds(round: str = "\n請輸入討論回合數：", allow_empty: bool = False) -> int:
-        while True:
-            rounds_input = input(round).strip()
-
-            if not rounds_input:
-                if allow_empty:
-                    return 0
-                print("❌ 請輸入回合數")
-                continue
-
-            try:
-                rounds = int(rounds_input)
-                if rounds < 1:
-                    print("❌ 回合數必須大於 0")
-                    continue
-                print(f"✓ 設定回合數：{rounds}")
-                return rounds
-            except ValueError:
-                print("❌ 回合數必須是數字")
+                pass
+        if selected:
+            print(f"\n✓ 本輪以 {len(selected)} 位身份發言：{', '.join(s.get('name', '?') for s in selected)}")
+        return selected
 
 
 class ProjectManager:
@@ -415,8 +249,6 @@ class ProjectManager:
     def display_project_info(store, project_id: str):
         artifact = store.load_artifact()
 
-        completed_rounds = len(list(store.artifact_dir.glob("draft_*.json")))
-
         created_at = "未知"
         if store.project_dir.exists():
             created_at = datetime.fromtimestamp(store.project_dir.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S")
@@ -427,5 +259,6 @@ class ProjectManager:
         print(f"創建時間: {created_at}")
         if artifact:
             print(f"初始想法: {artifact.get('rough_idea', '未知')}")
-        print(f"已完成輪數: {completed_rounds}")
+            discussions = artifact.get("discussions", [])
+            print(f"已完成輪數: {len(discussions)}")
         print("="*60 + "\n")

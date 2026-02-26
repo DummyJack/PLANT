@@ -11,20 +11,19 @@ from agents.tools.web_search import WebSearchTool
 
 
 class ExpertAgent(BaseAgent):
+    """領域專家 Agent — 領域知識注入、法規/標準/安全規範約束"""
+
     name = "expert"
 
-    system_prompt = """你是領域專家，提供基於客觀證據的專業建議。
-
-你的建議分為兩類：
-1. 非拘束性建議（binding=false）— 一般性的專業建議、風險提醒、最佳實務參考
-2. 拘束性建議（binding=true）— 僅限法規強制要求、安全硬性限制、技術不可行約束
+    system_prompt = """你是領域專家，負責注入必須遵守的法規、標準、安全規範。
 
 核心原則：
 1. Evidence-first — 只根據外部文件或 web_search 結果提供建議，禁止捏造
 2. Traceable — 每條建議須附可查證的來源（URL 或文件名），嚴禁虛構 URL
-3. binding 門檻 — binding=true 僅限「法規 / 安全 / 技術硬性限制」
-4. 無證據不建議 — 若無法找到支持證據，明確標註「資訊不足」，不得臆測
-5. 來源分組 — 同一來源（同一 URL 或文件）的多條建議應合併在同一筆 feedback"""
+3. 拘束性約束 — 注入的法規/標準/安全規範標記為 constraint
+4. 無證據不建議 — 若無法找到支持證據，明確標註「資訊不足」
+5. 衝突敏感 — 若注入的約束與現有需求產生衝突，必須標記
+6. 詳盡說明 — 每條約束必須包含具體條文內容、適用範圍、合規要求的詳細描述"""
 
     def __init__(self, model, tools: Optional[list] = None, registry=None,
                  doc_dir: str = "doc", enable_web_search: bool = True):
@@ -81,209 +80,147 @@ class ExpertAgent(BaseAgent):
 
         return docs
 
-    def build_conflict_text(self, conflicts: List[Dict]) -> str:
-        if not conflicts:
-            return "目前沒有已識別的衝突。"
-        lines = []
-        for c in conflicts:
-            lines.append(f"- {c.get('id', 'N/A')}: {c.get('title', 'N/A')}")
-            lines.append(f"  描述: {c.get('description', 'N/A')}")
-            stakeholders = c.get('stakeholder_names', [])
-            if stakeholders:
-                lines.append(f"  涉及: {', '.join(stakeholders)}")
-        return "\n".join(lines)
-
     def build_doc_context(self, external_docs: List[Dict]) -> str:
         if not external_docs:
             return ""
         parts = ["\n# 外部參考文件"]
         for doc in external_docs:
-            content = doc['content'][:2000] + "\n... (截斷)" if len(doc['content']) > 2000 else doc['content']
-            parts.append(f"\n【{doc['filename']}】\n{content}")
+            parts.append(f"\n【{doc['filename']}】\n{doc['content']}")
         return "\n".join(parts)
 
-    def build_feedback_prompt(self, conflict_text: str, doc_context: str,
-                               has_tools: bool, extra_context: str = "") -> str:
-        """統一的建議 prompt 模板"""
-        tool_instruction = ""
-        ref_instruction = ""
-
-        if has_tools:
-            tool_instruction = """# 步驟
-1. 使用 web_search 搜尋相關法規、標準、最佳實務（必須至少搜尋一次）
-2. 根據搜尋結果編寫建議（ref 必須來自真實搜尋結果的 URL）
-3. 輸出最終回應"""
-            ref_instruction = "ref 必須是真實 URL，來自 web_search 結果"
-        else:
-            tool_instruction = """# 注意
-目前無搜尋工具。ref 填寫已提供的文件名稱，若無相關文件則填「資訊不足」。嚴禁虛構 URL。"""
-            ref_instruction = "ref 填文件名稱或「資訊不足」"
-
-        return f"""{extra_context}
-# 衝突摘要
-{conflict_text}
-{doc_context}
-
-{tool_instruction}
-
-# binding 判斷標準
-- binding=true: 僅限法規強制要求 / 安全硬性限制 / 技術不可行
-- binding=false: 其他所有建議
-
-# 約束
-- {ref_instruction}
-- 每筆 feedback 的 ref 是單一來源（一個 URL 或文件名）
-- 同一來源產生的多條建議，全部寫在同一筆的 text 陣列中
-- 不同來源的建議分成不同筆 feedback"""
-
-    # 提供專家建議
-
-    def provide_feedback(self, conflicts: List[Dict], rough_idea: str) -> List[Dict]:
+    def inject_domain(self, requirements: List[Dict], conflicts: List[Dict], rough_idea: str) -> Dict:
+        """Phase 0 Step 0.4: 領域知識注入 — 將法規/標準/安全規範寫入 requirements"""
         external_docs = self.load_external_docs()
         doc_context = self.build_doc_context(external_docs)
-        conflict_text = self.build_conflict_text(conflicts)
 
         if external_docs:
             print(f"✓ 已參考 {len(external_docs)} 份外部文件")
 
+        requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+        conflicts_text = json.dumps(conflicts, ensure_ascii=False, indent=2)
+
         has_tools = bool(self.tools)
+        tool_instruction = (
+            "請使用 web_search 搜尋相關法規、標準、安全規範（必須至少搜尋一次）"
+            if has_tools else
+            "根據已提供的文件和你的專業知識提供建議"
+        )
 
-        extra = f"# 任務\n針對以下需求衝突，提供專家建議。\n\n背景: {rough_idea}"
-        base_prompt = self.build_feedback_prompt(conflict_text, doc_context, has_tools, extra)
+        user_prompt = f"""# 任務
+審查以下需求，注入必須遵守的法規/標準/安全規範作為 constraint 類型的需求。
 
-        if has_tools:
-            task = f"""{base_prompt}
+# 背景
+{rough_idea}
 
-輸出 JSON:
-{{
-    "feedback": [
-        {{"id": "FB-01", "binding": false, "ref": "URL 或來源名稱", "text": ["從此來源得出的建議1", "建議2"]}}
+# 當前需求
+{requirements_text}
+
+# 當前衝突
+{conflicts_text}
+{doc_context}
+
+# 步驟
+1. {tool_instruction}
+2. 識別必須遵守的法規、標準、安全規範
+3. 將這些約束寫入 new_requirements（type 標記為 constraint）
+4. 檢查新約束是否與現有需求衝突，若有則寫入 new_conflicts
+
+# 詳細度要求
+每條 constraint 的 text 必須包含：
+- 法規/標準的全名與條文編號
+- 具體的合規要求描述（不可只寫「需遵守 XXX 法規」）
+- 適用範圍（此約束影響系統的哪些面向）
+- 不合規的風險或後果
+
+# 約束
+- 每條 constraint 須附 ref（來源 URL 或文件名）
+- 嚴禁虛構 URL 或法規名稱
+- 若無相關法規，new_requirements 可為空陣列
+
+# 輸出 JSON
+{{{{
+    "new_requirements": [
+        {{{{
+            "id": "R-C01",
+            "text": "詳細的約束描述（包含法規全名、條文、合規要求、適用範圍、風險）",
+            "type": "constraint",
+            "ref": "來源 URL 或文件名",
+            "source_stakeholders": ["expert"]
+        }}}}
+    ],
+    "new_conflicts": [
+        {{{{
+            "id": "CF-xx",
+            "label": "Conflict",
+            "description": "新約束與哪些需求產生衝突，具體矛盾點為何",
+            "texts": {{{{"expert": "約束內容", "原利害關係人": "原需求內容"}}}}
+        }}}}
     ]
-}}"""
-            messages = self.build_direct_messages(task)
-            result = self.model.chat_json(messages)
+}}}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+
+        if self.tools:
+            raw = self.chat_with_tools(messages, max_rounds=3)
+            try:
+                response = json.loads(raw) if isinstance(raw, str) else raw
+            except json.JSONDecodeError:
+                import re
+                m = re.search(r"\{.*\}", raw, re.DOTALL)
+                response = json.loads(m.group(0)) if m else {}
         else:
-            task = f"""{base_prompt}
+            response = self.model.chat_json(messages)
 
-輸出 JSON:
-{{
-    "feedback": [
-        {{"id": "FB-01", "binding": false, "ref": "來源名稱或URL", "text": ["從此來源得出的建議1", "建議2"]}}
-    ]
-}}"""
-            messages = self.build_direct_messages(task)
-            result = self.model.chat_json(messages)
+        new_reqs = response.get("new_requirements", [])
+        for req in new_reqs:
+            req.setdefault("type", "constraint")
+            req.setdefault("source_stakeholders", ["expert"])
 
-        return self.extract_feedback(result)
+        new_conflicts = response.get("new_conflicts", [])
+        for cf in new_conflicts:
+            cf.setdefault("label", "Conflict")
+            cf.setdefault("texts", {})
+            cf.setdefault("source", "expert")
 
-    # 覆寫：議題討論回應
+        return {
+            "requirements": requirements + new_reqs,
+            "conflicts": conflicts + new_conflicts,
+        }
+
     def respond_to_topic(self, topic, previous_responses=None):
-        """從法規/標準/技術可行性角度回應議題，若有工具則先搜尋"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
         if previous_responses:
-            parts = []
-            for r in previous_responses:
-                agent = r.get("agent", "?")
-                resp = r.get("response", {})
-                content = resp.get("content", resp.get("position", ""))
-                parts.append(f"【{agent}】{content}")
-            prev_text = "\n前面的發言:\n" + "\n".join(parts)
+            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                     for r in previous_responses]
+            prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
 
-        has_tools = bool(self.tools)
-
-        if has_tools:
-            task = f"""你正在以領域專家的身份參與需求討論。請根據你的專業知識回應（可參考法規、標準、最佳實務）。
+        user_prompt = f"""你正在以領域專家的身份參與需求討論。
 
 {topic_text}
 {prev_text}
 
-# 回應要求
-1. position: 基於法規、標準或技術可行性的專業立場
-2. arguments: 有客觀依據的論點（標明來源或註明「資訊不足」）
-3. suggestions: 符合法規/標準的具體建議
-4. questions_to_others: 想請其他角色（user/analyst）回答的問題
-
-輸出 JSON:
-{{{{
-    "position": "基於...標準，我認為...",
-    "arguments": ["論點1", "論點2"],
-    "suggestions": ["建議1", "建議2"],
-    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
-}}}}"""
-            messages = self.build_direct_messages(task)
-            result = self.model.chat_json(messages)
-
-            if not isinstance(result, dict):
-                result = {}
-
-            return {
-                "agent": self.name,
-                "position": result.get("position", ""),
-                "arguments": result.get("arguments", []),
-                "suggestions": result.get("suggestions", []),
-                "questions_to_others": result.get("questions_to_others", []),
-            }
-        else:
-            user_prompt = f"""你正在以領域專家的身份參與需求討論。
-
-{topic_text}
-{prev_text}
-
-# 回應要求
-1. position: 基於法規、標準或技術可行性的專業立場
-2. arguments: 有客觀依據的論點（標明來源或註明「資訊不足」）
-3. suggestions: 符合法規/標準的具體建議
-4. questions_to_others: 想請其他角色（user/analyst）回答的問題
+# 思考與發言流程
+1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 不可讓步的要點（須附法規/標準依據）(3) 可接受調整或折衷的要點
+2. 再根據思考結果，撰寫一段完整的發言（statement），針對議題提出你的專業見解與法規依據
+3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
 
 # 約束
+- statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
 - 論點必須有客觀依據，無依據則標註「資訊不足」
-- 禁止虛構法規或標準名稱
 
 輸出 JSON:
 {{{{
-    "position": "基於...標準，我認為...",
-    "arguments": ["論點1", "論點2"],
-    "suggestions": ["建議1", "建議2"],
-    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
+    "statement": "針對此議題的完整發言內容（含法規依據與風險說明）",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
-            messages = self.build_direct_messages(user_prompt)
-            response = self.model.chat_json(messages)
+        messages = self.build_direct_messages(user_prompt)
+        response = self.model.chat_json(messages)
 
-            return {
-                "agent": self.name,
-                "position": response.get("position", ""),
-                "arguments": response.get("arguments", []),
-                "suggestions": response.get("suggestions", []),
-                "questions_to_others": response.get("questions_to_others", []),
-            }
-
-    def extract_feedback(self, result) -> List[Dict]:
-        if isinstance(result, dict):
-            feedback_list = result.get("feedback", [])
-            if not feedback_list and "output" in result:
-                output = result["output"]
-                if isinstance(output, dict):
-                    feedback_list = output.get("feedback", [])
-        elif isinstance(result, list):
-            feedback_list = result
-        else:
-            feedback_list = []
-
-        validated = []
-        for fb in feedback_list:
-            if not isinstance(fb, dict):
-                continue
-            if not all(key in fb for key in ["id", "text", "ref"]):
-                continue
-            if not isinstance(fb["text"], list):
-                fb["text"] = [fb["text"]]
-            # ref 為單一字串（一個來源）
-            if isinstance(fb["ref"], list):
-                fb["ref"] = fb["ref"][0] if fb["ref"] else ""
-            fb.setdefault("binding", False)
-            validated.append(fb)
-
-        return validated
+        return {
+            "agent": self.name,
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
+        }

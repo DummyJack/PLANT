@@ -88,9 +88,6 @@ class WebSearchTool(BaseTool):
             title = item.get("title", "無標題")
             url = item.get("url", "")
             content = item.get("content", "無內容")
-            # 截斷過長的內容
-            if len(content) > 300:
-                content = content[:300] + "..."
 
             formatted.append(
                 f"{i}. {title}\n"

@@ -41,9 +41,8 @@ class UserAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-        result = response.get("proposed_stakeholders", [])
-        return result
+        response = self.model.chat_json(messages, temperature=1)
+        return response.get("proposed_stakeholders", [])
 
     def generate_stakeholder_requirements(self, rough_idea: str, selected_stakeholders: List[str]) -> List[Dict]:
         stakeholder_list = ", ".join(f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders))
@@ -65,9 +64,8 @@ class UserAgent(BaseAgent):
 4. 擔心的事 — 你對這個系統有什麼顧慮？
 
 # 約束
-- 每位利害關係人提出 3-5 條獨立需求（最少 3 條，最多 5 條）
-- 每條需求是一個完整的獨立陳述，直接放入 text 的 list 中
-- 每條需求必須足夠具體，能獨立與其他利害關係人的需求做衝突比對
+- 每位利害關係人提出 3-5 條獨立需求（text 陣列）
+- 每條需求是一個完整的獨立陳述
 - 以該角色的日常經驗出發，禁止提出技術實作方案
 - 不同角色的需求可以矛盾，如實表達
 
@@ -75,13 +73,8 @@ class UserAgent(BaseAgent):
 {{{{
     "stakeholders": [
         {{{{
-            "id": "SH-01",
             "name": "利害關係人名稱",
-            "text": [
-                "",
-                "",
-                ...(最多 5 條)
-            ]
+            "text": ["需求1", "需求2", "需求3"]
         }}}}
     ]
 }}}}"""
@@ -92,11 +85,10 @@ class UserAgent(BaseAgent):
             stakeholders = response.get("stakeholders", [])
 
             for sh in stakeholders:
-                if not all(key in sh for key in ["id", "name", "text"]):
+                if not all(key in sh for key in ["name", "text"]):
                     raise ValueError(f"利害關係人格式錯誤: {sh}")
                 if isinstance(sh["text"], str):
                     sh["text"] = [s.strip() for s in sh["text"].split("\n") if s.strip()]
-                # 強制 3-5 條
                 if len(sh["text"]) < 3:
                     self.logger.warning(f"{sh['name']} 只有 {len(sh['text'])} 條需求，不足 3 條")
                 elif len(sh["text"]) > 5:
@@ -106,34 +98,45 @@ class UserAgent(BaseAgent):
         except Exception as e:
             raise RuntimeError(f"User 生成失敗: {e}")
 
-    # 覆寫：議題討論回應
-
     def respond_to_topic(self, topic, previous_responses=None):
-        """以選定的利害關係人角色參與議題討論"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
-        # 組裝角色資訊
-        roles_text = ""
+        speaking_as_list = []
         if self.stakeholders:
+            if len(self.stakeholders) == 1:
+                speaking_as_list = self.stakeholders
+            else:
+                speaking_as_list = []  # 多位時交由系統擇一或擇多立場發言
+
+        if len(speaking_as_list) == 1:
+            sh = speaking_as_list[0]
+            name = sh.get("name", "")
+            texts = sh.get("text", [])
+            needs = "\n".join(f"  - {t}" for t in texts) if isinstance(texts, list) else f"  - {texts}"
+            roles_text = f"\n# 你本輪發言身份\n請「僅」以【{name}】的身份發言。\n\n【{name}】的需求與關切：\n{needs}"
+        elif len(speaking_as_list) > 1:
+            role_parts = []
+            names = [s.get("name", "") for s in speaking_as_list]
+            for sh in speaking_as_list:
+                n = sh.get("name", "")
+                t = sh.get("text", [])
+                needs = "\n".join(f"  - {x}" for x in t) if isinstance(t, list) else f"  - {t}"
+                role_parts.append(f"【{n}】\n{needs}")
+            roles_text = f"\n# 你本輪發言身份（多位）\n請以【{'】與【'.join(names)}】的身份發言。可分別表述各角色在此議題上的立場與需求，或綜合表述；若以第一人稱分段表述，請明確區分是哪一位在發言。\n\n" + "\n\n".join(role_parts)
+        elif self.stakeholders:
             role_parts = []
             for sh in self.stakeholders:
-                name = sh.get("name", "")
-                texts = sh.get("text", [])
-                needs = "\n".join(f"  - {t}" for t in texts) if texts else "  （無具體需求）"
-                role_parts.append(f"【{name}】\n{needs}")
-            roles_text = "\n# 你代表的利害關係人角色\n" + "\n\n".join(role_parts)
-        else:
-            roles_text = "\n# 你代表的角色\n一般使用者"
+                n = sh.get("name", "")
+                t = sh.get("text", [])
+                needs = "\n".join(f"  - {x}" for x in t) if isinstance(t, list) else f"  - {t}"
+                role_parts.append(f"【{n}】\n{needs}")
+            roles_text = "\n# 你代表的利害關係人角色（請擇一立場發言）\n" + "\n\n".join(role_parts)
 
         prev_text = ""
         if previous_responses:
-            parts = []
-            for r in previous_responses:
-                agent = r.get("agent", "?")
-                resp = r.get("response", {})
-                content = resp.get("content", resp.get("position", ""))
-                parts.append(f"【{agent}】{content}")
-            prev_text = "\n# 前面的發言\n" + "\n".join(parts)
+            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                     for r in previous_responses]
+            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
 
         user_prompt = f"""你正在以利害關係人代表的身份參與需求討論。
 {roles_text}
@@ -141,32 +144,27 @@ class UserAgent(BaseAgent):
 {topic_text}
 {prev_text}
 
-# 回應要求
-1. position: 這個議題對你代表的利害關係人的影響和立場（以第一人稱表達）
-2. arguments: 從利害關係人的實際使用情境出發的論點
-3. suggestions: 從利害關係人角度提出的期望（不涉及技術方案）
-4. questions_to_others: 想請其他角色（analyst/expert）回答的問題
+# 思考與發言流程
+1. 先思考：(1) 我代表的角色在此議題上的核心需求與顧慮 (2) 不可退讓的立場 (3) 可妥協或配合的部分
+2. 再撰寫一段完整的發言（statement），以第一人稱表達你的立場與需求
+3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "analyst"、"expert"、"modeler"）
 
 # 約束
 - 必須以你代表的利害關係人角色立場發言
-- 使用第一人稱，以該角色的日常經驗為基礎
+- statement 須以第一人稱、該角色的日常經驗為基礎撰寫完整發言
 - 禁止提出技術解決方案，只表達「需要什麼」
 
 輸出 JSON:
 {{{{
-    "position": "作為...，我認為...",
-    "arguments": ["論點1", "論點2"],
-    "suggestions": ["期望1", "期望2"],
-    "questions_to_others": [{{{{"to": "agent名稱", "question": "問題"}}}}]
+    "statement": "針對此議題的完整發言內容",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
+        response = self.model.chat_json(messages, temperature=1.2)
 
         return {
             "agent": self.name,
-            "position": response.get("position", ""),
-            "arguments": response.get("arguments", []),
-            "suggestions": response.get("suggestions", []),
-            "questions_to_others": response.get("questions_to_others", []),
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
         }
