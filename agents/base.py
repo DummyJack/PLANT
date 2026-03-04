@@ -1,7 +1,8 @@
 import json
+import re
 import logging
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from agents.tools.base import BaseTool
 
 
@@ -15,8 +16,39 @@ class BaseAgent:
         self.registry = registry
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
-    def respond_to_topic(self, topic: Dict, previous_responses: List[Dict] = None) -> Dict:
-        """回應議題討論，子類別應覆寫以提供角色特化回應"""
+    def _parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
+        """從工具迴圈後的最終文字中解析 statement / open_questions JSON"""
+        if not raw or not isinstance(raw, str):
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.DOTALL)
+            if m:
+                try:
+                    return json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    pass
+        return {}
+
+    def _chat_for_topic_response(
+        self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """討論回合：有 tools 時走 chat_with_tools 並解析 JSON，否則 chat_json（kwargs 傳給 model.chat_json）"""
+        if self.tools:
+            raw = self.chat_with_tools(messages, max_rounds=3)
+            if parse_json:
+                return self._parse_topic_response_json(raw)
+            return {"statement": raw, "open_questions": []}
+        return self.model.chat_json(messages, **kwargs)
+
+    def respond_to_topic(
+        self,
+        topic: Dict,
+        previous_responses: Optional[List[Dict]] = None,
+        artifact_snapshot: Optional[Dict] = None,
+    ) -> Dict:
+        """回應議題討論，子類別應覆寫以提供角色特化回應。若有 tools 可先使用再輸出 JSON。"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
@@ -25,14 +57,29 @@ class BaseAgent:
                      for r in previous_responses]
             prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
 
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 若需要查證、搜尋或驗證，可先使用可用工具。\n- 使用完工具後，**必須**根據結果與你的判斷輸出下列 JSON，勿僅回傳工具結果。"
+
         user_prompt = f"""你正在參與一場需求討論會議。請針對以下議題，從你的專業角色角度提供意見。
 
 {topic_text}
 {prev_text}
+{snapshot_text}
+{tool_hint}
 
 # 要求
 - 撰寫一段完整的發言（statement），針對議題表達你的觀點、建議與論述
 - 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"、"modeler"）
+
+# 發言風格（像現實會議中的專家）
+- 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌
+- 可適當保留不確定性（例如「依目前資訊看來…」「若在…前提下，建議…」）
+- 論點簡潔有據，需要時再展開說明
 
 # 約束
 - 只從你的角色專業角度發言，不要代替其他角色
@@ -46,7 +93,7 @@ class BaseAgent:
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
+        response = self._chat_for_topic_response(messages)
 
         return {
             "agent": self.name,
@@ -104,23 +151,38 @@ class BaseAgent:
             })
         return schemas
 
+    def _supports_tool_calling(self) -> bool:
+        """是否為 OpenAI 相容 client（支援 chat.completions.create 的 tools 參數）"""
+        try:
+            c = getattr(self.model, "client", None)
+            return hasattr(c, "chat") and hasattr(c.chat, "completions")
+        except Exception:
+            return False
+
     def chat_with_tools(self, messages: List[Dict], max_rounds: int = 3) -> str:
-        """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果"""
+        """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果。若 client 不支援 tool calling 則改為普通 chat。"""
         if not self.tools:
+            return self.model.chat(messages)
+        if not self._supports_tool_calling():
+            self.logger.warning("目前 model client 不支援 tool calling，改為普通 chat（工具不會被呼叫）")
             return self.model.chat(messages)
 
         tool_schemas = self.get_tool_schemas()
 
         for _ in range(max_rounds):
-            response = self.model.client.chat.completions.create(
-                model=self.model.model_name,
-                messages=messages,
-                tools=tool_schemas,
-                tool_choice="auto",
-            )
+            try:
+                response = self.model.client.chat.completions.create(
+                    model=self.model.model_name,
+                    messages=messages,
+                    tools=tool_schemas,
+                    tool_choice="auto",
+                )
+            except (AttributeError, TypeError) as e:
+                self.logger.warning(f"tool calling 呼叫失敗，改為普通 chat: {e}")
+                return self.model.chat(messages)
             msg = response.choices[0].message
 
-            if not msg.tool_calls:
+            if not getattr(msg, "tool_calls", None):
                 return msg.content or ""
 
             messages.append(msg.model_dump())
@@ -139,8 +201,11 @@ class BaseAgent:
                     "content": result,
                 })
 
-        last = self.model.client.chat.completions.create(
-            model=self.model.model_name,
-            messages=messages,
-        )
-        return last.choices[0].message.content or ""
+        try:
+            last = self.model.client.chat.completions.create(
+                model=self.model.model_name,
+                messages=messages,
+            )
+            return last.choices[0].message.content or ""
+        except (AttributeError, TypeError):
+            return self.model.chat(messages)

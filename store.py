@@ -113,17 +113,6 @@ class Store:
                     pass
         return max_v
 
-    def load_latest_draft(self) -> Optional[str]:
-        """載入版本號最大的 draft markdown（用於轉為 SRS）"""
-        version = self.get_draft_version()
-        if version < 0:
-            return None
-        path = self.artifact_dir / f"draft_v{version}.md"
-        if not path.exists():
-            return None
-        with open(path, 'r', encoding='utf-8') as f:
-            return f.read()
-
     def load_draft(self, version: int) -> Optional[str]:
         """載入指定版本的 draft markdown"""
         path = self.artifact_dir / f"draft_v{version}.md"
@@ -131,24 +120,6 @@ class Store:
             return None
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
-
-    def save_conflict_record(self, data: Dict[str, Any], round_num: int):
-        """將衝突辨識紀錄存成 JSON 到 artifact 目錄（conflict_r1.json, conflict_r2.json, ...）"""
-        if not self.project_id:
-            return
-        path = self.artifact_dir / f"conflict_r{round_num}.json"
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    def load_conflict_record(self, round_num: int) -> Optional[Dict[str, Any]]:
-        """讀取不受 Mediator 影響的衝突辨識紀錄（Analyst 當輪辨識結果）。"""
-        if not self.project_id:
-            return None
-        path = self.artifact_dir / f"conflict_r{round_num}.json"
-        if not path.exists():
-            return None
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
 
     # Config
 

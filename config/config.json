@@ -1,13 +1,13 @@
 {
   "provider": "openai",
-  "model": "gpt-4o-mini",
-  "temperature": 0,
+  "model": "gpt-5-nano",
+  "temperature": 1,
   "enable_web_search": true,
   "enable_plantuml_validate": true,
   "plantuml_validate": {
     "use_online": true
   },
-  "rounds": 2,
+  "rounds": 1,
   "enable_user": true,
   "enable_analyst": true,
   "enable_expert": true,

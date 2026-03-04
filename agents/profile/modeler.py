@@ -47,15 +47,12 @@ class ModelerAgent(BaseAgent):
 1. **Use Case Diagram**（必要）
 2. **Class Diagram**（必要）
 3. **Sequence Diagram**（選擇性，若有跨 Actor 互動）
-4. **設計/可測試性衝突辨識**
+（設計/可測試性衝突由 Analyst 在產出模型後統一辨識）
 
 # 輸出格式
 {{
     "models": [
         {{"name": "名稱", "type": "use_case_diagram/class_diagram/sequence_diagram", "plantuml": "@startuml\\n...\\n@enduml"}}
-    ],
-    "design_conflicts": [
-        {{"description": "設計層面或可測試性的衝突描述", "related_requirements": ["R-01"]}}
     ]
 }}"""
 
@@ -84,12 +81,11 @@ class ModelerAgent(BaseAgent):
 # 分析步驟
 1. 比較新需求與當前模型，識別差異
 2. 只修改受影響的部分，保留未變動的元素
-3. 執行設計/可測試性衝突辨識
+（設計/可測試性衝突由 Analyst 在產出模型後統一辨識）
 
 # 輸出格式
 {{
-    "models": [{{"name": "...", "type": "...", "plantuml": "@startuml\\n...\\n@enduml"}}],
-    "design_conflicts": []
+    "models": [{{"name": "...", "type": "...", "plantuml": "@startuml\\n...\\n@enduml"}}]
 }}"""
 
         try:
@@ -99,13 +95,12 @@ class ModelerAgent(BaseAgent):
             return self.validate_models(model_data)
         except Exception as e:
             self.logger.warning(f"模型精煉失敗，保留原有模型。錯誤: {e}")
-            return {"models": prev_models or [], "design_conflicts": []}
+            return {"models": prev_models or []}
 
     def ensure_model_format(self, result) -> Dict[str, Any]:
         if not isinstance(result, dict):
-            return {"models": [], "design_conflicts": []}
+            return {"models": []}
         result.setdefault("models", [])
-        result.setdefault("design_conflicts", [])
         return result
 
     def validate_models(self, model_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,7 +155,7 @@ class ModelerAgent(BaseAgent):
             self.logger.warning(f"  修正失敗: {e}")
         return None
         
-    def respond_to_topic(self, topic, previous_responses=None):
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         """以系統建模專家身份回應議題"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
@@ -170,15 +165,29 @@ class ModelerAgent(BaseAgent):
                      for r in previous_responses]
             prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
 
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+
         user_prompt = f"""你正在以系統建模專家的身份參與需求討論。
 
 {topic_text}
 {prev_text}
+{snapshot_text}
+{tool_hint}
 
 # 思考與發言流程
 1. 先思考：(1) 此議題對系統架構與模型的影響 (2) 不可讓步的架構/建模要點 (3) 可接受調整或折衷的要點
 2. 再根據思考結果，撰寫一段完整的發言（statement），聚焦於系統架構、建模、元件設計的觀點
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"）
+
+# 發言風格
+- 以系統架構/建模專家在會議中的口吻：說明對模型或架構的影響、取捨與可驗證的建議
+- 可說「若需求這樣定，Use Case 圖需要…」「這點會影響到 Class 的職責邊界…」
 
 # 約束
 - statement 須聚焦系統架構與建模觀點，評估需求變更對 UML 模型的影響
@@ -190,7 +199,7 @@ class ModelerAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
+        response = self._chat_for_topic_response(messages)
 
         return {
             "agent": self.name,

@@ -33,9 +33,6 @@ class Logger:
     def error(self, message: str):
         self.logger.error(message)
 
-    def debug(self, message: str):
-        self.logger.debug(message)
-
 
 class Collect:
     @staticmethod
@@ -170,32 +167,6 @@ class Collect:
                     "summary": "無效輸入",
                     "decision": "暫緩處理",
                 }
-
-    @staticmethod
-    def choose_stakeholders_for_turn(stakeholders: List[Dict]) -> List[Dict]:
-        """議程發言前讓使用者選擇本輪以哪些利害關係人角度發言（可多位）。回傳選取的 stakeholder 列表，若跳過則回傳空列表（由模型自行擇一）。輸入方式由使用者自行決定。"""
-        if not stakeholders:
-            return []
-        if len(stakeholders) == 1:
-            return stakeholders
-        print("\n本輪輪到你（user）發言。")
-        for i, sh in enumerate(stakeholders, 1):
-            name = sh.get("name", "?")
-            print(f"  {i}. {name}")
-        raw = input("\n請輸入要發言的身份（直接 Enter 不指定）：").strip()
-        if not raw or raw == "0":
-            return []
-        selected = []
-        for part in raw.replace(",", " ").split():
-            try:
-                idx = int(part)
-                if 1 <= idx <= len(stakeholders) and stakeholders[idx - 1] not in selected:
-                    selected.append(stakeholders[idx - 1])
-            except ValueError:
-                pass
-        if selected:
-            print(f"\n✓ 本輪以 {len(selected)} 位身份發言：{', '.join(s.get('name', '?') for s in selected)}")
-        return selected
 
 
 class ProjectManager:

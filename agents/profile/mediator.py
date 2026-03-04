@@ -1,7 +1,22 @@
 import json
-
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
+
+_TYPE_DIR = Path(__file__).resolve().parent.parent / "type"
+with open(_TYPE_DIR / "agenda_types.json", "r", encoding="utf-8") as _f:
+    AGENDA_TYPES = tuple(json.load(_f))
+AGENDA_TYPE_IDS = [t["id"] for t in AGENDA_TYPES]
+
+AGENDA_ACTIONS = [
+    "generate_agenda",
+    "start_discussion",
+    "resolve_topic",
+    "escalate_to_human",
+    "save_topic",
+    "finish_round",
+]
+
 
 class MediatorAgent(BaseAgent):
     name = "mediator"
@@ -9,7 +24,7 @@ class MediatorAgent(BaseAgent):
     system_prompt = """你是需求調解主持人，負責主持需求討論會議。
 
 核心職責：
-1. 議程安排 — 分析需求與衝突，自動偵測問題並排定優先順序
+1. 議程安排 — 分析需求與衝突，自行判斷應開哪些議程並排定優先順序
 2. 討論主持 — 決定討論模式（逐一發言/同時發言），維持討論秩序
 3. 共識促成 — 綜合各方的不可讓步項與可讓步項，嘗試達成共識
 4. 決策彙整 — 彙整每輪討論的決策並更新衝突標記
@@ -26,317 +41,224 @@ class MediatorAgent(BaseAgent):
         self, artifact: Dict[str, Any], registry=None,
         max_items: Optional[int] = None, skip_source_ids: Optional[set] = None,
     ) -> List[Dict]:
-        limit = max_items
+        """由 Mediator LLM 根據 artifact 自行決定要開哪些議程，不依賴固定演算法。"""
+        limit = max_items or 5
         exclude = {"mediator", "documentor"}
         if registry:
             registered = [n for n in registry.get_names() if n not in exclude]
         else:
             registered = ["user", "analyst", "expert", "modeler"]
 
-        issues = self.detect_issues(artifact, skip_source_ids=skip_source_ids)
-        if not issues:
-            self.logger.info("未偵測到需要討論的問題")
-            return []
-
-        titles_and_descs = self.generate_topic_titles(issues)
-        items = []
-        for i, issue in enumerate(issues):
-            td = titles_and_descs[i] if i < len(titles_and_descs) else {}
-            raw_title = (td.get("title") or issue["description"]).strip()
-            title = raw_title[:80] + ("..." if len(raw_title) > 80 else "")
-            desc = td.get("description") or issue["description"]
-            items.append({
-                "issues": [issue],
-                "summary": issue["description"],
-                "title": title,
-                "description": desc,
-            })
-
-        agenda_items = []
-        for idx, cluster in enumerate(items, 1):
-            score = self.compute_priority(cluster)
-            category = self.classify(cluster)
-            setup = self.decide_discussion_setup(cluster, category, registered)
-            title = cluster.get("title", cluster.get("summary", "待討論議題"))
-            description = cluster.get("description", cluster.get("summary", ""))
-
-            source_ids = [issue["source_id"] for issue in cluster.get("issues", []) if issue.get("source_id")]
-            agenda_items.append({
-                "id": f"T-{idx:02d}",
-                "title": title,
-                "description": description,
-                "category": category,
-                "participants": setup["participants"],
-                "discussion_mode": setup["discussion_mode"],
-                "speaking_order": setup["speaking_order"],
-                "priority_score": score,
-                "source_ids": source_ids,
-            })
-
-        agenda_items.sort(key=lambda x: x["priority_score"], reverse=True)
-
-        for idx, item in enumerate(agenda_items[:limit], 1):
-            item["id"] = f"T-{idx:02d}"
-
-        return agenda_items[:limit]
-
-    def detect_issues(
-        self, artifact: Dict[str, Any], skip_source_ids: Optional[set] = None
-    ) -> List[Dict]:
-        """從 artifact 偵測所有待處理的問題，對應六種議程類別"""
-        issues = []
         skip = skip_source_ids or set()
-        requirements = artifact.get("requirements", [])
-        req_ids_in_models = set()
-        for diagram in artifact.get("system_models", {}).get("models", []):
-            for ref in diagram.get("requirement_refs", []):
-                req_ids_in_models.add(ref)
-
-        # 1. 衝突解決：未解決衝突
-        for conflict in artifact.get("conflicts", []):
-            if conflict.get("label") == "Conflict" and conflict.get("id", "") not in skip:
-                stakeholders = list(conflict.get("texts", {}).keys()) or conflict.get("agents", []) or conflict.get("stakeholder_names", [])
-                issues.append({
-                    "type": "conflict",
-                    "source_id": conflict.get("id", ""),
-                    "description": conflict.get("description", ""),
-                    "stakeholders": stakeholders,
-                    "data": conflict,
-                })
-
-        # 2. 未回答 Open Question
-        for oq in artifact.get("open_questions", []):
-            oq_id = oq.get("id", oq.get("from_agent", ""))
-            if oq.get("status") != "answered" and oq_id not in skip:
-                issues.append({
-                    "type": "open_question",
-                    "source_id": oq_id,
-                    "description": oq.get("question", ""),
-                    "stakeholders": [],
-                    "data": oq,
-                })
-
-        # 提出新需求：User / Expert / Modeler 可提出新功能、新限制、新例外情境
-        stakeholder_names = {sh.get("name", "") for sh in artifact.get("stakeholders", [])}
-        if stakeholder_names and "user_new_requirement" not in skip:
-            issues.append({
-                "type": "new_requirement",
-                "source_id": "user_new_requirement",
-                "description": "User 可提出新需求或補充需求（新功能、新限制、新例外情境），與既有需求一併納入討論。",
-                "stakeholders": list(stakeholder_names),
-                "data": {"from": "user"},
-            })
-
-        for req in requirements:
-            rid = req.get("id", "")
-            if rid in skip:
-                continue
-            text = req.get("text", "")
-            rtype = req.get("type", "")
-            source = req.get("source", "")
-
-            # 提出新需求：User / Expert / Modeler 可提出新功能、新限制、新例外情境（expert 的 constraint、user 見上方）
-            if source == "expert" or source == "modeler" or rtype == "constraint":
-                issues.append({
-                    "type": "new_requirement",
-                    "source_id": rid,
-                    "description": f"新增需求/約束 {rid}: {text}",
-                    "stakeholders": req.get("source_stakeholders", []),
-                    "data": req,
-                })
-                continue
-
-            # 領域與合規檢查：需求涉及法規/合規/安全/隱私
-            compliance_kw = ["法規", "合規", "GDPR", "CCPA", "隱私", "安全", "標準", "規範", "OWASP", "FSMA"]
-            if any(kw in text for kw in compliance_kw):
-                issues.append({
-                    "type": "domain_compliance",
-                    "source_id": rid,
-                    "description": f"需求 {rid} 涉及領域/合規要求: {text}",
-                    "stakeholders": req.get("source_stakeholders", []),
-                    "data": req,
-                })
-                continue
-
-            # 6. 取捨協商：NFR 可能互相競爭
-            if rtype == "NFR":
-                tradeoff_kw = ["效能", "性能", "可用性", "安全性", "擴展", "成本",
-                               "performance", "availability", "security", "scalability"]
-                if any(kw in text for kw in tradeoff_kw):
-                    issues.append({
-                        "type": "tradeoff",
-                        "source_id": rid,
-                        "description": f"NFR {rid} 可能涉及取捨: {text}",
-                        "stakeholders": req.get("source_stakeholders", []),
-                        "data": req,
-                    })
-                    continue
-
-            # 7. 模型一致性與覆蓋：需求未被任何模型圖參照
-            if req_ids_in_models and rid and rid not in req_ids_in_models:
-                issues.append({
-                    "type": "model_gap",
-                    "source_id": rid,
-                    "description": f"需求 {rid} 未被系統模型覆蓋: {text}",
-                    "stakeholders": req.get("source_stakeholders", []),
-                    "data": req,
-                })
-
-        return issues
-
-    def generate_topic_titles(self, issues: List[Dict]) -> List[Dict]:
-        """一次為多個 issue 產生簡短標題與一句描述，方便議程顯示"""
-        if not issues:
+        context = self._build_agenda_context(artifact, skip)
+        if not context.strip():
+            self.logger.info("無足夠 artifact 內容可供判斷議程")
             return []
-        issues_text = json.dumps(
-            [{"type": i["type"], "description": i["description"]} for i in issues],
-            ensure_ascii=False,
-            indent=2,
-        )
+
+        types_text = json.dumps(AGENDA_TYPES, ensure_ascii=False, indent=2)
         user_prompt = f"""# 任務
-為以下每個問題各產生一個「簡短議程標題」與「一句描述」。
+你是需求調解主持人。請根據「當前專案狀態」與「已討論過項目」，自行判斷本輪應開哪些議程。
+議程類型必須從下方「議程類型定義」中選擇，每項議程需決定：標題、描述、類型、參與者、討論模式、發言順序。
 
-# 問題列表
-{issues_text}
+# 議程類型定義（category 必須為以下 id 之一）
+{types_text}
 
-# 要求
-- title：簡短好讀，約 10～20 字，能一眼看出討論重點，不要冗長或重複內文
-- description：一句話說明需要討論與解決什麼（可略長，供議題說明用）
+# 當前專案狀態
+{context}
+
+# 已在本輪或前輪討論過的項目（可略過或合併，勿重複開相同議題）
+已討論 source_ids: {json.dumps(list(skip), ensure_ascii=False)}
+
+# 可用 agent（participants 與 speaking_order 僅能使用此清單內名稱）
+{json.dumps(registered, ensure_ascii=False)}
+
+# 討論模式（discussion_mode）情境說明
+- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：衝突協調、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
+- **simultaneous（同時發言）**：適合「先各自表態、再比較差異」的議題。例如：腦力激盪、多方案並列、各自提出對某議題的立場或建議，不需即時回應前一位。每人只看到議題與專案狀態，不看同輪其他人的發言。
+請依議題性質選擇其一。
+
+# 約束
+- 最多開 {limit} 個議程，依你判斷的優先順序排列
+- 若無需討論的議題，請回傳空陣列
+- category 只能是上述類型定義中的 id
+- discussion_mode 依上表情境選擇 "sequential" 或 "simultaneous"
+- 若有對應的衝突/需求/問題 id，請填在 source_ids 方便追蹤
 
 # 輸出 JSON
-{{{{
+{{
     "items": [
-        {{{{
-            "title": "簡短標題",
-            "description": "一句描述"
-        }}}}
+        {{
+            "title": "議程標題",
+            "description": "議程描述",
+            "category": "類型 id",
+            "participants": ["agent1", "agent2"],
+            "discussion_mode": "sequential 或 simultaneous",
+            "speaking_order": ["agent1", "agent2"],
+            "source_ids": ["id1", "id2"]
+        }}
     ]
-}}}}"""
+}}"""
 
         messages = self.build_direct_messages(user_prompt)
         try:
             response = self.model.chat_json(messages)
-            items = response.get("items", [])
-            return items[: len(issues)]
-        except Exception:
+        except Exception as e:
+            self.logger.warning(f"議程生成 LLM 失敗: {e}")
             return []
 
-    def compute_priority(self, cluster: Dict) -> float:
-        """計算議題優先度分數"""
-        type_weights = {
-            "conflict": 2.5,
-            "open_question": 2.5,
-            "domain_compliance": 2.5,
-            "new_requirement": 2.0,
-            "tradeoff": 1.5,
-            "model_gap": 1.5,
-        }
-        score = 0.0
-        stakeholders_involved = set()
+        raw_items = response.get("items", [])
+        if not raw_items:
+            self.logger.info("Mediator 判斷本輪無需新增議程")
+            return []
 
-        for issue in cluster.get("issues", []):
-            score += type_weights.get(issue["type"], 1.0)
-            stakeholders_involved.update(issue.get("stakeholders", []))
+        agenda_items = []
+        for idx, item in enumerate(raw_items[:limit], 1):
+            category = item.get("category", "")
+            if category not in AGENDA_TYPE_IDS:
+                category = AGENDA_TYPE_IDS[0]
+            participants = [p for p in item.get("participants", []) if p in registered]
+            if not participants:
+                participants = list(registered)
+            mode = item.get("discussion_mode", "sequential")
+            if mode not in ("sequential", "simultaneous"):
+                mode = "sequential"
+            order = [p for p in item.get("speaking_order", participants) if p in participants]
+            if set(order) != set(participants):
+                order = participants
 
-        score *= (1 + len(stakeholders_involved) * 0.3)
+            title = (item.get("title") or "待討論議題").strip()
+            agenda_items.append({
+                "id": f"T-{idx:02d}",
+                "title": title,
+                "description": item.get("description", ""),
+                "category": category,
+                "participants": participants,
+                "discussion_mode": mode,
+                "speaking_order": order,
+                "source_ids": item.get("source_ids", []),
+            })
 
-        if len(cluster.get("issues", [])) > 1:
-            score *= 1.2
+        return agenda_items
 
-        return round(score, 2)
+    def _build_agenda_context(self, artifact: Dict[str, Any], skip_source_ids: set) -> str:
+        """組裝 artifact 摘要供 Mediator 判斷議程用，不含演算法邏輯。"""
+        parts = []
+        scope = artifact.get("scope") or {}
+        if scope.get("description") or scope.get("in_scope") or scope.get("out_of_scope"):
+            parts.append("## 專案範圍\n" + json.dumps(scope, ensure_ascii=False, indent=2))
+        if artifact.get("stakeholders"):
+            parts.append("## 利害關係人\n" + json.dumps(artifact["stakeholders"], ensure_ascii=False, indent=2))
+        if artifact.get("requirements"):
+            reqs = [{"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")} for r in artifact["requirements"]]
+            parts.append("## 需求摘要\n" + json.dumps(reqs, ensure_ascii=False, indent=2))
+        conflicts = [c for c in artifact.get("conflicts", []) if c.get("id", "") not in skip_source_ids]
+        if conflicts:
+            parts.append("## 衝突\n" + json.dumps(conflicts, ensure_ascii=False, indent=2))
+        oqs = [q for q in artifact.get("open_questions", []) if q.get("status") != "answered"]
+        if oqs:
+            parts.append("## 未回答的開放問題\n" + json.dumps(oqs, ensure_ascii=False, indent=2))
+        models = artifact.get("system_models", {}).get("models", [])
+        if models:
+            refs = []
+            for m in models:
+                refs.extend(m.get("requirement_refs", []))
+            parts.append("## 系統模型已參照需求 id\n" + json.dumps(list(set(refs)), ensure_ascii=False))
+        return "\n\n".join(parts) if parts else ""
 
-    AGENDA_CATEGORIES = {
-        "conflict_resolution": "衝突討論",
-        "open_question": "開放問題討論",
-        "new_requirement": "提出新需求",
-        "tradeoff": "需求取捨（",
-        "domain_compliance": "領域與合規檢查",
-        "model_coverage": "模型一致性檢查",
-    }
+    # ===== 議程 Agent 決策（供執行層迴圈呼叫）=====
 
-    def classify(self, cluster: Dict) -> str:
-        types = {i["type"] for i in cluster.get("issues", [])}
-
-        if "conflict" in types:
-            return "conflict_resolution"
-        if "open_question" in types:
-            return "open_question"
-        if "new_requirement" in types:
-            return "new_requirement"
-        if "tradeoff" in types:
-            return "tradeoff"
-        if "domain_compliance" in types:
-            return "domain_compliance"
-        if "model_gap" in types:
-            return "model_coverage"
-
-        return "new_requirement"
-
-    def decide_discussion_setup(
-        self, cluster: Dict, category: str, registered: List[str]
-    ) -> Dict:
-        """由 Mediator LLM 決定參與者、討論模式、發言順序。參與者只能從已註冊 agent 中挑選。"""
-        issue_descriptions = "\n".join(
-            f"- [{i['type']}] {i['description']}" for i in cluster.get("issues", [])
-        )
+    def decide_next_agenda_action(
+        self, state_summary: Dict[str, Any], last_observation: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """根據當前狀態與上一動觀察，回傳下一個動作與參數。"""
+        last_observation = last_observation or {}
+        state_text = json.dumps(state_summary, ensure_ascii=False, indent=2)
+        obs_text = json.dumps(last_observation, ensure_ascii=False, indent=2)
 
         user_prompt = f"""# 任務
-請根據以下議題資訊，決定：
-1. 參與者（participants）：從「可用 agent」清單中挑選適合討論此議題的角色，只能使用清單內的 agent 名稱
-2. 討論模式（discussion_mode）：sequential（逐一發言）或 simultaneous（同時發言）
-3. 發言順序（speaking_order）：參與者的發言先後順序（僅 sequential 時有意義，但仍須提供）
+你是需求調解主持人，正在主持本輪議程。請根據「當前狀態」與「上一動執行結果」，決定下一步要執行的動作。
 
-# 議題類別
-{category}
+# 可用動作與參數
+- generate_agenda：產生本輪議程（無參數）。若 topics 已存在則勿重複呼叫。
+- start_discussion：對某議題開始討論。params: {{ "topic_id": "T-01" }}（須為 state.topics 中存在的 id）
+- resolve_topic：綜合某議題討論結果。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
+- escalate_to_human：某議題交由人類裁決。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
+- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
+- finish_round：結束本輪議程。無參數。僅在已處理完所有要討論的議題並 save 後才可呼叫。
 
-# 議題內容
-{issue_descriptions}
+# 當前狀態
+{state_text}
 
-# 可用 agent（參與者與發言順序僅能使用此清單內的名稱）
-{json.dumps(registered, ensure_ascii=False)}
+# 上一動執行結果（若為首輪則為空）
+{obs_text}
+
+# 規則
+- 若 topics 為空，先呼叫 generate_agenda
+- 對每個要討論的 topic 依序：start_discussion → resolve_topic（若共識則直接 save_topic；若未共識可選 escalate_to_human 再 save_topic）→ save_topic
+- 全部處理完後呼叫 finish_round
+- 一次只回傳一個動作
 
 # 輸出 JSON
-{{{{
-    "participants": ["agent1", "agent2"],
-    "discussion_mode": "sequential 或 simultaneous",
-    "speaking_order": ["agent1", "agent2"]
-}}}}"""
+{{
+    "action": "動作名稱",
+    "params": {{}} or {{ "topic_id": "T-01" }},
+    "reasoning": "一句說明"
+}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
+        try:
+            response = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"議程決策 LLM 失敗: {e}")
+            return {"action": "finish_round", "params": {}, "reasoning": f"fallback: {e}"}
 
-        participants = [p for p in response.get("participants", registered) if p in registered]
-        if not participants:
-            participants = registered
-
-        mode = response.get("discussion_mode", "sequential")
-        if mode not in ("sequential", "simultaneous"):
-            mode = "sequential"
-
-        order = [p for p in response.get("speaking_order", participants) if p in participants]
-        if set(order) != set(participants):
-            order = participants
-
-        return {
-            "participants": participants,
-            "discussion_mode": mode,
-            "speaking_order": order,
-        }
+        action = (response.get("action") or "").strip()
+        if action not in AGENDA_ACTIONS:
+            action = "finish_round"
+        params = response.get("params") or {}
+        return {"action": action, "params": params, "reasoning": response.get("reasoning", "")}
 
     # ===== 討論主持 =====
 
-    def moderate_sequential(self, topic: Dict, registry) -> List[Dict]:
+    @staticmethod
+    def _build_artifact_snapshot(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """產出專案狀態摘要，供 respond_to_topic 的 artifact_snapshot 使用"""
+        if not artifact:
+            return {}
+        reqs = artifact.get("requirements", [])
+        summary_reqs = [
+            {"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")}
+            for r in reqs
+        ]
+        conflicts = [
+            {"id": c.get("id"), "description": (c.get("description") or "")}
+            for c in artifact.get("conflicts", []) if c.get("label") == "Conflict"
+        ]
+        oqs = [
+            {"from_agent": q.get("from_agent"), "question": (q.get("question") or "")}
+            for q in artifact.get("open_questions", []) if q.get("status") != "answered"
+        ]
+        return {"requirements": summary_reqs, "conflicts": conflicts, "open_questions": oqs}
+
+    def moderate_sequential(
+        self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
+    ) -> List[Dict]:
         contributions = []
         speaking_order = topic.get("speaking_order", topic.get("participants", []))
         self.logger.info(f"[{topic['id']}] 逐一發言: {' → '.join(speaking_order)}")
 
+        snapshot = self._build_artifact_snapshot(artifact)
         for agent_name in speaking_order:
             agent = registry.get(agent_name)
             if not agent:
                 self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
                 continue
+            if hasattr(agent, "set_artifact") and artifact is not None:
+                agent.set_artifact(artifact)
             try:
-                response = agent.respond_to_topic(topic, previous_responses=contributions)
+                response = agent.respond_to_topic(
+                    topic, previous_responses=contributions, artifact_snapshot=snapshot
+                )
                 contributions.append({
                     "agent": agent_name,
                     "response": response if isinstance(response, dict) else {"content": str(response)},
@@ -347,18 +269,25 @@ class MediatorAgent(BaseAgent):
 
         return contributions
 
-    def moderate_simultaneous(self, topic: Dict, registry) -> List[Dict]:
+    def moderate_simultaneous(
+        self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
+    ) -> List[Dict]:
         contributions = []
         participants = topic.get("participants", [])
         self.logger.info(f"[{topic['id']}] 同時發言: {', '.join(participants)}")
 
+        snapshot = self._build_artifact_snapshot(artifact)
         for agent_name in participants:
             agent = registry.get(agent_name)
             if not agent:
                 self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
                 continue
+            if hasattr(agent, "set_artifact") and artifact is not None:
+                agent.set_artifact(artifact)
             try:
-                response = agent.respond_to_topic(topic, previous_responses=None)
+                response = agent.respond_to_topic(
+                    topic, previous_responses=None, artifact_snapshot=snapshot
+                )
                 contributions.append({
                     "agent": agent_name,
                     "response": response if isinstance(response, dict) else {"content": str(response)},
@@ -371,15 +300,26 @@ class MediatorAgent(BaseAgent):
 
     # ===== Open Question 處理 =====
 
-    def handle_open_questions(self, contributions: List[Dict], registry, stakeholders: List[Dict]) -> List[Dict]:
+    def handle_open_questions(
+        self,
+        contributions: List[Dict],
+        registry,
+        stakeholders: List[Dict],
+        artifact: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict]:
         """將 open_questions 依 to 欄位路由到對應 agent 回答"""
         oq_records = []
+        snapshot = self._build_artifact_snapshot(artifact)
 
         all_questions = []
         for c in contributions:
             agent_name = c.get("agent", "")
-            resp = c.get("response", {})
+            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
             for q in resp.get("open_questions", []):
+                if isinstance(q, str):
+                    q = {"question": q, "to": "user"}
+                elif not isinstance(q, dict):
+                    continue
                 to_agent = q.get("to", "user")
                 if to_agent == agent_name:
                     continue
@@ -397,6 +337,8 @@ class MediatorAgent(BaseAgent):
             target_agent = registry.get(target_name) if registry else None
             if target_agent:
                 try:
+                    if hasattr(target_agent, "set_artifact") and artifact is not None:
+                        target_agent.set_artifact(artifact)
                     q_topic = {
                         "id": "OQ",
                         "title": f"回答 {q_record['from_agent']} 的問題",
@@ -405,7 +347,9 @@ class MediatorAgent(BaseAgent):
                             "（請簡要針對此問題回答，若前面發言已涵蓋可寫「如前述」或只補充重點，勿整段重複相同內容。）"
                         ),
                     }
-                    response = target_agent.respond_to_topic(q_topic, previous_responses=contributions)
+                    response = target_agent.respond_to_topic(
+                        q_topic, previous_responses=contributions, artifact_snapshot=snapshot
+                    )
                     resp = response if isinstance(response, dict) else {"content": str(response)}
                     resp = dict(resp)
                     resp["reply_to_question"] = q_record["question"]
@@ -575,7 +519,7 @@ class MediatorAgent(BaseAgent):
         messages = self.build_direct_messages(user_prompt)
         response = self.model.chat_json(messages)
 
-        best = response.get("best_options", [])[:3]
+        best = response.get("best_options", [])
         compromise = response.get("compromise", {})
         if compromise:
             compromise.setdefault("id", 4)
@@ -600,23 +544,19 @@ class MediatorAgent(BaseAgent):
 # 規則
 - 若衝突已在本輪解決，將 label 改為 Neutral
 - 未解決的衝突保持 label 為 Conflict
+- 輸出 conflicts 時請保留每個衝突原有的所有欄位（id、description、conflict_type、requirement_ids、stakeholder_names 等，依衝突類型保留），僅依討論結果更新 label
+- 每個 new_decisions 項目請填寫 resolved_conflict_ids：此決策所解決的衝突 id 列表（若該議題討論解決了某個衝突則填其 CF-xx id，否則空陣列）
+- 若本輪討論中有人指出「尚未列在當前衝突列表中的需求/立場衝突」（辨識漏報），請將該筆填入 new_conflicts，格式見下方。id 留空由系統指派。
 
 # 輸出 JSON
 {{{{
-    "new_decisions": [
+    "new_decisions": [...],
+    "conflicts": [...],
+    "new_conflicts": [
         {{{{
-            "id": "D-xx",
-            "topic_id": "T-xx",
-            "decision": "決策內容",
-            "summary": "決策摘要"
-        }}}}
-    ],
-    "conflicts": [
-        {{{{
-            "id": "CF-xx",
-            "label": "Conflict 或 Neutral",
-            "description": "...",
-            "texts": {{}}
+            "description": "衝突描述",
+            "conflict_type": "Inconsistency | Ambiguity | Contradiction | Overlap",
+            "requirement_ids": ["R-01", "R-02"]
         }}}}
     ]
 }}}}"""
@@ -627,4 +567,188 @@ class MediatorAgent(BaseAgent):
         return {
             "new_decisions": response.get("new_decisions", []),
             "conflicts": response.get("conflicts", artifact.get("conflicts", [])),
+            "new_conflicts": response.get("new_conflicts", []),
         }
+
+
+# ===== 議程執行層：依 action 呼叫 Mediator / store / Collect，維護本輪狀態 =====
+
+
+class AgendaRunner:
+    """執行議程相關動作，維護本輪 topics、topic_status、round_discussions、all_open_questions。"""
+
+    def __init__(
+        self,
+        mediator_agent,
+        registry,
+        artifact: Dict[str, Any],
+        round_num: int,
+        config: Dict[str, Any],
+        store,
+        collect_module,
+        logger,
+    ):
+        self.mediator = mediator_agent
+        self.registry = registry
+        self.artifact = artifact
+        self.round_num = round_num
+        self.config = config
+        self.store = store
+        self.collect = collect_module
+        self.logger = logger
+
+        self.topics: List[Dict] = []
+        self.topic_status: Dict[str, Dict] = {}
+        self.round_discussions: List[Dict] = []
+        self.all_open_questions: List[Dict] = []
+        self._topic_idx = 0
+
+    def run(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+        params = params or {}
+        obs = {"action": action, "result": None, "error": None}
+
+        if action == "generate_agenda":
+            skip = set()
+            for disc in self.artifact.get("discussions", []):
+                for td in disc.get("topics", []):
+                    for sid in td.get("source_ids", []):
+                        skip.add(sid)
+            max_items = self.config.get("agenda_items", 5)
+            self.topics = self.mediator.generate_agenda(
+                self.artifact,
+                registry=self.registry,
+                max_items=max_items,
+                skip_source_ids=skip if skip else None,
+            )
+            self.topic_status = {t["id"]: {"discussed": False, "contributions": None, "resolution": None, "saved": False} for t in self.topics}
+            obs["result"] = {"topics": [{"id": t["id"], "title": t["title"], "category": t.get("category", "")} for t in self.topics], "count": len(self.topics)}
+            return obs
+
+        if action == "start_discussion":
+            topic_id = params.get("topic_id")
+            topic = self._get_topic(topic_id)
+            if not topic:
+                obs["error"] = f"topic_id 不存在: {topic_id}"
+                return obs
+            mode = topic.get("discussion_mode", "sequential")
+            if mode == "simultaneous":
+                contributions = self.mediator.moderate_simultaneous(
+                    topic, self.registry, artifact=self.artifact
+                )
+            else:
+                contributions = self.mediator.moderate_sequential(
+                    topic, self.registry, artifact=self.artifact
+                )
+            stakeholders = self.artifact.get("stakeholders", [])
+            oq_records = self.mediator.handle_open_questions(
+                contributions, self.registry, stakeholders, artifact=self.artifact
+            )
+            for oq in oq_records:
+                oq["topic_id"] = topic_id
+            self.all_open_questions.extend(oq_records)
+            self.topic_status[topic_id]["discussed"] = True
+            self.topic_status[topic_id]["contributions"] = contributions
+            obs["result"] = {"topic_id": topic_id, "contributions_count": len(contributions), "oq_count": len(oq_records)}
+            return obs
+
+        if action == "resolve_topic":
+            topic_id = params.get("topic_id")
+            topic = self._get_topic(topic_id)
+            contributions = self.topic_status.get(topic_id, {}).get("contributions")
+            if not topic or not contributions:
+                obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
+                return obs
+            resolution = self.mediator.synthesize_and_resolve(topic, contributions)
+            self.topic_status[topic_id]["resolution"] = resolution
+            obs["result"] = {"topic_id": topic_id, "resolution": resolution.get("resolution"), "summary": resolution.get("summary", "")}
+            return obs
+
+        if action == "escalate_to_human":
+            topic_id = params.get("topic_id")
+            topic = self._get_topic(topic_id)
+            contributions = self.topic_status.get(topic_id, {}).get("contributions")
+            if not topic or not contributions:
+                obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
+                return obs
+            options = self.mediator.prepare_human_options(topic, contributions)
+            resolution = self.collect.human_decision_on_topic(topic, options)
+            self.topic_status[topic_id]["resolution"] = resolution
+            obs["result"] = {"topic_id": topic_id, "resolution": "human_decision", "summary": str(resolution.get("decision", ""))}
+            return obs
+
+        if action == "save_topic":
+            topic_id = params.get("topic_id")
+            topic = self._get_topic(topic_id)
+            st = self.topic_status.get(topic_id, {})
+            contributions = st.get("contributions")
+            resolution = st.get("resolution")
+            if not topic or not contributions:
+                obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
+                return obs
+            if not resolution:
+                resolution = self.mediator.synthesize_and_resolve(topic, contributions)
+                self.topic_status[topic_id]["resolution"] = resolution
+            self._topic_idx += 1
+            meeting_md = self.mediator.generate_meeting_markdown(topic, contributions, resolution, round_num=self.round_num)
+            meeting_filename = f"R{self.round_num}-M{self._topic_idx:02d}.md"
+            self.store.save_markdown(meeting_md, meeting_filename)
+            topic_record = {
+                "id": topic.get("id"),
+                "title": topic.get("title"),
+                "description": topic.get("description", ""),
+                "category": topic.get("category", ""),
+                "participants": topic.get("participants", []),
+                "discussion_mode": topic.get("discussion_mode", "sequential"),
+                "speaking_order": topic.get("speaking_order", []),
+                "source_ids": topic.get("source_ids", []),
+            }
+            self.round_discussions.append({
+                "topic": topic_record,
+                "source_ids": topic.get("source_ids", []),
+                "contributions": [{"agent": c.get("agent"), "response": c.get("response", {})} for c in contributions],
+                "resolution": resolution,
+            })
+            self.topic_status[topic_id]["saved"] = True
+            obs["result"] = {"topic_id": topic_id, "filename": meeting_filename}
+            return obs
+
+        if action == "finish_round":
+            obs["result"] = "round_complete"
+            return obs
+
+        obs["error"] = f"未知動作: {action}，可用: {AGENDA_ACTIONS}"
+        return obs
+
+    def _get_topic(self, topic_id: Optional[str]) -> Optional[Dict]:
+        if not topic_id:
+            return None
+        for t in self.topics:
+            if t.get("id") == topic_id:
+                return t
+        return None
+
+    def get_state_summary(self) -> Dict[str, Any]:
+        status_list = []
+        for tid, st in self.topic_status.items():
+            status_list.append({
+                "topic_id": tid,
+                "discussed": st.get("discussed", False),
+                "resolved": st.get("resolution") is not None,
+                "resolution": (st.get("resolution") or {}).get("resolution"),
+                "saved": st.get("saved", False),
+            })
+        return {
+            "round_num": self.round_num,
+            "topics": [{"id": t["id"], "title": t["title"], "category": t.get("category", "")} for t in self.topics],
+            "topic_status": status_list,
+            "round_discussions_length": len(self.round_discussions),
+        }
+
+    def get_round_discussions(self) -> List[Dict]:
+        return self.round_discussions
+
+    def get_all_open_questions(self) -> List[Dict]:
+        return self.all_open_questions
+
+    def get_agenda_snapshot(self) -> List[Dict]:
+        return list(self.topics)

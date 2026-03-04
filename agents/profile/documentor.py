@@ -1,8 +1,12 @@
 import json
 import re
-
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
+
+_TYPE_DIR = Path(__file__).resolve().parent.parent / "type"
+with open(_TYPE_DIR / "srs_section_hints.json", "r", encoding="utf-8") as _f:
+    SRS_SECTION_HINTS = json.load(_f)
 
 
 class DocumentorAgent(BaseAgent):
@@ -49,25 +53,18 @@ class DocumentorAgent(BaseAgent):
         dr_md = self.strip_code_fences(dr_md)
         return dr_md
 
-    SRS_SECTION_HINTS = {
-        "1. System Overview": "整理系統概述，包含目的、範圍、產品概觀。",
-        "2. Requirement Engineering": "整理使用者需求和系統需求。2.2 System Requirements 每條只寫「SR-xx: 描述」。",
-        "3. System Stakeholders": "列出利害關係人，整理各自的關注點和需求。",
-        "4. Conflicting Requirements": "整理衝突需求，包含解決方案和決策結果。",
-        "5. Functional Requirements": "整理功能性需求，確保每個需求有明確的描述。",
-        "6. Non-Functional Requirements": "整理非功能性需求（效能、安全、可用性等）。",
-        "7. Appendices": "整理附錄內容，包含 UML 模型圖表（PlantUML）和系統元件結構。",
-    }
-
     def generate_srs(self, artifact: Dict[str, Any], srs_template: List[Dict]) -> Dict[str, Any]:
         """Step F2: 產出 SRS Final（JSON + Markdown）"""
         artifact_text = json.dumps({
             "rough_idea": artifact.get("rough_idea", ""),
+            "scope": artifact.get("scope", {}),
             "stakeholders": artifact.get("stakeholders", []),
             "requirements": artifact.get("requirements", []),
             "conflicts": artifact.get("conflicts", []),
             "decisions": artifact.get("decisions", []),
             "system_models": artifact.get("system_models", {}),
+            "glossary": artifact.get("glossary", []),
+            "assumptions": artifact.get("assumptions", []),
         }, ensure_ascii=False, indent=2)
 
         generated_sections = []
@@ -76,7 +73,7 @@ class DocumentorAgent(BaseAgent):
             section_name = section_template.get("section", "")
             self.logger.info(f"  生成 SRS 章節: {section_name}")
 
-            hint = self.SRS_SECTION_HINTS.get(section_name, "")
+            hint = SRS_SECTION_HINTS.get(section_name, "")
             section_template_text = json.dumps(section_template, ensure_ascii=False, indent=2)
 
             user_prompt = f"""# 任務

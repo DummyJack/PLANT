@@ -6,6 +6,7 @@ import PyPDF2
 from typing import Dict, List, Optional
 from pathlib import Path
 
+from openai import BadRequestError
 from agents.base import BaseAgent
 from agents.tools.web_search import WebSearchTool
 
@@ -88,8 +89,73 @@ class ExpertAgent(BaseAgent):
             parts.append(f"\n【{doc['filename']}】\n{doc['content']}")
         return "\n".join(parts)
 
-    def inject_domain(self, requirements: List[Dict], conflicts: List[Dict], rough_idea: str) -> Dict:
-        """Phase 0 Step 0.4: 領域知識注入 — 將法規/標準/安全規範寫入 requirements"""
+    @staticmethod
+    def _parse_first_json(raw: str) -> Dict:
+        """從可能含多個 JSON 或後綴文字的內容中，只解析第一個完整 JSON 物件。"""
+        if not raw or not isinstance(raw, str):
+            return {}
+        raw = raw.strip()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        start = raw.find("{")
+        if start == -1:
+            return {}
+        depth = 0
+        for i in range(start, len(raw)):
+            if raw[i] == "{":
+                depth += 1
+            elif raw[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(raw[start : i + 1])
+                    except json.JSONDecodeError:
+                        pass
+                    break
+        return {}
+
+    def _build_inject_fallback_prompt(self, requirements: List[Dict], rough_idea: str) -> str:
+        """內容政策觸發時使用的精簡 prompt，不含外部文件與完整衝突列表。"""
+        idea = (rough_idea or "")[:500]
+        req_limited = requirements[:10] if requirements else []
+        requirements_text = json.dumps(req_limited, ensure_ascii=False, indent=2)
+        return f"""# 任務
+根據以下需求與背景，以你的專業知識產出應遵守的法規/標準/安全規範，作為 constraint 類型需求。
+
+# 背景（摘要）
+{idea}
+
+# 當前需求（前 10 筆）
+{requirements_text}
+
+# 步驟
+1. 依專業知識識別相關法規、標準、安全規範
+2. 將約束寫入 new_requirements，type 標記為 constraint，ref 可填「依領域知識」
+3. 若無相關法規可產出，new_requirements 可為空陣列
+
+# 輸出 JSON
+{{{{
+    "new_requirements": [
+        {{{{
+            "id": "R-C01",
+            "text": "約束描述（法規/標準名稱、合規要求、適用範圍）",
+            "type": "constraint",
+            "ref": "來源說明",
+            "source_stakeholders": ["expert"]
+        }}}}
+    ]
+}}}}"""
+
+    def inject_domain(
+        self,
+        requirements: List[Dict],
+        conflicts: List[Dict],
+        rough_idea: str,
+        project_overview: Optional[str] = None,
+    ) -> Dict:
+        """Phase 0: 領域知識注入。查詢網頁時僅搜尋與「專案概述」相關的法規/標準/安全規範。"""
         external_docs = self.load_external_docs()
         doc_context = self.build_doc_context(external_docs)
 
@@ -98,6 +164,11 @@ class ExpertAgent(BaseAgent):
 
         requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
         conflicts_text = json.dumps(conflicts, ensure_ascii=False, indent=2)
+
+        overview = (project_overview or "").strip()
+        scope_constraint = ""
+        if overview:
+            scope_constraint = f"\n# 查詢範圍約束\n使用 web_search 時，僅搜尋與以下「專案概述」相關的法規/標準/安全規範。\n專案概述：\n{overview}\n勿搜尋與本專案無關的內容。\n"
 
         has_tools = bool(self.tools)
         tool_instruction = (
@@ -111,7 +182,7 @@ class ExpertAgent(BaseAgent):
 
 # 背景
 {rough_idea}
-
+{scope_constraint}
 # 當前需求
 {requirements_text}
 
@@ -123,7 +194,7 @@ class ExpertAgent(BaseAgent):
 1. {tool_instruction}
 2. 識別必須遵守的法規、標準、安全規範
 3. 將這些約束寫入 new_requirements（type 標記為 constraint）
-4. 檢查新約束是否與現有需求衝突，若有則寫入 new_conflicts
+（衝突辨識由 Analyst 在注入後統一執行，Expert 僅產出 new_requirements）
 
 # 詳細度要求
 每條 constraint 的 text 必須包含：
@@ -147,47 +218,50 @@ class ExpertAgent(BaseAgent):
             "ref": "來源 URL 或文件名",
             "source_stakeholders": ["expert"]
         }}}}
-    ],
-    "new_conflicts": [
-        {{{{
-            "id": "CF-xx",
-            "label": "Conflict",
-            "description": "新約束與哪些需求產生衝突，具體矛盾點為何",
-            "texts": {{{{"expert": "約束內容", "原利害關係人": "原需求內容"}}}}
-        }}}}
     ]
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
 
-        if self.tools:
-            raw = self.chat_with_tools(messages, max_rounds=3)
-            try:
-                response = json.loads(raw) if isinstance(raw, str) else raw
-            except json.JSONDecodeError:
-                import re
-                m = re.search(r"\{.*\}", raw, re.DOTALL)
-                response = json.loads(m.group(0)) if m else {}
-        else:
-            response = self.model.chat_json(messages)
+        try:
+            if self.tools:
+                raw = self.chat_with_tools(messages, max_rounds=3)
+                response = self._parse_first_json(raw)
+            else:
+                response = self.model.chat_json(messages)
+        except BadRequestError as e:
+            err_msg = str(e).lower()
+            if "invalid_prompt" in err_msg or "usage policy" in err_msg:
+                self.logger.warning("Expert 請求觸發內容政策，改以精簡 prompt 僅依模型知識產出約束")
+                fallback_prompt = self._build_inject_fallback_prompt(requirements, rough_idea)
+                response = self.model.chat_json(self.build_direct_messages(fallback_prompt))
+            else:
+                raise
 
         new_reqs = response.get("new_requirements", [])
+        if not isinstance(new_reqs, list):
+            new_reqs = []
         for req in new_reqs:
-            req.setdefault("type", "constraint")
-            req.setdefault("source_stakeholders", ["expert"])
+            if isinstance(req, dict):
+                req.setdefault("type", "constraint")
+                req.setdefault("source_stakeholders", ["expert"])
+                req.setdefault("priority", "must")
+        new_reqs = [r for r in new_reqs if isinstance(r, dict)]
 
-        new_conflicts = response.get("new_conflicts", [])
-        for cf in new_conflicts:
-            cf.setdefault("label", "Conflict")
-            cf.setdefault("texts", {})
-            cf.setdefault("source", "expert")
+        if len(new_reqs) == 0:
+            reasons = []
+            if not overview:
+                reasons.append("專案概述為空")
+            if not has_tools:
+                reasons.append("未設定 TAVILY_API_KEY 或無 web_search 工具")
+            if reasons:
+                self.logger.info(f"Expert 回傳 0 條約束，可能原因：{'、'.join(reasons)}；或模型判斷無適用法規／解析未取得 new_requirements")
+            else:
+                self.logger.info("Expert 回傳 0 條約束，可能為模型判斷本專案無適用法規/標準，或輸出格式未含 new_requirements")
 
-        return {
-            "requirements": requirements + new_reqs,
-            "conflicts": conflicts + new_conflicts,
-        }
+        return {"requirements": requirements + new_reqs}
 
-    def respond_to_topic(self, topic, previous_responses=None):
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
@@ -196,15 +270,29 @@ class ExpertAgent(BaseAgent):
                      for r in previous_responses]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
 
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 可先使用 web_search 查詢法規、標準或技術文件，再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+
         user_prompt = f"""你正在以領域專家的身份參與需求討論。
 
 {topic_text}
 {prev_text}
+{snapshot_text}
+{tool_hint}
 
 # 思考與發言流程
 1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 不可讓步的要點（須附法規/標準依據）(3) 可接受調整或折衷的要點
 2. 再根據思考結果，撰寫一段完整的發言（statement），針對議題提出你的專業見解與法規依據
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
+
+# 發言風格
+- 以領域專家在會議中的口吻：引用法規/標準時註明來源或條文，說明不合規風險與適用範圍
+- 資訊不足時可明確說「這部分需要再查證」或「依目前查到的資料…」，不捏造
 
 # 約束
 - statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
@@ -217,7 +305,7 @@ class ExpertAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
+        response = self._chat_for_topic_response(messages)
 
         return {
             "agent": self.name,

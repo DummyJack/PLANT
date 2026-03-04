@@ -1,8 +1,4 @@
-import logging
-
 from typing import Dict
-
-logger = logging.getLogger("Plant.AgentRegistry")
 
 # Agent 註冊中心(用於 Round 2 議題討論時查找 Agent 實例)
 class AgentRegistry:
