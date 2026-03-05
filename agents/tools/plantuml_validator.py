@@ -39,7 +39,7 @@ class PlantUMLValidatorTool(BaseTool):
 
         # 明確指定使用線上時，只走線上
         if self.use_online is True:
-            return self._validate_online(code)
+            return self.validate_online(code)
 
         try:
             result = subprocess.run(
@@ -54,29 +54,29 @@ class PlantUMLValidatorTool(BaseTool):
             if result.returncode == 0 and "ERROR" not in stdout.upper():
                 return "驗證通過: PlantUML 語法正確"
 
-            errors = self._extract_errors(stdout, stderr)
+            errors = self.extract_errors(stdout, stderr)
             return f"語法錯誤:\n{errors}" if errors else f"語法錯誤:\n{stdout}\n{stderr}"
 
         except FileNotFoundError:
             if self.use_online is False:
-                return self._fallback_validate(code)
-            return self._validate_online(code)
+                return self.fallback_validate(code)
+            return self.validate_online(code)
         except subprocess.TimeoutExpired:
             return "驗證逾時: PlantUML 驗證超過 30 秒"
         except Exception as e:
             logger.warning(f"PlantUML 驗證失敗，使用 fallback: {e}")
             if self.use_online is False:
-                return self._fallback_validate(code)
-            return self._validate_online(code)
+                return self.fallback_validate(code)
+            return self.validate_online(code)
 
-    def _encode_hex(self, code: str) -> str:
+    def encode_hex(self, code: str) -> str:
         """PlantUML 官方支援的 HEX 編碼：~h + UTF-8 的十六進位"""
         return "~h" + code.encode("utf-8").hex()
 
-    def _validate_online(self, code: str) -> str:
+    def validate_online(self, code: str) -> str:
         """用官方線上伺服器驗證：請求 PNG，語法錯誤時伺服器會回傳錯誤圖（通常較小）"""
         try:
-            encoded = self._encode_hex(code)
+            encoded = self.encode_hex(code)
             url = f"{self.server_url}/png/{encoded}"
             req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -91,16 +91,16 @@ class PlantUMLValidatorTool(BaseTool):
             return f"無法連線至 PlantUML 伺服器: {e.reason}"
         except Exception as e:
             logger.warning(f"線上驗證失敗: {e}")
-            return self._fallback_validate(code)
+            return self.fallback_validate(code)
 
-    def _extract_errors(self, stdout: str, stderr: str) -> str:
+    def extract_errors(self, stdout: str, stderr: str) -> str:
         lines = []
         for line in (stdout + "\n" + stderr).splitlines():
             if any(kw in line.upper() for kw in ["ERROR", "SYNTAX", "WARNING"]):
                 lines.append(line.strip())
         return "\n".join(lines)
 
-    def _fallback_validate(self, code: str) -> str:
+    def fallback_validate(self, code: str) -> str:
         """無 Java/plantuml.jar 時的基本語法檢查"""
         issues = []
         starts = code.count("@startuml")

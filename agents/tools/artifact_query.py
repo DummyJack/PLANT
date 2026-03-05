@@ -21,11 +21,11 @@ class ArtifactQueryTool(BaseTool):
 
     def execute(self, **kwargs) -> str:
         artifact = self.artifact_getter() or {}
-        summary = self._summarize(artifact)
+        summary = self.summarize(artifact)
         return json.dumps(summary, ensure_ascii=False, indent=2)
 
     @staticmethod
-    def _summarize(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    def summarize(artifact: Dict[str, Any]) -> Dict[str, Any]:
         """產出精簡摘要，避免 token 過多"""
         reqs = artifact.get("requirements", [])
         summary_reqs = [

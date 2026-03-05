@@ -473,7 +473,7 @@ class AnalystAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self._chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(messages)
 
         return {
             "agent": self.name,

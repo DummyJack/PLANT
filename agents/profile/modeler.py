@@ -120,13 +120,13 @@ class ModelerAgent(BaseAgent):
                 continue
 
             self.logger.warning(f"  模型 {m.get('name', '')} 語法有誤，嘗試修正: {result}")
-            fixed = self._fix_plantuml(m, result)
+            fixed = self.fix_plantuml(m, result)
             if fixed:
                 m["plantuml"] = fixed
 
         return model_data
 
-    def _fix_plantuml(self, model: Dict, error_msg: str) -> Optional[str]:
+    def fix_plantuml(self, model: Dict, error_msg: str) -> Optional[str]:
         """依據錯誤訊息讓 LLM 修正 PlantUML"""
         user_prompt = f"""# 任務
 以下 PlantUML 程式碼有語法錯誤，請修正後回傳。
@@ -199,7 +199,7 @@ class ModelerAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self._chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(messages)
 
         return {
             "agent": self.name,

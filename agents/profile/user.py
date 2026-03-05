@@ -186,7 +186,7 @@ class UserAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self._chat_for_topic_response(messages, temperature=1)
+        response = self.chat_for_topic_response(messages, temperature=1)
 
         statement = response.get("statement", "")
         open_questions = response.get("open_questions", [])

@@ -50,7 +50,7 @@ class MediatorAgent(BaseAgent):
             registered = ["user", "analyst", "expert", "modeler"]
 
         skip = skip_source_ids or set()
-        context = self._build_agenda_context(artifact, skip)
+        context = self.build_agenda_context(artifact, skip)
         if not context.strip():
             self.logger.info("無足夠 artifact 內容可供判斷議程")
             return []
@@ -145,7 +145,7 @@ class MediatorAgent(BaseAgent):
 
         return agenda_items
 
-    def _build_agenda_context(self, artifact: Dict[str, Any], skip_source_ids: set) -> str:
+    def build_agenda_context(self, artifact: Dict[str, Any], skip_source_ids: set) -> str:
         """組裝 artifact 摘要供 Mediator 判斷議程用，不含演算法邏輯。"""
         parts = []
         scope = artifact.get("scope") or {}
@@ -226,7 +226,7 @@ class MediatorAgent(BaseAgent):
     # ===== 討論主持 =====
 
     @staticmethod
-    def _build_artifact_snapshot(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def build_artifact_snapshot(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """產出專案狀態摘要，供 respond_to_topic 的 artifact_snapshot 使用"""
         if not artifact:
             return {}
@@ -252,7 +252,7 @@ class MediatorAgent(BaseAgent):
         speaking_order = topic.get("speaking_order", topic.get("participants", []))
         self.logger.info(f"[{topic['id']}] 逐一發言: {' → '.join(speaking_order)}")
 
-        snapshot = self._build_artifact_snapshot(artifact)
+        snapshot = self.build_artifact_snapshot(artifact)
         for agent_name in speaking_order:
             agent = registry.get(agent_name)
             if not agent:
@@ -281,7 +281,7 @@ class MediatorAgent(BaseAgent):
         participants = topic.get("participants", [])
         self.logger.info(f"[{topic['id']}] 同時發言: {', '.join(participants)}")
 
-        snapshot = self._build_artifact_snapshot(artifact)
+        snapshot = self.build_artifact_snapshot(artifact)
         for agent_name in participants:
             agent = registry.get(agent_name)
             if not agent:
@@ -314,7 +314,7 @@ class MediatorAgent(BaseAgent):
     ) -> List[Dict]:
         """將 open_questions 依 to 欄位路由到對應 agent 回答"""
         oq_records = []
-        snapshot = self._build_artifact_snapshot(artifact)
+        snapshot = self.build_artifact_snapshot(artifact)
 
         all_questions = []
         for c in contributions:
@@ -631,7 +631,7 @@ class AgendaRunner:
 
         if action == "start_discussion":
             topic_id = params.get("topic_id")
-            topic = self._get_topic(topic_id)
+            topic = self.get_topic(topic_id)
             if not topic:
                 obs["error"] = f"topic_id 不存在: {topic_id}"
                 return obs
@@ -658,7 +658,7 @@ class AgendaRunner:
 
         if action == "resolve_topic":
             topic_id = params.get("topic_id")
-            topic = self._get_topic(topic_id)
+            topic = self.get_topic(topic_id)
             contributions = self.topic_status.get(topic_id, {}).get("contributions")
             if not topic or not contributions:
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
@@ -670,7 +670,7 @@ class AgendaRunner:
 
         if action == "escalate_to_human":
             topic_id = params.get("topic_id")
-            topic = self._get_topic(topic_id)
+            topic = self.get_topic(topic_id)
             contributions = self.topic_status.get(topic_id, {}).get("contributions")
             if not topic or not contributions:
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
@@ -683,7 +683,7 @@ class AgendaRunner:
 
         if action == "save_topic":
             topic_id = params.get("topic_id")
-            topic = self._get_topic(topic_id)
+            topic = self.get_topic(topic_id)
             st = self.topic_status.get(topic_id, {})
             contributions = st.get("contributions")
             resolution = st.get("resolution")
@@ -724,7 +724,7 @@ class AgendaRunner:
         obs["error"] = f"未知動作: {action}，可用: {AGENDA_ACTIONS}"
         return obs
 
-    def _get_topic(self, topic_id: Optional[str]) -> Optional[Dict]:
+    def get_topic(self, topic_id: Optional[str]) -> Optional[Dict]:
         if not topic_id:
             return None
         for t in self.topics:

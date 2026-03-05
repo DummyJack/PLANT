@@ -107,19 +107,19 @@ class DocumentorAgent(BaseAgent):
         return srs_json, srs_md
 
     @staticmethod
-    def _strip_internal_req_id(text: str) -> str:
+    def strip_internal_req_id(text: str) -> str:
         """移除內容開頭的內部需求編號（R-01:、R-C01: 等），SRS 對外只顯示 SR-xx"""
         if not text or not isinstance(text, str):
             return text
         return re.sub(r"^R-(?:C?\d+):\s*", "", text.strip()).strip() or text
 
-    def _format_content_item(self, item: Any) -> str:
+    def format_content_item(self, item: Any) -> str:
         """將單一 content 項目轉成 Markdown 一行：支援 dict（id+content/description）或字串"""
         if isinstance(item, dict):
             mid = item.get("id", "")
             text = item.get("content", item.get("description", ""))
             if mid and str(mid).startswith("SR-") and text:
-                text = self._strip_internal_req_id(str(text))
+                text = self.strip_internal_req_id(str(text))
                 return f"- {mid}: {text}"
             if mid and text:
                 return f"- {mid}: {text}"
@@ -128,7 +128,7 @@ class DocumentorAgent(BaseAgent):
             return "- " + str(item)
         return f"- {item}"
 
-    def _render_section_content(self, section_content: Any) -> str:
+    def render_section_content(self, section_content: Any) -> str:
         """將章節 content（dict / list / str）轉成 Markdown 片段"""
         md = ""
         if isinstance(section_content, dict):
@@ -163,7 +163,7 @@ class DocumentorAgent(BaseAgent):
                             md += "\n"
             else:
                 for item in section_content:
-                    md += self._format_content_item(item) + "\n"
+                    md += self.format_content_item(item) + "\n"
                 md += "\n"
         elif isinstance(section_content, str) and section_content:
             md += f"{section_content}\n\n"
@@ -181,7 +181,7 @@ class DocumentorAgent(BaseAgent):
             content = subsection.get("content", "")
             if isinstance(content, list):
                 for item in content:
-                    md += self._format_content_item(item) + "\n"
+                    md += self.format_content_item(item) + "\n"
                 md += "\n"
             elif isinstance(content, str) and content:
                 md += f"{content}\n\n"
@@ -193,7 +193,7 @@ class DocumentorAgent(BaseAgent):
 
             section_content = section_data.get("content", None)
             if section_content is not None:
-                md += self._render_section_content(section_content)
+                md += self.render_section_content(section_content)
 
             for subsection in section_data.get("subsection", []):
                 process_subsection(subsection)

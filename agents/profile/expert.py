@@ -90,7 +90,7 @@ class ExpertAgent(BaseAgent):
         return "\n".join(parts)
 
     @staticmethod
-    def _parse_first_json(raw: str) -> Dict:
+    def parse_first_json(raw: str) -> Dict:
         """從可能含多個 JSON 或後綴文字的內容中，只解析第一個完整 JSON 物件。"""
         if not raw or not isinstance(raw, str):
             return {}
@@ -116,7 +116,7 @@ class ExpertAgent(BaseAgent):
                     break
         return {}
 
-    def _build_inject_fallback_prompt(self, requirements: List[Dict], rough_idea: str) -> str:
+    def build_inject_fallback_prompt(self, requirements: List[Dict], rough_idea: str) -> str:
         """內容政策觸發時使用的精簡 prompt，不含外部文件與完整衝突列表。"""
         idea = (rough_idea or "")[:500]
         req_limited = requirements[:10] if requirements else []
@@ -226,14 +226,14 @@ class ExpertAgent(BaseAgent):
         try:
             if self.tools:
                 raw = self.chat_with_tools(messages, max_rounds=3)
-                response = self._parse_first_json(raw)
+                response = self.parse_first_json(raw)
             else:
                 response = self.model.chat_json(messages)
         except BadRequestError as e:
             err_msg = str(e).lower()
             if "invalid_prompt" in err_msg or "usage policy" in err_msg:
                 self.logger.warning("Expert 請求觸發內容政策，改以精簡 prompt 僅依模型知識產出約束")
-                fallback_prompt = self._build_inject_fallback_prompt(requirements, rough_idea)
+                fallback_prompt = self.build_inject_fallback_prompt(requirements, rough_idea)
                 response = self.model.chat_json(self.build_direct_messages(fallback_prompt))
             else:
                 raise
@@ -305,7 +305,7 @@ class ExpertAgent(BaseAgent):
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self._chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(messages)
 
         return {
             "agent": self.name,

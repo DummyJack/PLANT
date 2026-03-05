@@ -16,7 +16,7 @@ class BaseAgent:
         self.registry = registry
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
-    def _parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
+    def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
         """從工具迴圈後的最終文字中解析 statement / open_questions JSON"""
         if not raw or not isinstance(raw, str):
             return {}
@@ -31,14 +31,14 @@ class BaseAgent:
                     pass
         return {}
 
-    def _chat_for_topic_response(
+    def chat_for_topic_response(
         self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
     ) -> Dict[str, Any]:
         """討論回合：有 tools 時走 chat_with_tools 並解析 JSON，否則 chat_json（kwargs 傳給 model.chat_json）"""
         if self.tools:
             raw = self.chat_with_tools(messages, max_rounds=3)
             if parse_json:
-                return self._parse_topic_response_json(raw)
+                return self.parse_topic_response_json(raw)
             return {"statement": raw, "open_questions": []}
         return self.model.chat_json(messages, **kwargs)
 
@@ -93,7 +93,7 @@ class BaseAgent:
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self._chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(messages)
 
         return {
             "agent": self.name,
@@ -151,7 +151,7 @@ class BaseAgent:
             })
         return schemas
 
-    def _supports_tool_calling(self) -> bool:
+    def supports_tool_calling(self) -> bool:
         """是否為 OpenAI 相容 client（支援 chat.completions.create 的 tools 參數）"""
         try:
             c = getattr(self.model, "client", None)
@@ -163,7 +163,7 @@ class BaseAgent:
         """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果。若 client 不支援 tool calling 則改為普通 chat。"""
         if not self.tools:
             return self.model.chat(messages)
-        if not self._supports_tool_calling():
+        if not self.supports_tool_calling():
             self.logger.warning("目前 model client 不支援 tool calling，改為普通 chat（工具不會被呼叫）")
             return self.model.chat(messages)
 
