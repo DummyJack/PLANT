@@ -259,8 +259,6 @@ class MediatorAgent(BaseAgent):
             if not agent:
                 self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
                 continue
-            if hasattr(agent, "set_artifact") and artifact is not None:
-                agent.set_artifact(artifact)
             try:
                 response = agent.respond_to_topic(
                     topic, previous_responses=contributions, artifact_snapshot=snapshot
@@ -288,8 +286,6 @@ class MediatorAgent(BaseAgent):
         if not agent:
             self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
             return {"agent": agent_name, "response": {"content": "（未註冊，跳過）"}}
-        if hasattr(agent, "set_artifact") and artifact is not None:
-            agent.set_artifact(artifact)
         try:
             response = agent.respond_to_topic(
                 topic, previous_responses=None, artifact_snapshot=snapshot
@@ -381,8 +377,6 @@ class MediatorAgent(BaseAgent):
             if not target_agent:
                 return (q_record, None, {**q_record, "status": "deferred"})
             try:
-                if hasattr(target_agent, "set_artifact") and artifact is not None:
-                    target_agent.set_artifact(artifact)
                 q_topic = {
                     "id": "OQ",
                     "title": f"回答 {q_record['from_agent']} 的問題",

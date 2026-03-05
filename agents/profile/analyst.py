@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 from agents.base import BaseAgent
-from agents.tools import ArtifactQueryTool
 
 _TYPE_DIR = Path(__file__).resolve().parent.parent / "type"
 with open(_TYPE_DIR / "conflict_types.json", "r", encoding="utf-8") as _f:
@@ -29,15 +28,8 @@ class AnalystAgent(BaseAgent):
 3. 衝突辨識 — 全專案衝突由分析師統一辨識：利害關係人衝突、需求/約束間衝突、設計與可測試性衝突"""
 
     def __init__(self, model, tools: Optional[list] = None, registry=None):
-        agent_tools = list(tools or [])
-        agent_tools.append(ArtifactQueryTool(lambda: getattr(self, "_current_artifact", None) or {}))
-        super().__init__(model, tools=agent_tools, registry=registry)
-        self._current_artifact: Optional[Dict] = None
+        super().__init__(model, tools=tools, registry=registry)
 
-    def set_artifact(self, artifact: Dict) -> None:
-        """由執行層在每輪討論前設定，供 query_artifact 工具讀取當前專案狀態。"""
-        self._current_artifact = artifact
-    
     def detect_stakeholder_conflicts(self, stakeholders: List[Dict]) -> List[Dict]:
         """辨識利害關係人需求衝突：一次檢視全部；若發言或角色超過兩個，同時檢視兩兩之間的可能衝突。"""
         if len(stakeholders) < 2:
@@ -444,7 +436,7 @@ class AnalystAgent(BaseAgent):
 
         tool_hint = ""
         if self.tools:
-            tool_hint = "\n# 工具使用\n- 可先使用 query_artifact 查詢當前需求與衝突，再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+            tool_hint = "\n# 工具使用\n- 最後**必須**輸出下列 JSON。"
 
         user_prompt = f"""你正在以系統分析師的身份參與需求討論。
 
