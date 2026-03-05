@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import PyPDF2
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -42,43 +43,59 @@ class ExpertAgent(BaseAgent):
         self.doc_dir.mkdir(exist_ok=True)
         self.enable_web_search = enable_web_search
 
+    def _read_one_file(self, file_path: Path, text_formats: List[str]) -> Optional[Dict[str, str]]:
+        """讀取單一檔案，供 load_external_docs 並行呼叫。"""
+        try:
+            content = None
+            if file_path.suffix in text_formats:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            elif file_path.suffix == ".pdf":
+                try:
+                    with open(file_path, "rb") as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        content = "".join(page.extract_text() + "\n" for page in pdf_reader.pages)
+                except Exception as e:
+                    print(f"無法讀取 PDF {file_path.name}: {e}")
+                    return None
+            elif file_path.suffix in [".docx", ".doc"]:
+                try:
+                    from docx import Document
+                    doc = Document(file_path)
+                    content = "\n".join(para.text for para in doc.paragraphs)
+                except Exception as e:
+                    print(f"無法讀取 Word {file_path.name}: {e}")
+                    return None
+
+            if content:
+                return {"filename": file_path.name, "content": content, "type": file_path.suffix[1:]}
+        except Exception as e:
+            print(f"無法載入文件 {file_path.name}: {e}")
+        return None
+
     def load_external_docs(self) -> List[Dict[str, str]]:
-        docs = []
         text_formats = [".txt", ".md", ".json"]
-
         if not self.doc_dir.exists():
-            return docs
+            return []
 
-        for file_path in self.doc_dir.iterdir():
-            if not file_path.is_file():
-                continue
-            try:
-                content = None
-                if file_path.suffix in text_formats:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                elif file_path.suffix == ".pdf":
-                    try:
-                        with open(file_path, "rb") as f:
-                            pdf_reader = PyPDF2.PdfReader(f)
-                            content = "".join(page.extract_text() + "\n" for page in pdf_reader.pages)
-                    except Exception as e:
-                        print(f"無法讀取 PDF {file_path.name}: {e}")
-                        continue
-                elif file_path.suffix in [".docx", ".doc"]:
-                    try:
-                        from docx import Document
-                        doc = Document(file_path)
-                        content = "\n".join(para.text for para in doc.paragraphs)
-                    except Exception as e:
-                        print(f"無法讀取 Word {file_path.name}: {e}")
-                        continue
+        file_list = [p for p in self.doc_dir.iterdir() if p.is_file()]
+        if not file_list:
+            return []
 
-                if content:
-                    docs.append({"filename": file_path.name, "content": content, "type": file_path.suffix[1:]})
-            except Exception as e:
-                print(f"無法載入文件 {file_path.name}: {e}")
-
+        docs = []
+        max_workers = min(len(file_list), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._read_one_file, file_path, text_formats): file_path
+                for file_path in file_list
+            }
+            for future in as_completed(futures):
+                try:
+                    doc = future.result()
+                    if doc:
+                        docs.append(doc)
+                except Exception as e:
+                    print(f"載入文件失敗: {e}")
         return docs
 
     def build_doc_context(self, external_docs: List[Dict]) -> str:
@@ -297,10 +314,12 @@ class ExpertAgent(BaseAgent):
 # 約束
 - statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
 - 論點必須有客觀依據，無依據則標註「資訊不足」
+- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容（含法規依據與風險說明）",
+    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -310,5 +329,6 @@ class ExpertAgent(BaseAgent):
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
+            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }

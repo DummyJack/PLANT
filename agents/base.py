@@ -1,6 +1,7 @@
 import json
 import re
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from typing import Dict, List, Optional, Any
 from agents.tools.base import BaseTool
@@ -75,6 +76,7 @@ class BaseAgent:
 # 要求
 - 撰寫一段完整的發言（statement），針對議題表達你的觀點、建議與論述
 - 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"、"modeler"）
+- 依你的立場投票（vote）：agreed 表示你認為本議題可達成共識、可形成決策；unresolved 表示你認為仍有衝突或無法接受，需升級裁決
 
 # 發言風格（像現實會議中的專家）
 - 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌
@@ -89,6 +91,7 @@ class BaseAgent:
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
+    "vote": "agreed 或 unresolved（依你的立場）",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題內容"}}}}]
 }}}}"""
 
@@ -98,6 +101,7 @@ class BaseAgent:
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
+            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
 
@@ -187,7 +191,9 @@ class BaseAgent:
 
             messages.append(msg.model_dump())
 
-            for tc in msg.tool_calls:
+            tool_calls_list = list(msg.tool_calls)
+            if len(tool_calls_list) == 1:
+                tc = tool_calls_list[0]
                 fname = tc.function.name
                 try:
                     fargs = json.loads(tc.function.arguments)
@@ -200,6 +206,34 @@ class BaseAgent:
                     "tool_call_id": tc.id,
                     "content": result,
                 })
+            else:
+                def run_one(tc):
+                    fname = tc.function.name
+                    try:
+                        fargs = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        fargs = {}
+                    self.logger.info(f"🔧 {fname}({fargs})")
+                    result = self.execute_tool(fname, fargs)
+                    return (tc.id, result)
+
+                max_workers = min(len(tool_calls_list), 6)
+                results_by_id = {}
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_tc = {executor.submit(run_one, tc): tc for tc in tool_calls_list}
+                    for future in as_completed(future_to_tc):
+                        tc = future_to_tc[future]
+                        try:
+                            tool_call_id, result = future.result()
+                            results_by_id[tool_call_id] = result
+                        except Exception as e:
+                            results_by_id[tc.id] = f"工具執行失敗: {e}"
+                for tc in tool_calls_list:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": results_by_id.get(tc.id, ""),
+                    })
 
         try:
             last = self.model.client.chat.completions.create(

@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from typing import Dict, Any, Optional, List
 
@@ -110,15 +111,38 @@ class ModelerAgent(BaseAgent):
             return model_data
 
         models = model_data.get("models", [])
-        for m in models:
+        if not models:
+            return model_data
+
+        # 並行執行所有驗證
+        validation_results = {}
+
+        def validate_one(idx: int, m: Dict) -> tuple:
             code = m.get("plantuml", "")
             if not code:
-                continue
-
+                return (idx, m, None)
             result = self.execute_tool("plantuml_validate", {"plantuml_code": code})
+            return (idx, m, result)
+
+        max_workers = min(len(models), 6)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(validate_one, i, m): i for i, m in enumerate(models)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    i, m, result = future.result()
+                    validation_results[i] = (m, result)
+                except Exception as e:
+                    self.logger.warning(f"  模型驗證失敗: {e}")
+                    validation_results[idx] = (models[idx], None)
+
+        # 依序處理需修正的模型（fix_plantuml 呼叫 LLM，維持順序並控制並發）
+        for i in range(len(models)):
+            m, result = validation_results.get(i, (models[i], None))
+            if result is None:
+                continue
             if "通過" in result:
                 continue
-
             self.logger.warning(f"  模型 {m.get('name', '')} 語法有誤，嘗試修正: {result}")
             fixed = self.fix_plantuml(m, result)
             if fixed:
@@ -191,10 +215,12 @@ class ModelerAgent(BaseAgent):
 
 # 約束
 - statement 須聚焦系統架構與建模觀點，評估需求變更對 UML 模型的影響
+- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
+    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -204,5 +230,6 @@ class ModelerAgent(BaseAgent):
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
+            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }

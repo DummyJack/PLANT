@@ -465,10 +465,12 @@ class AnalystAgent(BaseAgent):
 # 約束
 - 保持中立，不偏袒任何利害關係人
 - statement 必須是完整、有條理的發言，論點須有具體需求依據
+- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
+    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -478,5 +480,6 @@ class AnalystAgent(BaseAgent):
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
+            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }

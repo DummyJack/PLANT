@@ -152,12 +152,13 @@ class UserAgent(BaseAgent):
             json_hint = (
                 '"speaking_as": ["本輪發言身份名稱"]（必須是上述角色之一或數位）, '
                 '"statement": "完整發言內容", '
+                '"vote": "agreed 或 unresolved（依你的立場）", '
                 '"open_questions": [...]'
             )
-            flow_hint = "1. 先決定本輪以誰發言（speaking_as） 2. 再撰寫 statement"
+            flow_hint = "1. 先決定本輪以誰發言（speaking_as） 2. 再撰寫 statement 3. 依立場投票（vote）"
         else:
-            json_hint = '"statement": "針對此議題的完整發言內容", "open_questions": [...]'
-            flow_hint = "撰寫一段完整的發言（statement），以第一人稱表達立場與需求"
+            json_hint = '"statement": "針對此議題的完整發言內容", "vote": "agreed 或 unresolved", "open_questions": [...]'
+            flow_hint = "撰寫一段完整的發言（statement），以第一人稱表達立場與需求，並依立場投票（vote）"
 
         user_prompt = f"""你正在以利害關係人代表的身份參與需求討論。
 {roles_text}
@@ -207,6 +208,7 @@ class UserAgent(BaseAgent):
         return {
             "agent": self.name,
             "statement": statement,
+            "vote": response.get("vote", "unresolved"),
             "open_questions": open_questions,
             "speaking_as": speaking_as,
         }

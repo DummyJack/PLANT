@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from agents import AgentRegistry
@@ -503,16 +504,18 @@ class Flow:
     # Finalization
 
     def finalize(self, artifact: Dict[str, Any]):
-
-        self.logger.info("Step F1: 產生 Design Rationale")
-        dr_md = self.documentor_agent.generate_design_rationale(artifact)
-        self.store.save_markdown(dr_md, "design_rationale.md")
-        self.logger.info("✓ 產生 design_rationale.md")
-
-        self.logger.info("Step F2: 產出 SRS Final")
         template = self.store.load_spec_template()
         srs_template = template.get("spec", [])
-        srs_json, srs_md = self.documentor_agent.generate_srs(artifact, srs_template)
+
+        self.logger.info("Step F1 & F2: 並行產生 Design Rationale 與 SRS")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_dr = executor.submit(self.documentor_agent.generate_design_rationale, artifact)
+            f_srs = executor.submit(self.documentor_agent.generate_srs, artifact, srs_template)
+            dr_md = f_dr.result()
+            srs_json, srs_md = f_srs.result()
+
+        self.store.save_markdown(dr_md, "design_rationale.md")
+        self.logger.info("✓ 產生 design_rationale.md")
         self.store.save_srs(srs_json)
         self.store.save_markdown(srs_md, "srs.md")
         self.logger.info("✓ 產生 srs.json + srs.md")

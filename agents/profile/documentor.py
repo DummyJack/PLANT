@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
@@ -67,15 +68,10 @@ class DocumentorAgent(BaseAgent):
             "assumptions": artifact.get("assumptions", []),
         }, ensure_ascii=False, indent=2)
 
-        generated_sections = []
-
-        for section_template in srs_template:
+        def generate_one_section(idx: int, section_template: Dict) -> tuple:
             section_name = section_template.get("section", "")
-            self.logger.info(f"  生成 SRS 章節: {section_name}")
-
             hint = SRS_SECTION_HINTS.get(section_name, "")
             section_template_text = json.dumps(section_template, ensure_ascii=False, indent=2)
-
             user_prompt = f"""# 任務
 根據需求資料產生 SRS 的「{section_name}」章節。
 
@@ -92,15 +88,33 @@ class DocumentorAgent(BaseAgent):
 
 # 輸出 JSON（只輸出此章節）
 {section_template_text}"""
-
             try:
                 messages = self.build_direct_messages(user_prompt)
                 section_result = self.model.chat_json(messages)
-                generated_sections.append(section_result)
+                return (idx, section_result)
             except Exception as e:
                 self.logger.warning(f"  SRS 章節 {section_name} 生成失敗: {e}，使用空模板")
-                generated_sections.append(section_template)
+                return (idx, section_template)
 
+        max_workers = min(len(srs_template), 6)
+        results_by_idx = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(generate_one_section, i, st): i
+                for i, st in enumerate(srs_template)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    i, section_result = future.result()
+                    results_by_idx[i] = section_result
+                    self.logger.info(f"  生成 SRS 章節: {srs_template[i].get('section', '')}")
+                except Exception as e:
+                    self.logger.warning(f"  SRS 章節並行生成失敗: {e}")
+                    results_by_idx[idx] = srs_template[idx]
+
+        generated_sections = [results_by_idx[i] for i in range(len(srs_template))]
         srs_json = {"srs": generated_sections}
 
         srs_md = self.generate_srs_markdown(srs_json)

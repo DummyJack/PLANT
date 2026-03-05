@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
@@ -274,33 +275,68 @@ class MediatorAgent(BaseAgent):
 
         return contributions
 
+    def _respond_one_simultaneous(
+        self,
+        agent_name: str,
+        topic: Dict,
+        registry,
+        artifact: Optional[Dict[str, Any]],
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """單一 agent 發言，供 moderate_simultaneous 並行呼叫。"""
+        agent = registry.get(agent_name)
+        if not agent:
+            self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
+            return {"agent": agent_name, "response": {"content": "（未註冊，跳過）"}}
+        if hasattr(agent, "set_artifact") and artifact is not None:
+            agent.set_artifact(artifact)
+        try:
+            response = agent.respond_to_topic(
+                topic, previous_responses=None, artifact_snapshot=snapshot
+            )
+            return {
+                "agent": agent_name,
+                "response": response if isinstance(response, dict) else {"content": str(response)},
+            }
+        except Exception as e:
+            self.logger.warning(f"  {agent_name} 發言失敗: {e}")
+            return {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
+
     def moderate_simultaneous(
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> List[Dict]:
-        contributions = []
         participants = topic.get("participants", [])
         self.logger.info(f"[{topic['id']}] 同時發言: {', '.join(participants)}")
 
         snapshot = self.build_artifact_snapshot(artifact)
-        for agent_name in participants:
-            agent = registry.get(agent_name)
-            if not agent:
-                self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
-                continue
-            if hasattr(agent, "set_artifact") and artifact is not None:
-                agent.set_artifact(artifact)
-            try:
-                response = agent.respond_to_topic(
-                    topic, previous_responses=None, artifact_snapshot=snapshot
-                )
-                contributions.append({
-                    "agent": agent_name,
-                    "response": response if isinstance(response, dict) else {"content": str(response)},
-                })
-            except Exception as e:
-                self.logger.warning(f"  {agent_name} 發言失敗: {e}")
-                contributions.append({"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}})
+        max_workers = min(len(participants), 6)
+        contributions_by_agent = {}
 
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._respond_one_simultaneous,
+                    agent_name,
+                    topic,
+                    registry,
+                    artifact,
+                    snapshot,
+                ): agent_name
+                for agent_name in participants
+            }
+            for future in as_completed(futures):
+                agent_name = futures[future]
+                try:
+                    contrib = future.result()
+                    contributions_by_agent[contrib["agent"]] = contrib
+                except Exception as e:
+                    self.logger.warning(f"  {agent_name} 發言失敗: {e}")
+                    contributions_by_agent[agent_name] = {
+                        "agent": agent_name,
+                        "response": {"content": f"（發言失敗: {e}）"},
+                    }
+
+        contributions = [contributions_by_agent[name] for name in participants if name in contributions_by_agent]
         return contributions
 
     # ===== Open Question 處理 =====
@@ -334,42 +370,63 @@ class MediatorAgent(BaseAgent):
                     "question": q.get("question", ""),
                 })
 
-        for q_record in all_questions:
-            if not q_record["question"]:
-                continue
+        valid_questions = [q for q in all_questions if q.get("question")]
+        if not valid_questions:
+            return oq_records
 
+        def answer_one(q_record: Dict) -> tuple:
+            """回答單一問題，回傳 (q_record, contribution_entry or None, oq_record)。"""
             target_name = q_record["to_agent"]
             target_agent = registry.get(target_name) if registry else None
-            if target_agent:
+            if not target_agent:
+                return (q_record, None, {**q_record, "status": "deferred"})
+            try:
+                if hasattr(target_agent, "set_artifact") and artifact is not None:
+                    target_agent.set_artifact(artifact)
+                q_topic = {
+                    "id": "OQ",
+                    "title": f"回答 {q_record['from_agent']} 的問題",
+                    "description": (
+                        f"{q_record['question']}\n\n"
+                        "（請簡要針對此問題回答，若前面發言已涵蓋可寫「如前述」或只補充重點，勿整段重複相同內容。）"
+                    ),
+                }
+                response = target_agent.respond_to_topic(
+                    q_topic, previous_responses=contributions, artifact_snapshot=snapshot
+                )
+                resp = response if isinstance(response, dict) else {"content": str(response)}
+                resp = dict(resp)
+                resp["reply_to_question"] = q_record["question"]
+                resp["reply_to_agent"] = q_record["from_agent"]
+                answer = resp.get("statement") or resp.get("content", "")
+                contrib = {
+                    "agent": target_name,
+                    "response": resp,
+                    "is_reply": True,
+                }
+                return (q_record, contrib, {**q_record, "status": "answered", "answer": answer})
+            except Exception:
+                return (q_record, None, {**q_record, "status": "deferred"})
+
+        max_workers = min(len(valid_questions), 6)
+        results_by_idx = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(answer_one, q_record): i for i, q_record in enumerate(valid_questions)}
+            for future in as_completed(futures):
+                idx = futures[future]
                 try:
-                    if hasattr(target_agent, "set_artifact") and artifact is not None:
-                        target_agent.set_artifact(artifact)
-                    q_topic = {
-                        "id": "OQ",
-                        "title": f"回答 {q_record['from_agent']} 的問題",
-                        "description": (
-                            f"{q_record['question']}\n\n"
-                            "（請簡要針對此問題回答，若前面發言已涵蓋可寫「如前述」或只補充重點，勿整段重複相同內容。）"
-                        ),
-                    }
-                    response = target_agent.respond_to_topic(
-                        q_topic, previous_responses=contributions, artifact_snapshot=snapshot
-                    )
-                    resp = response if isinstance(response, dict) else {"content": str(response)}
-                    resp = dict(resp)
-                    resp["reply_to_question"] = q_record["question"]
-                    resp["reply_to_agent"] = q_record["from_agent"]
-                    contributions.append({
-                        "agent": target_name,
-                        "response": resp,
-                        "is_reply": True,
-                    })
-                    answer = resp.get("statement") or resp.get("content", "")
-                    oq_records.append({**q_record, "status": "answered", "answer": answer})
-                except Exception:
-                    oq_records.append({**q_record, "status": "deferred"})
-            else:
-                oq_records.append({**q_record, "status": "deferred"})
+                    _q, contrib, oq = future.result()
+                    results_by_idx[idx] = (contrib, oq)
+                except Exception as e:
+                    self.logger.warning(f"開放問題回答失敗: {e}")
+                    results_by_idx[idx] = (None, {**valid_questions[idx], "status": "deferred"})
+
+        for i in range(len(valid_questions)):
+            contrib, oq = results_by_idx.get(i, (None, {**valid_questions[i], "status": "deferred"}))
+            oq_records.append(oq)
+            if contrib:
+                contributions.append(contrib)
 
         return oq_records
 
@@ -387,7 +444,18 @@ class MediatorAgent(BaseAgent):
         if decision:
             md += f"- **Decision**: {decision}\n"
         md += f"- **Participants**: {', '.join(participants)}\n"
-        md += f"- **Discussion mode**: {mode}\n\n"
+        md += f"- **Discussion mode**: {mode}\n"
+        # 多數決投票結果
+        votes_line = []
+        for c in contributions:
+            if c.get("is_reply", False):
+                continue
+            resp = c.get("response", {})
+            v = resp.get("vote", "unresolved")
+            votes_line.append(f"{c.get('agent', '?')}: {v}")
+        if votes_line:
+            md += f"- **Votes (多數決)**: {', '.join(votes_line)}\n"
+        md += "\n"
 
         md += "## Participants content\n\n"
         for c in contributions:
@@ -421,6 +489,20 @@ class MediatorAgent(BaseAgent):
         return md
 
     def synthesize_and_resolve(self, topic: Dict, contributions: List[Dict]) -> Dict:
+        """依各 agent 的投票（vote）以多數決決定是否達成共識；agreed 時由 LLM 產出 summary 與 decision。"""
+        # 只計入主要發言（排除開放問題的回覆），收集每人一票
+        main_contributions = [c for c in contributions if not c.get("is_reply", False)]
+        votes = []
+        for c in main_contributions:
+            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
+            v = (resp.get("vote") or "unresolved").strip().lower()
+            votes.append("agreed" if v == "agreed" else "unresolved")
+
+        agreed_count = sum(1 for v in votes if v == "agreed")
+        n = len(votes)
+        # 多數決：同意數過半才為 agreed，否則 unresolved
+        resolution = "agreed" if n > 0 and agreed_count > (n - agreed_count) else "unresolved"
+
         discussion_text = ""
         for c in contributions:
             agent = c.get("agent", "?")
@@ -428,8 +510,10 @@ class MediatorAgent(BaseAgent):
             statement = resp.get("statement", "")
             discussion_text += f"\n【{agent}】\n{statement}\n"
 
-        user_prompt = f"""# 任務
-綜合以下議題的討論結果，判斷是否達成共識。
+        # 僅用 LLM 產出 summary 與 decision（不再由 LLM 判斷 resolution）
+        if resolution == "agreed":
+            user_prompt = f"""# 任務
+以下議題經討論後以多數決判定為「達成共識」。請根據各方發言整理出摘要與具體決策內容。
 
 # 議題資訊
 標題: {topic.get('title', '')}
@@ -438,33 +522,46 @@ class MediatorAgent(BaseAgent):
 # 各方討論內容
 {discussion_text}
 
-# 共識判斷標準（只有兩種）
-- agreed: 各方發言立場一致或可整合，可直接形成決策
-- unresolved: 各方發言立場衝突，無法自行解決，需升級至人類裁決
-
-# 約束
-- 如實反映各方立場，不要人為「製造」共識
-- decision 必須具體可執行
-- 若有發言立場互相衝突，一律判定為 unresolved
+# 要求
+- summary：總結討論內容與共識要點
+- decision：具體可執行的決策內容
 
 # 輸出 JSON
 {{{{
-    "resolution": "agreed 或 unresolved",
-    "summary": "總結討論內容與結論（若 agreed 須含決策要點）",
-    "decision": "具體決策內容（agreed 時填寫）"
+    "summary": "總結討論內容與結論",
+    "decision": "具體決策內容"
+}}}}"""
+        else:
+            user_prompt = f"""# 任務
+以下議題經討論後以多數決判定為「未達成共識」。請簡要總結各方討論重點（summary 即可，decision 留空）。
+
+# 議題資訊
+標題: {topic.get('title', '')}
+描述: {topic.get('description', '')}
+
+# 各方討論內容
+{discussion_text}
+
+# 輸出 JSON
+{{{{
+    "summary": "總結討論內容與各方立場",
+    "decision": ""
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-
-        resolution = response.get("resolution", "unresolved")
-        if resolution not in ("agreed", "unresolved"):
-            resolution = "unresolved"
+        try:
+            response = self.model.chat_json(messages)
+            summary = response.get("summary", "")
+            decision = response.get("decision", "") if resolution == "agreed" else ""
+        except Exception as e:
+            self.logger.warning(f"共識摘要 LLM 失敗: {e}")
+            summary = "（多數決結果：%s；摘要產生失敗）" % resolution
+            decision = ""
 
         return {
             "resolution": resolution,
-            "summary": response.get("summary", ""),
-            "decision": response.get("decision", "")
+            "summary": summary,
+            "decision": decision,
         }
 
     # ===== 人類裁決 =====

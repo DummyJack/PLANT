@@ -2,6 +2,7 @@
 
 import csv
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
@@ -25,27 +26,39 @@ def run_conflict(model: BaselineModel, count: int = 0, mode: str = "macro"):
         data = data[:count]
 
     total = len(data)
-    y_true = []
-    y_pred = []
-    records = []
+    y_true = [row["Class"] for row in data]
+    results_by_idx = {}
+    max_workers = min(6, total) or 1
 
-    for i, row in enumerate(data):
+    def predict_one(idx: int, row: dict) -> tuple:
         text1 = row["Text1"]
         text2 = row["Text2"]
-        label = row["Class"]
-
-        print(f"\r  conflict: {i + 1}/{total}", end="", flush=True)
         pred = model.detect_conflict(text1, text2)
+        return (idx, pred, {"text1": text1, "text2": text2, "true": row["Class"], "pred": pred})
 
-        y_true.append(label)
-        y_pred.append(pred)
-        records.append({
-            "text1": text1,
-            "text2": text2,
-            "true": label,
-            "pred": pred,
-        })
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {executor.submit(predict_one, i, row): i for i, row in enumerate(data)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                i, pred, rec = future.result()
+                results_by_idx[i] = (pred, rec)
+            except Exception as e:
+                results_by_idx[idx] = (None, {
+                    "text1": data[idx]["Text1"],
+                    "text2": data[idx]["Text2"],
+                    "true": data[idx]["Class"],
+                    "pred": None,
+                })
+            done += 1
+            print(f"\r  conflict: {done}/{total}", end="", flush=True)
 
+    y_pred = []
+    for i in range(total):
+        pred = results_by_idx[i][0]
+        y_pred.append(pred if pred is not None else "Neutral")
+    records = [results_by_idx[i][1] for i in range(total)]
     print()
 
     # 計算指標：conflict 永遠算，overall 根據 mode 決定
