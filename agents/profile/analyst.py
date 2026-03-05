@@ -1,418 +1,211 @@
 import json
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from agents.base import BaseAgent
 
-_TYPE_DIR = Path(__file__).resolve().parent.parent / "type"
-with open(_TYPE_DIR / "conflict_types.json", "r", encoding="utf-8") as _f:
-    _CONFLICT_TYPES = tuple(json.load(_f))
-CONFLICT_TYPE_IDS = [t["id"] for t in _CONFLICT_TYPES]
-CONFLICT_TYPE_LABELS = {t["id"]: t["label_zh"] for t in _CONFLICT_TYPES}
+_CONFLICT_PATTERNS_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "skills"
+    / "conflict-analyzer"
+    / "references"
+    / "conflict_patterns.md"
+)
 
 
-def format_conflict_types_for_prompt() -> str:
-    """供 LLM prompt 使用的衝突類型條列（含 id 與說明）"""
-    return "\n".join(f"- {t['id']}: {t['label_zh']} — {t['description']}" for t in _CONFLICT_TYPES)
+def _parse_conflict_types_from_patterns(path: Path) -> tuple:
+    """從 conflict_patterns.md 的 ## X Conflicts 標題解析出類型 id 順序。"""
+    if not path.exists():
+        return ("Logical", "Technical", "Resource", "Temporal", "Data", "State", "Priority", "Scope")
+    text = path.read_text(encoding="utf-8")
+    ids = []
+    for m in re.finditer(r"^## (\w+) Conflicts", text, re.MULTILINE):
+        if m.group(1) != "Table":
+            ids.append(m.group(1))
+    return tuple(ids) if ids else ("Logical", "Technical", "Resource", "Temporal", "Data", "State", "Priority", "Scope")
+
+
+ALLOWED_CONFLICT_TYPES = _parse_conflict_types_from_patterns(_CONFLICT_PATTERNS_PATH)
+CONFLICT_TYPE_LABELS = {
+    "Logical": "邏輯衝突",
+    "Technical": "技術衝突",
+    "Resource": "資源衝突",
+    "Temporal": "時序衝突",
+    "Data": "資料衝突",
+    "State": "狀態衝突",
+    "Priority": "優先序衝突",
+    "Scope": "範圍衝突",
+}
 
 
 class AnalystAgent(BaseAgent):
-    """需求轉換、分類、利害關係人衝突辨識、草稿版本管理。"""
+    """需求分析師：賦予 conflict-analyzer、requirements-analyst skill，負責衝突辨識與需求草稿。"""
 
     name = "analyst"
 
-    system_prompt = """你是需求分析師。
+    system_prompt = """你是一個專業的需求分析師，在需求討論流程中負責產出與維護需求產物，並辨識衝突。
+# 職責與產出
+1. **範圍**：依 rough_idea 與 stakeholders 產出 scope（description、in_scope、out_of_scope）。
+2. **衝突辨識**：依 artifact 狀態執行衝突分析，只保留 label 為 Conflict 的項目並賦予 id（CF-01…、CF-D01…）。
+3. **需求草稿**：建立初版需求清單（create_draft）、依 decisions/discussions 更新需求清單（update_draft）。
+4. **會議發言**：參與議題討論時以分析師身份發言，引用需求 id 或衝突 id，保持中立，依立場輸出 vote（agreed/unresolved）與 open_questions。
 
-核心職責：
-1. 需求轉換 — 將口語化利害關係人需求轉換為正式需求描述
-2. 需求分類 — 區分功能性（FR）與非功能性需求（NFR）
-3. 衝突辨識 — 全專案衝突由分析師統一辨識：利害關係人衝突、需求/約束間衝突、設計與可測試性衝突"""
+# 約束
+- 只根據既有資料與 skill 產出，不捏造需求或衝突。
+- 衝突 label 僅使用 Conflict 與 Neutral；術語與格式依各 skill 的說明與 task 指示。
+- 在討論中不代其他角色發言，論點須有需求或衝突依據。"""
 
     def __init__(self, model, tools: Optional[list] = None, registry=None):
-        super().__init__(model, tools=tools, registry=registry)
-
-    def detect_stakeholder_conflicts(self, stakeholders: List[Dict]) -> List[Dict]:
-        """辨識利害關係人需求衝突：一次檢視全部；若發言或角色超過兩個，同時檢視兩兩之間的可能衝突。"""
-        if len(stakeholders) < 2:
-            return []
-        return self.detect_stakeholder_conflicts_all(stakeholders)
-
-    def detect_stakeholder_conflicts_all(self, stakeholders: List[Dict]) -> List[Dict]:
-        """一次檢視所有利害關係人發言，辨識整體性或多方衝突；若發言或角色超過兩個，同時檢視兩兩之間的可能衝突。"""
-        parts = []
-        total_speeches = 0
-        for s in stakeholders:
-            raw = s.get("text", "")
-            texts = raw if isinstance(raw, list) else [raw] if raw else []
-            total_speeches += len(texts)
-            segs = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(texts))
-            parts.append(f"【{s.get('name', '')}】的發言：\n{segs}")
-        speeches_text = "\n\n".join(parts)
-        pairwise_hint = ""
-        if len(stakeholders) > 2 or total_speeches > 2:
-            pairwise_hint = "\n- 因發言或角色超過兩個，請同時檢視兩兩之間的可能衝突；每筆衝突的 stakeholder_names 填涉及的兩人。"
-
-        user_prompt = f"""# 任務
-辨識以下利害關係人發言之間是否存在衝突（一次檢視全部）。
-
-# 利害關係人發言
-{speeches_text}
-
-# 衝突類型定義（conflict_type 必須為以下 id 之一）
-{format_conflict_types_for_prompt()}
-
-# 判斷標準
-- 有衝突時 label 填 Conflict，並填寫對應的 conflict_type、description、stakeholder_names（涉及的利害關係人，每筆通常為兩人）。
-{pairwise_hint}
-- 若沒有衝突，label 填 Neutral（Neutral 不需填 conflict_type）
-
-# 輸出 JSON
-{{{{
-    "conflicts": [
-        {{{{
-            "label": "Conflict 或 Neutral",
-            "conflict_type": "類型 id（僅當 label 為 Conflict 時必填）",
-            "description": "衝突描述（若 Neutral 則簡述原因）",
-            "stakeholder_names": ["涉及的利害關係人"]
-        }}}}
-    ]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-        return response.get("conflicts", [])
+        super().__init__(
+            model,
+            tools=tools,
+            registry=registry,
+            skill_names=["conflict-analyzer", "requirements-analyst"],
+        )
 
     def run_conflict_detection(self, artifact: Dict) -> Dict:
-        """由 Analyst 主動依 artifact 狀態決定並執行衝突辨識，回傳更新後的 artifact。流程不安排細步，只呼叫此入口。"""
+        """依 conflict-analyzer skill 執行衝突辨識；輸出須為 label: Conflict 或 Neutral，回傳更新後的 artifact。"""
         stakeholders = artifact.get("stakeholders", [])
         requirements = artifact.get("requirements", [])
-        conflicts = list(artifact.get("conflicts", []))
         system_models = artifact.get("system_models") or {}
+        context = {
+            "stakeholders": stakeholders,
+            "requirements": requirements,
+            "system_models": system_models,
+        }
+        task = """依 conflict-analyzer skill 的衝突類型與辨識方式，分析 Context 中的利害關係人、需求與系統模型，辨識所有衝突。
+輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。每筆須包含：
+- label：只能是 "Conflict" 或 "Neutral"（無衝突時用 Neutral）
+- 若 label 為 Conflict：須有 description；並依類型填 stakeholder_names（利害關係人衝突）或 requirement_ids / related_requirements（需求或設計衝突）；conflict_type 須為本 skill 的 8 種類型之一：Logical、Technical、Resource、Temporal、Data、State、Priority、Scope
+- 若 label 為 Neutral：可簡述原因，不需 conflict_type
+勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
 
-        has_stakeholder_cf = any(c.get("stakeholder_names") for c in conflicts)
-        if stakeholders and not has_stakeholder_cf:
-            raw = self.detect_stakeholder_conflicts(stakeholders)
-            conflicts = []
-            for c in raw:
-                if c.get("label") != "Conflict":
-                    continue
-                names = c.get("stakeholder_names", [])
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            data = self.parse_topic_response_json(raw)
+        except Exception as e:
+            self.logger.warning(f"衝突分析 skill 執行失敗: {e}")
+            return artifact
+
+        raw_list = data.get("conflicts", [])
+        if not isinstance(raw_list, list):
+            return {**artifact, "conflicts": list(artifact.get("conflicts", []))}
+
+        conflicts = []
+        design_count = 0
+        for c in raw_list:
+            label = (c.get("label") or "").strip()
+            if label != "Conflict":
+                continue
+            ctype = (c.get("conflict_type") or "").strip()
+            if ctype not in ALLOWED_CONFLICT_TYPES:
+                ctype = ALLOWED_CONFLICT_TYPES[0]
+            rel_reqs = c.get("requirement_ids") or c.get("related_requirements") or []
+            if c.get("stakeholder_names"):
                 cf_id = f"CF-{len(conflicts) + 1:02d}"
-                item = {
-                    "id": cf_id,
-                    "label": "Conflict",
-                    "description": c.get("description", ""),
-                    "stakeholder_names": names,
-                }
-                ctype = c.get("conflict_type", "")
-                if ctype and ctype in CONFLICT_TYPE_IDS:
-                    item["conflict_type"] = ctype
-                else:
-                    item["conflict_type"] = CONFLICT_TYPE_IDS[0]
-                conflicts.append(item)
-            self.logger.info(f"辨識出 {len(conflicts)} 個利害關係人衝突")
-
-        has_constraint = any((r.get("type") or "") == "constraint" for r in requirements)
-        if requirements and has_constraint:
-            req_cf = self.detect_requirement_conflicts(requirements, conflicts)
-            for c in req_cf:
+                conflicts.append(
+                    {
+                        "id": cf_id,
+                        "label": "Conflict",
+                        "description": c.get("description", ""),
+                        "stakeholder_names": c.get("stakeholder_names", []),
+                        "conflict_type": ctype,
+                    }
+                )
+            elif rel_reqs or c.get("requirement_ids"):
                 cf_id = f"CF-{len(conflicts) + 1:02d}"
-                ctype = c.get("conflict_type", "") or CONFLICT_TYPE_IDS[0]
-                if ctype not in CONFLICT_TYPE_IDS:
-                    ctype = CONFLICT_TYPE_IDS[0]
-                conflicts.append({
-                    "id": cf_id,
-                    "label": "Conflict",
-                    "description": c.get("description", ""),
-                    "requirement_ids": c.get("requirement_ids", []),
-                    "conflict_type": ctype,
-                })
-            if req_cf:
-                self.logger.info(f"辨識出 {len(req_cf)} 個需求/約束間衝突")
+                conflicts.append(
+                    {
+                        "id": cf_id,
+                        "label": "Conflict",
+                        "description": c.get("description", ""),
+                        "requirement_ids": rel_reqs or c.get("requirement_ids", []),
+                        "conflict_type": ctype,
+                    }
+                )
+            else:
+                design_count += 1
+                cf_id = f"CF-D{design_count:02d}"
+                conflicts.append(
+                    {
+                        "id": cf_id,
+                        "label": "Conflict",
+                        "description": c.get("description", ""),
+                        "requirement_ids": rel_reqs,
+                    }
+                )
 
-        models = system_models.get("models", []) if isinstance(system_models, dict) else []
-        if models:
-            conflicts = [c for c in conflicts if not (c.get("id") or "").startswith("CF-D")]
-            design_cf = self.detect_design_conflicts(requirements, system_models)
-            for dc in design_cf:
-                cf_id = f"CF-D{len(conflicts) + 1:02d}"
-                conflicts.append({
-                    "id": cf_id,
-                    "label": "Conflict",
-                    "description": dc.get("description", ""),
-                    "requirement_ids": dc.get("related_requirements", []),
-                })
-            if design_cf:
-                self.logger.info(f"辨識出 {len(design_cf)} 個設計/可測試性衝突")
-
+        if conflicts:
+            self.logger.info(
+                f"辨識出 {len(conflicts)} 個衝突（label: Conflict / Neutral）"
+            )
         return {**artifact, "conflicts": conflicts}
 
-    def detect_requirement_conflicts(
-        self, requirements: List[Dict], existing_conflicts: Optional[List[Dict]] = None
-    ) -> List[Dict]:
-        """辨識需求之間的衝突：一次檢視全部；若需求/約束超過兩條，同時檢視兩兩之間的可能衝突。"""
-        if not requirements:
-            return []
-        result = self.detect_requirement_conflicts_all(requirements)
-        for c in result:
-            c.setdefault("label", "Conflict")
-            c.setdefault("requirement_ids", [])
-        return result
-
-    def detect_requirement_conflicts_all(self, requirements: List[Dict]) -> List[Dict]:
-        """一次檢視所有需求（含 constraint），辨識整體性或多方衝突；若超過兩條則同時檢視兩兩之間的可能衝突。"""
-        if len(requirements) < 2:
-            return []
-        reqs_text = json.dumps(
-            [{"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")} for r in requirements],
-            ensure_ascii=False,
-            indent=2,
-        )
-        conflict_types_text = format_conflict_types_for_prompt()
-        pairwise_hint = ""
-        if len(requirements) > 2:
-            pairwise_hint = "\n- 因需求/約束超過兩條，請同時檢視兩兩之間的可能衝突；每筆衝突的 requirement_ids 填涉及的 id（通常為兩個）。"
-        user_prompt = f"""# 任務
-針對以下需求列表（含 constraint），辨識「需求與需求之間」的衝突（一次檢視全部）。例如：約束與既有功能矛盾、NFR 之間競合等。
-{pairwise_hint}
-
-# 當前需求列表
-{reqs_text}
-
-# 衝突類型定義（conflict_type 必須為以下 id 之一）
-{conflict_types_text}
-
-# 判斷標準
-- 若某幾條需求之間存在語意衝突，輸出一筆 Conflict，並填寫 conflict_type、description、requirement_ids（涉及的需求 id 列表，至少兩個）
-- 若無衝突，請回傳空陣列
-
-# 輸出 JSON
-{{{{
-    "conflicts": [
-        {{{{
-            "label": "Conflict",
-            "conflict_type": "類型 id",
-            "description": "衝突描述",
-            "requirement_ids": ["R-01", "R-C01"]
-        }}}}
-    ]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        try:
-            response = self.model.chat_json(messages)
-        except Exception as e:
-            self.logger.warning(f"需求整體辨識失敗: {e}")
-            return []
-        return response.get("conflicts", [])
-
-    def detect_design_conflicts(
-        self, requirements: List[Dict], system_models: Dict
-    ) -> List[Dict]:
-        """辨識系統模型與需求之間的設計/可測試性衝突。由 Analyst 在 Modeler 產出模型後呼叫。"""
-        models = system_models.get("models", []) if isinstance(system_models, dict) else []
-        if not models:
-            return []
-        reqs_text = json.dumps(
-            [{"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")} for r in requirements],
-            ensure_ascii=False,
-            indent=2,
-        )
-        models_summary = []
-        for m in models:
-            name = m.get("name", "")
-            mtype = m.get("type", "")
-            plantuml = (m.get("plantuml") or "")
-            models_summary.append({"name": name, "type": mtype, "plantuml_preview": plantuml})
-        models_text = json.dumps(models_summary, ensure_ascii=False, indent=2)
-
-        user_prompt = f"""# 任務
-根據「需求列表」與「系統模型摘要」，辨識設計層面或可測試性的衝突。例如：需求未被模型覆蓋、模型與需求矛盾、可測試性缺口等。
-
-# 需求列表摘要
-{reqs_text}
-
-# 系統模型摘要
-{models_text}
-
-# 輸出 JSON
-僅輸出有衝突的項目；若無衝突請回傳空陣列。
-{{{{
-    "design_conflicts": [
-        {{{{
-            "description": "設計/可測試性衝突描述",
-            "related_requirements": ["R-01"]
-        }}}}
-    ]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        try:
-            response = self.model.chat_json(messages)
-        except Exception as e:
-            self.logger.warning(f"設計衝突辨識失敗: {e}")
-            return []
-        return response.get("design_conflicts", [])
-
     def generate_scope(self, rough_idea: str, stakeholders: List[Dict]) -> Dict:
-        """依初始想法與利害關係人產出專案範圍（in_scope / out_of_scope / description）。"""
-        if not rough_idea:
-            return {"in_scope": [], "out_of_scope": [], "description": ""}
-        stakeholders_preview = json.dumps(
-            [{"name": s.get("name"), "text": (s.get("text") if isinstance(s.get("text"), str) else (s.get("text") or []))} for s in stakeholders],
-            ensure_ascii=False,
-        )
-        user_prompt = f"""# 任務
-根據「初始想法」與「利害關係人需求摘要」，產出專案範圍：系統邊界內（in_scope）、明確排除（out_of_scope）、以及一句範圍描述。
-
-# 初始想法
-{rough_idea}
-
-# 利害關係人摘要（供參考）
-{stakeholders_preview}
-
-# 輸出 JSON
-{{{{
-    "description": "一句話描述本專案/系統的範圍與邊界",
-    "in_scope": ["範圍內項目 1", "範圍內項目 2"],
-    "out_of_scope": ["明確排除項目 1"]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
+        """依 requirements-analyst skill 產出專案範圍（description / in_scope / out_of_scope）。"""
+        context = {"rough_idea": rough_idea, "stakeholders": stakeholders}
+        task = """依 requirements-analyst skill，根據 Context 的 rough_idea 與 stakeholders 產出專案範圍。
+輸出「僅一個」JSON 物件，鍵名 "scope"，值為 { "description": "一句話描述範圍與邊界", "in_scope": ["項目"], "out_of_scope": ["排除項目"] }。
+勿輸出 Markdown，只輸出該 JSON。"""
         try:
-            response = self.model.chat_json(messages)
+            raw = self.invoke_skill("requirements-analyst", task, context=context)
+            data = self.parse_topic_response_json(raw)
         except Exception as e:
-            self.logger.warning(f"範圍產出失敗: {e}")
+            self.logger.warning(f"requirements-analyst scope 失敗: {e}")
+            return {"in_scope": [], "out_of_scope": [], "description": ""}
+        scope = data.get("scope") or {}
+        if not isinstance(scope, dict):
             return {"in_scope": [], "out_of_scope": [], "description": ""}
         return {
-            "in_scope": response.get("in_scope", []),
-            "out_of_scope": response.get("out_of_scope", []),
-            "description": response.get("description", ""),
-        }
-
-    def generate_scope_glossary_assumptions(self, rough_idea: str, stakeholders: List[Dict]) -> Dict:
-        """Stakeholders 發言完後由 Analyst 產出：專案範圍、術語表、假設。"""
-        scope = self.generate_scope(rough_idea, stakeholders)
-        stakeholders_preview = json.dumps(
-            [{"name": s.get("name"), "text": (s.get("text") if isinstance(s.get("text"), str) else (s.get("text") or []))} for s in stakeholders],
-            ensure_ascii=False,
-        )
-        user_prompt = f"""# 任務
-根據「初始想法」與「利害關係人需求摘要」，產出術語表（glossary）與專案假設（assumptions）。
-
-# 初始想法
-{rough_idea}
-
-# 利害關係人摘要
-{stakeholders_preview}
-
-# 輸出 JSON
-{{{{
-    "glossary": ["術語或名詞: 簡短定義", "..."],
-    "assumptions": ["專案前提或假設一", "專案前提或假設二", "..."]
-}}}}"""
-        messages = self.build_direct_messages(user_prompt)
-        try:
-            response = self.model.chat_json(messages)
-        except Exception as e:
-            self.logger.warning(f"glossary/assumptions 產出失敗: {e}")
-            return {"scope": scope, "glossary": [], "assumptions": []}
-        return {
-            "scope": scope,
-            "glossary": response.get("glossary", []),
-            "assumptions": response.get("assumptions", []),
+            "in_scope": scope.get("in_scope", []),
+            "out_of_scope": scope.get("out_of_scope", []),
+            "description": scope.get("description", ""),
         }
 
     def create_draft(self, stakeholders: List[Dict]) -> Dict:
-        requirements = self.convert_to_requirements(stakeholders)
-        return {"requirements": requirements, "conflicts": []}
-
-    def convert_to_requirements(self, stakeholders: List[Dict]) -> List[Dict]:
-        stakeholder_text = json.dumps(stakeholders, ensure_ascii=False, indent=2)
-
-        user_prompt = f"""# 任務
-將以下利害關係人需求轉換為結構化的需求規格。
-
-# 利害關係人資料
-{stakeholder_text}
-
-# 處理步驟
-1. 將每位利害關係人的 text 轉換為正式的 requirements，標記 source_stakeholders
-2. 分類為 FR（功能性需求）或 NFR（非功能性需求）
-3. 為每條需求設定 priority：must（必要）、should（重要）、could（可選）
-
-# NFR 要求
-每條 NFR 必須包含可量化的指標，禁止使用模糊形容詞。
-- 效能：須指定回應時間（如「API 回應時間 ≤ 200ms，P99」）、吞吐量、並發數
-- 可用性：須指定正常運行時間（如「系統可用性 ≥ 99.9%」）
-- 安全性：須指定安全等級或標準（如「符合 OWASP Top 10 防護要求」）
-- 可擴展性：須指定預期負載範圍（如「支援 10,000 並發使用者」）
-若利害關係人原始需求模糊，分析師應根據系統類型推定合理的量化指標。
-
-# 輸出 JSON
-{{{{
-    "requirements": [
-        {{{{
-            "id": "R-01",
-            "text": "正式的需求描述",
-            "type": "FR 或 NFR",
-            "priority": "must 或 should 或 could",
-            "source_stakeholders": ["利害關係人名稱"]
-        }}}}
-    ]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-
-        requirements = response.get("requirements", [])
+        """依 requirements-analyst skill 從利害關係人產出需求草稿。"""
+        context = {"stakeholders": stakeholders}
+        task = """依 requirements-analyst skill，根據 Context 的利害關係人產出結構化需求清單。
+輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為陣列。每筆須含：id（如 R-01）、text、type（FR 或 NFR）、priority（must / should / could）、source_stakeholders。NFR 須含可量化指標。勿輸出 Markdown，只輸出該 JSON。"""
+        try:
+            raw = self.invoke_skill("requirements-analyst", task, context=context)
+            data = self.parse_topic_response_json(raw)
+        except Exception as e:
+            self.logger.warning(f"需求分析 skill 執行失敗: {e}")
+            return {"requirements": [], "conflicts": []}
+        requirements = data.get("requirements", [])
+        if not isinstance(requirements, list):
+            return {"requirements": [], "conflicts": []}
         for req in requirements:
             req.setdefault("type", "FR")
             req.setdefault("source_stakeholders", [])
             if req.get("priority") not in ("must", "should", "could"):
                 req["priority"] = "should"
-
-        return requirements
+        return {"requirements": requirements, "conflicts": []}
 
     def update_draft(self, artifact: Dict) -> Dict:
-        """Round 級更新 Step 5.2: 根據決策與討論結果更新需求草稿"""
+        """依 requirements-analyst skill 依決策與討論更新需求草稿。"""
         context = {
             "requirements": artifact.get("requirements", []),
             "decisions": artifact.get("decisions", []),
             "discussions": artifact.get("discussions", []),
             "conflicts": artifact.get("conflicts", []),
+            "scope": artifact.get("scope", {}),
         }
-        context_text = json.dumps(context, ensure_ascii=False, indent=2)
-
-        user_prompt = f"""# 任務
-根據最新的決策（decisions）和討論結果（discussions），更新需求草稿。
-
-# 當前資料
-{context_text}
-
-# 更新規則
-1. 依 decisions 與 discussions 的結論，修改或新增 requirements
-2. 已由決策解決的衝突（decisions 中的 resolved_conflict_ids）對應的需求應反映該決策內容
-3. 保留未受影響的需求不變
-4. 去除因決策而不再需要的需求
-5. 每條需求保留或設定 priority（must / should / could）
-
-# 輸出 JSON
-{{{{
-    "requirements": [
-        {{{{
-            "id": "R-01",
-            "text": "需求描述",
-            "type": "FR 或 NFR 或 constraint",
-            "priority": "must 或 should 或 could",
-            "source_stakeholders": ["來源"]
-        }}}}
-    ]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.model.chat_json(messages)
-
-        requirements = response.get("requirements", artifact.get("requirements", []))
+        task = """依 requirements-analyst skill，根據 Context 的 decisions 與 discussions 更新 requirements；更新時須符合 scope（範圍邊界），勿新增超出 out_of_scope 的需求。
+輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為更新後的需求陣列。每筆須含 id、text、type（FR/NFR/constraint）、priority、source_stakeholders。已解決的衝突對應需求須反映決策。勿輸出 Markdown，只輸出該 JSON。"""
+        try:
+            raw = self.invoke_skill("requirements-analyst", task, context=context)
+            data = self.parse_topic_response_json(raw)
+        except Exception as e:
+            self.logger.warning(f"需求分析 skill 更新失敗: {e}")
+            return {
+                "requirements": artifact.get("requirements", []),
+                "conflicts": artifact.get("conflicts", []),
+            }
+        requirements = data.get("requirements", artifact.get("requirements", []))
+        if not isinstance(requirements, list):
+            requirements = artifact.get("requirements", [])
         for req in requirements:
             if req.get("priority") not in ("must", "should", "could"):
                 req["priority"] = "should"
@@ -421,18 +214,42 @@ class AnalystAgent(BaseAgent):
             "conflicts": artifact.get("conflicts", []),
         }
 
+    def get_optional_skill_context(
+        self, topic: Dict, artifact_snapshot: Optional[Dict]
+    ) -> Optional[str]:
+        """議題為衝突討論時，觸發 conflict-analyzer 產出簡短要點供發言參考。"""
+        if topic.get("category") != "conflict_resolution":
+            return None
+        if "conflict-analyzer" not in self.skill_names:
+            return None
+        context = {"topic": topic, "artifact_snapshot": artifact_snapshot or {}}
+        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點衝突分析要點（可含類型、涉及需求 id、建議方向），供會議發言參考。只輸出簡短條列文字，勿 JSON。"""
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            return (raw or "").strip()[:1500]
+        except Exception as e:
+            self.logger.debug("議程中觸發 conflict-analyzer 失敗: %s", e)
+            return None
+
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
         if previous_responses:
-            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                     for r in previous_responses]
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
 
         snapshot_text = ""
         if artifact_snapshot:
             snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        skill_section = ""
+        skill_context = self.get_optional_skill_context(topic, artifact_snapshot)
+        if skill_context:
+            skill_section = f"\n# Skill 參考（本輪依議題類型觸發）\n{skill_context}\n"
 
         tool_hint = ""
         if self.tools:
@@ -443,6 +260,7 @@ class AnalystAgent(BaseAgent):
 {topic_text}
 {prev_text}
 {snapshot_text}
+{skill_section}
 {tool_hint}
 
 # 思考與發言流程
@@ -475,3 +293,88 @@ class AnalystAgent(BaseAgent):
             "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
+
+    def generate_draft_markdown(
+        self,
+        artifact: Dict[str, Any],
+        draft_version: Optional[int] = None,
+        round_num: Optional[int] = None,
+        recent_decisions_limit: Optional[int] = None,
+    ) -> str:
+        """依 requirements-analyst skill 的 Output Format，從 artifact 產出需求草稿 Markdown。"""
+        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
+        decisions = artifact.get("decisions", [])[-n:] if n else []
+        context = {
+            "scope": artifact.get("scope", {}),
+            "rough_idea": artifact.get("rough_idea", ""),
+            "stakeholders": artifact.get("stakeholders", []),
+            "requirements": artifact.get("requirements", []),
+            "conflicts": artifact.get("conflicts", []),
+            "open_questions": artifact.get("open_questions", []),
+            "decisions": decisions,
+            "system_models": artifact.get("system_models", {}),
+        }
+        version_note = ""
+        if draft_version is not None:
+            version_note = f" 本稿版本: draft_v{draft_version}。"
+        if round_num is not None:
+            version_note += f" 對應輪次: Round {round_num}。"
+        task = f"""依 requirements-analyst skill 的 **Output Format**，僅根據 Context 產出完整需求草稿 Markdown。{version_note}
+只輸出 Markdown，勿包程式碼區塊。"""
+        try:
+            raw = self.invoke_skill("requirements-analyst", task, context=context)
+        except Exception as e:
+            self.logger.warning("Analyst 產出 draft markdown 失敗: %s", e)
+            return f"# Requirements Draft\n\n（生成失敗: {e}）"
+        return self._strip_code_fences(raw)
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        s = (text or "").strip()
+        if s.startswith("```"):
+            idx = s.find("\n")
+            if idx != -1:
+                s = s[idx + 1:]
+        if s.endswith("```"):
+            s = s[:-3]
+        return s.strip()
+
+    def generate_conflict_report(
+        self,
+        artifact: Dict[str, Any],
+        round_num: Optional[int] = None,
+        recent_decisions_limit: Optional[int] = None,
+    ) -> str:
+        """依 conflict-analyzer skill 與 assets/conflict_report_format.md，從 artifact 產出需求衝突分析報告（Markdown）。"""
+        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
+        decisions = artifact.get("decisions", [])[-n:] if n else []
+        active = [c for c in artifact.get("conflicts", []) if c.get("label") == "Conflict"]
+        context = {
+            "conflicts": active,
+            "requirements": artifact.get("requirements", []),
+            "stakeholders": artifact.get("stakeholders", []),
+            "scope": artifact.get("scope", {}),
+            "rough_idea": artifact.get("rough_idea", ""),
+            "open_questions": artifact.get("open_questions", []),
+            "decisions": decisions,
+            "system_models": artifact.get("system_models", {}),
+            "round_num": round_num,
+        }
+        task = """依本 skill 與 conflict_report_format.md 的 Report Structure，僅根據 Context 產出「需求衝突分析報告」Markdown。只輸出 Markdown，勿包程式碼區塊。"""
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+        except Exception as e:
+            self.logger.warning("Analyst 產出 conflict report 失敗: %s", e)
+            return self._empty_conflict_report_md(artifact)
+        return self._strip_code_fences(raw) or self._empty_conflict_report_md(artifact)
+
+    @staticmethod
+    def _empty_conflict_report_md(artifact: Dict[str, Any]) -> str:
+        reqs = artifact.get("requirements", [])
+        active = [c for c in artifact.get("conflicts", []) if c.get("label") == "Conflict"]
+        proj = (artifact.get("scope") or {}).get("description", "")[:50] or "Project"
+        return (
+            "# Requirement Conflict Analysis Report\n\n## Executive Summary\n"
+            f"- **Project:** {proj}\n- **Conflicts Found:** {len(active)}\n"
+            f"- **Requirements Analyzed:** {len(reqs)}\n\n*（報告生成失敗或無內容）*"
+        )

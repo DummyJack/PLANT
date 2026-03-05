@@ -11,10 +11,17 @@ class BaseAgent:
     name: str = ""
     system_prompt: str = ""
 
-    def __init__(self, model, tools: Optional[List[BaseTool]] = None, registry=None):
+    def __init__(
+        self,
+        model,
+        tools: Optional[List[BaseTool]] = None,
+        registry=None,
+        skill_names: Optional[List[str]] = None,
+    ):
         self.model = model
         self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
         self.registry = registry
+        self.skill_names: List[str] = list(skill_names or [])
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
@@ -42,6 +49,12 @@ class BaseAgent:
                 return self.parse_topic_response_json(raw)
             return {"statement": raw, "open_questions": []}
         return self.model.chat_json(messages, **kwargs)
+
+    def get_optional_skill_context(
+        self, topic: Dict, artifact_snapshot: Optional[Dict]
+    ) -> Optional[str]:
+        """依議題類型與專案狀態，可選觸發 skill 並回傳參考文字，供發言時使用。預設不觸發。子類別可覆寫。"""
+        return None
 
     def respond_to_topic(
         self,
@@ -104,6 +117,45 @@ class BaseAgent:
             "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
+
+    def invoke_skill(
+        self,
+        skill_name: str,
+        task: str,
+        context: Optional[Dict] = None,
+    ) -> str:
+        """
+        依名稱呼叫 agent 已賦予的 skill：載入該 skill 的內容與 references，
+        組 system + user message 後呼叫 model，回傳模型輸出的字串。
+        若此 agent 未賦予該 skill（skill_name 不在 self.skill_names），則拋錯。
+        """
+        if skill_name not in self.skill_names:
+            raise ValueError(
+                f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
+            )
+        from agents.skills.loader import get_skill
+
+        skill = get_skill(skill_name)
+        system_parts = [self.system_prompt, f"\n\n# Skill: {skill.get('name', skill_name)}\n\n", skill["content"]]
+        if skill.get("template"):
+            system_parts.append("\n\n# 範本（必須依此結構）\n\n")
+            system_parts.append(skill["template"])
+        if skill.get("checklist"):
+            system_parts.append("\n\n# 品質檢查清單（產出前須自檢通過）\n\n")
+            system_parts.append(skill["checklist"])
+        for ref_name, ref_content in (skill.get("reference_files") or {}).items():
+            system_parts.append(f"\n\n# {ref_name}\n\n")
+            system_parts.append(ref_content)
+
+        user_parts = [task]
+        if context is not None:
+            user_parts.append(f"\n\n# Context\n{json.dumps(context, ensure_ascii=False, indent=2)}")
+
+        messages = [
+            {"role": "system", "content": "".join(system_parts)},
+            {"role": "user", "content": "\n".join(user_parts)},
+        ]
+        return self.model.chat(messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []

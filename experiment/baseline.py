@@ -14,7 +14,7 @@ load_dotenv(dotenv_path=BASE_DIR / "config" / ".env")
 
 
 class BaselineModel:
-    def __init__(self, model_name: str = "gpt-5-nano", temperature: float = 0):
+    def __init__(self, model_name: str = "gpt-5-nano", temperature: float = 1):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             print("錯誤：未找到 OPENAI_API_KEY 環境變數")
@@ -38,7 +38,7 @@ class BaselineModel:
     def generate_plantuml(self, human_lang: str) -> dict:
         user_prompt = (
             f"請根據自然語言描述: {human_lang}，生成 PlantUML 類別圖和對應的 AST。\n\n"
-            '請以 JSON 格式輸出:\n'
+            "請以 JSON 格式輸出:\n"
             '{"PlantUML": "...", "Output_AST": {"type": "root", "children": [...]}}'
         )
         resp = self.client.chat.completions.create(

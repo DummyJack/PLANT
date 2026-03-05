@@ -34,23 +34,32 @@ def run_conflict(model: BaselineModel, count: int = 0, mode: str = "macro"):
         text1 = row["Text1"]
         text2 = row["Text2"]
         pred = model.detect_conflict(text1, text2)
-        return (idx, pred, {"text1": text1, "text2": text2, "true": row["Class"], "pred": pred})
+        return (
+            idx,
+            pred,
+            {"text1": text1, "text2": text2, "true": row["Class"], "pred": pred},
+        )
 
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {executor.submit(predict_one, i, row): i for i, row in enumerate(data)}
+        future_to_idx = {
+            executor.submit(predict_one, i, row): i for i, row in enumerate(data)
+        }
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
                 i, pred, rec = future.result()
                 results_by_idx[i] = (pred, rec)
             except Exception as e:
-                results_by_idx[idx] = (None, {
-                    "text1": data[idx]["Text1"],
-                    "text2": data[idx]["Text2"],
-                    "true": data[idx]["Class"],
-                    "pred": None,
-                })
+                results_by_idx[idx] = (
+                    None,
+                    {
+                        "text1": data[idx]["Text1"],
+                        "text2": data[idx]["Text2"],
+                        "true": data[idx]["Class"],
+                        "pred": None,
+                    },
+                )
             done += 1
             print(f"\r  conflict: {done}/{total}", end="", flush=True)
 
@@ -100,7 +109,5 @@ def run_conflict(model: BaselineModel, count: int = 0, mode: str = "macro"):
 if __name__ == "__main__":
     model = BaselineModel()
 
-    print("1. 需求衝突")
-    print()
     count = int(input("實驗幾筆資料 (0:全做): ").strip() or "0")
     run_conflict(model, count=count)

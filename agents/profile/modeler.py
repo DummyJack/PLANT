@@ -11,7 +11,7 @@ class ModelerAgent(BaseAgent):
 
     name = "modeler"
 
-    system_prompt = """你是系統建模專家，負責將需求規格轉換為 UML 系統模型。
+    system_prompt = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
 
 核心原則：
 1. UML 2.x 規範 — 嚴格遵守 UML 2.x 標準語法和語意
@@ -30,7 +30,9 @@ class ModelerAgent(BaseAgent):
     def __init__(self, model, tools: Optional[list] = None, registry=None):
         super().__init__(model, tools=tools or [], registry=registry)
 
-    def generate_system_model(self, requirements: List[Dict], stakeholders: List[Dict]) -> Dict[str, Any]:
+    def generate_system_model(
+        self, requirements: List[Dict], stakeholders: List[Dict]
+    ) -> Dict[str, Any]:
         """根據需求產生初始 UML 系統模型"""
         requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
         stakeholders_text = json.dumps(stakeholders, ensure_ascii=False, indent=2)
@@ -62,7 +64,9 @@ class ModelerAgent(BaseAgent):
         model_data = self.ensure_model_format(result)
         return self.validate_models(model_data)
 
-    def refine_model(self, requirements: List[Dict], prev_models: List[Dict] = None) -> Dict[str, Any]:
+    def refine_model(
+        self, requirements: List[Dict], prev_models: List[Dict] = None
+    ) -> Dict[str, Any]:
         """根據更新的需求精煉系統模型"""
         current_model = {"models": prev_models or []}
         current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
@@ -126,7 +130,9 @@ class ModelerAgent(BaseAgent):
 
         max_workers = min(len(models), 6)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(validate_one, i, m): i for i, m in enumerate(models)}
+            futures = {
+                executor.submit(validate_one, i, m): i for i, m in enumerate(models)
+            }
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
@@ -143,7 +149,9 @@ class ModelerAgent(BaseAgent):
                 continue
             if "通過" in result:
                 continue
-            self.logger.warning(f"  模型 {m.get('name', '')} 語法有誤，嘗試修正: {result}")
+            self.logger.warning(
+                f"  模型 {m.get('name', '')} 語法有誤，嘗試修正: {result}"
+            )
             fixed = self.fix_plantuml(m, result)
             if fixed:
                 m["plantuml"] = fixed
@@ -178,15 +186,17 @@ class ModelerAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"  修正失敗: {e}")
         return None
-        
+
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         """以系統建模專家身份回應議題"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
         if previous_responses:
-            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                     for r in previous_responses]
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
             prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
 
         snapshot_text = ""

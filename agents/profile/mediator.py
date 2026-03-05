@@ -22,7 +22,7 @@ AGENDA_ACTIONS = [
 class MediatorAgent(BaseAgent):
     name = "mediator"
 
-    system_prompt = """你是需求調解主持人，負責主持需求討論會議。
+    system_prompt = """你是一個專業的需求調解主持人，負責主持需求討論會議。
 
 核心職責：
 1. 議程安排 — 分析需求與衝突，自行判斷應開哪些議程並排定優先順序
@@ -39,10 +39,14 @@ class MediatorAgent(BaseAgent):
         super().__init__(model, tools=tools, registry=registry)
 
     def generate_agenda(
-        self, artifact: Dict[str, Any], registry=None,
-        max_items: Optional[int] = None, skip_source_ids: Optional[set] = None,
+        self,
+        artifact: Dict[str, Any],
+        registry=None,
+        max_items: Optional[int] = None,
+        skip_source_ids: Optional[set] = None,
+        draft_markdown: Optional[str] = None,
     ) -> List[Dict]:
-        """由 Mediator LLM 根據 artifact 自行決定要開哪些議程，不依賴固定演算法。"""
+        """由 Mediator LLM 根據最新草稿與專案狀態自行決定要開哪些議程。"""
         limit = max_items or 5
         exclude = {"mediator", "documentor"}
         if registry:
@@ -52,19 +56,26 @@ class MediatorAgent(BaseAgent):
 
         skip = skip_source_ids or set()
         context = self.build_agenda_context(artifact, skip)
+        if draft_markdown and draft_markdown.strip():
+            context = (
+                "## 最新需求草稿（本輪開會依據）\n\n"
+                + draft_markdown.strip()
+                + "\n\n---\n\n"
+                + context
+            )
         if not context.strip():
-            self.logger.info("無足夠 artifact 內容可供判斷議程")
+            self.logger.info("無足夠專案內容或草稿可供判斷議程")
             return []
 
         types_text = json.dumps(AGENDA_TYPES, ensure_ascii=False, indent=2)
         user_prompt = f"""# 任務
-你是需求調解主持人。請根據「當前專案狀態」與「已討論過項目」，自行判斷本輪應開哪些議程。
+你是需求調解主持人。請根據「最新需求草稿」與「當前專案狀態」、以及「已討論過項目」，自行判斷本輪應開哪些議程。
 議程類型必須從下方「議程類型定義」中選擇，每項議程需決定：標題、描述、類型、參與者、討論模式、發言順序。
 
 # 議程類型定義（category 必須為以下 id 之一）
 {types_text}
 
-# 當前專案狀態
+# 最新需求草稿與專案狀態
 {context}
 
 # 已在本輪或前輪討論過的項目（可略過或合併，勿重複開相同議題）
@@ -128,53 +139,94 @@ class MediatorAgent(BaseAgent):
             mode = item.get("discussion_mode", "sequential")
             if mode not in ("sequential", "simultaneous"):
                 mode = "sequential"
-            order = [p for p in item.get("speaking_order", participants) if p in participants]
+            order = [
+                p for p in item.get("speaking_order", participants) if p in participants
+            ]
             if set(order) != set(participants):
                 order = participants
 
             title = (item.get("title") or "待討論議題").strip()
-            agenda_items.append({
-                "id": f"T-{idx:02d}",
-                "title": title,
-                "description": item.get("description", ""),
-                "category": category,
-                "participants": participants,
-                "discussion_mode": mode,
-                "speaking_order": order,
-                "source_ids": item.get("source_ids", []),
-            })
+            agenda_items.append(
+                {
+                    "id": f"T-{idx:02d}",
+                    "title": title,
+                    "description": item.get("description", ""),
+                    "category": category,
+                    "participants": participants,
+                    "discussion_mode": mode,
+                    "speaking_order": order,
+                    "source_ids": item.get("source_ids", []),
+                }
+            )
 
         return agenda_items
 
-    def build_agenda_context(self, artifact: Dict[str, Any], skip_source_ids: set) -> str:
+    def build_agenda_context(
+        self, artifact: Dict[str, Any], skip_source_ids: set
+    ) -> str:
         """組裝 artifact 摘要供 Mediator 判斷議程用，不含演算法邏輯。"""
         parts = []
         scope = artifact.get("scope") or {}
-        if scope.get("description") or scope.get("in_scope") or scope.get("out_of_scope"):
-            parts.append("## 專案範圍\n" + json.dumps(scope, ensure_ascii=False, indent=2))
+        if (
+            scope.get("description")
+            or scope.get("in_scope")
+            or scope.get("out_of_scope")
+        ):
+            parts.append(
+                "## 專案範圍\n" + json.dumps(scope, ensure_ascii=False, indent=2)
+            )
         if artifact.get("stakeholders"):
-            parts.append("## 利害關係人\n" + json.dumps(artifact["stakeholders"], ensure_ascii=False, indent=2))
+            parts.append(
+                "## 利害關係人\n"
+                + json.dumps(artifact["stakeholders"], ensure_ascii=False, indent=2)
+            )
         if artifact.get("requirements"):
-            reqs = [{"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")} for r in artifact["requirements"]]
-            parts.append("## 需求摘要\n" + json.dumps(reqs, ensure_ascii=False, indent=2))
-        conflicts = [c for c in artifact.get("conflicts", []) if c.get("id", "") not in skip_source_ids]
+            reqs = [
+                {
+                    "id": r.get("id"),
+                    "type": r.get("type"),
+                    "text": (r.get("text") or ""),
+                }
+                for r in artifact["requirements"]
+            ]
+            parts.append(
+                "## 需求摘要\n" + json.dumps(reqs, ensure_ascii=False, indent=2)
+            )
+        conflicts = [
+            c
+            for c in artifact.get("conflicts", [])
+            if c.get("id", "") not in skip_source_ids
+        ]
         if conflicts:
-            parts.append("## 衝突\n" + json.dumps(conflicts, ensure_ascii=False, indent=2))
-        oqs = [q for q in artifact.get("open_questions", []) if q.get("status") != "answered"]
+            parts.append(
+                "## 衝突\n" + json.dumps(conflicts, ensure_ascii=False, indent=2)
+            )
+        oqs = [
+            q
+            for q in artifact.get("open_questions", [])
+            if q.get("status") != "answered"
+        ]
         if oqs:
-            parts.append("## 未回答的開放問題\n" + json.dumps(oqs, ensure_ascii=False, indent=2))
+            parts.append(
+                "## 未回答的開放問題\n" + json.dumps(oqs, ensure_ascii=False, indent=2)
+            )
         models = artifact.get("system_models", {}).get("models", [])
         if models:
             refs = []
             for m in models:
                 refs.extend(m.get("requirement_refs", []))
-            parts.append("## 系統模型已參照需求 id\n" + json.dumps(list(set(refs)), ensure_ascii=False))
+            parts.append(
+                "## 系統模型已參照需求 id\n"
+                + json.dumps(list(set(refs)), ensure_ascii=False)
+            )
         return "\n\n".join(parts) if parts else ""
 
     # ===== 議程 Agent 決策（供執行層迴圈呼叫）=====
 
     def decide_next_agenda_action(
-        self, state_summary: Dict[str, Any], last_observation: Optional[Dict[str, Any]] = None
+        self,
+        state_summary: Dict[str, Any],
+        last_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """根據當前狀態與上一動觀察，回傳下一個動作與參數。"""
         last_observation = last_observation or {}
@@ -216,13 +268,21 @@ class MediatorAgent(BaseAgent):
             response = self.model.chat_json(messages)
         except Exception as e:
             self.logger.warning(f"議程決策 LLM 失敗: {e}")
-            return {"action": "finish_round", "params": {}, "reasoning": f"fallback: {e}"}
+            return {
+                "action": "finish_round",
+                "params": {},
+                "reasoning": f"fallback: {e}",
+            }
 
         action = (response.get("action") or "").strip()
         if action not in AGENDA_ACTIONS:
             action = "finish_round"
         params = response.get("params") or {}
-        return {"action": action, "params": params, "reasoning": response.get("reasoning", "")}
+        return {
+            "action": action,
+            "params": params,
+            "reasoning": response.get("reasoning", ""),
+        }
 
     # ===== 討論主持 =====
 
@@ -238,13 +298,19 @@ class MediatorAgent(BaseAgent):
         ]
         conflicts = [
             {"id": c.get("id"), "description": (c.get("description") or "")}
-            for c in artifact.get("conflicts", []) if c.get("label") == "Conflict"
+            for c in artifact.get("conflicts", [])
+            if c.get("label") == "Conflict"
         ]
         oqs = [
             {"from_agent": q.get("from_agent"), "question": (q.get("question") or "")}
-            for q in artifact.get("open_questions", []) if q.get("status") != "answered"
+            for q in artifact.get("open_questions", [])
+            if q.get("status") != "answered"
         ]
-        return {"requirements": summary_reqs, "conflicts": conflicts, "open_questions": oqs}
+        return {
+            "requirements": summary_reqs,
+            "conflicts": conflicts,
+            "open_questions": oqs,
+        }
 
     def moderate_sequential(
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
@@ -263,13 +329,21 @@ class MediatorAgent(BaseAgent):
                 response = agent.respond_to_topic(
                     topic, previous_responses=contributions, artifact_snapshot=snapshot
                 )
-                contributions.append({
-                    "agent": agent_name,
-                    "response": response if isinstance(response, dict) else {"content": str(response)},
-                })
+                contributions.append(
+                    {
+                        "agent": agent_name,
+                        "response": (
+                            response
+                            if isinstance(response, dict)
+                            else {"content": str(response)}
+                        ),
+                    }
+                )
             except Exception as e:
                 self.logger.warning(f"  {agent_name} 發言失敗: {e}")
-                contributions.append({"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}})
+                contributions.append(
+                    {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
+                )
 
         return contributions
 
@@ -292,7 +366,11 @@ class MediatorAgent(BaseAgent):
             )
             return {
                 "agent": agent_name,
-                "response": response if isinstance(response, dict) else {"content": str(response)},
+                "response": (
+                    response
+                    if isinstance(response, dict)
+                    else {"content": str(response)}
+                ),
             }
         except Exception as e:
             self.logger.warning(f"  {agent_name} 發言失敗: {e}")
@@ -332,7 +410,11 @@ class MediatorAgent(BaseAgent):
                         "response": {"content": f"（發言失敗: {e}）"},
                     }
 
-        contributions = [contributions_by_agent[name] for name in participants if name in contributions_by_agent]
+        contributions = [
+            contributions_by_agent[name]
+            for name in participants
+            if name in contributions_by_agent
+        ]
         return contributions
 
     # ===== Open Question 處理 =====
@@ -360,11 +442,13 @@ class MediatorAgent(BaseAgent):
                 to_agent = q.get("to", "user")
                 if to_agent == agent_name:
                     continue
-                all_questions.append({
-                    "from_agent": agent_name,
-                    "to_agent": to_agent,
-                    "question": q.get("question", ""),
-                })
+                all_questions.append(
+                    {
+                        "from_agent": agent_name,
+                        "to_agent": to_agent,
+                        "question": q.get("question", ""),
+                    }
+                )
 
         valid_questions = [q for q in all_questions if q.get("question")]
         if not valid_questions:
@@ -386,9 +470,15 @@ class MediatorAgent(BaseAgent):
                     ),
                 }
                 response = target_agent.respond_to_topic(
-                    q_topic, previous_responses=contributions, artifact_snapshot=snapshot
+                    q_topic,
+                    previous_responses=contributions,
+                    artifact_snapshot=snapshot,
                 )
-                resp = response if isinstance(response, dict) else {"content": str(response)}
+                resp = (
+                    response
+                    if isinstance(response, dict)
+                    else {"content": str(response)}
+                )
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
@@ -398,7 +488,11 @@ class MediatorAgent(BaseAgent):
                     "response": resp,
                     "is_reply": True,
                 }
-                return (q_record, contrib, {**q_record, "status": "answered", "answer": answer})
+                return (
+                    q_record,
+                    contrib,
+                    {**q_record, "status": "answered", "answer": answer},
+                )
             except Exception:
                 return (q_record, None, {**q_record, "status": "deferred"})
 
@@ -406,7 +500,10 @@ class MediatorAgent(BaseAgent):
         results_by_idx = {}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(answer_one, q_record): i for i, q_record in enumerate(valid_questions)}
+            futures = {
+                executor.submit(answer_one, q_record): i
+                for i, q_record in enumerate(valid_questions)
+            }
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
@@ -414,10 +511,15 @@ class MediatorAgent(BaseAgent):
                     results_by_idx[idx] = (contrib, oq)
                 except Exception as e:
                     self.logger.warning(f"開放問題回答失敗: {e}")
-                    results_by_idx[idx] = (None, {**valid_questions[idx], "status": "deferred"})
+                    results_by_idx[idx] = (
+                        None,
+                        {**valid_questions[idx], "status": "deferred"},
+                    )
 
         for i in range(len(valid_questions)):
-            contrib, oq = results_by_idx.get(i, (None, {**valid_questions[i], "status": "deferred"}))
+            contrib, oq = results_by_idx.get(
+                i, (None, {**valid_questions[i], "status": "deferred"})
+            )
             oq_records.append(oq)
             if contrib:
                 contributions.append(contrib)
@@ -425,7 +527,11 @@ class MediatorAgent(BaseAgent):
         return oq_records
 
     def generate_meeting_markdown(
-        self, topic: Dict, contributions: List[Dict], resolution: Dict, round_num: int = 0
+        self,
+        topic: Dict,
+        contributions: List[Dict],
+        resolution: Dict,
+        round_num: int = 0,
     ) -> str:
         mode = topic.get("discussion_mode", "sequential")
         participants = topic.get("participants", [])
@@ -495,7 +601,9 @@ class MediatorAgent(BaseAgent):
         agreed_count = sum(1 for v in votes if v == "agreed")
         n = len(votes)
         # 多數決：同意數過半才為 agreed，否則 unresolved
-        resolution = "agreed" if n > 0 and agreed_count > (n - agreed_count) else "unresolved"
+        resolution = (
+            "agreed" if n > 0 and agreed_count > (n - agreed_count) else "unresolved"
+        )
 
         discussion_text = ""
         for c in contributions:
@@ -624,9 +732,13 @@ class MediatorAgent(BaseAgent):
 
     # ===== 更新決策與衝突 =====
 
-    def update_decisions(self, artifact: Dict[str, Any], round_discussions: List[Dict]) -> Dict:
+    def update_decisions(
+        self, artifact: Dict[str, Any], round_discussions: List[Dict]
+    ) -> Dict:
         discussions_text = json.dumps(round_discussions, ensure_ascii=False, indent=2)
-        conflicts_text = json.dumps(artifact.get("conflicts", []), ensure_ascii=False, indent=2)
+        conflicts_text = json.dumps(
+            artifact.get("conflicts", []), ensure_ascii=False, indent=2
+        )
 
         user_prompt = f"""# 任務
 彙整本輪所有議程的討論決策，並更新衝突的 label。
@@ -651,7 +763,7 @@ class MediatorAgent(BaseAgent):
     "new_conflicts": [
         {{{{
             "description": "衝突描述",
-            "conflict_type": "Inconsistency | Ambiguity | Contradiction | Overlap",
+            "conflict_type": "Logical | Technical | Resource | Temporal | Data | State | Priority | Scope",
             "requirement_ids": ["R-01", "R-02"]
         }}}}
     ]
@@ -710,14 +822,35 @@ class AgendaRunner:
                     for sid in td.get("source_ids", []):
                         skip.add(sid)
             max_items = self.config.get("agenda_items", 5)
+            latest_version = self.store.get_draft_version()
+            draft_md = self.store.load_draft(latest_version) if latest_version >= 0 else None
             self.topics = self.mediator.generate_agenda(
                 self.artifact,
                 registry=self.registry,
                 max_items=max_items,
                 skip_source_ids=skip if skip else None,
+                draft_markdown=draft_md,
             )
-            self.topic_status = {t["id"]: {"discussed": False, "contributions": None, "resolution": None, "saved": False} for t in self.topics}
-            obs["result"] = {"topics": [{"id": t["id"], "title": t["title"], "category": t.get("category", "")} for t in self.topics], "count": len(self.topics)}
+            self.topic_status = {
+                t["id"]: {
+                    "discussed": False,
+                    "contributions": None,
+                    "resolution": None,
+                    "saved": False,
+                }
+                for t in self.topics
+            }
+            obs["result"] = {
+                "topics": [
+                    {
+                        "id": t["id"],
+                        "title": t["title"],
+                        "category": t.get("category", ""),
+                    }
+                    for t in self.topics
+                ],
+                "count": len(self.topics),
+            }
             return obs
 
         if action == "start_discussion":
@@ -744,7 +877,11 @@ class AgendaRunner:
             self.all_open_questions.extend(oq_records)
             self.topic_status[topic_id]["discussed"] = True
             self.topic_status[topic_id]["contributions"] = contributions
-            obs["result"] = {"topic_id": topic_id, "contributions_count": len(contributions), "oq_count": len(oq_records)}
+            obs["result"] = {
+                "topic_id": topic_id,
+                "contributions_count": len(contributions),
+                "oq_count": len(oq_records),
+            }
             return obs
 
         if action == "resolve_topic":
@@ -756,7 +893,11 @@ class AgendaRunner:
                 return obs
             resolution = self.mediator.synthesize_and_resolve(topic, contributions)
             self.topic_status[topic_id]["resolution"] = resolution
-            obs["result"] = {"topic_id": topic_id, "resolution": resolution.get("resolution"), "summary": resolution.get("summary", "")}
+            obs["result"] = {
+                "topic_id": topic_id,
+                "resolution": resolution.get("resolution"),
+                "summary": resolution.get("summary", ""),
+            }
             return obs
 
         if action == "escalate_to_human":
@@ -769,7 +910,11 @@ class AgendaRunner:
             options = self.mediator.prepare_human_options(topic, contributions)
             resolution = self.collect.human_decision_on_topic(topic, options)
             self.topic_status[topic_id]["resolution"] = resolution
-            obs["result"] = {"topic_id": topic_id, "resolution": "human_decision", "summary": str(resolution.get("decision", ""))}
+            obs["result"] = {
+                "topic_id": topic_id,
+                "resolution": "human_decision",
+                "summary": str(resolution.get("decision", "")),
+            }
             return obs
 
         if action == "save_topic":
@@ -785,7 +930,9 @@ class AgendaRunner:
                 resolution = self.mediator.synthesize_and_resolve(topic, contributions)
                 self.topic_status[topic_id]["resolution"] = resolution
             self._topic_idx += 1
-            meeting_md = self.mediator.generate_meeting_markdown(topic, contributions, resolution, round_num=self.round_num)
+            meeting_md = self.mediator.generate_meeting_markdown(
+                topic, contributions, resolution, round_num=self.round_num
+            )
             meeting_filename = f"R{self.round_num}-M{self._topic_idx:02d}.md"
             self.store.save_markdown(meeting_md, meeting_filename)
             topic_record = {
@@ -798,12 +945,17 @@ class AgendaRunner:
                 "speaking_order": topic.get("speaking_order", []),
                 "source_ids": topic.get("source_ids", []),
             }
-            self.round_discussions.append({
-                "topic": topic_record,
-                "source_ids": topic.get("source_ids", []),
-                "contributions": [{"agent": c.get("agent"), "response": c.get("response", {})} for c in contributions],
-                "resolution": resolution,
-            })
+            self.round_discussions.append(
+                {
+                    "topic": topic_record,
+                    "source_ids": topic.get("source_ids", []),
+                    "contributions": [
+                        {"agent": c.get("agent"), "response": c.get("response", {})}
+                        for c in contributions
+                    ],
+                    "resolution": resolution,
+                }
+            )
             self.topic_status[topic_id]["saved"] = True
             obs["result"] = {"topic_id": topic_id, "filename": meeting_filename}
             return obs
@@ -826,16 +978,21 @@ class AgendaRunner:
     def get_state_summary(self) -> Dict[str, Any]:
         status_list = []
         for tid, st in self.topic_status.items():
-            status_list.append({
-                "topic_id": tid,
-                "discussed": st.get("discussed", False),
-                "resolved": st.get("resolution") is not None,
-                "resolution": (st.get("resolution") or {}).get("resolution"),
-                "saved": st.get("saved", False),
-            })
+            status_list.append(
+                {
+                    "topic_id": tid,
+                    "discussed": st.get("discussed", False),
+                    "resolved": st.get("resolution") is not None,
+                    "resolution": (st.get("resolution") or {}).get("resolution"),
+                    "saved": st.get("saved", False),
+                }
+            )
         return {
             "round_num": self.round_num,
-            "topics": [{"id": t["id"], "title": t["title"], "category": t.get("category", "")} for t in self.topics],
+            "topics": [
+                {"id": t["id"], "title": t["title"], "category": t.get("category", "")}
+                for t in self.topics
+            ],
             "topic_status": status_list,
             "round_discussions_length": len(self.round_discussions),
         }

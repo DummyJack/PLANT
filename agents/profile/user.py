@@ -8,7 +8,7 @@ class UserAgent(BaseAgent):
 
     name = "user"
 
-    system_prompt = """你是利害關係人模擬專家，負責模擬不同利害關係人的角色。
+    system_prompt = """你負責模擬不同利害關係人的角色。
 
 核心原則：
 1. 角色扮演 — 以第一人稱代入每位利害關係人，用口語化方式表達
@@ -44,8 +44,12 @@ class UserAgent(BaseAgent):
         response = self.model.chat_json(messages, temperature=1)
         return response.get("proposed_stakeholders", [])
 
-    def generate_stakeholder_requirements(self, rough_idea: str, selected_stakeholders: List[str]) -> List[Dict]:
-        stakeholder_list = ", ".join(f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders))
+    def generate_stakeholder_requirements(
+        self, rough_idea: str, selected_stakeholders: List[str]
+    ) -> List[Dict]:
+        stakeholder_list = ", ".join(
+            f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders)
+        )
 
         user_prompt = f"""# 任務
 模擬以下利害關係人，以第一人稱、口語方式從各自的角度提出需求與期望。
@@ -86,9 +90,13 @@ class UserAgent(BaseAgent):
                 if not all(key in sh for key in ["name", "text"]):
                     raise ValueError(f"利害關係人格式錯誤: {sh}")
                 if isinstance(sh["text"], str):
-                    sh["text"] = [s.strip() for s in sh["text"].split("\n") if s.strip()]
+                    sh["text"] = [
+                        s.strip() for s in sh["text"].split("\n") if s.strip()
+                    ]
                 if len(sh["text"]) < 3:
-                    self.logger.warning(f"{sh['name']} 只有 {len(sh['text'])} 條需求，不足 3 條")
+                    self.logger.warning(
+                        f"{sh['name']} 只有 {len(sh['text'])} 條需求，不足 3 條"
+                    )
 
             return stakeholders
         except Exception as e:
@@ -108,7 +116,11 @@ class UserAgent(BaseAgent):
             sh = speaking_as_list[0]
             name = sh.get("name", "")
             texts = sh.get("text", [])
-            needs = "\n".join(f"  - {t}" for t in texts) if isinstance(texts, list) else f"  - {texts}"
+            needs = (
+                "\n".join(f"  - {t}" for t in texts)
+                if isinstance(texts, list)
+                else f"  - {texts}"
+            )
             roles_text = f"\n# 你本輪發言身份\n請「僅」以【{name}】的身份發言。\n\n【{name}】的需求與關切：\n{needs}"
         elif len(speaking_as_list) > 1:
             role_parts = []
@@ -116,15 +128,26 @@ class UserAgent(BaseAgent):
             for sh in speaking_as_list:
                 n = sh.get("name", "")
                 t = sh.get("text", [])
-                needs = "\n".join(f"  - {x}" for x in t) if isinstance(t, list) else f"  - {t}"
+                needs = (
+                    "\n".join(f"  - {x}" for x in t)
+                    if isinstance(t, list)
+                    else f"  - {t}"
+                )
                 role_parts.append(f"【{n}】\n{needs}")
-            roles_text = f"\n# 你本輪發言身份（多位）\n請以【{'】與【'.join(names)}】的身份發言。可分別表述各角色在此議題上的立場與需求，或綜合表述；若以第一人稱分段表述，請明確區分是哪一位在發言。\n\n" + "\n\n".join(role_parts)
+            roles_text = (
+                f"\n# 你本輪發言身份（多位）\n請以【{'】與【'.join(names)}】的身份發言。可分別表述各角色在此議題上的立場與需求，或綜合表述；若以第一人稱分段表述，請明確區分是哪一位在發言。\n\n"
+                + "\n\n".join(role_parts)
+            )
         elif self.stakeholders:
             role_parts = []
             for sh in self.stakeholders:
                 n = sh.get("name", "")
                 t = sh.get("text", [])
-                needs = "\n".join(f"  - {x}" for x in t) if isinstance(t, list) else f"  - {t}"
+                needs = (
+                    "\n".join(f"  - {x}" for x in t)
+                    if isinstance(t, list)
+                    else f"  - {t}"
+                )
                 role_parts.append(f"【{n}】\n{needs}")
             names_list = [sh.get("name", "") for sh in self.stakeholders]
             roles_text = (
@@ -138,8 +161,10 @@ class UserAgent(BaseAgent):
 
         prev_text = ""
         if previous_responses:
-            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                     for r in previous_responses]
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
             prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
 
         snapshot_text = ""

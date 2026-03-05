@@ -144,12 +144,6 @@ class Store:
     def load_config(self) -> Dict[str, Any]:
         return self.load_json(self.config_dir / "config.json")
 
-    def load_spec_template(self) -> Dict[str, Any]:
-        template_path = self.config_dir / "spec.json"
-        if not template_path.exists():
-            raise FileNotFoundError(f"spec.json 不存在: {template_path}")
-        return self.load_json(template_path)
-
     def save_config(self, config: Dict[str, Any]):
         with open(self.config_dir / "config.json", 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
