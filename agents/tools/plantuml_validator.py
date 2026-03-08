@@ -24,9 +24,9 @@ class PlantUMLValidatorTool(BaseTool):
         }
     }
 
-    def __init__(self, jar_path: str = "plantuml.jar", use_online: Optional[bool] = None, server_url: str = ""):
+    def __init__(self, jar_path: str = "plantuml.jar", use_online: bool = True, server_url: str = ""):
         self.jar_path = jar_path
-        self.use_online = use_online  # None=自動
+        self.use_online = use_online  # 預設 True：使用線上驗證
         self.server_url = (server_url or DEFAULT_ONLINE_SERVER).rstrip("/")
 
     def execute(self, **kwargs) -> str:

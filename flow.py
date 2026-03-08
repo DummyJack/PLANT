@@ -11,10 +11,13 @@ from agents.profile import (
     ModelerAgent,
     DocumentorAgent,
 )
-from agents.profile.mediator import AgendaRunner
+from agents.profile.mediator import AgendaRunner, AGENDA_CATEGORY_LABEL
+from pathlib import Path
 from model import create_model
 from store import Store
 from utils import Logger, Collect
+from agents.profile.expert import has_supported_doc_files
+from agents.tools.read_external_file import ReadExternalFileTool
 
 
 class Flow:
@@ -30,22 +33,31 @@ class Flow:
         )
 
         self.registry = AgentRegistry()
+        enable_tools = config.get("enable_tools") or {}
+        enable_agents = config.get("enable_agents") or {}
 
+        doc_dir = Path("doc")
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        expert_tools = []
+        if enable_tools.get("web_search", False):
+            from agents.tools import WebSearchTool
+            expert_tools.append(WebSearchTool())
+        if enable_tools.get("read_external_file", True) and has_supported_doc_files(doc_dir):
+            expert_tools.append(ReadExternalFileTool(base_dir=doc_dir))
         self.user_agent = UserAgent(self.model, registry=self.registry)
         self.analyst_agent = AnalystAgent(self.model, registry=self.registry)
         self.expert_agent = ExpertAgent(
-            self.model, registry=self.registry, doc_dir="doc"
+            self.model, tools=expert_tools, registry=self.registry, doc_dir="doc"
         )
         self.mediator_agent = MediatorAgent(self.model, registry=self.registry)
         modeler_tools = []
-        if config.get("enable_plantuml_validate", True):
+        if enable_tools.get("plantuml_validate", True):
             from agents.tools import PlantUMLValidatorTool
-
             opts = config.get("plantuml_validate") or {}
             modeler_tools.append(
                 PlantUMLValidatorTool(
                     jar_path=opts.get("jar_path", "plantuml.jar"),
-                    use_online=opts.get("use_online"),
+                    use_online=opts.get("use_online", True),
                     server_url=opts.get("server_url", ""),
                 )
             )
@@ -58,12 +70,16 @@ class Flow:
             registry=self.registry,
         )
 
-        self.registry.register("user", self.user_agent)
-        self.registry.register("analyst", self.analyst_agent)
-        self.registry.register("expert", self.expert_agent)
-        self.registry.register("mediator", self.mediator_agent)
-        self.registry.register("modeler", self.modeler_agent)
-        self.registry.register("documentor", self.documentor_agent)
+        for name, agent in [
+            ("user", self.user_agent),
+            ("analyst", self.analyst_agent),
+            ("expert", self.expert_agent),
+            ("mediator", self.mediator_agent),
+            ("modeler", self.modeler_agent),
+            ("documentor", self.documentor_agent),
+        ]:
+            if enable_agents.get(name, True):
+                self.registry.register(name, agent)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
@@ -74,10 +90,11 @@ class Flow:
             "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
             "requirements": [],
             "conflicts": [],
-            "decisions": [],
-            "open_questions": [],
+            "feedback": {},
             "system_models": {},
             "discussions": [],
+            "decisions": [],
+            "open_questions": [],
             "meta": {"created_at": now, "updated_at": now, "last_round": 0},
         }
 
@@ -85,6 +102,17 @@ class Flow:
 
         self.logger.info("=== Phase 0: 初始草稿建立 ===")
         artifact = self.run_init_phase(artifact)
+
+        # 開會前產出需求衝突報告，供與會參考
+        if artifact.get("conflicts"):
+            self.logger.info("產出需求衝突報告")
+            conflict_md = self.analyst_agent.generate_conflict_report(
+                artifact,
+                round_num=0,
+                recent_decisions_limit=self.config.get("agenda_items", 5),
+            )
+            self.store.save_markdown(conflict_md, "conflict_report.md")
+            self.logger.info("  ✓ 已存 conflict_report.md")
 
         for round_num in range(1, rounds + 1):
             self.logger.info(f"=== Round {round_num}/{rounds}: 開會 ===")
@@ -102,12 +130,24 @@ class Flow:
         artifact.setdefault(
             "scope", {"in_scope": [], "out_of_scope": [], "description": ""}
         )
+        artifact.setdefault("feedback", {})
         artifact.setdefault("meta", {})
         self.user_agent.stakeholders = artifact.get("stakeholders", [])
 
         rounds = self.config.get("rounds", 1)
         start_round = len(artifact.get("discussions", [])) + 1
         self.logger.info(f"繼續現有專案，從 Round {start_round} 開始，共 {rounds} 輪")
+
+        # 開會前產出需求衝突報告，供與會參考
+        if artifact.get("conflicts"):
+            self.logger.info("產出需求衝突報告")
+            conflict_md = self.analyst_agent.generate_conflict_report(
+                artifact,
+                round_num=start_round - 1,
+                recent_decisions_limit=self.config.get("agenda_items", 5),
+            )
+            self.store.save_markdown(conflict_md, "conflict_report.md")
+            self.logger.info("  ✓ 已存 conflict_report.md")
 
         for round_num in range(start_round, start_round + rounds):
             self.logger.info(f"=== Round {round_num}: 開會 ===")
@@ -146,13 +186,13 @@ class Flow:
         artifact["scope"] = self.analyst_agent.generate_scope(rough_idea, stakeholders)
         self.store.save_artifact(artifact)
 
-        self.logger.info("Analyst 主動執行衝突辨識")
-        artifact = self.analyst_agent.run_conflict_detection(artifact)
-        self.store.save_artifact(artifact)
-
-        self.logger.info("Analyst 建立 Draft")
+        self.logger.info("Analyst 分析需求")
         draft = self.analyst_agent.create_draft(stakeholders)
         artifact["requirements"] = draft["requirements"]
+        self.store.save_artifact(artifact)
+
+        self.logger.info("Analyst 執行衝突辨識")
+        artifact = self.analyst_agent.run_conflict_detection(artifact)
         self.store.save_artifact(artifact)
         draft_md = self.analyst_agent.generate_draft_markdown(
             artifact,
@@ -164,24 +204,24 @@ class Flow:
             f"✓ Draft v0: {len(draft['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個衝突"
         )
 
-        self.logger.info("Expert 注入領域知識（查詢與專案概述相關的法規/標準）")
+        self.logger.info("Expert 提供領域知識")
         scope = artifact.get("scope", {})
-        project_overview = scope.get("description") or rough_idea or ""
-        injection = self.expert_agent.inject_domain(
+        project_overview = scope.get("description") or ""
+        injection = self.expert_agent.provide_domain_knowledge(
             artifact["requirements"],
             artifact["conflicts"],
-            rough_idea,
             project_overview=project_overview,
         )
-        artifact["requirements"] = injection["requirements"]
+        if injection.get("feedback"):
+            artifact.setdefault("feedback", {})
+            artifact["feedback"].update(injection["feedback"])
         self.store.save_artifact(artifact)
-        constraint_count = len(
-            [r for r in artifact["requirements"] if r.get("type") == "constraint"]
-        )
-        self.logger.info(f"✓ 注入 {constraint_count} 條約束")
-        if constraint_count == 0:
+        dr = artifact.get("feedback", {}).get("domain_research") or {}
+        if dr and isinstance(dr, dict) and dr:
+            self.logger.info("✓ 領域研究結果已寫入 artifact.feedback.domain_research")
+        else:
             self.logger.info(
-                "  （若需約束：請確認專案概述已填寫、或於 doc/ 放置參考文件供 read_external_file 讀取）"
+                "artifact.feedback.domain_research 已寫入但為空（domain-research skill 未產出或解析失敗）"
             )
 
         meta = artifact.setdefault("meta", {})
@@ -222,6 +262,15 @@ class Flow:
             decision = self.mediator_agent.decide_next_agenda_action(state, observation)
             action = decision.get("action", "finish_round")
             params = decision.get("params") or {}
+            topic_id = params.get("topic_id")
+            title_hint = ""
+            category_hint = ""
+            if topic_id:
+                for t in state.get("topics", []):
+                    if t.get("id") == topic_id:
+                        title_hint = f" 《{t.get('title', '')}》"
+                        category_hint = t.get("category_label") or t.get("category", "")
+                        break
             self.logger.info(
                 f"  Agent 決策: {action} {params} — {decision.get('reasoning', '')}"
             )
@@ -236,8 +285,9 @@ class Flow:
         if agenda_snapshot:
             print(f"\n{'='*60}\nRound {round_num} 議程\n{'='*60}")
             for t in agenda_snapshot:
+                cat_label = AGENDA_CATEGORY_LABEL.get(t.get("category", ""), t.get("category", ""))
                 print(
-                    f"  [{t['id']}] {t['title']} ({t.get('discussion_mode', 'sequential')}) [{t.get('category', '')}]"
+                    f"  [{t['id']}] {t['title']} ({t.get('discussion_mode', 'sequential')}) [{cat_label}]"
                 )
             print(f"{'='*60}\n")
 
@@ -264,6 +314,22 @@ class Flow:
         }
         updates = self.mediator_agent.update_decisions(artifact, round_discussions)
         new_decisions = updates.get("new_decisions", [])
+        # 為本輪新決策指派 id（D-01, D-02, ...），供 resolved_by_decision_id 對應
+        existing_ids = [
+            d.get("id") for d in artifact.get("decisions", [])
+            if isinstance(d.get("id"), str) and d["id"].startswith("D-")
+        ]
+        max_d = 0
+        for eid in existing_ids:
+            try:
+                max_d = max(max_d, int(eid[2:].lstrip("-")))
+            except ValueError:
+                pass
+        for i, d in enumerate(new_decisions):
+            if not d.get("id"):
+                d = dict(d)
+                d["id"] = f"D-{max_d + i + 1:02d}"
+                new_decisions[i] = d
         artifact["decisions"].extend(new_decisions)
         new_conflicts = list(updates.get("conflicts", artifact["conflicts"]))
         # 討論中提出的新增衝突（漏報補正）：指派 id 後併入
@@ -346,11 +412,8 @@ class Flow:
         self.store.save_draft(draft_md, version=next_version)
         self.logger.info(f"  ✓ 已存 draft_v{next_version}.md")
 
-        # Step 5.5: 僅當 artifact 中有 label=Conflict 時產出需求衝突報告
-        active_conflicts = [
-            c for c in artifact.get("conflicts", []) if c.get("label") == "Conflict"
-        ]
-        if active_conflicts:
+        # Step 5.5: 只要有衝突列表就產出需求衝突報告（含已解決／未解決），每輪更新
+        if artifact.get("conflicts"):
             self.logger.info("Step 5.5: 產出需求衝突報告（Analyst，Markdown）")
             conflict_md = self.analyst_agent.generate_conflict_report(
                 artifact,
@@ -360,7 +423,7 @@ class Flow:
             self.store.save_markdown(conflict_md, "conflict_report.md")
             self.logger.info("  ✓ 已存 conflict_report.md")
         else:
-            self.logger.info("Step 5.5: 無未解決衝突，略過 conflict_report.md")
+            self.logger.info("Step 5.5: 無衝突資料，略過 conflict_report.md")
 
         meta = artifact.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -380,10 +443,9 @@ class Flow:
             )
             f_srs = executor.submit(self.documentor_agent.generate_srs, artifact)
             dr_md = f_dr.result()
-            srs_json, srs_md = f_srs.result()
+            srs_md = f_srs.result()
 
         self.store.save_markdown(dr_md, "design_rationale.md")
         self.logger.info("✓ 產生 design_rationale.md")
-        self.store.save_srs(srs_json)
         self.store.save_markdown(srs_md, "srs.md")
-        self.logger.info("✓ 產生 srs.json + srs.md")
+        self.logger.info("✓ 產生 srs.md")

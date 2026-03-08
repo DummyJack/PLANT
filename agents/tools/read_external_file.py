@@ -1,5 +1,5 @@
 """
-讀取外部檔案工具：供 Expert 等 agent 在討論或注入領域時讀取 doc 目錄下的檔案。
+讀取外部檔案工具：供 Expert 等 agent 在討論或提供領域知識時讀取 doc 目錄下的檔案。
 支援 .txt, .md, .json, .pdf, .docx。
 """
 import logging

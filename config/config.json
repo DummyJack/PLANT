@@ -2,17 +2,19 @@
   "provider": "openai",
   "model": "gpt-5-nano",
   "temperature": 1,
-  "enable_web_search": true,
-  "enable_plantuml_validate": true,
-  "plantuml_validate": {
-    "use_online": true
-  },
   "rounds": 1,
-  "enable_user": true,
-  "enable_analyst": true,
-  "enable_expert": true,
-  "enable_mediator": true,
-  "enable_modeler": true,
-  "enable_documentor": true,
-  "agenda_items": 5
+  "agenda_items": 5,
+  "enable_tools": {
+    "web_search": true,
+    "read_external_file": true,
+    "plantuml_validate": true
+  },
+  "enable_agents": {
+    "user": true,
+    "analyst": true,
+    "expert": true,
+    "mediator": true,
+    "modeler": true,
+    "documentor": true
+  }
 }
