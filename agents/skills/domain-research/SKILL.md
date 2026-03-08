@@ -1,24 +1,24 @@
 ---
 name: domain-research
-description: MCP-powered domain research for requirements elicitation. Uses perplexity, context7, firecrawl, and other MCP servers to research domain knowledge, best practices, and industry requirements.
-allowed-tools: Read, Glob, Grep, Write, mcp__perplexity__search, mcp__perplexity__reason, mcp__context7__resolve-library-id, mcp__context7__query-docs, mcp__firecrawl__firecrawl_search, mcp__firecrawl__firecrawl_scrape
+description: Domain research for requirements elicitation using web_search (general research, web scraping) and read_external_file (library/documentation in doc/).
+allowed-tools: web_search, read_external_file
 ---
 
 # Domain Research Skill
 
-MCP-powered domain research for enriching requirements elicitation with external knowledge.
+Domain research for enriching requirements elicitation with external knowledge. Use **web_search** for general research and web scraping; use **read_external_file** for library and project documentation in the doc/ directory.
 
-## MANDATORY: Documentation-First Approach
+## Documentation-First Approach
 
 Before conducting domain research:
 
-1. **Invoke `docs-management` skill** for requirements elicitation patterns
-2. **Use MCP servers as primary research tools** (perplexity, context7, firecrawl)
-3. **Base all guidance on official documentation and authoritative sources**
+1. **read_external_file**: Read reference files under doc/ (regulations, standards, technical docs, library docs).
+2. **web_search**: Search the web for industry standards, best practices, regulatory requirements, competitors, and technical documentation.
+3. Base all guidance on official documentation and authoritative sources.
 
 ## When to Use This Skill
 
-**Keywords:** domain research, MCP research, industry standards, best practices, competitive analysis, technology research, regulatory requirements
+**Keywords:** domain research, industry standards, best practices, competitive analysis, technology research, regulatory requirements
 
 Invoke this skill when:
 
@@ -29,9 +29,9 @@ Invoke this skill when:
 - Exploring technology constraints
 - Supplementing stakeholder knowledge
 
-## Available MCP Servers
+## Available Tools
 
-### Perplexity (General Research)
+### General Research — web_search
 
 **Use for:**
 
@@ -40,15 +40,17 @@ Invoke this skill when:
 - Comparative analysis
 - Regulatory overviews
 
+**Tool:** `web_search` (query keywords to get web search results)
+
 ```yaml
-mcp_tool: mcp__perplexity__search
+tool: web_search
 example_queries:
   - "e-commerce checkout best practices 2025"
   - "GDPR compliance requirements for SaaS"
   - "authentication patterns for financial applications"
 ```
 
-### Context7 (Library Documentation)
+### Library Documentation — read_external_file
 
 **Use for:**
 
@@ -56,17 +58,19 @@ example_queries:
 - API constraints
 - Library capabilities
 - Technical limitations
+- Regulations, standards, and technical docs under project doc/
+
+**Tool:** `read_external_file` (pass path relative to doc/; reads .txt, .md, .json, .pdf, .docx)
 
 ```yaml
-mcp_tools:
-  - mcp__context7__resolve-library-id
-  - mcp__context7__query-docs
-example_queries:
-  - Library: "react" → Query: "state management patterns"
-  - Library: "fastapi" → Query: "authentication requirements"
+tool: read_external_file
+example:
+  - file_path: "regulation.pdf"   # regulation file under doc/
+  - file_path: "refs/api-guide.md"
+  - file_path: "standards/iso-29148.md"
 ```
 
-### Firecrawl (Web Scraping)
+### Web Scraping — web_search
 
 **Use for:**
 
@@ -75,13 +79,14 @@ example_queries:
 - Feature comparison
 - Market research
 
+**Tool:** `web_search` (search by keywords for summaries and links; equivalent to fetching public web content)
+
 ```yaml
-mcp_tools:
-  - mcp__firecrawl__firecrawl_search
-  - mcp__firecrawl__firecrawl_scrape
+tool: web_search
 example_queries:
-  - Search: "inventory management software features"
-  - Scrape: Competitor feature pages
+  - "inventory management software features"
+  - "competitor product feature comparison"
+  - "market requirements for [domain]"
 ```
 
 ## Research Patterns
@@ -93,7 +98,7 @@ Build foundational domain knowledge:
 ```yaml
 research_pattern: domain_background
 steps:
-  1. Use perplexity for industry overview
+  1. Use web_search for industry overview
   2. Identify key concepts and terminology
   3. Research common requirements in domain
   4. Note regulatory considerations
@@ -122,7 +127,7 @@ Research competitor features:
 research_pattern: competitive_analysis
 steps:
   1. Identify key competitors
-  2. Scrape feature pages with firecrawl
+  2. Use web_search to find competitor feature pages and summaries
   3. Extract capability lists
   4. Compare and contrast
 output: Competitive feature matrix
@@ -150,8 +155,8 @@ Research technical requirements:
 research_pattern: technology
 steps:
   1. Identify technologies in scope
-  2. Use context7 for library docs
-  3. Research integration requirements
+  2. Use read_external_file for doc/ library and technical docs
+  3. Research integration requirements (web_search if needed)
   4. Document technical constraints
 output: Technical requirements document
 ```
@@ -165,15 +170,15 @@ research_scope:
   domain: "{domain name}"
   topic: "{specific focus area}"
   depth: shallow|moderate|deep
-  sources: [perplexity, context7, firecrawl]
+  sources: [web_search, read_external_file]
 ```
 
 ### Step 2: Execute Research Queries
 
 For each research need:
 
-1. Select appropriate MCP server
-2. Formulate effective query
+1. Select appropriate tool: **web_search** (general research, competitors, regulations) or **read_external_file** (doc/ regulations, standards, technical docs)
+2. Formulate effective query or file path
 3. Process results
 4. Extract requirements
 
@@ -202,13 +207,13 @@ research_session:
   timestamp: "{ISO-8601}"
 
   queries_executed:
-    - server: perplexity
+    - tool: web_search
       query: "{query text}"
       results_count: {number}
 
-    - server: firecrawl
-      url: "{scraped URL}"
-      content_type: feature_page
+    - tool: read_external_file
+      file_path: "{path under doc/}"
+      content_type: documentation|regulation|standard
 
   findings:
     domain_context:
@@ -251,9 +256,10 @@ research_session:
 
 ## Query Optimization
 
-### Effective Perplexity Queries
+### Effective web_search Queries (General Research)
 
 ```yaml
+tool: web_search
 query_patterns:
   best_practices:
     template: "{domain} {topic} best practices {year}"
@@ -272,30 +278,32 @@ query_patterns:
     example: "PCI-DSS requirements for payment processing"
 ```
 
-### Effective Context7 Queries
+### Effective read_external_file Usage (Library / Documentation)
 
 ```yaml
-query_patterns:
+tool: read_external_file
+usage:
   library_features:
-    resolve: "{library name}"
-    get_docs: topic="{specific feature}"
+    file_path: "doc/{library or API guide}.md"
+    purpose: Read technical docs and API guides under doc/
 
-  integration:
-    resolve: "{library name}"
-    get_docs: topic="integration authentication"
+  regulation_standards:
+    file_path: "doc/regulation.pdf"  # or doc/standards/*.md
+    purpose: Regulations and standards documents
 ```
 
-### Effective Firecrawl Queries
+### Effective web_search Queries (Web / Competitor Research)
 
 ```yaml
+tool: web_search
 query_patterns:
   competitor_features:
-    search: "{competitor} features {product type}"
-    scrape: Feature page URLs
+    query: "{competitor} features {product type}"
+    purpose: Competitor features and market info
 
   documentation:
-    search: "{technology} documentation requirements"
-    scrape: Official docs
+    query: "{technology} documentation requirements"
+    purpose: Technical docs and requirements summaries
 ```
 
 ## Confidence Levels
