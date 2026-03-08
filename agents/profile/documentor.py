@@ -1,5 +1,6 @@
 import json
-from typing import Dict, Any, Optional, Tuple
+import re
+from typing import Dict, Any, Optional
 from agents.base import BaseAgent
 
 
@@ -29,6 +30,7 @@ class DocumentorAgent(BaseAgent):
             "decisions": artifact.get("decisions", []),
             "conflicts": artifact.get("conflicts", []),
             "discussions": artifact.get("discussions", []),
+            "feedback": artifact.get("feedback", {}),
         }
         context_text = json.dumps(context, ensure_ascii=False, indent=2)
 
@@ -45,6 +47,7 @@ class DocumentorAgent(BaseAgent):
 # 約束
 - 只整理已有資料，禁止推測或添加不存在的決策
 - 若某個章節沒有對應資料，標註「本輪無相關資料」
+- 產出內容請使用繁體中文
 - 以 Markdown 格式輸出"""
 
         messages = self.build_direct_messages(user_prompt)
@@ -52,8 +55,8 @@ class DocumentorAgent(BaseAgent):
         dr_md = self.strip_code_fences(dr_md)
         return dr_md
 
-    def generate_srs(self, artifact: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
-        """Step F2: 以最新需求草稿為輸入，invoke srs-generation skill 產出正式 SRS（ISO 29148），回傳 (srs_json, srs_md)。"""
+    def generate_srs(self, artifact: Optional[Dict[str, Any]] = None) -> str:
+        """Step F2: 以 store 中最新需求草稿為輸入，invoke srs-generation skill 產出正式 SRS（ISO 29148），回傳 SRS Markdown。"""
         latest_version = self.store.get_draft_version()
         if latest_version < 0:
             raise ValueError("尚無需求草稿，請先產生 draft 再生成 SRS")
@@ -64,23 +67,31 @@ class DocumentorAgent(BaseAgent):
         context = {
             "draft_version": latest_version,
             "draft_markdown": draft_md,
+            "feedback": (artifact or {}).get("feedback", {}),
         }
         task = """依 srs-generation skill、範本與檢查清單，僅根據 Context 的**最新需求草稿**（draft_markdown）產出正式 Software Requirements Specification（Markdown）。
-要求：以草稿為唯一輸入來源，忠實轉寫為符合 ISO/IEC/IEEE 29148；使用 FR-<MODULE>-<NNN>、NFR-<CATEGORY>-<NNN> 編號；產出須通過 skill 品質檢查清單。只輸出 SRS Markdown，勿包程式碼區塊。"""
+要求：以草稿為唯一輸入來源，忠實轉寫為符合 ISO/IEC/IEEE 29148；使用 FR-<MODULE>-<NNN>、NFR-<CATEGORY>-<NNN> 編號；產出須通過 skill 品質檢查清單。
+產出的 SRS 全文（章節標題、需求描述、說明等）請使用繁體中文。需求編號格式維持英文（如 FR-xxx、NFR-xxx）。只輸出 SRS Markdown，勿包程式碼區塊。"""
 
-        srs_md = self.invoke_skill("srs-generation", task, context=context)
-        srs_md = self.strip_code_fences(srs_md)
+        srs_md_full = self.invoke_skill("srs-generation", task, context=context)
+        srs_md_full = self.strip_code_fences(srs_md_full)
         self.logger.info(
             f"  已依 srs-generation skill 由 draft_v{latest_version} 產生正式 SRS"
         )
+        return self.strip_document_info_and_revision_history(srs_md_full)
 
-        srs_json = {
-            "srs": [
-                {"section": "Software Requirements Specification", "content": srs_md}
-            ],
-            "source": "srs-generation-skill",
-        }
-        return srs_json, srs_md
+    @staticmethod
+    def strip_document_info_and_revision_history(md: str) -> str:
+        """從 SRS Markdown 移除「Document Information」與「Revision History」區塊，供存成 srs.md 使用。"""
+        if not md or not isinstance(md, str):
+            return md
+        # 從 ## 1. Document Information 或 ## Document Information 刪到 ## 3. Introduction 之前
+        pattern = r'\n## (?:1\. )?Document Information\s.*?(?=\n## 3\.)'
+        out = re.sub(pattern, "\n\n", md, flags=re.DOTALL)
+        if out == md:
+            pattern_alt = r'\n## Document Information\s.*?(?=\n## 3\.)'
+            out = re.sub(pattern_alt, "\n\n", md, flags=re.DOTALL)
+        return out.strip() if out != md else md
 
     @staticmethod
     def strip_code_fences(text: str) -> str:

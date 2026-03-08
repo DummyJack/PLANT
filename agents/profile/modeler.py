@@ -51,6 +51,7 @@ class ModelerAgent(BaseAgent):
 2. **Class Diagram**（必要）
 3. **Sequence Diagram**（選擇性，若有跨 Actor 互動）
 （設計/可測試性衝突由 Analyst 在產出模型後統一辨識）
+- models 陣列中的 name（圖表顯示名稱）請使用繁體中文。plantuml 程式碼內關鍵字維持英文。
 
 # 輸出格式
 {{
@@ -87,6 +88,7 @@ class ModelerAgent(BaseAgent):
 1. 比較新需求與當前模型，識別差異
 2. 只修改受影響的部分，保留未變動的元素
 （設計/可測試性衝突由 Analyst 在產出模型後統一辨識）
+- models 陣列中的 name（圖表顯示名稱）請使用繁體中文。plantuml 程式碼內關鍵字維持英文。
 
 # 輸出格式
 {{
@@ -188,7 +190,6 @@ class ModelerAgent(BaseAgent):
         return None
 
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
-        """以系統建模專家身份回應議題"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = ""
@@ -207,9 +208,7 @@ class ModelerAgent(BaseAgent):
         if self.tools:
             tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
 
-        user_prompt = f"""你正在以系統建模專家的身份參與需求討論。
-
-{topic_text}
+        user_prompt = f"""{topic_text}
 {prev_text}
 {snapshot_text}
 {tool_hint}
@@ -226,6 +225,7 @@ class ModelerAgent(BaseAgent):
 # 約束
 - statement 須聚焦系統架構與建模觀點，評估需求變更對 UML 模型的影響
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
+- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{

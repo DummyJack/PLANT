@@ -1,19 +1,29 @@
 import json
-import logging
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from openai import BadRequestError
 from agents.base import BaseAgent
-from agents.tools.read_external_file import ReadExternalFileTool
+
+# 與 ReadExternalFileTool 支援的副檔名一致（供 flow 組裝工具時判斷）
+DOC_SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
+
+
+def has_supported_doc_files(doc_dir: Path) -> bool:
+    """檢查 doc 目錄下是否至少有一個支援的檔案（含子目錄）。"""
+    if not doc_dir.is_dir():
+        return False
+    for p in doc_dir.rglob("*"):
+        if p.is_file() and p.suffix.lower() in DOC_SUPPORTED_SUFFIXES:
+            return True
+    return False
 
 
 class ExpertAgent(BaseAgent):
-    """領域專家 Agent — 賦予 domain-research skill，以 read_external_file 工具讀取 doc/ 參考檔案注入法規/標準/安全規範。"""
+    """領域專家 Agent — 賦予 domain-research skill，可搭配 read_external_file 等工具（由 flow 依 enable_tools 注入）。"""
 
     name = "expert"
 
-    system_prompt = """你是領域專家，負責注入必須遵守的法規、標準、安全規範（constraint）。
+    system_prompt = """你是領域專家，負責提供必須遵守的法規、標準、安全規範。
 核心原則：Evidence-first、可追溯來源、無證據不建議；約束須含具體條文、適用範圍、合規要求與風險。"""
 
     def __init__(
@@ -23,14 +33,11 @@ class ExpertAgent(BaseAgent):
         registry=None,
         doc_dir: str = "doc",
     ):
-        agent_tools = list(tools or [])
         self.doc_dir = Path(doc_dir)
         self.doc_dir.mkdir(parents=True, exist_ok=True)
-        agent_tools.append(ReadExternalFileTool(base_dir=self.doc_dir))
-
         super().__init__(
             model,
-            tools=agent_tools,
+            tools=tools or [],
             registry=registry,
             skill_names=["domain-research"],
         )
@@ -62,163 +69,46 @@ class ExpertAgent(BaseAgent):
                     break
         return {}
 
-    def build_inject_fallback_prompt(
-        self, requirements: List[Dict], rough_idea: str
-    ) -> str:
-        """內容政策觸發時使用的精簡 prompt，不含外部文件與完整衝突列表。"""
-        idea = (rough_idea or "")[:500]
-        req_limited = requirements[:10] if requirements else []
-        requirements_text = json.dumps(req_limited, ensure_ascii=False, indent=2)
-        return f"""# 任務
-根據以下需求與背景，以你的專業知識產出應遵守的法規/標準/安全規範，作為 constraint 類型需求。
-
-# 背景（摘要）
-{idea}
-
-# 當前需求（前 10 筆）
-{requirements_text}
-
-# 步驟
-1. 依專業知識識別相關法規、標準、安全規範
-2. 將約束寫入 new_requirements，type 標記為 constraint，ref 可填「依領域知識」
-3. 若無相關法規可產出，new_requirements 可為空陣列
-
-# 輸出 JSON
-{{{{
-    "new_requirements": [
-        {{{{
-            "id": "R-C01",
-            "text": "約束描述（法規/標準名稱、合規要求、適用範圍）",
-            "type": "constraint",
-            "ref": "來源說明",
-            "source_stakeholders": ["expert"]
-        }}}}
-    ]
-}}}}"""
-
-    def inject_domain(
+    def provide_domain_knowledge(
         self,
         requirements: List[Dict],
         conflicts: List[Dict],
-        rough_idea: str,
-        project_overview: Optional[str] = None,
+        project_overview: str = "",
     ) -> Dict:
-        """Phase 0: 領域知識注入。依 domain-research skill 使用 read_external_file 讀取 doc/ 參考檔案產出 constraint。"""
-        requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
-        conflicts_text = json.dumps(conflicts, ensure_ascii=False, indent=2)
-
-        overview = (project_overview or "").strip()
-        scope_constraint = ""
-        if overview:
-            scope_constraint = f"\n# 專案概述（供判斷適用範圍）\n{overview}\n"
-
-        has_tools = bool(self.tools)
-        tool_instruction = (
-            "可先使用 read_external_file 讀取 doc/ 目錄下的參考檔案（法規、標準、技術文件），再依內容產出約束。"
-            if has_tools
-            else "根據你的專業知識提供建議。"
-        )
-
-        user_prompt = f"""# 任務
-審查以下需求，注入「與本專案直接相關」且必須遵守的法規/標準/安全規範作為 constraint 類型的需求。
-
-# 背景
-{rough_idea}
-{scope_constraint}
-# 當前需求
-{requirements_text}
-
-# 當前衝突
-{conflicts_text}
-
-# 步驟
-1. {tool_instruction}
-2. 依專案概述與範圍，僅識別「適用於本專案」的法規、標準、安全規範（與專案領域、產業、部署環境或受眾直接相關）
-3. 將這些約束寫入 new_requirements（type 標記為 constraint）
-（衝突辨識由 Analyst 在注入後統一執行，Expert 僅產出 new_requirements）
-
-# 相關性要求
-- 每條 constraint 的適用範圍須與本專案一致；與本專案無關或僅間接相關的法規/標準不要列入
-- 若專案概述不明，可依 rough_idea 與當前需求推斷專案領域，只產出該領域內確實適用的約束
-
-# 詳細度要求
-每條 constraint 的 text 必須包含：法規/標準全名與條文編號、具體合規要求、適用範圍、不合規風險。
-
-# 約束
-- 每條 constraint 須附 ref（來源 URL 或文件名）；嚴禁虛構
-- 若無與本專案相關的法規，new_requirements 可為空陣列
-
-# 輸出 JSON
-{{{{
-    "new_requirements": [
-        {{{{
-            "id": "R-C01",
-            "text": "詳細的約束描述（法規全名、條文、合規要求、適用範圍、風險）",
-            "type": "constraint",
-            "ref": "來源 URL 或文件名",
-            "source_stakeholders": ["expert"]
-        }}}}
-    ]
-}}}}"""
-
-        # 若有 domain-research skill，將 skill 內容注入 system 以引導領域研究與工具使用
-        system_content = self.system_prompt
-        if "domain-research" in self.skill_names:
-            try:
-                from agents.skills.loader import get_skill
-                skill = get_skill("domain-research")
-                system_content = system_content + "\n\n# Skill: domain-research\n\n" + (skill.get("content") or "")
-            except Exception as e:
-                self.logger.debug("載入 domain-research skill 失敗: %s", e)
-        messages = [{"role": "system", "content": system_content}, {"role": "user", "content": user_prompt}]
-
-        try:
-            if self.tools:
-                raw = self.chat_with_tools(messages, max_rounds=3)
-                response = self.parse_first_json(raw)
-            else:
-                response = self.model.chat_json(messages)
-        except BadRequestError as e:
-            err_msg = str(e).lower()
-            if "invalid_prompt" in err_msg or "usage policy" in err_msg:
-                self.logger.warning(
-                    "Expert 請求觸發內容政策，改以精簡 prompt 僅依模型知識產出約束"
-                )
-                fallback_prompt = self.build_inject_fallback_prompt(
-                    requirements, rough_idea
-                )
-                response = self.model.chat_json(
-                    self.build_direct_messages(fallback_prompt)
-                )
-            else:
-                raise
-
-        new_reqs = response.get("new_requirements", [])
-        if not isinstance(new_reqs, list):
-            new_reqs = []
-        for req in new_reqs:
-            if isinstance(req, dict):
-                req.setdefault("type", "constraint")
-                req.setdefault("source_stakeholders", ["expert"])
-                req.setdefault("priority", "must")
-        new_reqs = [r for r in new_reqs if isinstance(r, dict)]
-
-        if len(new_reqs) == 0:
-            reasons = []
-            if not overview:
-                reasons.append("專案概述為空")
-            if not has_tools:
-                reasons.append("無 read_external_file 工具或 doc/ 無參考檔案")
-            if reasons:
-                self.logger.info(
-                    f"Expert 回傳 0 條約束，可能原因：{'、'.join(reasons)}；或模型判斷無適用法規／解析未取得 new_requirements"
-                )
-            else:
-                self.logger.info(
-                    "Expert 回傳 0 條約束，可能為模型判斷本專案無適用法規/標準，或輸出格式未含 new_requirements"
-                )
-
-        return {"requirements": requirements + new_reqs}
+        """Phase 0: 提供領域知識。依 domain-research skill 的 Research Results 格式產出，結果寫入 artifact.feedback.domain_research，不修改 requirements。"""
+        project_overview = (project_overview or "").strip()
+        context = {
+            "project_overview": project_overview,
+            "requirements": requirements,
+            "conflicts": conflicts,
+        }
+        task = """依 domain-research skill 的 **Output Format: Research Results** 執行領域研究並產出結果。
+審查 Context 中的需求與專案概述，若有 read_external_file 工具可先讀取 doc/ 參考檔案，依專案範圍識別法規/標準/安全規範與 derived_requirements。
+輸出「僅一個」JSON 物件，鍵名 "research_session"，值為物件，須含：
+- id（如 RES-{timestamp}）
+- domain, topic, timestamp
+- findings（domain_context, best_practices, regulatory, competitive 等陣列）
+- derived_requirements（陣列，每筆含 id, text, source, source_detail, confidence, needs_validation, category；法規/約束類請產出於此）
+- recommendations（選填）
+- gaps_in_research（選填）
+findings、derived_requirements 的 text/source_detail、recommendations、gaps_in_research 等所有描述與說明文字請使用繁體中文。id、category 等欄位名維持英文。勿輸出 Markdown，只輸出該 JSON。"""
+        raw = self.invoke_skill("domain-research", task, context=context)
+        response = self.parse_first_json(raw or "")
+        research_session = response.get("research_session")
+        if isinstance(research_session, dict):
+            pass
+        elif isinstance(response, dict) and (
+            response.get("findings") or response.get("derived_requirements")
+        ):
+            # skill 有時直接回傳 research 內容於頂層
+            research_session = response
+        else:
+            research_session = {}
+        if not research_session:
+            self.logger.warning(
+                "domain-research skill 未產出 research_session（可能為 JSON 解析失敗或 skill 回傳格式不符）"
+            )
+        return {"feedback": {"domain_research": research_session}}
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
@@ -229,7 +119,7 @@ class ExpertAgent(BaseAgent):
         if "domain-research" not in self.skill_names:
             return None
         context = {"topic": topic, "artifact_snapshot": artifact_snapshot or {}}
-        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點法規/合規/安全相關要點（可含適用範圍與風險），供會議發言參考。只輸出簡短條列文字，勿 JSON。"""
+        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點法規/合規/安全相關要點（可含適用範圍與風險），供會議發言參考。請使用繁體中文。只輸出簡短條列文字，勿 JSON。"""
         try:
             raw = self.invoke_skill("domain-research", task, context=context)
             return (raw or "").strip()[:1500]
@@ -261,9 +151,7 @@ class ExpertAgent(BaseAgent):
         if self.tools:
             tool_hint = "\n# 工具使用\n- 可先使用 read_external_file 讀取 doc/ 參考檔案，再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
 
-        user_prompt = f"""你正在以領域專家的身份參與需求討論。
-
-{topic_text}
+        user_prompt = f"""{topic_text}
 {prev_text}
 {snapshot_text}
 {skill_section}
@@ -281,7 +169,9 @@ class ExpertAgent(BaseAgent):
 # 約束
 - statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
 - 論點必須有客觀依據，無依據則標註「資訊不足」
+- 若此議題與法規/標準無直接對應，仍請以領域專家角度簡要說明最佳實務、業界常見做法或技術/風險建議；切勿留空或僅輸出 JSON 結構
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
+- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{
@@ -292,10 +182,27 @@ class ExpertAgent(BaseAgent):
 
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_topic_response(messages)
+        statement = (response.get("statement") or "").strip()
+
+        # 若仍為空（例如模型只回 JSON 殼、或議題非純法規導致拒答），用簡短重試強制產出內容
+        if not statement:
+            fallback_prompt = (
+                f"{topic_text}\n\n"
+                "請以領域專家身份，用 2～4 句話簡要說明你對上述議題的專業看法（可含法規、最佳實務、技術建議或風險提醒）。勿留空，直接輸出繁體中文內容。"
+            )
+            fallback_messages = self.build_direct_messages(fallback_prompt)
+            try:
+                raw_fallback = self.model.chat(fallback_messages)
+                statement = (raw_fallback or "").strip()
+                if len(statement) > 2000:
+                    statement = statement[:2000] + "…"
+            except Exception as e:
+                self.logger.warning("expert 簡短重試失敗: %s", e)
+                statement = "（依目前資訊暫無法提供具體法規依據，建議會後再查證後補充分享。）"
 
         return {
             "agent": self.name,
-            "statement": response.get("statement", ""),
+            "statement": statement,
             "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }

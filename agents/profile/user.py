@@ -32,6 +32,7 @@ class UserAgent(BaseAgent):
 - 避免角色重疊
 - name 只填名稱，不要用括號補充說明
 - reason 選擇理由用一句話即可
+- name、reason 請使用繁體中文
 
 # 輸出 JSON
 {{{{
@@ -70,6 +71,7 @@ class UserAgent(BaseAgent):
 # 約束
 - 每位利害關係人提出 3-5 條獨立需求（text 陣列）
 - 以該角色的日常經驗出發
+- name、text 陣列內容請使用繁體中文
 
 # 輸出 JSON
 {{{{
@@ -185,8 +187,7 @@ class UserAgent(BaseAgent):
             json_hint = '"statement": "針對此議題的完整發言內容", "vote": "agreed 或 unresolved", "open_questions": [...]'
             flow_hint = "撰寫一段完整的發言（statement），以第一人稱表達立場與需求，並依立場投票（vote）"
 
-        user_prompt = f"""你正在以利害關係人代表的身份參與需求討論。
-{roles_text}
+        user_prompt = f"""{roles_text}
 
 {topic_text}
 {prev_text}
@@ -204,6 +205,7 @@ class UserAgent(BaseAgent):
 - 必須以你代表的利害關係人角色立場發言
 - statement 須以第一人稱、該角色的日常經驗為基礎撰寫完整發言
 - 禁止提出技術解決方案，只表達「需要什麼」
+- statement、open_questions 的 question 請使用繁體中文
 {f'- speaking_as 的名稱必須從以下選一個或數個：{names_list}' if need_speaking_as else ''}
 
 輸出 JSON:

@@ -46,7 +46,19 @@ class BaseAgent:
         if self.tools:
             raw = self.chat_with_tools(messages, max_rounds=3)
             if parse_json:
-                return self.parse_topic_response_json(raw)
+                parsed = self.parse_topic_response_json(raw)
+                # 若解析後 statement 為空但模型有產出文字，用原始文字當 fallback，避免發言/回答留空
+                if not (parsed.get("statement") or "").strip() and (raw or "").strip():
+                    fallback = (raw or "").strip()
+                    for prefix in ("```json", "```"):
+                        if fallback.startswith(prefix):
+                            fallback = fallback[len(prefix) :].strip()
+                    if fallback.endswith("```"):
+                        fallback = fallback[:-3].strip()
+                    if len(fallback) > 2000:
+                        fallback = fallback[:2000] + "…"
+                    parsed["statement"] = fallback
+                return parsed
             return {"statement": raw, "open_questions": []}
         return self.model.chat_json(messages, **kwargs)
 
@@ -100,6 +112,7 @@ class BaseAgent:
 - 只從你的角色專業角度發言，不要代替其他角色
 - statement 必須是完整、有條理的發言內容
 - 論點必須基於已知資訊，禁止捏造
+- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{
@@ -133,21 +146,27 @@ class BaseAgent:
             raise ValueError(
                 f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
             )
-        from agents.skills.loader import get_skill
+        from agents.skills.base import get_skill
 
         skill = get_skill(skill_name)
-        system_parts = [self.system_prompt, f"\n\n# Skill: {skill.get('name', skill_name)}\n\n", skill["content"]]
+        system_parts = [self.system_prompt]
+        if skill.get("content_system"):
+            system_parts.append(f"\n\n# Skill: {skill.get('name', skill_name)}\n\n")
+            system_parts.append(skill["content_system"])
+        user_content = skill.get("content_user") or skill["content"]
+        user_parts = []
+        if not skill.get("content_system"):
+            user_parts.append(f"# Skill: {skill.get('name', skill_name)}\n\n")
+        user_parts.extend([user_content, "\n\n# Task\n\n", task])
         if skill.get("template"):
-            system_parts.append("\n\n# 範本（必須依此結構）\n\n")
-            system_parts.append(skill["template"])
+            user_parts.append("\n\n# 範本（必須依此結構）\n\n")
+            user_parts.append(skill["template"])
         if skill.get("checklist"):
-            system_parts.append("\n\n# 品質檢查清單（產出前須自檢通過）\n\n")
-            system_parts.append(skill["checklist"])
+            user_parts.append("\n\n# 品質檢查清單（產出前須自檢通過）\n\n")
+            user_parts.append(skill["checklist"])
         for ref_name, ref_content in (skill.get("reference_files") or {}).items():
-            system_parts.append(f"\n\n# {ref_name}\n\n")
-            system_parts.append(ref_content)
-
-        user_parts = [task]
+            user_parts.append(f"\n\n# {ref_name}\n\n")
+            user_parts.append(ref_content)
         if context is not None:
             user_parts.append(f"\n\n# Context\n{json.dumps(context, ensure_ascii=False, indent=2)}")
 
@@ -155,6 +174,8 @@ class BaseAgent:
             {"role": "system", "content": "".join(system_parts)},
             {"role": "user", "content": "\n".join(user_parts)},
         ]
+        if self.tools:
+            return self.chat_with_tools(messages, max_rounds=3)
         return self.model.chat(messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
