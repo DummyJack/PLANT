@@ -18,15 +18,5 @@
     "id": "tradeoff",
     "label": "需求取捨",
     "description": "NFR 間可能互相競爭（效能、可用性、成本等）需協商"
-  },
-  {
-    "id": "domain_compliance",
-    "label": "領域與合規檢查",
-    "description": "需求涉及法規、合規、安全、隱私等需確認"
-  },
-  {
-    "id": "model_coverage",
-    "label": "模型一致性與覆蓋",
-    "description": "需求未被系統模型覆蓋需檢視"
   }
 ]

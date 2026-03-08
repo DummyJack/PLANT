@@ -1,6 +1,5 @@
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from agents.base import BaseAgent
@@ -23,14 +22,25 @@ CONFLICT_REPORT_TEMPLATE_PATH = (
 
 def parse_conflict_types_from_patterns(path: Path) -> tuple:
     """從 conflict_patterns.md 的 ## X Conflicts 標題解析出類型 id 順序。"""
-    if not path.exists():
-        return ("Logical", "Technical", "Resource", "Temporal", "Data", "State", "Priority", "Scope")
     text = path.read_text(encoding="utf-8")
     ids = []
     for m in re.finditer(r"^## (\w+) Conflicts", text, re.MULTILINE):
         if m.group(1) != "Table":
             ids.append(m.group(1))
-    return tuple(ids) if ids else ("Logical", "Technical", "Resource", "Temporal", "Data", "State", "Priority", "Scope")
+    return (
+        tuple(ids)
+        if ids
+        else (
+            "Logical",
+            "Technical",
+            "Resource",
+            "Temporal",
+            "Data",
+            "State",
+            "Priority",
+            "Scope",
+        )
+    )
 
 
 ALLOWED_CONFLICT_TYPES = parse_conflict_types_from_patterns(CONFLICT_PATTERNS_PATH)
@@ -51,6 +61,7 @@ class AnalystAgent(BaseAgent):
             skill_names=["conflict-analyzer", "requirements-analyst"],
         )
         from agents.skills.base import get_skill
+
         parts = []
         for skill_name in ("requirements-analyst", "conflict-analyzer"):
             skill = get_skill(skill_name)
@@ -107,7 +118,7 @@ class AnalystAgent(BaseAgent):
                 continue
             ctype = (c.get("conflict_type") or "").strip()
             if ctype not in ALLOWED_CONFLICT_TYPES:
-                ctype = ALLOWED_CONFLICT_TYPES[0]
+                ctype = ""
             rel_reqs = c.get("requirement_ids") or c.get("related_requirements") or []
             if c.get("stakeholder_names"):
                 cf_id = f"CF-{len([x for x in conflicts if x.get('label') == 'Conflict']) + 1:02d}"
@@ -144,8 +155,8 @@ class AnalystAgent(BaseAgent):
                 )
 
         if conflicts:
-            n_conflict = len([x for x in conflicts if x.get('label') == 'Conflict'])
-            n_neutral = len([x for x in conflicts if x.get('label') == 'Neutral'])
+            n_conflict = len([x for x in conflicts if x.get("label") == "Conflict"])
+            n_neutral = len([x for x in conflicts if x.get("label") == "Neutral"])
             self.logger.info(
                 f"辨識出 {len(conflicts)} 筆（Conflict: {n_conflict}，Neutral: {n_neutral}）"
             )
@@ -175,8 +186,8 @@ class AnalystAgent(BaseAgent):
             "description": scope.get("description", ""),
         }
 
-    def create_draft(self, stakeholders: List[Dict]) -> Dict:
-        """依 requirements-analyst skill 從利害關係人產出需求草稿。"""
+    def analyze_requirements(self, stakeholders: List[Dict]) -> Dict[str, Any]:
+        """依 requirements-analyst skill 從利害關係人執行需求分析，產出結構化需求清單（尚未正規化為草稿）。"""
         context = {"stakeholders": stakeholders}
         task = """依 requirements-analyst skill，根據 Context 的利害關係人產出結構化需求清單。
 輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為陣列。每筆須含：id（如 R-01）、text、type（FR 或 NFR）、priority（must / should / could）、source_stakeholders。NFR 須含可量化指標。
@@ -186,16 +197,72 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
             data = self.parse_topic_response_json(raw)
         except Exception as e:
             self.logger.warning(f"需求分析 skill 執行失敗: {e}")
-            return {"requirements": [], "conflicts": []}
+            return {"requirements": []}
         requirements = data.get("requirements", [])
         if not isinstance(requirements, list):
-            return {"requirements": [], "conflicts": []}
+            return {"requirements": []}
+        return {"requirements": requirements}
+
+    def create_draft(
+        self,
+        artifact: Dict[str, Any],
+        draft_version: Optional[int] = None,
+        round_num: Optional[int] = None,
+        recent_decisions_limit: Optional[int] = None,
+    ) -> str:
+        """正規化 artifact 內的需求後，依 requirements-analyst skill 產出需求草稿 Markdown。"""
+        requirements = artifact.get("requirements", [])
         for req in requirements:
             req.setdefault("type", "FR")
             req.setdefault("source_stakeholders", [])
             if req.get("priority") not in ("must", "should", "could"):
                 req["priority"] = "should"
-        return {"requirements": requirements, "conflicts": []}
+
+        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
+        decisions = artifact.get("decisions", [])[-n:] if n else []
+        scope = artifact.get("scope", {}) or {}
+        feedback = artifact.get("feedback", {}) or {}
+        stakeholder_names = [
+            (s.get("name") or str(s))
+            for s in artifact.get("stakeholders", [])
+            if s.get("name") or str(s).strip()
+        ]
+        context = {
+            "scope": scope,
+            "project_overview": scope.get("description", ""),
+            "stakeholders": artifact.get("stakeholders", []),
+            "stakeholder_names": stakeholder_names,
+            "requirements": artifact.get("requirements", []),
+            "conflicts": artifact.get("conflicts", []),
+            "open_questions": artifact.get("open_questions", []),
+            "decisions": decisions,
+            "system_models": artifact.get("system_models", {}),
+            "feedback": feedback,
+            "domain_research": feedback.get("domain_research"),
+            "draft_version": draft_version if draft_version is not None else 0,
+        }
+        version_note = ""
+        if draft_version is not None:
+            version_note = f" 本稿版本: draft_v{draft_version}。"
+        if round_num is not None:
+            version_note += f" 對應輪次: Round {round_num}。"
+        task = f"""依 requirements-analyst skill 的 **Output Format**，僅根據 Context 產出完整需求草稿 Markdown。{version_note}
+- 草稿全文使用繁體中文，只輸出 Markdown，勿包程式碼區塊。
+- **勿產出**文件頂層 H1 標題（不要 # Feature Name）。草稿直接從 Frontmatter 或「概觀」章節開始。
+- Frontmatter 僅含 version, status, stakeholders（勿含 feature、created、updated）。version 填 Context.draft_version（初始草稿為 0）；stakeholders 用 Context.stakeholder_names。
+- 概觀只寫 Context.scope.description。
+- 約束依 Context.feedback 撰寫。勿產出依賴關係、成功標準。
+- Scope 章節寫 Context.scope.in_scope 與 Context.scope.out_of_scope。
+- **ID 規則**：功能性需求用 **FR-1、FR-2、FR-3** … 依序；非功能性用 **NFR-類別-1**（類別：SEC、PERF、ACC、REL、AVL、MNT、PRT、USB），例如 NFR-SEC-1、NFR-PERF-1。
+- **非功能性需求**：常見類別**全部寫上**（安全性、性能、可及性、可靠性、可用性、可維護性、可攜性、易用性），有對應需求則填表，無則該小節可留空表或簡短註明「（本專案暫無）」。
+- 衝突需求表格三欄：Issue | Requirements Affected（受影響需求）| Decision（決策）。Requirements Affected 欄位請寫詳細：列出受影響的需求 ID，並對每個 ID 附一句簡短摘要（該需求內容要點）；Decision 欄位標題與內容可使用繁體中文（如「待決」「已決：…」）。不要 Resolution Options。草稿結束於「衝突需求」。
+- 功能性與非功能性需求的 **Requirement 欄位**：每格維持簡短（一句話或至多兩句），勿將整段決策或實作細節貼入表格；若原始需求過長，請改寫為精簡摘要。"""
+        try:
+            raw = self.invoke_skill("requirements-analyst", task, context=context)
+        except Exception as e:
+            self.logger.warning("Analyst 產出 draft markdown 失敗: %s", e)
+            return f"# Requirements Draft\n\n（生成失敗: {e}）"
+        return self.strip_code_fences(raw)
 
     def update_draft(self, artifact: Dict) -> Dict:
         """依 requirements-analyst skill 依決策與討論更新需求草稿。"""
@@ -229,7 +296,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
         if not isinstance(requirements, list):
             requirements = artifact.get("requirements", [])
         # 合併：若 LLM 遺漏既有 id，以舊版補回，避免前版需求被刪除
-        prev_by_id = {r.get("id"): r for r in artifact.get("requirements", []) if r.get("id")}
+        prev_by_id = {
+            r.get("id"): r for r in artifact.get("requirements", []) if r.get("id")
+        }
         returned_ids = {r.get("id") for r in requirements if r.get("id")}
         for pid, prev_req in prev_by_id.items():
             if pid not in returned_ids:
@@ -242,6 +311,50 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
             "requirements": requirements,
             "conflicts": artifact.get("conflicts", []),
         }
+
+    def generate_conflict_report(
+        self,
+        artifact: Dict[str, Any],
+        round_num: Optional[int] = None,
+        recent_decisions_limit: Optional[int] = None,
+    ) -> str:
+        """依 conflict-analyzer skill 與 assets/conflict_report_template.json 結構，從 artifact 產出需求衝突分析報告（Markdown）；含所有衝突（含已解決）並標示是否已解決。"""
+        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
+        decisions = artifact.get("decisions", [])[-n:] if n else []
+        all_conflicts = artifact.get("conflicts", [])
+        report_template_json = ""
+        if CONFLICT_REPORT_TEMPLATE_PATH.exists():
+            report_template_json = CONFLICT_REPORT_TEMPLATE_PATH.read_text(
+                encoding="utf-8"
+            )
+        context = {
+            "report_template": report_template_json,
+            "conflicts": all_conflicts,
+            "requirements": artifact.get("requirements", []),
+            "stakeholders": artifact.get("stakeholders", []),
+            "scope": artifact.get("scope", {}),
+            "project_overview": (artifact.get("scope") or {}).get("description", ""),
+            "open_questions": artifact.get("open_questions", []),
+            "decisions": decisions,
+            "system_models": artifact.get("system_models", {}),
+            "round_num": round_num,
+            "domain_research": artifact.get("feedback", {}).get("domain_research"),
+        }
+        task = """依本 skill 與 Context.report_template（conflict_report_template.json）的結構，僅根據 Context 產出「需求衝突分析報告」。
+- Context.conflicts 為**所有衝突**（含已解決與未解決）。每筆有 label：**Conflict** = 未解決，**Neutral** = 已解決。報告須**全部列出**，並在每筆標示「是否已解決」（依 label）。label 維持英文。
+- 其餘章節與欄位（metadata、conflict_matrix、recommendations、unresolved/resolved 總數等）依 report_template 撰寫；unresolved 為 label=Conflict 的數量，resolved 為 label=Neutral 的數量。
+- 報告內所有章節標題、描述、建議、說明等文字請使用**繁體中文**。
+- **輸出為 Markdown**，勿輸出 JSON 或程式碼區塊。只輸出 Markdown。"""
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+        except Exception as e:
+            self.logger.warning("Analyst 產出 conflict report 失敗: %s", e)
+            return f"# 需求衝突分析報告\n\n（報告生成失敗: {e}）"
+        out = self.strip_code_fences(raw)
+        if not out:
+            self.logger.warning("Analyst 產出 conflict report 無內容")
+            return "# 需求衝突分析報告\n\n（報告無內容）"
+        return out
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
@@ -269,7 +382,11 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
         if "conflict-analyzer" not in self.skill_names:
             return None
         source_ids = topic.get("source_ids") or []
-        conflict_ids = [s for s in source_ids if isinstance(s, str) and (s.startswith("CF-") or s.startswith("CF-D"))]
+        conflict_ids = [
+            s
+            for s in source_ids
+            if isinstance(s, str) and (s.startswith("CF-") or s.startswith("CF-D"))
+        ]
         conflicts = artifact.get("conflicts", [])
         if conflict_ids:
             relevant = [c for c in conflicts if c.get("id") in conflict_ids]
@@ -306,17 +423,33 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
             if o.get("pros") or o.get("cons"):
                 parts = []
                 if o.get("pros"):
-                    parts.append("優點：" + (", ".join(o["pros"]) if isinstance(o["pros"], list) else str(o["pros"])))
+                    parts.append(
+                        "優點："
+                        + (
+                            ", ".join(o["pros"])
+                            if isinstance(o["pros"], list)
+                            else str(o["pros"])
+                        )
+                    )
                 if o.get("cons"):
-                    parts.append("缺點：" + (", ".join(o["cons"]) if isinstance(o["cons"], list) else str(o["cons"])))
+                    parts.append(
+                        "缺點："
+                        + (
+                            ", ".join(o["cons"])
+                            if isinstance(o["cons"], list)
+                            else str(o["cons"])
+                        )
+                    )
                 if parts:
                     desc = desc + "\n" + "\n".join(parts) if desc else "\n".join(parts)
-            best_options.append({
-                "id": i,
-                "title": title or f"方案 {i}",
-                "description": desc or "(無描述)",
-                "source": "analyst",
-            })
+            best_options.append(
+                {
+                    "id": i,
+                    "title": title or f"方案 {i}",
+                    "description": desc or "(無描述)",
+                    "source": "analyst",
+                }
+            )
         compromise = None
         if recommended:
             compromise = {
@@ -391,117 +524,13 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
             "open_questions": response.get("open_questions", []),
         }
 
-    def generate_draft_markdown(
-        self,
-        artifact: Dict[str, Any],
-        draft_version: Optional[int] = None,
-        round_num: Optional[int] = None,
-        recent_decisions_limit: Optional[int] = None,
-    ) -> str:
-        """依 requirements-analyst skill 的 Output Format，從 artifact 產出需求草稿 Markdown。"""
-        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
-        decisions = artifact.get("decisions", [])[-n:] if n else []
-        scope = artifact.get("scope", {}) or {}
-        feedback = artifact.get("feedback", {}) or {}
-        # 專案/功能名稱：供草稿標題與 frontmatter feature 使用
-        rough = (artifact.get("rough_idea") or "").strip()
-        desc = (scope.get("description") or "").strip()
-        if desc:
-            feature_name = desc[:40].rstrip() if len(desc) > 40 else desc
-        elif rough:
-            feature_name = rough[:40].rstrip() if len(rough) > 40 else rough
-        else:
-            feature_name = "專案"
-        stakeholder_names = [
-            (s.get("name") or str(s)) for s in artifact.get("stakeholders", [])
-            if s.get("name") or str(s).strip()
-        ]
-        context = {
-            "scope": scope,
-            "project_overview": scope.get("description", ""),
-            "stakeholders": artifact.get("stakeholders", []),
-            "stakeholder_names": stakeholder_names,
-            "feature_name": feature_name,
-            "requirements": artifact.get("requirements", []),
-            "conflicts": artifact.get("conflicts", []),
-            "open_questions": artifact.get("open_questions", []),
-            "decisions": decisions,
-            "system_models": artifact.get("system_models", {}),
-            "feedback": feedback,
-            "domain_research": feedback.get("domain_research"),
-        }
-        version_note = ""
-        if draft_version is not None:
-            version_note = f" 本稿版本: draft_v{draft_version}。"
-        if round_num is not None:
-            version_note += f" 對應輪次: Round {round_num}。"
-        task = f"""依 requirements-analyst skill 的 **Output Format**，僅根據 Context 產出完整需求草稿 Markdown。{version_note}
-- 草稿全文使用繁體中文，只輸出 Markdown，勿包程式碼區塊。
-- **文件第一個標題（H1）**：只寫 **Feature Name**，使用 Context.feature_name，勿加 "Requirements:" 前綴。
-- Frontmatter 僅含 feature, version, status, stakeholders（勿含 created、updated）。feature 填 Context.feature_name；stakeholders 用 Context.stakeholder_names。
-- 概觀只寫 Context.scope.description。
-- 約束依 Context.feedback 撰寫。勿產出依賴關係、成功標準。
-- Scope 章節寫 Context.scope.in_scope 與 Context.scope.out_of_scope。
-- **ID 規則**：功能性需求用 **FR-1、FR-2、FR-3** … 依序；非功能性用 **NFR-類別-1**（類別：SEC、PERF、ACC、REL、AVL、MNT、PRT、USB），例如 NFR-SEC-1、NFR-PERF-1。
-- **非功能性需求**：常見類別**全部寫上**（安全性、性能、可及性、可靠性、可用性、可維護性、可攜性、易用性），有對應需求則填表，無則該小節可留空表或簡短註明「（本專案暫無）」。
-- 衝突需求表格僅三欄：Issue | Requirements Affected | Decision（不要 Resolution Options）。草稿結束於「衝突需求」。
-- 功能性與非功能性需求的 **Requirement 欄位**：每格維持簡短（一句話或至多兩句），勿將整段決策或實作細節貼入表格；若原始需求過長，請改寫為精簡摘要。"""
-        try:
-            raw = self.invoke_skill("requirements-analyst", task, context=context)
-        except Exception as e:
-            self.logger.warning("Analyst 產出 draft markdown 失敗: %s", e)
-            return f"# Requirements Draft\n\n（生成失敗: {e}）"
-        return self.strip_code_fences(raw)
-
     @staticmethod
     def strip_code_fences(text: str) -> str:
         s = (text or "").strip()
         if s.startswith("```"):
             idx = s.find("\n")
             if idx != -1:
-                s = s[idx + 1:]
+                s = s[idx + 1 :]
         if s.endswith("```"):
             s = s[:-3]
         return s.strip()
-
-    def generate_conflict_report(
-        self,
-        artifact: Dict[str, Any],
-        round_num: Optional[int] = None,
-        recent_decisions_limit: Optional[int] = None,
-    ) -> str:
-        """依 conflict-analyzer skill 與 assets/conflict_report_template.json 結構，從 artifact 產出需求衝突分析報告（Markdown）；含所有衝突（含已解決）並標示是否已解決。"""
-        n = 10 if recent_decisions_limit is None else max(0, recent_decisions_limit)
-        decisions = artifact.get("decisions", [])[-n:] if n else []
-        all_conflicts = artifact.get("conflicts", [])
-        report_template_json = ""
-        if CONFLICT_REPORT_TEMPLATE_PATH.exists():
-            report_template_json = CONFLICT_REPORT_TEMPLATE_PATH.read_text(encoding="utf-8")
-        context = {
-            "report_template": report_template_json,
-            "conflicts": all_conflicts,
-            "requirements": artifact.get("requirements", []),
-            "stakeholders": artifact.get("stakeholders", []),
-            "scope": artifact.get("scope", {}),
-            "project_overview": (artifact.get("scope") or {}).get("description", ""),
-            "open_questions": artifact.get("open_questions", []),
-            "decisions": decisions,
-            "system_models": artifact.get("system_models", {}),
-            "round_num": round_num,
-            "domain_research": artifact.get("feedback", {}).get("domain_research"),
-        }
-        task = """依本 skill 與 Context.report_template（conflict_report_template.json）的結構，僅根據 Context 產出「需求衝突分析報告」。
-- Context.conflicts 為**所有衝突**（含已解決與未解決）。每筆有 label：**Conflict** = 未解決，**Neutral** = 已解決。報告須**全部列出**，並在每筆標示「是否已解決」（依 label）。label 維持英文。
-- 其餘章節與欄位（metadata、conflict_matrix、recommendations、unresolved/resolved 總數等）依 report_template 撰寫；unresolved 為 label=Conflict 的數量，resolved 為 label=Neutral 的數量。
-- 報告內所有章節標題、描述、建議、說明等文字請使用**繁體中文**。
-- **輸出為 Markdown**，勿輸出 JSON 或程式碼區塊。只輸出 Markdown。"""
-        try:
-            raw = self.invoke_skill("conflict-analyzer", task, context=context)
-        except Exception as e:
-            self.logger.warning("Analyst 產出 conflict report 失敗: %s", e)
-            return f"# 需求衝突分析報告\n\n（報告生成失敗: {e}）"
-        out = self.strip_code_fences(raw)
-        if not out:
-            self.logger.warning("Analyst 產出 conflict report 無內容")
-            return "# 需求衝突分析報告\n\n（報告無內容）"
-        return out

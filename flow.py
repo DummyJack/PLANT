@@ -187,22 +187,13 @@ class Flow:
         self.store.save_artifact(artifact)
 
         self.logger.info("Analyst 分析需求")
-        draft = self.analyst_agent.create_draft(stakeholders)
-        artifact["requirements"] = draft["requirements"]
+        analysis = self.analyst_agent.analyze_requirements(stakeholders)
+        artifact["requirements"] = analysis["requirements"]
         self.store.save_artifact(artifact)
 
         self.logger.info("Analyst 執行衝突辨識")
         artifact = self.analyst_agent.run_conflict_detection(artifact)
         self.store.save_artifact(artifact)
-        draft_md = self.analyst_agent.generate_draft_markdown(
-            artifact,
-            draft_version=0,
-            recent_decisions_limit=self.config.get("agenda_items", 5),
-        )
-        self.store.save_draft(draft_md, version=0)
-        self.logger.info(
-            f"✓ Draft v0: {len(draft['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個衝突"
-        )
 
         self.logger.info("Expert 提供領域知識")
         scope = artifact.get("scope", {})
@@ -223,6 +214,17 @@ class Flow:
             self.logger.info(
                 "artifact.feedback.domain_research 已寫入但為空（domain-research skill 未產出或解析失敗）"
             )
+
+        self.logger.info("Analyst 草稿化")
+        draft_md = self.analyst_agent.create_draft(
+            artifact,
+            draft_version=0,
+            recent_decisions_limit=self.config.get("agenda_items", 5),
+        )
+        self.store.save_draft(draft_md, version=0)
+        self.logger.info(
+            f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個衝突"
+        )
 
         meta = artifact.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -347,9 +349,7 @@ class Flow:
                         pass
             ctype = (nc.get("conflict_type") or "").strip()
             if ctype not in valid_conflict_types:
-                ctype = (
-                    ALLOWED_CONFLICT_TYPES[0] if ALLOWED_CONFLICT_TYPES else "Logical"
-                )
+                ctype = ""
             new_conflicts.append(
                 {
                     "id": f"CF-{max_num + 1:02d}",
@@ -403,7 +403,7 @@ class Flow:
 
         # Step 5.4: 產出 draft markdown（含系統模型）
         next_version = self.store.get_draft_version() + 1
-        draft_md = self.analyst_agent.generate_draft_markdown(
+        draft_md = self.analyst_agent.create_draft(
             artifact,
             draft_version=next_version,
             round_num=round_num,
