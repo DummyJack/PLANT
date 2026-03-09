@@ -41,7 +41,9 @@ class Flow:
         expert_tools = []
         if enable_tools.get("web_search", False):
             from agents.tools import WebSearchTool
-            expert_tools.append(WebSearchTool())
+            expert_tools.append(
+                WebSearchTool(max_results=config.get("web_search_max_results", 3))
+            )
         if enable_tools.get("read_external_file", True) and has_supported_doc_files(doc_dir):
             expert_tools.append(ReadExternalFileTool(base_dir=doc_dir))
         self.user_agent = UserAgent(self.model, registry=self.registry)
@@ -70,6 +72,7 @@ class Flow:
             registry=self.registry,
         )
 
+        tool_max = config.get("tool_call_max_rounds", 3)
         for name, agent in [
             ("user", self.user_agent),
             ("analyst", self.analyst_agent),
@@ -78,8 +81,22 @@ class Flow:
             ("modeler", self.modeler_agent),
             ("documentor", self.documentor_agent),
         ]:
+            agent.tool_call_max_rounds = tool_max
+            agent.low_confidence_threshold = config.get(
+                "low_confidence_threshold", 0.7
+            )
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
+
+        self.mediator_agent.enable_human_escalation = config.get(
+            "enable_human_escalation", True
+        )
+
+        eat = config.get("enable_agenda_types")
+        if isinstance(eat, dict):
+            self.mediator_agent.enabled_agenda_type_ids = [
+                k for k, v in eat.items() if v
+            ]
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
@@ -169,7 +186,8 @@ class Flow:
         proposed = self.user_agent.propose_stakeholders(rough_idea)
 
         self.logger.info("請選擇利害關係人")
-        selected_indices = Collect.user_selection(proposed)
+        max_sh = self.config.get("max_stakeholders", 5)
+        selected_indices = Collect.user_selection(proposed, max_select=max_sh)
         selected = [proposed[i]["name"] for i in selected_indices]
         print()
         self.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
@@ -191,29 +209,150 @@ class Flow:
         artifact["requirements"] = analysis["requirements"]
         self.store.save_artifact(artifact)
 
-        self.logger.info("Analyst 執行衝突辨識")
+        self.logger.info("Analyst 精煉模糊需求")
+        refined = self.analyst_agent.refine_requirements(artifact)
+        artifact["requirements"] = refined.get(
+            "requirements", artifact["requirements"]
+        )
+        refined_ids = refined.get("refined_ids", [])
+        if refined_ids:
+            self.logger.info(
+                f"  ✓ 精煉了 {len(refined_ids)} 條: {refined_ids}"
+            )
+        self.store.save_artifact(artifact)
+
+        self.logger.info("Analyst 執行衝突辨識（含信心度）")
         artifact = self.analyst_agent.run_conflict_detection(artifact)
         self.store.save_artifact(artifact)
 
-        self.logger.info("Expert 提供領域知識")
-        scope = artifact.get("scope", {})
-        project_overview = scope.get("description") or ""
-        injection = self.expert_agent.provide_domain_knowledge(
-            artifact["requirements"],
-            artifact["conflicts"],
-            project_overview=project_overview,
+        lc_threshold = self.config.get("low_confidence_threshold", 0.7)
+        low_conf = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Conflict"
+            and isinstance(c.get("confidence"), (int, float))
+            and c["confidence"] < lc_threshold
+        ]
+        if low_conf:
+            for c in low_conf:
+                amb = c.get("ambiguous_requirements", [])
+                desc = (
+                    f"衝突 {c['id']} 信心度低（{c.get('confidence', '?')}）"
+                    f"：{c.get('description', '')[:80]}"
+                )
+                if amb:
+                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
+                artifact.setdefault("open_questions", []).append({
+                    "from_agent": "analyst",
+                    "question": desc,
+                    "status": "pending",
+                    "type": "low_confidence_conflict",
+                    "related_conflict_id": c["id"],
+                })
+            self.logger.info(
+                f"  {len(low_conf)} 個低信心衝突加入 open_questions"
+            )
+
+        low_conf_neutrals = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+            and isinstance(c.get("confidence"), (int, float))
+            and c["confidence"] < lc_threshold
+        ]
+        if low_conf_neutrals:
+            for c in low_conf_neutrals:
+                amb = c.get("ambiguous_requirements", [])
+                desc = (
+                    f"Neutral {c['id']} 信心度低（{c.get('confidence', '?')}）"
+                    f"，可能遺漏衝突：{c.get('description', '')[:80]}"
+                )
+                if amb:
+                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
+                artifact.setdefault("open_questions", []).append({
+                    "from_agent": "analyst",
+                    "question": desc,
+                    "status": "pending",
+                    "type": "low_confidence_neutral",
+                    "related_neutral_id": c["id"],
+                })
+            self.logger.info(
+                f"  {len(low_conf_neutrals)} 個低信心 Neutral 加入 open_questions"
+            )
+
+        if low_conf or low_conf_neutrals:
+            self.store.save_artifact(artifact)
+
+        self.logger.info("Expert 自主領域研究")
+        ri = self.config.get("review_iterations") or {}
+        review = self.expert_agent.run_review_loop(
+            artifact, max_iterations=ri.get("expert", 5)
         )
-        if injection.get("feedback"):
-            artifact.setdefault("feedback", {})
-            artifact["feedback"].update(injection["feedback"])
         self.store.save_artifact(artifact)
+        review_actions = review.get("actions_taken", [])
+        review_issues = review.get("pending_issues", [])
         dr = artifact.get("feedback", {}).get("domain_research") or {}
         if dr and isinstance(dr, dict) and dr:
-            self.logger.info("✓ 領域研究結果已寫入 artifact.feedback.domain_research")
-        else:
             self.logger.info(
-                "artifact.feedback.domain_research 已寫入但為空（domain-research skill 未產出或解析失敗）"
+                f"✓ 領域研究完成（{len(review_actions)} 步驟）"
             )
+        else:
+            self.logger.info("領域研究循環完成但無研究結果寫入")
+        if review_issues:
+            for issue in review_issues:
+                artifact.setdefault("open_questions", []).append({
+                    "from_agent": "expert",
+                    "question": issue.get("description", ""),
+                    "status": "pending",
+                    "type": issue.get("type", "compliance_risk"),
+                })
+            self.logger.info(
+                f"  Expert 標記了 {len(review_issues)} 個合規風險"
+                "（加入 open_questions）"
+            )
+
+        self.logger.info("Modeler 初步建模")
+        model_data = self.modeler_agent.generate_system_model(
+            artifact["requirements"], artifact["stakeholders"]
+        )
+        artifact["system_models"] = model_data
+        self.store.save_artifact(artifact)
+        model_count = len(model_data.get("models", []))
+        self.logger.info(f"  ✓ 產生 {model_count} 張 UML 圖")
+        self.store.save_plantuml_files(model_data)
+
+        self.logger.info("Modeler 交叉複審 Neutral 項目")
+        modeler_upgraded = self.modeler_agent.cross_review_neutrals(artifact)
+        all_upgraded = [
+            {**u, "cross_review_source": "modeler"} for u in modeler_upgraded
+        ]
+        if all_upgraded:
+            existing_cf = len([
+                c for c in artifact.get("conflicts", [])
+                if c.get("label") == "Conflict"
+            ])
+            for i, up in enumerate(all_upgraded, existing_cf + 1):
+                ctype = (up.get("conflict_type") or "").strip()
+                if ctype not in ALLOWED_CONFLICT_TYPES:
+                    ctype = ""
+                evidence = (
+                    up.get("domain_evidence")
+                    or up.get("architecture_evidence", "")
+                )
+                artifact.setdefault("conflicts", []).append({
+                    "id": f"CF-{i:02d}",
+                    "label": "Conflict",
+                    "description": up.get("description", ""),
+                    "requirement_ids": up.get("requirement_ids", []),
+                    "conflict_type": ctype,
+                    "cross_review_source": up["cross_review_source"],
+                    "original_neutral_id": up.get("original_neutral_id"),
+                    "evidence": evidence,
+                })
+            self.logger.info(
+                f"  ✓ 交叉複審升級了 {len(all_upgraded)} 個 Neutral → Conflict"
+            )
+            self.store.save_artifact(artifact)
+        else:
+            self.logger.info("  交叉複審確認所有 Neutral 無遺漏")
 
         self.logger.info("Analyst 草稿化")
         draft_md = self.analyst_agent.create_draft(

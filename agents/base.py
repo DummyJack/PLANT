@@ -10,6 +10,8 @@ from agents.tools.base import BaseTool
 class BaseAgent:
     name: str = ""
     system_prompt: str = ""
+    tool_call_max_rounds: int = 3
+    low_confidence_threshold: float = 0.7
 
     def __init__(
         self,
@@ -44,7 +46,7 @@ class BaseAgent:
     ) -> Dict[str, Any]:
         """討論回合：有 tools 時走 chat_with_tools 並解析 JSON，否則 chat_json（kwargs 傳給 model.chat_json）"""
         if self.tools:
-            raw = self.chat_with_tools(messages, max_rounds=3)
+            raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
             if parse_json:
                 parsed = self.parse_topic_response_json(raw)
                 # 若解析後 statement 為空但模型有產出文字，用原始文字當 fallback，避免發言/回答留空
@@ -175,7 +177,7 @@ class BaseAgent:
             {"role": "user", "content": "\n".join(user_parts)},
         ]
         if self.tools:
-            return self.chat_with_tools(messages, max_rounds=3)
+            return self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
         return self.model.chat(messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:

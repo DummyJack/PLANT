@@ -36,14 +36,14 @@ class Logger:
 
 class Collect:
     @staticmethod
-    def user_selection(proposed: List[Dict[str, str]]) -> List[int]:
+    def user_selection(proposed: List[Dict[str, str]], max_select: int = 5) -> List[int]:
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
                 print(f"{i}. {sh['name']}，理由: {sh['reason']}")
 
             print("\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)")
-            user_input = input("\n請選擇利害關係人(最多 5 位)：").strip()
+            user_input = input(f"\n請選擇利害關係人(最多 {max_select} 位)：").strip()
 
             if not user_input:
                 print("\n❌ 請至少選擇 1 個利害關係人")
@@ -65,8 +65,8 @@ class Collect:
                             proposed.append({"name": part, "reason": "使用者自訂"})
                             selected_indices.append(len(proposed) - 1)
 
-                if len(selected_indices) > 5:
-                    print(f"\n⚠️ 選擇超過 5 個，請重新選擇")
+                if len(selected_indices) > max_select:
+                    print(f"\n⚠️ 選擇超過 {max_select} 個，請重新選擇")
                     continue
 
                 if len(selected_indices) == 0:

@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
 
-TYPE_DIR = Path(__file__).resolve().parent.parent / "type"
-with open(TYPE_DIR / "agenda_types.json", "r", encoding="utf-8") as f:
+_AGENTS_DIR = Path(__file__).resolve().parent.parent
+with open(_AGENTS_DIR / "agenda_types.json", "r", encoding="utf-8") as f:
     AGENDA_TYPES = tuple(json.load(f))
 AGENDA_TYPE_IDS = [t["id"] for t in AGENDA_TYPES]
 AGENDA_CATEGORY_LABEL = {t["id"]: t["label"] for t in AGENDA_TYPES}
@@ -16,6 +16,9 @@ AGENDA_ACTIONS = [
     "resolve_topic",
     "escalate_to_human",
     "save_topic",
+    "expert_review",
+    "analyst_review",
+    "modeler_review",
     "finish_round",
 ]
 
@@ -36,8 +39,22 @@ class MediatorAgent(BaseAgent):
 - 忠於資料 — 只根據已有的分析結果和討論內容做出綜合判斷
 - 無法共識時升級 — 無法達成共識時直接升級至人類裁決"""
 
+    enabled_agenda_type_ids: Optional[List[str]] = None
+    enable_human_escalation: bool = True
+
     def __init__(self, model, tools: Optional[list] = None, registry=None):
         super().__init__(model, tools=tools, registry=registry)
+
+    def _get_active_agenda_types(self):
+        """回傳啟用的議程類型（tuple of dicts）和 id 列表。"""
+        if self.enabled_agenda_type_ids is None:
+            return AGENDA_TYPES, AGENDA_TYPE_IDS
+        active = tuple(
+            t for t in AGENDA_TYPES
+            if t["id"] in self.enabled_agenda_type_ids
+        )
+        active_ids = [t["id"] for t in active]
+        return active, active_ids
 
     def generate_agenda(
         self,
@@ -61,7 +78,8 @@ class MediatorAgent(BaseAgent):
             self.logger.info("無足夠專案內容或草稿可供判斷議程")
             return []
 
-        types_text = json.dumps(AGENDA_TYPES, ensure_ascii=False, indent=2)
+        active_types, active_ids = self._get_active_agenda_types()
+        types_text = json.dumps(active_types, ensure_ascii=False, indent=2)
         user_prompt = f"""# 任務
 你是需求調解主持人。請根據「當前專案狀態」與「已討論過項目」，自行判斷本輪應開哪些議程。
 議程類型必須從下方「議程類型定義」中選擇，每項議程需決定：標題、描述、類型、參與者、討論模式、發言順序。
@@ -87,6 +105,13 @@ class MediatorAgent(BaseAgent):
 - **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，例如寫出涉及的對象、需求或衝突重點，勿只寫類型名稱（如勿只寫「衝突討論」「需求取捨」）。
 - **description（描述）**：簡短說明「為什麼要開這個議題、要解決什麼」。可提及相關需求 id 或衝突 id，並用一兩句話說明討論重點。
 - 範例：標題可為「管理員權限與一般使用者隱私的衝突如何取捨」而非「衝突討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
+
+# conflict_resolution 與 requirement_clarification 的區分
+- 高信心衝突（confidence ≥ {self.low_confidence_threshold} 或無 confidence 欄位）：歸類為 **conflict_resolution**，目標是協調立場、達成共識
+- 低信心衝突（confidence < {self.low_confidence_threshold} 且 ambiguous_requirements 非空）：歸類為 **requirement_clarification**，目標是先釐清需求再判定衝突
+- 低信心 Neutral（confidence < {self.low_confidence_threshold}）：歸類為 **requirement_clarification**，目標是釐清需求、判定是否遺漏衝突
+- open_questions 中 type 為 "low_confidence_conflict" 或 "low_confidence_neutral" 的項目歸 **requirement_clarification**
+- 來自交叉複審（cross_review_source 非空）的衝突歸 **conflict_resolution**（已有明確證據，需討論是否採納）
 
 # 約束
 - 最多開 {limit} 個議程，依你判斷的優先順序排列
@@ -126,8 +151,8 @@ class MediatorAgent(BaseAgent):
         agenda_items = []
         for idx, item in enumerate(raw_items[:limit], 1):
             category = item.get("category", "")
-            if category not in AGENDA_TYPE_IDS:
-                category = AGENDA_TYPE_IDS[0]
+            if category not in active_ids:
+                category = active_ids[0] if active_ids else AGENDA_TYPE_IDS[0]
             participants = [p for p in item.get("participants", []) if p in registered]
             if not participants:
                 participants = list(registered)
@@ -217,6 +242,15 @@ class MediatorAgent(BaseAgent):
         state_text = json.dumps(state_summary, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation, ensure_ascii=False, indent=2)
 
+        escalate_hint = ""
+        escalate_action = ""
+        if self.enable_human_escalation:
+            escalate_action = (
+                "- escalate_to_human：某議題交由人類裁決。"
+                "params: {{ \"topic_id\": \"T-01\" }}（須已 start_discussion）\n"
+            )
+            escalate_hint = "；若未共識可選 escalate_to_human 再 save_topic"
+
         user_prompt = f"""# 任務
 你是需求調解主持人，正在主持本輪議程。請根據「當前狀態」與「上一動執行結果」，決定下一步要執行的動作。
 
@@ -224,8 +258,10 @@ class MediatorAgent(BaseAgent):
 - generate_agenda：產生本輪議程（無參數）。若 topics 已存在則勿重複呼叫。
 - start_discussion：對某議題開始討論。params: {{ "topic_id": "T-01" }}（須為 state.topics 中存在的 id）
 - resolve_topic：綜合某議題討論結果。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
-- escalate_to_human：某議題交由人類裁決。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
-- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
+{escalate_action}- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
+- expert_review：讓領域專家進行自主研究與合規分析。無參數。適合在討論涉及法規/標準/安全後觸發。
+- analyst_review：讓需求分析師進行自主分析（掃描討論、偵測衝突、更新需求）。無參數。適合在議題討論後觸發。
+- modeler_review：讓系統建模師進行自主模型更新與驗證。無參數。適合在需求變更後觸發。
 - finish_round：結束本輪議程。無參數。僅在已處理完所有要討論的議題並 save 後才可呼叫。
 
 # 當前狀態
@@ -236,7 +272,9 @@ class MediatorAgent(BaseAgent):
 
 # 規則
 - 若 topics 為空，先呼叫 generate_agenda
-- 對每個要討論的 topic 依序：start_discussion → resolve_topic（若共識則直接 save_topic；若未共識可選 escalate_to_human 再 save_topic）→ save_topic
+- 對每個要討論的 topic 依序：start_discussion → resolve_topic（若共識則直接 save_topic{escalate_hint}）→ save_topic
+- 在 save_topic 後，可視討論內容觸發 expert_review / analyst_review / modeler_review（非每次必要，視需要決定）
+- 若 pending_review_issues 有項目，可考慮為其開新議題或升級處理
 - 全部處理完後呼叫 finish_round
 - 一次只回傳一個動作
 - reasoning 請使用繁體中文
@@ -305,7 +343,12 @@ class MediatorAgent(BaseAgent):
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> List[Dict]:
         contributions = []
-        speaking_order = topic.get("speaking_order", topic.get("participants", []))
+        speaking_order = topic.get("speaking_order") or topic.get("participants") or []
+        if not speaking_order:
+            self.logger.warning(
+                f"[{topic['id']}] speaking_order 與 participants 皆為空，無人可發言"
+            )
+            return contributions
         title = topic.get("title", "") or "（無標題）"
         cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
         self.logger.info(f"[{topic['id']}] {title} [{cat_label}] — 逐一發言: {' → '.join(speaking_order)}")
@@ -370,7 +413,12 @@ class MediatorAgent(BaseAgent):
     def moderate_simultaneous(
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> List[Dict]:
-        participants = topic.get("participants", [])
+        participants = topic.get("participants") or []
+        if not participants:
+            self.logger.warning(
+                f"[{topic.get('id', '?')}] participants 為空，無人可發言"
+            )
+            return []
         title = topic.get("title", "") or "（無標題）"
         cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
         self.logger.info(f"[{topic['id']}] {title} [{cat_label}] — 同時發言: {', '.join(participants)}")
@@ -527,18 +575,31 @@ class MediatorAgent(BaseAgent):
         round_num: int = 0,
     ) -> str:
         mode = topic.get("discussion_mode", "sequential")
-        participants = topic.get("participants", [])
+        participants = (
+            topic.get("participants")
+            or topic.get("speaking_order")
+            or []
+        )
+        category = topic.get("category", "")
+        cat_label = AGENDA_CATEGORY_LABEL.get(category, category)
+        description = topic.get("description", "")
 
         md = f"# {topic.get('title', '')}\n\n"
         md += f"- **Round**: {round_num}\n"
+        md += f"- **Category**: {cat_label}\n"
+        if description:
+            md += f"- **Description**: {description}\n"
         summary = resolution.get("summary", "")
         decision = resolution.get("decision", "")
+        resolution_status = resolution.get("resolution", "")
         md += f"- **Summary**: {summary}\n"
         if decision:
             md += f"- **Decision**: {decision}\n"
-        md += f"- **Participants**: {', '.join(participants)}\n"
+        if resolution_status:
+            md += f"- **Resolution**: {resolution_status}\n"
+        md += f"- **Participants**: {', '.join(participants) if participants else '（無參與者）'}\n"
         md += f"- **Discussion mode**: {mode}\n"
-        # 多數決投票結果
+
         votes_line = []
         for c in contributions:
             if c.get("is_reply", False):
@@ -547,21 +608,25 @@ class MediatorAgent(BaseAgent):
             v = resp.get("vote", "unresolved")
             votes_line.append(f"{c.get('agent', '?')}: {v}")
         if votes_line:
-            md += f"- **Votes (多數決)**: {', '.join(votes_line)}\n"
+            md += f"- **Votes**: {', '.join(votes_line)}\n"
         md += "\n"
 
-        md += "## Participants content\n\n"
-        for c in contributions:
-            if c.get("is_reply", False):
-                continue
-            agent = c.get("agent", "?")
-            resp = c.get("response", {})
-            statement = resp.get("statement", "")
-            md += f"### {agent}\n\n"
-            if statement:
-                md += f"{statement}\n\n"
+        main_contribs = [c for c in contributions if not c.get("is_reply", False)]
+        md += "## 討論內容\n\n"
+        if not main_contribs:
+            md += "（本議題無人發言）\n\n"
+        else:
+            for c in main_contribs:
+                agent = c.get("agent", "?")
+                resp = c.get("response", {})
+                statement = resp.get("statement", "")
+                vote = resp.get("vote", "")
+                md += f"### {agent}\n\n"
+                if statement:
+                    md += f"{statement}\n\n"
+                if vote:
+                    md += f"> **Vote**: {vote}\n\n"
 
-        # ## Open Questions：以「提出者 問 被問者: 問題」+ 分隔線 + 回答者內容列出
         oq_pairs = []
         for c in contributions:
             if not c.get("is_reply"):
@@ -574,7 +639,7 @@ class MediatorAgent(BaseAgent):
             if question or answer:
                 oq_pairs.append((from_agent, question, reply_agent, answer))
         if oq_pairs:
-            md += "## Open Questions\n\n"
+            md += "## 開放問題\n\n"
             for i, (from_agent, question, reply_agent, answer) in enumerate(oq_pairs):
                 if i > 0:
                     md += "\n---\n\n"
@@ -585,7 +650,17 @@ class MediatorAgent(BaseAgent):
 
     def synthesize_and_resolve(self, topic: Dict, contributions: List[Dict]) -> Dict:
         """依各 agent 的投票（vote）以多數決決定是否達成共識；agreed 時由 LLM 產出 summary 與 decision。"""
-        # 只計入主要發言（排除開放問題的回覆），收集每人一票並記錄
+        if not contributions:
+            self.logger.warning(
+                f"  [{topic.get('id', '?')}] 無發言紀錄，直接標記為 unresolved"
+            )
+            return {
+                "resolution": "unresolved",
+                "summary": "本議題無人發言，無法進行決議。",
+                "decision": "",
+                "votes": {},
+                "votes_summary": "無投票（0/0）",
+            }
         main_contributions = [c for c in contributions if not c.get("is_reply", False)]
         votes_list = []
         votes_by_agent = {}
@@ -814,6 +889,7 @@ class AgendaRunner:
         self.round_discussions: List[Dict] = []
         self.all_open_questions: List[Dict] = []
         self.topic_idx = 0
+        self.pending_review_issues: List[Dict] = []
 
     def run(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
         params = params or {}
@@ -863,6 +939,13 @@ class AgendaRunner:
             if not topic:
                 obs["error"] = f"topic_id 不存在: {topic_id}"
                 return obs
+            st_disc = self.topic_status.get(topic_id, {})
+            if st_disc.get("discussed"):
+                obs["error"] = (
+                    f"{topic_id} 已討論過，不可重複討論。"
+                    f"請使用 save_topic 儲存後繼續下一個議題。"
+                )
+                return obs
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             mode = topic.get("discussion_mode", "sequential")
             if mode == "simultaneous":
@@ -882,20 +965,26 @@ class AgendaRunner:
             self.all_open_questions.extend(oq_records)
             self.topic_status[topic_id]["discussed"] = True
             self.topic_status[topic_id]["contributions"] = contributions
-            obs["result"] = {
+            result_info = {
                 "topic_id": topic_id,
                 "contributions_count": len(contributions),
                 "oq_count": len(oq_records),
             }
+            if not contributions:
+                result_info["warning"] = (
+                    "本議題無參與者可發言，請直接執行 save_topic 儲存後繼續。"
+                )
+            obs["result"] = result_info
             return obs
 
         if action == "resolve_topic":
             topic_id = params.get("topic_id")
             topic = self.get_topic(topic_id)
-            contributions = self.topic_status.get(topic_id, {}).get("contributions")
-            if not topic or not contributions:
+            st = self.topic_status.get(topic_id, {})
+            if not topic or not st.get("discussed"):
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
+            contributions = st.get("contributions") or []
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  綜合決議: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             resolution = self.mediator.synthesize_and_resolve(topic, contributions)
@@ -913,16 +1002,20 @@ class AgendaRunner:
             return obs
 
         if action == "escalate_to_human":
+            if not self.mediator.enable_human_escalation:
+                self.logger.info("  人類裁決已關閉，自動改為 resolve_topic")
+                return self.run("resolve_topic", params)
             topic_id = params.get("topic_id")
             topic = self.get_topic(topic_id)
-            contributions = self.topic_status.get(topic_id, {}).get("contributions")
-            if not topic or not contributions:
+            st_esc = self.topic_status.get(topic_id, {})
+            if not topic or not st_esc.get("discussed"):
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
+            contributions = st_esc.get("contributions") or []
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  人類裁決: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             options = None
-            if topic.get("category") == "conflict_resolution" and self.registry:
+            if topic.get("category") in ("conflict_resolution", "requirement_clarification") and self.registry:
                 analyst = self.registry.get("analyst")
                 if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
                     options = analyst.get_resolution_options_for_topic(topic, self.artifact)
@@ -941,11 +1034,11 @@ class AgendaRunner:
             topic_id = params.get("topic_id")
             topic = self.get_topic(topic_id)
             st = self.topic_status.get(topic_id, {})
-            contributions = st.get("contributions")
-            resolution = st.get("resolution")
-            if not topic or not contributions:
+            if not topic or not st.get("discussed"):
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
+            contributions = st.get("contributions") or []
+            resolution = st.get("resolution")
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  存檔議題: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             if not resolution:
@@ -980,6 +1073,84 @@ class AgendaRunner:
             )
             self.topic_status[topic_id]["saved"] = True
             obs["result"] = {"topic_id": topic_id, "filename": meeting_filename}
+            return obs
+
+        if action == "expert_review":
+            expert = self.registry.get("expert") if self.registry else None
+            if not expert or not hasattr(expert, "run_review_loop"):
+                obs["error"] = "Expert agent 不可用"
+                return obs
+            self.logger.info("  Expert 自主研究循環")
+            ri = self.config.get("review_iterations") or {}
+            result = expert.run_review_loop(
+                self.artifact, self.round_discussions,
+                max_iterations=ri.get("expert", 5),
+            )
+            for issue in result.get("pending_issues", []):
+                self.pending_review_issues.append(issue)
+            self.store.save_artifact(self.artifact)
+            obs["result"] = {
+                "actions_count": len(result.get("actions_taken", [])),
+                "pending_issues_count": len(
+                    result.get("pending_issues", [])
+                ),
+                "summary": "; ".join(
+                    a.get("result_summary", "")
+                    for a in result.get("actions_taken", [])
+                ),
+            }
+            return obs
+
+        if action == "analyst_review":
+            analyst = self.registry.get("analyst") if self.registry else None
+            if not analyst or not hasattr(analyst, "run_review_loop"):
+                obs["error"] = "Analyst agent 不可用"
+                return obs
+            self.logger.info("  Analyst 自主分析循環")
+            ri = self.config.get("review_iterations") or {}
+            result = analyst.run_review_loop(
+                self.artifact, self.round_discussions,
+                max_iterations=ri.get("analyst", 3),
+            )
+            for issue in result.get("pending_issues", []):
+                self.pending_review_issues.append(issue)
+            self.store.save_artifact(self.artifact)
+            obs["result"] = {
+                "actions_count": len(result.get("actions_taken", [])),
+                "pending_issues_count": len(
+                    result.get("pending_issues", [])
+                ),
+                "summary": "; ".join(
+                    a.get("result_summary", "")
+                    for a in result.get("actions_taken", [])
+                ),
+            }
+            return obs
+
+        if action == "modeler_review":
+            modeler = self.registry.get("modeler") if self.registry else None
+            if not modeler or not hasattr(modeler, "run_review_loop"):
+                obs["error"] = "Modeler agent 不可用"
+                return obs
+            self.logger.info("  Modeler 自主更新循環")
+            ri = self.config.get("review_iterations") or {}
+            result = modeler.run_review_loop(
+                self.artifact, self.round_discussions,
+                max_iterations=ri.get("modeler", 5),
+            )
+            for issue in result.get("pending_issues", []):
+                self.pending_review_issues.append(issue)
+            self.store.save_artifact(self.artifact)
+            obs["result"] = {
+                "actions_count": len(result.get("actions_taken", [])),
+                "pending_issues_count": len(
+                    result.get("pending_issues", [])
+                ),
+                "summary": "; ".join(
+                    a.get("result_summary", "")
+                    for a in result.get("actions_taken", [])
+                ),
+            }
             return obs
 
         if action == "finish_round":
@@ -1024,6 +1195,7 @@ class AgendaRunner:
             ],
             "topic_status": status_list,
             "round_discussions_length": len(self.round_discussions),
+            "pending_review_issues": self.pending_review_issues,
         }
 
     def get_round_discussions(self) -> List[Dict]:

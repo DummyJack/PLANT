@@ -18,6 +18,15 @@ def has_supported_doc_files(doc_dir: Path) -> bool:
     return False
 
 
+EXPERT_REVIEW_ACTIONS = [
+    "research_topic",
+    "update_findings",
+    "review_neutrals",
+    "flag_compliance_risk",
+    "done",
+]
+
+
 class ExpertAgent(BaseAgent):
     """領域專家 Agent — 賦予 domain-research skill，可搭配 read_external_file 等工具（由 flow 依 enable_tools 注入）。"""
 
@@ -110,11 +119,69 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             )
         return {"feedback": {"domain_research": research_session}}
 
+    def cross_review_neutrals(self, artifact: Dict) -> List[Dict]:
+        """從領域專業角度複審 Neutral 項目，找出可能遺漏的衝突。"""
+        neutrals = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+        ]
+        if not neutrals:
+            return []
+
+        domain_research = artifact.get("feedback", {}).get("domain_research", {})
+        context = {
+            "neutrals": neutrals,
+            "requirements": artifact.get("requirements", []),
+            "domain_research": domain_research,
+        }
+        task = """你是領域專家。以下是 Analyst 判定為「無衝突（Neutral）」的項目。
+請從法規、技術限制、行業標準的角度複審，判斷是否有被遺漏的衝突。
+
+常見盲點：
+- 兩條需求從文字看無衝突，但某法規實際上禁止同時實現
+- 兩條技術需求看似相容，但在特定架構或部署環境下會互相衝突
+- 需求描述模糊導致 Analyst 無法判斷，但領域知識能指出實質衝突
+
+輸出 JSON：
+{
+    "upgraded_conflicts": [
+        {
+            "original_neutral_id": "NF-XX",
+            "description": "為什麼這其實是衝突",
+            "conflict_type": "Logical/Technical/Resource/Temporal/Data/State/Priority/Scope",
+            "requirement_ids": ["R-XX", "R-YY"],
+            "domain_evidence": "領域依據（法規條文、技術限制等）"
+        }
+    ],
+    "review_summary": "複審摘要"
+}
+若所有 Neutral 確實無衝突，upgraded_conflicts 為空陣列。
+文字請使用繁體中文。只輸出 JSON。"""
+
+        messages = self.build_direct_messages(task, context=context)
+        try:
+            result = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"Expert Neutral 複審失敗: {e}")
+            return []
+
+        upgraded = result.get("upgraded_conflicts", [])
+        if not isinstance(upgraded, list):
+            return []
+
+        if upgraded:
+            self.logger.info(
+                f"Expert 複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
+            )
+        return upgraded
+
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
     ) -> Optional[str]:
-        """議題為領域與合規檢查時，觸發 domain-research 產出簡短要點供發言參考。"""
-        if topic.get("category") != "domain_compliance":
+        """議題涉及衝突協調、需求釐清或 NFR 取捨時，觸發 domain-research 產出簡短要點供發言參考。"""
+        if topic.get("category") not in (
+            "conflict_resolution", "requirement_clarification", "tradeoff"
+        ):
             return None
         if "domain-research" not in self.skill_names:
             return None
@@ -206,3 +273,275 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
+
+    # ===== 子 OODA 循環 =====
+
+    def run_review_loop(self, artifact, recent_discussions=None, max_iterations=5):
+        """Expert 子 OODA：自主研究 → 更新發現 → 標記風險。"""
+        observation = None
+        actions_taken = []
+        pending_issues = []
+        research_results = []
+
+        for i in range(max_iterations):
+            state = self._build_review_state(
+                artifact, recent_discussions, actions_taken,
+                research_results, i, max_iterations,
+            )
+            decision = self.decide_next_review_action(state, observation)
+            action = decision.get("action", "done")
+            self.logger.info(
+                f"  Expert review [{i + 1}/{max_iterations}]: {action}"
+                f" — {decision.get('reasoning', '')}"
+            )
+            if action == "done" or action not in EXPERT_REVIEW_ACTIONS:
+                break
+
+            params = decision.get("params") or {}
+            observation = self._execute_review_action(
+                action, params, artifact, pending_issues, research_results,
+            )
+            actions_taken.append({
+                "action": action,
+                "params": params,
+                "result_summary": observation.get("summary", ""),
+            })
+            if observation.get("error"):
+                self.logger.warning(f"  Expert review error: {observation['error']}")
+
+        return {
+            "agent": self.name,
+            "actions_taken": actions_taken,
+            "pending_issues": pending_issues,
+        }
+
+    def decide_next_review_action(self, state, last_observation=None):
+        state_text = json.dumps(state, ensure_ascii=False, indent=2)
+        obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
+
+        tools_hint = ""
+        if state.get("available_tools"):
+            tools_hint = (
+                "\n- research_topic 執行時可自動使用工具："
+                + ", ".join(state["available_tools"])
+            )
+
+        user_prompt = f"""# 任務
+你是領域專家，正在對當前專案進行自主領域研究與合規分析。根據「當前狀態」與「上一步結果」，決定下一步行動。
+
+# 可用動作
+- research_topic：針對特定問題進行領域研究（搜尋法規、讀取文件）。params: {{ "query": "具體研究問題" }}{tools_hint}
+- update_findings：綜合已有研究結果更新至專案領域研究資料。無參數。（研究完畢後呼叫）
+- review_neutrals：從領域角度複審被標為 Neutral（無衝突）的項目，找出 Analyst 可能遺漏的衝突。無參數。
+- flag_compliance_risk：標記合規風險供主持人參考。params: {{ "description": "風險描述" }}
+- done：分析完成，交還控制權。無參數。
+
+# 當前狀態
+{state_text}
+
+# 上一步結果
+{obs_text}
+
+# 決策指引
+- 若有近期討論涉及法規、標準、安全、合規問題，優先研究
+- 若需求涉及受管制領域（用戶資料、支付、醫療、教育等），研究對應法規
+- research_topic 可多次呼叫，每次聚焦一個具體問題
+- 研究到足夠深度後呼叫 update_findings 寫入
+- 若有 Neutral 項目且已有領域研究結果，呼叫 review_neutrals 複審
+- 發現重大合規風險時呼叫 flag_compliance_risk
+- 無需進一步研究時呼叫 done
+- reasoning 請使用繁體中文
+
+輸出 JSON:
+{{
+    "action": "動作名稱",
+    "params": {{}},
+    "reasoning": "一句說明"
+}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        try:
+            response = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"Expert review 決策失敗: {e}")
+            return {"action": "done", "params": {}, "reasoning": f"fallback: {e}"}
+
+        action = (response.get("action") or "").strip()
+        if action not in EXPERT_REVIEW_ACTIONS:
+            action = "done"
+        return {
+            "action": action,
+            "params": response.get("params") or {},
+            "reasoning": response.get("reasoning", ""),
+        }
+
+    def _build_review_state(
+        self, artifact, recent_discussions, actions_taken,
+        research_results, iteration, max_iterations,
+    ):
+        reqs = artifact.get("requirements", [])
+        summary_reqs = [
+            {"id": r.get("id"), "type": r.get("type"),
+             "text": (r.get("text") or "")[:120]}
+            for r in reqs
+        ]
+        conflicts = [
+            {"id": c.get("id"),
+             "description": (c.get("description") or "")[:120]}
+            for c in artifact.get("conflicts", [])
+            if c.get("label") == "Conflict"
+        ]
+        neutrals = [
+            {"id": c.get("id"),
+             "confidence": c.get("confidence"),
+             "description": (c.get("description") or "")[:120]}
+            for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+        ]
+        disc_summaries = []
+        for disc in (recent_discussions or []):
+            topic = disc.get("topic", {})
+            resolution = disc.get("resolution", {})
+            disc_summaries.append({
+                "topic_id": topic.get("id"),
+                "title": topic.get("title"),
+                "resolution": resolution.get("resolution"),
+                "summary": (resolution.get("summary") or "")[:200],
+            })
+        existing = artifact.get("feedback", {}).get("domain_research", {})
+        return {
+            "requirements": summary_reqs,
+            "conflicts": conflicts,
+            "neutrals": neutrals,
+            "scope": artifact.get("scope", {}),
+            "has_existing_research": bool(existing),
+            "recent_discussions": disc_summaries,
+            "actions_taken": actions_taken,
+            "research_results_count": len(research_results),
+            "available_tools": list(self.tools.keys()),
+            "iteration": iteration + 1,
+            "max_iterations": max_iterations,
+        }
+
+    def _execute_review_action(
+        self, action, params, artifact, pending_issues, research_results,
+    ):
+        obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
+
+        if action == "research_topic":
+            query = params.get("query", "")
+            if not query:
+                obs["error"] = "query 參數為空"
+                obs["summary"] = "研究失敗：未提供研究問題"
+                return obs
+            context = {
+                "project_overview": (artifact.get("scope") or {}).get(
+                    "description", ""
+                ),
+            }
+            task = f"""針對以下問題進行領域研究：{query}
+
+請使用可用工具搜尋相關法規標準或讀取 doc/ 參考文件，然後整理研究發現。
+輸出「僅一個」JSON：
+{{
+    "findings": ["發現1", "發現2"],
+    "sources": ["來源1"],
+    "derived_requirements": [
+        {{"text": "建議需求", "source": "來源", "category": "regulatory/best_practice/safety"}}
+    ],
+    "compliance_risks": ["風險描述"]
+}}
+文字請使用繁體中文。只輸出 JSON。"""
+            messages = self.build_direct_messages(task, context=context)
+            try:
+                raw = (
+                    self.chat_with_tools(
+                        messages, max_rounds=self.tool_call_max_rounds,
+                    )
+                    if self.tools
+                    else self.model.chat(messages)
+                )
+                result = self.parse_first_json(raw)
+                if not result:
+                    result = {"findings": [(raw or "")[:500]]}
+                research_results.append({"query": query, **result})
+                obs["result"] = result
+                obs["summary"] = (
+                    f"研究 '{query[:40]}': "
+                    f"{len(result.get('findings', []))} 項發現"
+                )
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"研究失敗: {e}"
+            return obs
+
+        if action == "update_findings":
+            if not research_results:
+                obs["summary"] = "無研究結果可更新"
+                return obs
+            existing = artifact.get("feedback", {}).get("domain_research", {})
+            context = {
+                "research_results": research_results,
+                "existing_research": existing,
+            }
+            task = """綜合 Context.research_results 與 Context.existing_research，依 domain-research skill 格式產出合併後的領域研究資料。
+輸出「僅一個」JSON，鍵名 "domain_research"，值含：
+- findings（合併新舊研究發現）
+- derived_requirements（合併新舊，勿重複）
+- recommendations（選填）
+文字使用繁體中文。只輸出 JSON。"""
+            try:
+                raw = self.invoke_skill("domain-research", task, context=context)
+                result = self.parse_first_json(raw)
+                dr = result.get("domain_research") or result
+                if isinstance(dr, dict) and dr:
+                    artifact.setdefault("feedback", {})["domain_research"] = dr
+                    obs["summary"] = "已更新領域研究資料"
+                else:
+                    obs["error"] = "解析失敗"
+                    obs["summary"] = "更新失敗：解析錯誤"
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"更新失敗: {e}"
+            return obs
+
+        if action == "review_neutrals":
+            try:
+                upgraded = self.cross_review_neutrals(artifact)
+                if upgraded:
+                    for up in upgraded:
+                        pending_issues.append({
+                            "type": "upgraded_neutral",
+                            "description": up.get("description", ""),
+                            "source": "expert",
+                            "original_neutral_id": up.get("original_neutral_id"),
+                            "conflict_type": up.get("conflict_type", ""),
+                            "requirement_ids": up.get("requirement_ids", []),
+                            "domain_evidence": up.get("domain_evidence", ""),
+                        })
+                    obs["result"] = {"upgraded_count": len(upgraded)}
+                    obs["summary"] = (
+                        f"複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
+                    )
+                else:
+                    obs["summary"] = "所有 Neutral 項目確認無衝突"
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"Neutral 複審失敗: {e}"
+            return obs
+
+        if action == "flag_compliance_risk":
+            desc = (params.get("description") or "").strip()
+            if not desc:
+                obs["error"] = "description 為空"
+                return obs
+            pending_issues.append({
+                "type": "compliance_risk",
+                "description": desc,
+                "source": "expert",
+            })
+            obs["summary"] = f"已標記合規風險: {desc[:80]}"
+            return obs
+
+        obs["error"] = f"未知動作: {action}"
+        return obs

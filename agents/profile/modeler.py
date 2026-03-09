@@ -6,6 +6,16 @@ from typing import Dict, Any, Optional, List
 from agents.base import BaseAgent
 
 
+MODELER_REVIEW_ACTIONS = [
+    "assess_impact",
+    "update_diagram",
+    "validate_diagram",
+    "fix_diagram",
+    "review_neutrals",
+    "done",
+]
+
+
 class ModelerAgent(BaseAgent):
     """系統建模 Agent — 產生 UML 系統模型（PlantUML 格式）+ 設計衝突辨識"""
 
@@ -189,6 +199,66 @@ class ModelerAgent(BaseAgent):
             self.logger.warning(f"  修正失敗: {e}")
         return None
 
+    def cross_review_neutrals(self, artifact: Dict) -> list:
+        """從系統架構角度複審 Neutral 項目，找出設計層衝突。"""
+        neutrals = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+        ]
+        if not neutrals:
+            return []
+
+        models = artifact.get("system_models", {}).get("models", [])
+        context = {
+            "neutrals": neutrals,
+            "requirements": artifact.get("requirements", []),
+            "system_models": [
+                {"name": m.get("name"), "type": m.get("type"),
+                 "plantuml": m.get("plantuml", "")}
+                for m in models
+            ],
+        }
+        task = """你是系統建模專家。以下是 Analyst 判定為「無衝突（Neutral）」的項目。
+請對照系統模型（UML 圖），從架構設計角度複審，判斷是否有被遺漏的設計層衝突。
+
+常見盲點：
+- 兩個 Use Case 看似獨立，但共用同一個 Component 導致資源競爭
+- 兩條需求從文字看無衝突，但對映到 Class Diagram 後發現職責邊界衝突
+- 某需求的 Sequence 流程會阻塞另一需求的關鍵路徑
+
+輸出 JSON：
+{
+    "upgraded_conflicts": [
+        {
+            "original_neutral_id": "NF-XX",
+            "description": "為什麼這其實是衝突",
+            "conflict_type": "Logical/Technical/Resource/Temporal/Data/State/Priority/Scope",
+            "requirement_ids": ["R-XX", "R-YY"],
+            "architecture_evidence": "架構依據（涉及的模型元素或設計衝突）"
+        }
+    ],
+    "review_summary": "複審摘要"
+}
+若所有 Neutral 確實無衝突，upgraded_conflicts 為空陣列。
+文字請使用繁體中文。只輸出 JSON。"""
+
+        messages = self.build_direct_messages(task, context=context)
+        try:
+            result = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"Modeler Neutral 複審失敗: {e}")
+            return []
+
+        upgraded = result.get("upgraded_conflicts", [])
+        if not isinstance(upgraded, list):
+            return []
+
+        if upgraded:
+            self.logger.info(
+                f"Modeler 複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
+            )
+        return upgraded
+
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
@@ -243,3 +313,348 @@ class ModelerAgent(BaseAgent):
             "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
+
+    # ===== 子 OODA 循環 =====
+
+    def run_review_loop(self, artifact, recent_discussions=None, max_iterations=5):
+        """Modeler 子 OODA：評估影響 → 更新圖表 → 驗證修正。"""
+        observation = None
+        actions_taken = []
+        pending_issues = []
+
+        for i in range(max_iterations):
+            state = self._build_review_state(
+                artifact, recent_discussions, actions_taken, i, max_iterations,
+            )
+            decision = self.decide_next_review_action(state, observation)
+            action = decision.get("action", "done")
+            self.logger.info(
+                f"  Modeler review [{i + 1}/{max_iterations}]: {action}"
+                f" — {decision.get('reasoning', '')}"
+            )
+            if action == "done" or action not in MODELER_REVIEW_ACTIONS:
+                break
+
+            params = decision.get("params") or {}
+            observation = self._execute_review_action(
+                action, params, artifact, pending_issues, observation,
+            )
+            actions_taken.append({
+                "action": action,
+                "params": params,
+                "result_summary": observation.get("summary", ""),
+            })
+            if observation.get("error"):
+                self.logger.warning(f"  Modeler review error: {observation['error']}")
+
+        return {
+            "agent": self.name,
+            "actions_taken": actions_taken,
+            "pending_issues": pending_issues,
+        }
+
+    def decide_next_review_action(self, state, last_observation=None):
+        state_text = json.dumps(state, ensure_ascii=False, indent=2)
+        obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
+
+        user_prompt = f"""# 任務
+你是系統建模專家，正在對當前專案的 UML 模型進行自主更新與驗證。根據「當前狀態」與「上一步結果」，決定下一步行動。
+
+# 可用動作
+- assess_impact：分析需求變更對現有模型的影響，判斷哪些圖表需要更新。無參數。
+- update_diagram：更新或新建特定類型的圖表。params: {{ "diagram_type": "use_case_diagram/class_diagram/sequence_diagram" }}
+- validate_diagram：驗證特定圖表的 PlantUML 語法。params: {{ "diagram_type": "..." }}
+- fix_diagram：修正驗證失敗的圖表（依上一步驗證錯誤修正）。params: {{ "diagram_type": "..." }}
+- review_neutrals：從架構角度複審被標為 Neutral（無衝突）的項目，找出 Analyst 可能遺漏的設計層衝突。無參數。
+- done：更新完成，交還控制權。無參數。
+
+# 當前狀態
+{state_text}
+
+# 上一步結果
+{obs_text}
+
+# 決策指引
+- 先 assess_impact 判斷哪些模型需更新
+- 對每個需更新的圖表：update_diagram → validate_diagram → (若失敗) fix_diagram → validate_diagram
+- Use Case Diagram 和 Class Diagram 為必要，Sequence Diagram 視需求而定
+- 若有 Neutral 項目且已有系統模型，呼叫 review_neutrals 從架構角度複審
+- 所有需更新的圖表處理完後呼叫 done
+- reasoning 請使用繁體中文
+
+輸出 JSON:
+{{
+    "action": "動作名稱",
+    "params": {{}},
+    "reasoning": "一句說明"
+}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        try:
+            response = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"Modeler review 決策失敗: {e}")
+            return {"action": "done", "params": {}, "reasoning": f"fallback: {e}"}
+
+        action = (response.get("action") or "").strip()
+        if action not in MODELER_REVIEW_ACTIONS:
+            action = "done"
+        return {
+            "action": action,
+            "params": response.get("params") or {},
+            "reasoning": response.get("reasoning", ""),
+        }
+
+    def _build_review_state(
+        self, artifact, recent_discussions, actions_taken,
+        iteration, max_iterations,
+    ):
+        models = artifact.get("system_models", {}).get("models", [])
+        model_summary = [
+            {"name": m.get("name"), "type": m.get("type"),
+             "has_plantuml": bool(m.get("plantuml"))}
+            for m in models
+        ]
+        reqs = artifact.get("requirements", [])
+        summary_reqs = [
+            {"id": r.get("id"), "type": r.get("type"),
+             "text": (r.get("text") or "")[:80]}
+            for r in reqs
+        ]
+        disc_summaries = []
+        for disc in (recent_discussions or []):
+            topic = disc.get("topic", {})
+            resolution = disc.get("resolution", {})
+            disc_summaries.append({
+                "topic_id": topic.get("id"),
+                "title": topic.get("title"),
+                "summary": (resolution.get("summary") or "")[:150],
+            })
+        neutrals = [
+            {"id": c.get("id"),
+             "confidence": c.get("confidence"),
+             "description": (c.get("description") or "")[:120]}
+            for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+        ]
+        return {
+            "current_models": model_summary,
+            "requirements": summary_reqs,
+            "neutrals": neutrals,
+            "recent_discussions": disc_summaries,
+            "actions_taken": actions_taken,
+            "has_validator": "plantuml_validate" in self.tools,
+            "iteration": iteration + 1,
+            "max_iterations": max_iterations,
+        }
+
+    def _execute_review_action(
+        self, action, params, artifact, pending_issues, last_observation=None,
+    ):
+        obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
+
+        if action == "assess_impact":
+            reqs = artifact.get("requirements", [])
+            models = artifact.get("system_models", {}).get("models", [])
+            context = {
+                "requirements": [
+                    {"id": r.get("id"), "type": r.get("type"),
+                     "text": r.get("text", "")}
+                    for r in reqs
+                ],
+                "current_models": [
+                    {"name": m.get("name"), "type": m.get("type")}
+                    for m in models
+                ],
+            }
+            ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
+            task = f"""分析需求與現有模型，判斷哪些圖表需要更新或新建。
+
+# Context
+{ctx_text}
+
+輸出 JSON:
+{{
+    "models_to_update": ["需更新的 diagram type"],
+    "models_to_create": ["需新建的 diagram type"],
+    "impact_summary": "影響摘要"
+}}
+impact_summary 請使用繁體中文。只輸出 JSON。"""
+            messages = self.build_direct_messages(task)
+            try:
+                result = self.model.chat_json(messages)
+                obs["result"] = result
+                to_update = result.get("models_to_update", [])
+                to_create = result.get("models_to_create", [])
+                obs["summary"] = (
+                    f"影響評估: 更新 {len(to_update)}, 新建 {len(to_create)}"
+                )
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"影響評估失敗: {e}"
+            return obs
+
+        if action == "update_diagram":
+            diagram_type = params.get("diagram_type", "")
+            if not diagram_type:
+                obs["error"] = "diagram_type 參數為空"
+                return obs
+            models = artifact.get("system_models", {}).get("models", [])
+            existing = next(
+                (m for m in models if m.get("type") == diagram_type), None
+            )
+            reqs = artifact.get("requirements", [])
+            stakeholders = artifact.get("stakeholders", [])
+            try:
+                result = self._update_single_diagram(
+                    diagram_type, reqs, stakeholders,
+                    existing_model=existing,
+                )
+                new_plantuml = result.get("plantuml", "")
+                new_name = result.get(
+                    "name",
+                    existing.get("name", diagram_type) if existing else diagram_type,
+                )
+                if existing:
+                    existing["plantuml"] = new_plantuml
+                    existing["name"] = new_name
+                else:
+                    artifact.setdefault("system_models", {}).setdefault(
+                        "models", []
+                    ).append({
+                        "name": new_name,
+                        "type": diagram_type,
+                        "plantuml": new_plantuml,
+                    })
+                label = "更新" if existing else "新建"
+                obs["summary"] = f"{diagram_type} 已{label}"
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"{diagram_type} 更新失敗: {e}"
+            return obs
+
+        if action == "validate_diagram":
+            diagram_type = params.get("diagram_type", "")
+            models = artifact.get("system_models", {}).get("models", [])
+            target = next(
+                (m for m in models if m.get("type") == diagram_type), None
+            )
+            if not target:
+                obs["error"] = f"找不到 {diagram_type}"
+                return obs
+            validator = self.tools.get("plantuml_validate")
+            if not validator:
+                obs["result"] = {"valid": True}
+                obs["summary"] = f"{diagram_type}: 無驗證工具，跳過"
+                return obs
+            code = target.get("plantuml", "")
+            if not code:
+                obs["error"] = f"{diagram_type} 無 PlantUML 內容"
+                return obs
+            result = self.execute_tool(
+                "plantuml_validate", {"plantuml_code": code}
+            )
+            if "通過" in result:
+                obs["result"] = {"valid": True}
+                obs["summary"] = f"{diagram_type} 驗證通過"
+            else:
+                obs["result"] = {"valid": False, "error": result}
+                obs["summary"] = f"{diagram_type} 驗證失敗"
+            return obs
+
+        if action == "fix_diagram":
+            diagram_type = params.get("diagram_type", "")
+            models = artifact.get("system_models", {}).get("models", [])
+            target = next(
+                (m for m in models if m.get("type") == diagram_type), None
+            )
+            if not target:
+                obs["error"] = f"找不到 {diagram_type}"
+                return obs
+            error_msg = ""
+            if (
+                last_observation
+                and isinstance(last_observation.get("result"), dict)
+            ):
+                error_msg = last_observation["result"].get("error", "")
+            if not error_msg:
+                error_msg = "語法錯誤"
+            fixed = self.fix_plantuml(target, error_msg)
+            if fixed:
+                target["plantuml"] = fixed
+                obs["summary"] = f"{diagram_type} 已修正"
+            else:
+                obs["error"] = "修正失敗"
+                obs["summary"] = f"{diagram_type} 修正失敗"
+            return obs
+
+        if action == "review_neutrals":
+            try:
+                upgraded = self.cross_review_neutrals(artifact)
+                if upgraded:
+                    for up in upgraded:
+                        pending_issues.append({
+                            "type": "upgraded_neutral",
+                            "description": up.get("description", ""),
+                            "source": "modeler",
+                            "original_neutral_id": up.get("original_neutral_id"),
+                            "conflict_type": up.get("conflict_type", ""),
+                            "requirement_ids": up.get("requirement_ids", []),
+                            "architecture_evidence": up.get(
+                                "architecture_evidence", ""
+                            ),
+                        })
+                    obs["result"] = {"upgraded_count": len(upgraded)}
+                    obs["summary"] = (
+                        f"複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
+                    )
+                else:
+                    obs["summary"] = "所有 Neutral 項目確認無設計衝突"
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"Neutral 複審失敗: {e}"
+            return obs
+
+        obs["error"] = f"未知動作: {action}"
+        return obs
+
+    def _update_single_diagram(
+        self, diagram_type, requirements, stakeholders=None,
+        existing_model=None,
+    ):
+        type_names = {
+            "use_case_diagram": "Use Case Diagram",
+            "class_diagram": "Class Diagram",
+            "sequence_diagram": "Sequence Diagram",
+        }
+        type_name = type_names.get(diagram_type, diagram_type)
+        req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+
+        if existing_model and existing_model.get("plantuml"):
+            task = f"""根據更新後的需求，精煉以下 {type_name}。只修改受影響的部分，保留未變動的元素。
+
+當前 PlantUML:
+{existing_model['plantuml']}
+
+需求:
+{req_text}
+
+- name 使用繁體中文，plantuml 關鍵字維持英文
+輸出 JSON:
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+        else:
+            sh_text = json.dumps(stakeholders or [], ensure_ascii=False, indent=2)
+            task = f"""根據以下需求產生 {type_name}。
+
+需求:
+{req_text}
+
+利害關係人:
+{sh_text}
+
+- name 使用繁體中文，plantuml 關鍵字維持英文
+輸出 JSON:
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+
+        messages = self.build_direct_messages(task)
+        return self.model.chat_json(messages)
