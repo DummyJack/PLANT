@@ -5,6 +5,7 @@
 """
 import csv
 import json
+import random
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -73,7 +74,11 @@ def run_conflict(analyst: AnalystAgent, model_name: str, count: int = 0, mode: s
             data.append(row)
 
     if count > 0:
-        data = data[:count]
+        sample_mode = input("取樣方式 (1:前N筆, 2:隨機N筆) [1]: ").strip() or "1"
+        if sample_mode == "2":
+            data = random.sample(data, min(count, len(data)))
+        else:
+            data = data[:count]
 
     total = len(data)
     y_true = [row["Class"] for row in data]

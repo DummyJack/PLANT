@@ -33,19 +33,3 @@ class BaselineModel:
         )
         raw = resp.choices[0].message.content.strip()
         return raw
-
-    # PlantUML 類別圖生成，回傳 dict 包含 plantuml 和 ast
-    def generate_plantuml(self, human_lang: str) -> dict:
-        user_prompt = (
-            f"請根據自然語言描述: {human_lang}，生成 PlantUML 類別圖和對應的 AST。\n\n"
-            "請以 JSON 格式輸出:\n"
-            '{"PlantUML": "...", "Output_AST": {"type": "root", "children": [...]}}'
-        )
-        resp = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "user", "content": user_prompt}],
-            temperature=self.temperature,
-            response_format={"type": "json_object"},
-        )
-        content = resp.choices[0].message.content
-        return json.loads(content)
