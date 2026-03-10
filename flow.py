@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from agents import AgentRegistry
 from agents.profile.analyst import ALLOWED_CONFLICT_TYPES
 from agents.profile import (
@@ -374,16 +374,13 @@ class Flow:
     # Round k: 開會
 
     def run_meeting_round(
-        self, artifact: Dict[str, Any], round_num: int, skip_agenda: bool = False
+        self, artifact: Dict[str, Any], round_num: int
     ) -> Dict[str, Any]:
         # 讀取前一輪草稿，讓本輪基於前一版草稿
         prev_version = round_num - 1
         prev_draft_md = self.store.load_draft(prev_version)
         if prev_draft_md:
             self.logger.info(f"載入 draft_v{prev_version}.md 作為本輪基礎")
-
-        if skip_agenda:
-            return artifact
 
         # 議程由 Mediator Agent 驅動（產生議程、討論、綜合、人類裁決、存檔）
         self.logger.info("議程由 Mediator Agent 驅動")
@@ -403,15 +400,6 @@ class Flow:
             decision = self.mediator_agent.decide_next_agenda_action(state, observation)
             action = decision.get("action", "finish_round")
             params = decision.get("params") or {}
-            topic_id = params.get("topic_id")
-            title_hint = ""
-            category_hint = ""
-            if topic_id:
-                for t in state.get("topics", []):
-                    if t.get("id") == topic_id:
-                        title_hint = f" 《{t.get('title', '')}》"
-                        category_hint = t.get("category_label") or t.get("category", "")
-                        break
             self.logger.info(
                 f"  Agent 決策: {action} {params} — {decision.get('reasoning', '')}"
             )

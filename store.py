@@ -108,9 +108,6 @@ class Store:
     def save_artifact(self, data: Dict[str, Any]):
         self.save_json(data, self.artifact_dir / "artifact.json")
 
-    def save_srs(self, data: Dict[str, Any]):
-        self.save_json(data, self.output_dir / "srs.json")
-
     def save_draft(self, content: str, version: int):
         """儲存需求草稿為 draft_v{version}.md（Markdown）到 artifact 目錄"""
         path = self.artifact_dir / f"draft_v{version}.md"
