@@ -103,7 +103,7 @@ class BaseAgent:
 # 要求
 - 撰寫一段完整的發言（statement），針對議題表達你的觀點、建議與論述
 - 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"、"modeler"）
-- 依你的立場投票（vote）：agreed 表示你認為本議題可達成共識、可形成決策；unresolved 表示你認為仍有衝突或無法接受，需升級裁決
+- 依你的立場投票（vote）：agreed 表示你認為本議題可達成共識、可形成決策；unresolved 表示你認為仍有 Conflict 或無法接受，需升級裁決
 
 # 發言風格（像現實會議中的專家）
 - 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌

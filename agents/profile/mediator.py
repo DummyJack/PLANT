@@ -29,10 +29,10 @@ class MediatorAgent(BaseAgent):
     system_prompt = """你是一個專業的需求調解主持人，負責主持需求討論會議。
 
 核心職責：
-1. 議程安排 — 分析需求與衝突，自行判斷應開哪些議程並排定優先順序
+1. 議程安排 — 分析需求與 Conflict，自行判斷應開哪些議程並排定優先順序
 2. 討論主持 — 決定討論模式（逐一發言/同時發言），維持討論秩序
 3. 共識促成 — 綜合各方的不可讓步項與可讓步項，嘗試達成共識
-4. 決策彙整 — 彙整每輪討論的決策並更新衝突標記
+4. 決策彙整 — 彙整每輪討論的決策並更新 Conflict 標記
 
 核心原則：
 - 中立客觀 — 不偏袒任何利害關係人，不提出自己的技術觀點
@@ -97,28 +97,25 @@ class MediatorAgent(BaseAgent):
 {json.dumps(registered, ensure_ascii=False)}
 
 # 討論模式（discussion_mode）情境說明
-- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：衝突協調、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
+- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：Conflict 協調、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
 - **simultaneous（同時發言）**：適合「先各自表態、再比較差異」的議題。例如：腦力激盪、多方案並列、各自提出對某議題的立場或建議，不需即時回應前一位。每人只看到議題與專案狀態，不看同輪其他人的發言。
 請依議題性質選擇其一。
 
 # 標題與描述撰寫要求（重要）
-- **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，例如寫出涉及的對象、需求或衝突重點，勿只寫類型名稱（如勿只寫「衝突討論」「需求取捨」）。
-- **description（描述）**：簡短說明「為什麼要開這個議題、要解決什麼」。可提及相關需求 id 或衝突 id，並用一兩句話說明討論重點。
-- 範例：標題可為「管理員權限與一般使用者隱私的衝突如何取捨」而非「衝突討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
+- **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，例如寫出涉及的對象、需求或 Conflict 重點，勿只寫類型名稱（如勿只寫「Conflict 討論」「需求取捨」）。
+- **description（描述）**：簡短說明「為什麼要開這個議題、要解決什麼」。可提及相關需求 id 或 Conflict id，並用一兩句話說明討論重點。
+- 範例：標題可為「管理員權限與一般使用者隱私的 Conflict 如何取捨」而非「Conflict 討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
 
-# conflict_resolution 與 requirement_clarification 的區分
-- 高信心衝突（confidence ≥ {self.low_confidence_threshold} 或無 confidence 欄位）：歸類為 **conflict_resolution**，目標是協調立場、達成共識
-- 低信心衝突（confidence < {self.low_confidence_threshold} 且 ambiguous_requirements 非空）：歸類為 **requirement_clarification**，目標是先釐清需求再判定衝突
-- 低信心 Neutral（confidence < {self.low_confidence_threshold}）：歸類為 **requirement_clarification**，目標是釐清需求、判定是否遺漏衝突
-- open_questions 中 type 為 "low_confidence_conflict" 或 "low_confidence_neutral" 的項目歸 **requirement_clarification**
-- 來自交叉複審（cross_review_source 非空）的衝突歸 **conflict_resolution**（已有明確證據，需討論是否採納）
+# 議程類型與開題
+- **低信心**（Conflict 與 Neutral 皆須打信心分；低於閾值者）：open_questions 中 type 為 "low_confidence_conflict" 或 "low_confidence_neutral" 的項目由**系統預設**成一個 requirement_clarification 議題，請勿再為這些 id 重複開議題。
+- **其餘**（高信心 Conflict、高信心 Neutral 等）：是否開題、開哪種類型（conflict_resolution / requirement_clarification / open_question 等）**完全由你依專案狀態與優先順序判斷**，無強制對應。
 
 # 約束
-- 最多開 {limit} 個議程，依你判斷的優先順序排列
+- 最多開 {limit} 個議程。**需求釐清（requirement_clarification）類議題優先順序排最高**，請排在最前；其餘依你判斷的優先順序排列。
 - 若無需討論的議題，請回傳空陣列
 - category 只能是上述類型定義中的 id
 - discussion_mode 依上表情境選擇 "sequential" 或 "simultaneous"
-- 若有對應的衝突/需求/問題 id，請填在 source_ids 方便追蹤
+- 若有對應的 Conflict/需求/問題 id，請填在 source_ids 方便追蹤
 - title、description 請使用繁體中文；category、discussion_mode、participants 等 id 維持英文
 
 # 輸出 JSON
@@ -144,6 +141,41 @@ class MediatorAgent(BaseAgent):
             return []
 
         raw_items = response.get("items", [])
+
+        # 低信心 Conflict 與 Neutral：合併成一個 requirement_clarification 議題一併討論
+        low_conf_source_ids = set()
+        for q in artifact.get("open_questions", []):
+            if q.get("status") == "answered":
+                continue
+            if q.get("type") not in ("low_confidence_conflict", "low_confidence_neutral"):
+                continue
+            cid = q.get("related_conflict_id")
+            nid = q.get("related_neutral_id")
+            if cid and cid not in skip:
+                low_conf_source_ids.add(cid)
+            if nid and nid not in skip:
+                low_conf_source_ids.add(nid)
+
+        if low_conf_source_ids:
+            low_conf_topic = {
+                "title": "低信心 Conflict 與 Neutral 一併釐清",
+                "description": f"以下項目信心度低於閾值，一併釐清需求與是否為真實 Conflict：{', '.join(sorted(low_conf_source_ids))}",
+                "category": "requirement_clarification",
+                "participants": list(registered),
+                "discussion_mode": "sequential",
+                "speaking_order": list(registered),
+                "source_ids": sorted(low_conf_source_ids),
+            }
+            # 移除 LLM 回傳中「僅含這些低信心 id」的 requirement_clarification，避免重複
+            raw_items = [
+                i for i in raw_items
+                if not (
+                    i.get("category") == "requirement_clarification"
+                    and set(i.get("source_ids") or []) <= low_conf_source_ids
+                )
+            ]
+            raw_items = [low_conf_topic] + raw_items
+
         if not raw_items:
             self.logger.info("Mediator 判斷本輪無需新增議程")
             return []
@@ -202,7 +234,7 @@ class MediatorAgent(BaseAgent):
         ]
         if conflicts:
             parts.append(
-                "## 衝突\n" + json.dumps(conflicts, ensure_ascii=False, indent=2)
+                "## Conflict\n" + json.dumps(conflicts, ensure_ascii=False, indent=2)
             )
         oqs = [
             q
@@ -259,9 +291,9 @@ class MediatorAgent(BaseAgent):
 - start_discussion：對某議題開始討論。params: {{ "topic_id": "T-01" }}（須為 state.topics 中存在的 id）
 - resolve_topic：綜合某議題討論結果。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
 {escalate_action}- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
-- expert_review：讓領域專家進行自主研究與合規分析。無參數。適合在討論涉及法規/標準/安全後觸發。
-- analyst_review：讓需求分析師進行自主分析（掃描討論、偵測衝突、更新需求）。無參數。適合在議題討論後觸發。
-- modeler_review：讓系統建模師進行自主模型更新與驗證。無參數。適合在需求變更後觸發。
+- expert_review：讓領域專家進行自主研究與合規分析。params 選填：{{ "max_iterations": 1–5（此次複審最多幾輪） }}。適合在討論涉及法規/標準/安全後觸發。
+- analyst_review：讓需求分析師進行自主分析（掃描討論、偵測 Conflict、更新需求）。params 選填：{{ "max_iterations": 1–5 }}。
+- modeler_review：讓系統建模師進行自主模型更新與驗證。params 選填：{{ "max_iterations": 1–5 }}。
 - finish_round：結束本輪議程。無參數。僅在已處理完所有要討論的議題並 save 後才可呼叫。
 
 # 當前狀態
@@ -808,7 +840,7 @@ class MediatorAgent(BaseAgent):
 
         return {"best_options": best, "compromise": compromise}
 
-    # ===== 更新決策與衝突 =====
+    # ===== 更新決策與 Conflict =====
 
     def update_decisions(
         self, artifact: Dict[str, Any], round_discussions: List[Dict]
@@ -819,20 +851,20 @@ class MediatorAgent(BaseAgent):
         )
 
         user_prompt = f"""# 任務
-彙整本輪所有議程的討論決策，並更新衝突的 label。
+彙整本輪所有議程的討論決策，並更新 Conflict 的 label。
 
 # 本輪討論結果
 {discussions_text}
 
-# 當前衝突列表
+# 當前 Conflict 列表
 {conflicts_text}
 
 # 規則
-- 若衝突已在本輪解決，將 label 改為 Neutral
-- 未解決的衝突保持 label 為 Conflict
-- 輸出 conflicts 時請保留每個衝突原有的所有欄位（id、description、conflict_type、requirement_ids、stakeholder_names 等，依衝突類型保留），僅依討論結果更新 label
-- 每個 new_decisions 項目請填寫 resolved_conflict_ids：此決策所解決的衝突 id 列表（若該議題討論解決了某個衝突則填其 CF-xx id，否則空陣列）
-- 若本輪討論中有人指出「尚未列在當前衝突列表中的需求/立場衝突」（辨識漏報），請將該筆填入 new_conflicts，格式見下方。id 留空由系統指派。
+- 若本輪討論認定某筆 Conflict 已解決（非 Conflict），將該筆 label 改為 Neutral
+- 若本輪討論認定某筆 Neutral 實為 Conflict，將該筆 label 改為 Conflict（誤判修正與升級皆經討論 + 本步驟）
+- 其餘依討論結果維持原 label。輸出 conflicts 時請保留每筆原有的所有欄位（id、description、conflict_type、requirement_ids、stakeholder_names 等），僅依討論結果更新 label
+- 每個 new_decisions 項目請填寫 resolved_conflict_ids：此決策所解決的 Conflict id 列表（若該議題討論解決了某個 Conflict 則填其 CF-xx id，否則空陣列）
+- 若本輪討論中有人指出「尚未列在當前 Conflict 列表中的需求/立場 Conflict」（辨識漏報），請將該筆填入 new_conflicts，格式見下方。id 留空由系統指派。
 - new_conflicts 的 description、new_decisions 中與決策相關的描述文字請使用繁體中文。label、conflict_type 維持英文。
 
 # 輸出 JSON
@@ -841,7 +873,7 @@ class MediatorAgent(BaseAgent):
     "conflicts": [...],
     "new_conflicts": [
         {{{{
-            "description": "衝突描述",
+            "description": "Conflict 描述",
             "conflict_type": "Logical | Technical | Resource | Temporal | Data | State | Priority | Scope",
             "requirement_ids": ["R-01", "R-02"]
         }}}}
@@ -1080,11 +1112,16 @@ class AgendaRunner:
             if not expert or not hasattr(expert, "run_review_loop"):
                 obs["error"] = "Expert agent 不可用"
                 return obs
-            self.logger.info("  Expert 自主研究循環")
-            ri = self.config.get("review_iterations") or {}
+            ri = self.config.get("max_iterations") or {}
+            n = params.get("max_iterations")
+            max_iter = (
+                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
+                else ri.get("expert_review", 5)
+            )
+            self.logger.info("  Expert 自主研究循環（上限 %s 輪，實際由 Expert 自訂 1–5）", max_iter)
             result = expert.run_review_loop(
                 self.artifact, self.round_discussions,
-                max_iterations=ri.get("expert", 5),
+                max_iterations=max_iter,
             )
             for issue in result.get("pending_issues", []):
                 self.pending_review_issues.append(issue)
@@ -1106,11 +1143,16 @@ class AgendaRunner:
             if not analyst or not hasattr(analyst, "run_review_loop"):
                 obs["error"] = "Analyst agent 不可用"
                 return obs
-            self.logger.info("  Analyst 自主分析循環")
-            ri = self.config.get("review_iterations") or {}
+            ri = self.config.get("max_iterations") or {}
+            n = params.get("max_iterations")
+            max_iter = (
+                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
+                else ri.get("analyst_review", 5)
+            )
+            self.logger.info("  Analyst 自主分析循環（上限 %s 輪，實際由 Analyst 自訂 1–5）", max_iter)
             result = analyst.run_review_loop(
                 self.artifact, self.round_discussions,
-                max_iterations=ri.get("analyst", 3),
+                max_iterations=max_iter,
             )
             for issue in result.get("pending_issues", []):
                 self.pending_review_issues.append(issue)
@@ -1132,11 +1174,16 @@ class AgendaRunner:
             if not modeler or not hasattr(modeler, "run_review_loop"):
                 obs["error"] = "Modeler agent 不可用"
                 return obs
-            self.logger.info("  Modeler 自主更新循環")
-            ri = self.config.get("review_iterations") or {}
+            ri = self.config.get("max_iterations") or {}
+            n = params.get("max_iterations")
+            max_iter = (
+                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
+                else ri.get("modeler_review", 5)
+            )
+            self.logger.info("  Modeler 自主更新循環（上限 %s 輪，實際由 Modeler 自訂 1–5）", max_iter)
             result = modeler.run_review_loop(
                 self.artifact, self.round_discussions,
-                max_iterations=ri.get("modeler", 5),
+                max_iterations=max_iter,
             )
             for issue in result.get("pending_issues", []):
                 self.pending_review_issues.append(issue)

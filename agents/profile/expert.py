@@ -21,7 +21,6 @@ def has_supported_doc_files(doc_dir: Path) -> bool:
 EXPERT_REVIEW_ACTIONS = [
     "research_topic",
     "update_findings",
-    "review_neutrals",
     "flag_compliance_risk",
     "done",
 ]
@@ -119,66 +118,10 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             )
         return {"feedback": {"domain_research": research_session}}
 
-    def cross_review_neutrals(self, artifact: Dict) -> List[Dict]:
-        """從領域專業角度複審 Neutral 項目，找出可能遺漏的衝突。"""
-        neutrals = [
-            c for c in artifact.get("conflicts", [])
-            if c.get("label") == "Neutral"
-        ]
-        if not neutrals:
-            return []
-
-        domain_research = artifact.get("feedback", {}).get("domain_research", {})
-        context = {
-            "neutrals": neutrals,
-            "requirements": artifact.get("requirements", []),
-            "domain_research": domain_research,
-        }
-        task = """你是領域專家。以下是 Analyst 判定為「無衝突（Neutral）」的項目。
-請從法規、技術限制、行業標準的角度複審，判斷是否有被遺漏的衝突。
-
-常見盲點：
-- 兩條需求從文字看無衝突，但某法規實際上禁止同時實現
-- 兩條技術需求看似相容，但在特定架構或部署環境下會互相衝突
-- 需求描述模糊導致 Analyst 無法判斷，但領域知識能指出實質衝突
-
-輸出 JSON：
-{
-    "upgraded_conflicts": [
-        {
-            "original_neutral_id": "NF-XX",
-            "description": "為什麼這其實是衝突",
-            "conflict_type": "Logical/Technical/Resource/Temporal/Data/State/Priority/Scope",
-            "requirement_ids": ["R-XX", "R-YY"],
-            "domain_evidence": "領域依據（法規條文、技術限制等）"
-        }
-    ],
-    "review_summary": "複審摘要"
-}
-若所有 Neutral 確實無衝突，upgraded_conflicts 為空陣列。
-文字請使用繁體中文。只輸出 JSON。"""
-
-        messages = self.build_direct_messages(task, context=context)
-        try:
-            result = self.model.chat_json(messages)
-        except Exception as e:
-            self.logger.warning(f"Expert Neutral 複審失敗: {e}")
-            return []
-
-        upgraded = result.get("upgraded_conflicts", [])
-        if not isinstance(upgraded, list):
-            return []
-
-        if upgraded:
-            self.logger.info(
-                f"Expert 複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
-            )
-        return upgraded
-
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
     ) -> Optional[str]:
-        """議題涉及衝突協調、需求釐清或 NFR 取捨時，觸發 domain-research 產出簡短要點供發言參考。"""
+        """議題涉及 Conflict 協調、需求釐清或 NFR 取捨時，觸發 domain-research 產出簡短要點供發言參考。"""
         if topic.get("category") not in (
             "conflict_resolution", "requirement_clarification", "tradeoff"
         ):
@@ -237,7 +180,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 - statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
 - 論點必須有客觀依據，無依據則標註「資訊不足」
 - 若此議題與法規/標準無直接對應，仍請以領域專家角度簡要說明最佳實務、業界常見做法或技術/風險建議；切勿留空或僅輸出 JSON 結構
-- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有衝突需升級
+- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
 - statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
@@ -276,22 +219,29 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 
     # ===== 子 OODA 循環 =====
 
-    def run_review_loop(self, artifact, recent_discussions=None, max_iterations=5):
-        """Expert 子 OODA：自主研究 → 更新發現 → 標記風險。"""
+    def run_review_loop(self, artifact, recent_discussions=None, *, max_iterations):
+        """Expert 子 OODA：自主研究 → 更新發現 → 標記風險。max_iterations 為此次複審上限（caller 傳入，通常為 5）；第一輪可選填 max_iterations（1–5）由 Expert 自訂此次實際輪數。"""
         observation = None
         actions_taken = []
         pending_issues = []
         research_results = []
+        effective_max = min(max_iterations, 5)  # 上限 5，agent 自訂 1–5
+        i = 0
 
-        for i in range(max_iterations):
+        while i < effective_max:
             state = self._build_review_state(
                 artifact, recent_discussions, actions_taken,
-                research_results, i, max_iterations,
+                research_results, i, effective_max,
             )
             decision = self.decide_next_review_action(state, observation)
+            if i == 0:
+                n = decision.get("max_iterations")
+                if n is not None and isinstance(n, int) and 1 <= n <= 5:
+                    effective_max = n
+                    self.logger.info(f"  Expert 自訂此次複審輪數: {effective_max}（1–5）")
             action = decision.get("action", "done")
             self.logger.info(
-                f"  Expert review [{i + 1}/{max_iterations}]: {action}"
+                f"  Expert review [{i + 1}/{effective_max}]: {action}"
                 f" — {decision.get('reasoning', '')}"
             )
             if action == "done" or action not in EXPERT_REVIEW_ACTIONS:
@@ -308,6 +258,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             })
             if observation.get("error"):
                 self.logger.warning(f"  Expert review error: {observation['error']}")
+            i += 1
 
         return {
             "agent": self.name,
@@ -330,9 +281,8 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 你是領域專家，正在對當前專案進行自主領域研究與合規分析。根據「當前狀態」與「上一步結果」，決定下一步行動。
 
 # 可用動作
-- research_topic：針對特定問題進行領域研究（搜尋法規、讀取文件）。params: {{ "query": "具體研究問題" }}{tools_hint}
+- research_topic：針對特定問題進行領域研究（搜尋法規、讀取文件）。params: {{ "query": "具體研究問題", "max_tool_rounds": 選填 1–10，此次研究允許的 tool 呼叫輪數 }}；使用搜尋工具時可自行決定要取幾筆結果（工具支援 max_results 參數）。{tools_hint}
 - update_findings：綜合已有研究結果更新至專案領域研究資料。無參數。（研究完畢後呼叫）
-- review_neutrals：從領域角度複審被標為 Neutral（無衝突）的項目，找出 Analyst 可能遺漏的衝突。無參數。
 - flag_compliance_risk：標記合規風險供主持人參考。params: {{ "description": "風險描述" }}
 - done：分析完成，交還控制權。無參數。
 
@@ -343,11 +293,11 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 {obs_text}
 
 # 決策指引
+- 若為第一輪（當前狀態中 iteration 為 1），可選填 max_iterations（1–5）表示此次複審你打算跑幾輪；不填則用目前上限（最多 5）。
 - 若有近期討論涉及法規、標準、安全、合規問題，優先研究
 - 若需求涉及受管制領域（用戶資料、支付、醫療、教育等），研究對應法規
 - research_topic 可多次呼叫，每次聚焦一個具體問題
 - 研究到足夠深度後呼叫 update_findings 寫入
-- 若有 Neutral 項目且已有領域研究結果，呼叫 review_neutrals 複審
 - 發現重大合規風險時呼叫 flag_compliance_risk
 - 無需進一步研究時呼叫 done
 - reasoning 請使用繁體中文
@@ -356,7 +306,8 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 {{
     "action": "動作名稱",
     "params": {{}},
-    "reasoning": "一句說明"
+    "reasoning": "一句說明",
+    "max_iterations": "選填，僅第一輪有效；填數字 1–5 表示此次複審自訂輪數"
 }}"""
 
         messages = self.build_direct_messages(user_prompt)
@@ -369,11 +320,14 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
         action = (response.get("action") or "").strip()
         if action not in EXPERT_REVIEW_ACTIONS:
             action = "done"
-        return {
+        out = {
             "action": action,
             "params": response.get("params") or {},
             "reasoning": response.get("reasoning", ""),
         }
+        if "max_iterations" in response:
+            out["max_iterations"] = response["max_iterations"]
+        return out
 
     def _build_review_state(
         self, artifact, recent_discussions, actions_taken,
@@ -434,6 +388,11 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                 obs["error"] = "query 參數為空"
                 obs["summary"] = "研究失敗：未提供研究問題"
                 return obs
+            max_rounds = params.get("max_tool_rounds")
+            if max_rounds is not None and isinstance(max_rounds, int) and 1 <= max_rounds <= 10:
+                tool_rounds = max_rounds
+            else:
+                tool_rounds = self.tool_call_max_rounds
             context = {
                 "project_overview": (artifact.get("scope") or {}).get(
                     "description", ""
@@ -456,7 +415,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             try:
                 raw = (
                     self.chat_with_tools(
-                        messages, max_rounds=self.tool_call_max_rounds,
+                        messages, max_rounds=tool_rounds,
                     )
                     if self.tools
                     else self.model.chat(messages)
@@ -503,31 +462,6 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"更新失敗: {e}"
-            return obs
-
-        if action == "review_neutrals":
-            try:
-                upgraded = self.cross_review_neutrals(artifact)
-                if upgraded:
-                    for up in upgraded:
-                        pending_issues.append({
-                            "type": "upgraded_neutral",
-                            "description": up.get("description", ""),
-                            "source": "expert",
-                            "original_neutral_id": up.get("original_neutral_id"),
-                            "conflict_type": up.get("conflict_type", ""),
-                            "requirement_ids": up.get("requirement_ids", []),
-                            "domain_evidence": up.get("domain_evidence", ""),
-                        })
-                    obs["result"] = {"upgraded_count": len(upgraded)}
-                    obs["summary"] = (
-                        f"複審發現 {len(upgraded)} 個 Neutral 可能有衝突"
-                    )
-                else:
-                    obs["summary"] = "所有 Neutral 項目確認無衝突"
-            except Exception as e:
-                obs["error"] = str(e)
-                obs["summary"] = f"Neutral 複審失敗: {e}"
             return obs
 
         if action == "flag_compliance_risk":

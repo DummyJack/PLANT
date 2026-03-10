@@ -14,6 +14,11 @@ class WebSearchTool(BaseTool):
             "type": "string",
             "description": "搜尋關鍵字（建議使用英文以獲得更多結果）",
             "required": True
+        },
+        "max_results": {
+            "type": "integer",
+            "description": "選填。此次搜尋要回傳的結果筆數（1–20），不填則用預設。可依問題複雜度自行決定。",
+            "required": False
         }
     }
 
@@ -48,6 +53,7 @@ class WebSearchTool(BaseTool):
 
         Args:
             query: 搜尋關鍵字
+            max_results: 選填。此次要回傳的結果數（1–20），不傳則用建構時的預設值
 
         Returns:
             格式化的搜尋結果文字
@@ -56,11 +62,17 @@ class WebSearchTool(BaseTool):
         if not query:
             return "錯誤: 搜尋關鍵字不可為空"
 
+        n = kwargs.get("max_results")
+        if n is not None and isinstance(n, int) and 1 <= n <= 20:
+            max_results = n
+        else:
+            max_results = self.max_results
+
         try:
             client = self.get_client()
             results = client.search(
                 query=query,
-                max_results=self.max_results,
+                max_results=max_results,
                 search_depth="basic"
             )
             return self.format_results(results)

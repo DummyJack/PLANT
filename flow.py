@@ -42,7 +42,7 @@ class Flow:
         if enable_tools.get("web_search", False):
             from agents.tools import WebSearchTool
             expert_tools.append(
-                WebSearchTool(max_results=config.get("web_search_max_results", 3))
+                WebSearchTool()
             )
         if enable_tools.get("read_external_file", True) and has_supported_doc_files(doc_dir):
             expert_tools.append(ReadExternalFileTool(base_dir=doc_dir))
@@ -120,9 +120,9 @@ class Flow:
         self.logger.info("=== Phase 0: 初始草稿建立 ===")
         artifact = self.run_init_phase(artifact)
 
-        # 開會前產出需求衝突報告，供與會參考
+        # 開會前產出需求 Conflict 報告，供與會參考
         if artifact.get("conflicts"):
-            self.logger.info("產出需求衝突報告")
+            self.logger.info("產出需求 Conflict 報告")
             conflict_md = self.analyst_agent.generate_conflict_report(
                 artifact,
                 round_num=0,
@@ -155,9 +155,9 @@ class Flow:
         start_round = len(artifact.get("discussions", [])) + 1
         self.logger.info(f"繼續現有專案，從 Round {start_round} 開始，共 {rounds} 輪")
 
-        # 開會前產出需求衝突報告，供與會參考
+        # 開會前產出需求 Conflict 報告，供與會參考
         if artifact.get("conflicts"):
-            self.logger.info("產出需求衝突報告")
+            self.logger.info("產出需求 Conflict 報告")
             conflict_md = self.analyst_agent.generate_conflict_report(
                 artifact,
                 round_num=start_round - 1,
@@ -209,19 +209,7 @@ class Flow:
         artifact["requirements"] = analysis["requirements"]
         self.store.save_artifact(artifact)
 
-        self.logger.info("Analyst 精煉模糊需求")
-        refined = self.analyst_agent.refine_requirements(artifact)
-        artifact["requirements"] = refined.get(
-            "requirements", artifact["requirements"]
-        )
-        refined_ids = refined.get("refined_ids", [])
-        if refined_ids:
-            self.logger.info(
-                f"  ✓ 精煉了 {len(refined_ids)} 條: {refined_ids}"
-            )
-        self.store.save_artifact(artifact)
-
-        self.logger.info("Analyst 執行衝突辨識（含信心度）")
+        self.logger.info("Analyst 執行 Conflict 辨識（含信心度）")
         artifact = self.analyst_agent.run_conflict_detection(artifact)
         self.store.save_artifact(artifact)
 
@@ -236,8 +224,8 @@ class Flow:
             for c in low_conf:
                 amb = c.get("ambiguous_requirements", [])
                 desc = (
-                    f"衝突 {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"：{c.get('description', '')[:80]}"
+                    f"Conflict {c['id']} 信心度低（{c.get('confidence', '?')}）"
+                    f"：{c.get('description', '')}"
                 )
                 if amb:
                     desc += f"（涉及模糊需求: {', '.join(amb)}）"
@@ -249,7 +237,7 @@ class Flow:
                     "related_conflict_id": c["id"],
                 })
             self.logger.info(
-                f"  {len(low_conf)} 個低信心衝突加入 open_questions"
+                f"  {len(low_conf)} 個低信心 Conflict 加入 open_questions"
             )
 
         low_conf_neutrals = [
@@ -263,7 +251,7 @@ class Flow:
                 amb = c.get("ambiguous_requirements", [])
                 desc = (
                     f"Neutral {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"，可能遺漏衝突：{c.get('description', '')[:80]}"
+                    f"，可能遺漏 Conflict：{c.get('description', '')[:80]}"
                 )
                 if amb:
                     desc += f"（涉及模糊需求: {', '.join(amb)}）"
@@ -282,9 +270,10 @@ class Flow:
             self.store.save_artifact(artifact)
 
         self.logger.info("Expert 自主領域研究")
-        ri = self.config.get("review_iterations") or {}
+        mi = self.config.get("max_iterations") or {}
         review = self.expert_agent.run_review_loop(
-            artifact, max_iterations=ri.get("expert", 5)
+            artifact,
+            max_iterations=mi.get("expert_phase0", 10),
         )
         self.store.save_artifact(artifact)
         review_actions = review.get("actions_taken", [])
@@ -310,49 +299,17 @@ class Flow:
             )
 
         self.logger.info("Modeler 初步建模")
+        mi = self.config.get("max_iterations") or {}
         model_data = self.modeler_agent.generate_system_model(
-            artifact["requirements"], artifact["stakeholders"]
+            artifact["requirements"],
+            artifact["stakeholders"],
+            max_iterations=mi.get("modeler_phase0", 15),
         )
         artifact["system_models"] = model_data
         self.store.save_artifact(artifact)
         model_count = len(model_data.get("models", []))
         self.logger.info(f"  ✓ 產生 {model_count} 張 UML 圖")
         self.store.save_plantuml_files(model_data)
-
-        self.logger.info("Modeler 交叉複審 Neutral 項目")
-        modeler_upgraded = self.modeler_agent.cross_review_neutrals(artifact)
-        all_upgraded = [
-            {**u, "cross_review_source": "modeler"} for u in modeler_upgraded
-        ]
-        if all_upgraded:
-            existing_cf = len([
-                c for c in artifact.get("conflicts", [])
-                if c.get("label") == "Conflict"
-            ])
-            for i, up in enumerate(all_upgraded, existing_cf + 1):
-                ctype = (up.get("conflict_type") or "").strip()
-                if ctype not in ALLOWED_CONFLICT_TYPES:
-                    ctype = ""
-                evidence = (
-                    up.get("domain_evidence")
-                    or up.get("architecture_evidence", "")
-                )
-                artifact.setdefault("conflicts", []).append({
-                    "id": f"CF-{i:02d}",
-                    "label": "Conflict",
-                    "description": up.get("description", ""),
-                    "requirement_ids": up.get("requirement_ids", []),
-                    "conflict_type": ctype,
-                    "cross_review_source": up["cross_review_source"],
-                    "original_neutral_id": up.get("original_neutral_id"),
-                    "evidence": evidence,
-                })
-            self.logger.info(
-                f"  ✓ 交叉複審升級了 {len(all_upgraded)} 個 Neutral → Conflict"
-            )
-            self.store.save_artifact(artifact)
-        else:
-            self.logger.info("  交叉複審確認所有 Neutral 無遺漏")
 
         self.logger.info("Analyst 草稿化")
         draft_md = self.analyst_agent.create_draft(
@@ -362,7 +319,7 @@ class Flow:
         )
         self.store.save_draft(draft_md, version=0)
         self.logger.info(
-            f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個衝突"
+            f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個 Conflict"
         )
 
         meta = artifact.setdefault("meta", {})
@@ -436,8 +393,8 @@ class Flow:
         artifact["open_questions"] = existing_oq + all_open_questions
         self.store.save_artifact(artifact)
 
-        # Step 5.1: Mediator 更新決策與衝突（含討論中提出的新增衝突，可補辨識漏報）
-        self.logger.info("Step 5.1: Mediator 更新決策與衝突")
+        # Step 5.1: Mediator 更新決策與 Conflict（含討論中提出的新增 Conflict，可補辨識漏報）
+        self.logger.info("Step 5.1: Mediator 更新決策與 Conflict")
         prev_conflicts_by_id = {
             c.get("id"): c for c in artifact.get("conflicts", []) if c.get("id")
         }
@@ -461,7 +418,7 @@ class Flow:
                 new_decisions[i] = d
         artifact["decisions"].extend(new_decisions)
         new_conflicts = list(updates.get("conflicts", artifact["conflicts"]))
-        # 討論中提出的新增衝突（漏報補正）：指派 id 後併入
+        # 討論中提出的新增 Conflict（漏報補正）：指派 id 後併入
         valid_conflict_types = set(ALLOWED_CONFLICT_TYPES)
         for nc in updates.get("new_conflicts", []):
             if not nc.get("description"):
@@ -486,7 +443,7 @@ class Flow:
                     "requirement_ids": nc.get("requirement_ids", []),
                 }
             )
-        # 決策 ↔ 衝突對應：依 resolved_conflict_ids 寫入 resolved_by_decision_id
+        # 決策 ↔ Conflict 對應：依 resolved_conflict_ids 寫入 resolved_by_decision_id
         cf_to_decision = {}
         for d in new_decisions:
             did = d.get("id")
@@ -522,8 +479,11 @@ class Flow:
                 artifact["requirements"], prev_models
             )
         else:
+            mi = self.config.get("max_iterations") or {}
             model_data = self.modeler_agent.generate_system_model(
-                artifact["requirements"], artifact["stakeholders"]
+                artifact["requirements"],
+                artifact["stakeholders"],
+                max_iterations=mi.get("modeler_phase0", 15),
             )
 
         artifact["system_models"] = model_data
@@ -539,9 +499,9 @@ class Flow:
         self.store.save_draft(draft_md, version=next_version)
         self.logger.info(f"  ✓ 已存 draft_v{next_version}.md")
 
-        # Step 5.5: 只要有衝突列表就產出需求衝突報告（含已解決／未解決），每輪更新
+        # Step 5.5: 只要有 Conflict 列表就產出需求 Conflict 報告（含已解決／未解決），每輪更新
         if artifact.get("conflicts"):
-            self.logger.info("Step 5.5: 產出需求衝突報告（Analyst，Markdown）")
+            self.logger.info("Step 5.5: 產出需求 Conflict 報告（Analyst，Markdown）")
             conflict_md = self.analyst_agent.generate_conflict_report(
                 artifact,
                 round_num,
@@ -550,7 +510,7 @@ class Flow:
             self.store.save_markdown(conflict_md, "conflict_report.md")
             self.logger.info("  ✓ 已存 conflict_report.md")
         else:
-            self.logger.info("Step 5.5: 無衝突資料，略過 conflict_report.md")
+            self.logger.info("Step 5.5: 無 Conflict 資料，略過 conflict_report.md")
 
         meta = artifact.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()

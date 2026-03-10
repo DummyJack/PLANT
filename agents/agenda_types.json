@@ -2,12 +2,12 @@
   {
     "id": "conflict_resolution",
     "label": "衝突協調",
-    "description": "利害關係人間對需求或設計的衝突已確認，需協調立場、投票或人類裁決以達成共識"
+    "description": "利害關係人間對需求或設計的 Conflict 已確認，需協調立場、投票或人類裁決以達成共識"
   },
   {
     "id": "requirement_clarification",
     "label": "需求釐清",
-    "description": "因需求描述模糊導致衝突判斷不確定（低信心衝突或低信心 Neutral），需先釐清需求的具體含義再判定衝突是否成立"
+    "description": "因需求描述模糊導致 Conflict 判斷不確定（低信心 Conflict 或低信心 Neutral），需先釐清需求的具體含義再判定 Conflict 是否成立"
   },
   {
     "id": "open_question",
@@ -22,6 +22,6 @@
   {
     "id": "tradeoff",
     "label": "需求取捨",
-    "description": "NFR 間可能互相競爭（效能、可用性、成本等）需協商"
+    "description": "NFR 間可能互相競爭(效能、可用性、成本等)需協商"
   }
 ]
