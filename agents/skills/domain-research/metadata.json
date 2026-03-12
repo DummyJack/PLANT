@@ -1,0 +1,41 @@
+{
+  "name": "domain-research",
+  "description": "研究法規、標準與最佳實務，產出領域研究結論與衍生需求。",
+  "triggers": [
+    "法規或合規相關議題",
+    "需要外部證據支撐決策",
+    "需求涉及受管制領域"
+  ],
+  "inputs": {
+    "required": ["project_overview"],
+    "optional": ["requirements", "conflicts", "doc_references"]
+  },
+  "tools": {
+    "allowed": ["web_search", "file_parser"],
+    "external": ["tavily", "public_web"],
+    "prerequisites": ["TAVILY_API_KEY (for web_search)"]
+  },
+  "workflow": {
+    "steps": [
+      "定義研究問題",
+      "蒐集公開資料或 doc 文件",
+      "萃取可追溯發現",
+      "整理 derived_requirements 與風險"
+    ]
+  },
+  "outputs": {
+    "artifacts": ["research_session", "domain_research_summary", "derived_requirements"]
+  },
+  "integration": {
+    "upstream": ["rough_idea", "stakeholder_requirements"],
+    "downstream": ["requirements-analyst", "conflict-analyzer", "srs-generation"],
+    "related": ["plantuml-ascii"]
+  },
+  "quality": {
+    "acceptance_criteria": [
+      "每個關鍵結論具來源或依據",
+      "derived_requirements 可追溯到 findings",
+      "不輸出未驗證的法規結論"
+    ]
+  }
+}

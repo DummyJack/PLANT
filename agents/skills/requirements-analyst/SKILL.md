@@ -1,193 +1,388 @@
 ---
+name: requirement-analyzer
+description: Analyzes and documents requirements for any software project, technology-agnostic approach to requirement engineering
+---
 
-## name: requirements-analyst
-description: Gathers, refines, and documents requirements from Discovery outputs
+# Generic Requirement Analyzer
 
-# Requirements Analyst
+A technology-agnostic skill for analyzing, categorizing, and documenting software requirements for any type of project.
 
-You are the Requirements Analyst. Your job is to transform Discovery findings into actionable requirements.
+## Core Responsibilities
 
-## Your Responsibilities
+### 1. Requirement Decomposition
 
-1. READ the Discovery Brief and Intake documents completely
-2. IDENTIFY functional requirements for each stakeholder
-3. IDENTIFY non-functional requirements (performance, security, accessibility)
-4. DEFINE measurable success criteria
-5. CREATE testable acceptance criteria
-6. DOCUMENT constraints and dependencies
-7. EXPLICITLY list what's out of scope
-8. SURFACE potential conflicts or ambiguities that need resolution
+Break down requirements into universal categories:
 
-## Conventions in This Flow
+```yaml
+Requirement Categories:
+  Functional:
+    - What the system must do
+    - User interactions
+    - Business logic
+    - Data processing
 
-- **Scope**: Set scope.description = project overview (from rough_idea). Set in_scope and out_of_scope only from stakeholder needs.
-- **Draft**: create_draft = initial requirements list; update_draft = **preserve the previous version** and only adjust or add. Use Context.requirements as the base: keep every existing requirement; only modify entries that are directly affected by the current round’s decisions/discussions; add new requirements only when the round introduces scope-compliant new ones. Do not drop or forget earlier requirements. When updating, keep each requirement **text** short (1–2 sentences); do not merge full decision or implementation paragraphs into text — decision details stay in decisions.
-- Base all requirements on existing data and this skill; do not invent requirements.
-- When participating in meetings: speak as the analyst; cite requirement or conflict IDs; stay neutral; output vote (agreed/unresolved) and open_questions; do not speak for other roles; base arguments on requirements or conflicts.
+  Non-Functional:
+    - Performance targets
+    - Security requirements
+    - Usability standards
+    - Reliability metrics
 
-## Requirement ID Convention
+  Constraints:
+    - Technical limitations
+    - Business rules
+    - Regulatory compliance
+    - Resource boundaries
+```
 
-**For the draft document output only** (草稿中的 ID 寫法):
-- **Functional**: `FR-1`, `FR-2`, `FR-3`, ... (數字依序，無前綴)
-- **Non-Functional**: `NFR-{類別}-1`, `NFR-{類別}-2`, ... 類別用英文縮寫：SEC（安全性）、PERF（性能）、ACC（可及性）、REL（可靠性）、AVL（可用性）、MNT（可維護性）、PRT（可攜性）、USB（易用性）。例如 NFR-SEC-1、NFR-PERF-1、NFR-ACC-1。
+### 2. Requirement Analysis Framework
 
-**Internal/artifact** may keep other IDs (e.g. R-01) for traceability; when generating the draft Markdown, map to FR-1, FR-2 and NFR-類別-1.
+**Universal User Story Format:**
+```yaml
+User Story:
+  as_a: [user role/persona]
+  i_want: [feature/capability]
+  so_that: [business value/benefit]
 
-**Key Rule**: Priority (P0/P1/P2) goes in the table column, NOT in the ID.
+Acceptance Criteria:
+  given: [initial context/state]
+  when: [action/trigger]
+  then: [expected outcome/result]
+```
 
-## Prioritization Guidelines
+**Requirement Specification Template:**
+```yaml
+Requirement:
+  id: REQ-[number]
+  title: [brief description]
+  type: functional|non-functional|constraint
+  priority: must|should|could|wont
+  description: [detailed description]
+  rationale: [why this is needed]
+  source: [stakeholder/document]
+  acceptance_criteria:
+    - [measurable criterion 1]
+    - [measurable criterion 2]
+  dependencies:
+    - [related requirement ids]
+  risks:
+    - [potential risks]
+  assumptions:
+    - [underlying assumptions]
+```
 
-- **P0 (Must Have)**: Feature doesn't work without this. Launch blocker.
-- **P1 (Should Have)**: Important for good UX/functionality. Strong desire.
-- **P2 (Nice to Have)**: Enhances but not critical. Can defer.
+### 3. Priority Frameworks
 
-## Stopping Criteria
+**MoSCoW Method:**
+```yaml
+Must Have:
+  - Critical for launch
+  - System fails without it
+  - Legal/regulatory requirement
 
-Stop exploring and start documenting when:
+Should Have:
+  - Important but not vital
+  - Workaround exists
+  - High value for users
 
-1. All stakeholders have defined objectives
-2. Core functionality is clear
-3. Success criteria are measurable
-4. Major constraints are identified
-5. Scope boundaries are defined
-6. Potential conflicts are surfaced
+Could Have:
+  - Desirable but not necessary
+  - Nice to have
+  - Can be postponed
 
-If unclear on any of these, ASK before proceeding.
+Won't Have (this time):
+  - Out of scope
+  - Future consideration
+  - Explicitly excluded
+```
 
-## Quality Standards
+**Kano Model:**
+```yaml
+Basic Needs:
+  - Expected by users
+  - Causes dissatisfaction if missing
 
-- Requirements should be specific, not vague
-- Acceptance criteria should be testable
-- Success metrics should be measurable
-- Dependencies should be actionable
-- Scope should be clear (in AND out)
-- Conflicts should be surfaced, not hidden
+Performance Needs:
+  - More is better
+  - Linear satisfaction
 
-## Output Format
+Excitement Needs:
+  - Delighters
+  - Unexpected features
+  - Competitive advantage
+```
 
-Generate a requirements document using this template:
+### 4. Requirement Quality Criteria
 
-**Data source:** All content from Context (artifact). **勿產出**頂層 H1 標題（不要 # Feature Name）。**Frontmatter**：僅含 `version`, `status`, `stakeholders`。勿含 feature、created、updated、id、phase、document、domains、author、reviewed_by。`version` = Context.draft_version（初始草稿為 0）。`stakeholders` = list of stakeholder **names** from artifact. 概觀 = only scope.description. 約束 = from Context.feedback. No 依賴關係、成功標準. Scope section = scope.in_scope + scope.out_of_scope. 衝突需求 = 3 columns (Issue | Requirements Affected | Decision), no Resolution Options.
+**SMART Requirements:**
+```yaml
+Specific:
+  - Clear and unambiguous
+  - Well-defined scope
 
+Measurable:
+  - Quantifiable success criteria
+  - Testable conditions
+
+Achievable:
+  - Technically feasible
+  - Resource realistic
+
+Relevant:
+  - Aligns with business goals
+  - Provides value
+
+Time-bound:
+  - Has deadline/milestone
+  - Time constraints defined
+```
+
+**Completeness Checklist:**
+```yaml
+Requirement Completeness:
+  - [ ] Clear description
+  - [ ] Defined acceptance criteria
+  - [ ] Identified stakeholder
+  - [ ] Priority assigned
+  - [ ] Dependencies mapped
+  - [ ] Risks assessed
+  - [ ] Assumptions documented
+  - [ ] Traceability established
+```
+
+### 5. Stakeholder Analysis
+
+**Stakeholder Mapping:**
+```yaml
+Stakeholder Analysis:
+  identification:
+    - End users
+    - Business owners
+    - Technical team
+    - Regulatory bodies
+    - External partners
+
+  influence_interest_matrix:
+    high_influence_high_interest:
+      - Key players
+      - Manage closely
+
+    high_influence_low_interest:
+      - Keep satisfied
+      - Regular updates
+
+    low_influence_high_interest:
+      - Keep informed
+      - Regular communication
+
+    low_influence_low_interest:
+      - Monitor
+      - Minimal effort
+```
+
+### 6. Requirement Validation
+
+**Validation Techniques:**
+```yaml
+Review Methods:
+  walkthrough:
+    - Informal review
+    - Author-led
+    - Educational focus
+
+  inspection:
+    - Formal review
+    - Defined roles
+    - Defect detection
+
+  prototype_validation:
+    - Visual representation
+    - User feedback
+    - Early validation
+```
+
+**Validation Criteria:**
+```yaml
+Quality Attributes:
+  correctness:
+    - Accurately represents need
+    - Factually correct
+
+  consistency:
+    - No conflicts
+    - Uniform terminology
+
+  completeness:
+    - All aspects covered
+    - No gaps
+
+  feasibility:
+    - Technically possible
+    - Resource available
+
+  testability:
+    - Verifiable criteria
+    - Measurable outcomes
+```
+
+## Analysis Process
+
+### Step 1: Requirement Gathering
+```yaml
+Sources:
+  - Stakeholder interviews
+  - Existing documentation
+  - Market research
+  - Competitive analysis
+  - User feedback
+  - Regulatory requirements
+```
+
+### Step 2: Categorization
+```yaml
+Classification:
+  1. Parse raw requirements
+  2. Identify requirement type
+  3. Assign categories
+  4. Group related items
+  5. Identify patterns
+```
+
+### Step 3: Analysis
+```yaml
+Analysis Activities:
+  1. Ambiguity resolution
+  2. Conflict identification
+  3. Gap analysis
+  4. Dependency mapping
+  5. Risk assessment
+```
+
+### Step 4: Documentation
+```yaml
+Documentation Outputs:
+  - Requirement specification
+  - Traceability matrix
+  - Stakeholder matrix
+  - Risk register
+  - Assumption log
+```
+
+## Output Formats
+
+### Requirement Specification Document
 ```markdown
----
-version: 0
-status: draft
-stakeholders: [name1, name2, ...]
----
+# Requirement Specification
 
-## 概觀
+## Executive Summary
+[High-level overview of requirements]
 
-[僅寫 scope.description，一段即可]
+## Functional Requirements
+### FR-001: [Title]
+- **Description**: [Detail]
+- **Priority**: Must Have
+- **Acceptance Criteria**:
+  1. [Criterion 1]
+  2. [Criterion 2]
 
----
+## Non-Functional Requirements
+### NFR-001: [Title]
+- **Category**: Performance
+- **Metric**: Response time < 2 seconds
+- **Validation**: Load testing
 
-## 功能性需求 (Functional Requirements)
+## Constraints
+### CON-001: [Title]
+- **Type**: Technical
+- **Description**: [Limitation details]
+- **Impact**: [How it affects design]
 
-ID 使用 **FR-1、FR-2、FR-3** … 依序編號。
+## Dependencies
+[Requirement dependency diagram]
 
-| ID | Priority | Requirement | Stakeholder | Acceptance Criteria |
-|----|----------|-------------|-------------|---------------------|
-| FR-1 | P0 | [Requirement] | [Who needs this] | [How to verify] |
-| FR-2 | P0 | [Requirement] | [Who needs this] | [How to verify] |
-| FR-3 | P1 | [Requirement] | [Who needs this] | [How to verify] |
+## Risks and Assumptions
+### Risks
+- [Risk 1]: [Mitigation strategy]
 
-**Priority Legend:** P0 (Must Have) / P1 (Should Have) / P2 (Nice to Have)
-
----
-
-## 非功能性需求 (Non-Functional Requirements)
-
-ID 使用 **NFR-類別-1**（類別：SEC、PERF、ACC、REL、AVL、MNT、PRT、USB）。**常見類別全部列出**，有對應需求則填表，無則可留空表或「（本專案暫無）」說明。
-
-### 安全性 (Security) — NFR-SEC-n
-| ID | Priority | Requirement | Rationale |
-
-### 性能 (Performance) — NFR-PERF-n
-| ID | Priority | Requirement | Metric | Target |
-
-### 可及性 (Accessibility) — NFR-ACC-n
-| ID | Priority | Requirement | Standard |
-
-### 可靠性 (Reliability) — NFR-REL-n
-| ID | Priority | Requirement | Rationale / Metric |
-
-### 可用性 (Availability) — NFR-AVL-n
-| ID | Priority | Requirement | Metric | Target |
-
-### 可維護性 (Maintainability) — NFR-MNT-n
-| ID | Priority | Requirement | Rationale |
-
-### 可攜性 (Portability) — NFR-PRT-n
-| ID | Priority | Requirement | Rationale |
-
-### 易用性 (Usability) — NFR-USB-n
-| ID | Priority | Requirement | Standard / Metric |
-
----
-
-## 約束 (Constraints)
-
-依 Context.feedback 撰寫（如 domain_research、derived_requirements 等）。
-
-- [從 feedback 產出的約束條目]
-
----
-
-## Scope
-
-**in_scope:**
-- [Context.scope.in_scope 各項]
-
-**out_of_scope:**
-- [Context.scope.out_of_scope 各項]
-
----
-
-## 衝突需求
-
-| Issue | Requirements Affected（受影響需求） | Decision（決策） |
-|-------|-------------------------------------|------------------|
-| [Conflict] | [各受影響需求 ID 與一句摘要] | [待決 / 已決：…] |
+### Assumptions
+- [Assumption 1]: [Validation plan]
 ```
 
-**Do not include:** 開發準備與交付里程碑、開放性問題、專案協同、審核與批准、依賴關係、成功標準. End at 衝突需求.
+### Traceability Matrix
+```yaml
+Traceability:
+  REQ-001:
+    source: "User Interview #3"
+    design_element: "Component A"
+    test_case: "TC-001, TC-002"
+    implementation: "Module X"
 
-## Agent Coordination
-
-### When Receiving Work
-
-**Expected invocation:**
-
-```
-Invoke: Skill v:requirements-analyst
-
-Task: Generate requirements from Discovery outputs
-
-Context:
-- Brief: [path to brief-final.md]
-- Intake: [path to intake-final.md]
-- Feature slug: [feature-slug]
-
-Deliverable:
-- requirements-v1.md in 02-definition/
+  REQ-002:
+    source: "Regulatory Doc Section 4.2"
+    design_element: "Security Layer"
+    test_case: "TC-010"
+    implementation: "Auth Module"
 ```
 
-### When Complete
+## Integration Points
 
-Report completion:
+### With Project Configuration
+```yaml
+# Project-specific configuration
+requirement_config:
+  project_type: "web_application|mobile_app|api|system"
 
+  priority_framework: "moscow|kano|numerical"
+
+  requirement_categories:
+    - functional
+    - non-functional
+    - business
+    - technical
+
+  validation_requirements:
+    review_type: "formal|informal"
+    approval_levels: 2
+
+  compliance_standards:
+    - "ISO 27001"
+    - "GDPR"
 ```
-Requirements Analysis Complete
 
-Output: 02-definition/requirements-v1.md
+### With Technology-Specific Skills
+```yaml
+# Technology-specific extensions
+tech_specific:
+  framework: "[Framework name]"
 
-Summary:
-- Functional requirements: X (P0: A, P1: B, P2: C)
-- Non-functional requirements: Y
-- Success criteria: Z defined
-- Conflicts surfaced: N
+  requirement_patterns:
+    - "[Framework-specific pattern]"
 
-Ready for: User review
+  validation_rules:
+    - "[Technology-specific rule]"
 ```
 
+## Best Practices
+
+1. **Stakeholder Engagement**: Involve all stakeholders early
+2. **Clear Communication**: Use unambiguous language
+3. **Measurable Criteria**: Define quantifiable success metrics
+4. **Iterative Refinement**: Requirements evolve, plan for changes
+5. **Traceability**: Maintain links from requirements to implementation
+6. **Risk-Based Focus**: Prioritize based on risk and value
+7. **Documentation**: Keep requirements current and accessible
+
+## Universal Application
+
+This skill can be applied to:
+- Web applications
+- Mobile applications
+- Desktop software
+- Embedded systems
+- APIs and services
+- Cloud platforms
+- IoT solutions
+- Enterprise systems
+- Machine learning projects
+- Any software development project
+
+The skill adapts to project needs through configuration rather than modification, ensuring reusability across different technology stacks and domains.

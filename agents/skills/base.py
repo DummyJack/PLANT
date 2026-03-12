@@ -4,8 +4,10 @@ Skill 載入與註冊：agents/skills/<name>/ 下的 SKILL.md 與 references。
 """
 
 import re
+import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+from agents.skills.metadata_schema import validate_skill_metadata
 
 _SKILLS_ROOT = Path(__file__).resolve().parent
 _cache: Dict[str, Dict[str, Any]] = {}
@@ -86,6 +88,9 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         for f in assets_dir.glob("*.md"):
             reference_files[f.name] = f.read_text(encoding="utf-8")
 
+    metadata = _load_skill_metadata(skill_dir, skill_name)
+    metadata_valid, metadata_errors = validate_skill_metadata(metadata) if metadata else (False, ["metadata not found"])
+
     result = {
         "name": name,
         "description": description,
@@ -95,6 +100,9 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         "template": template,
         "checklist": checklist,
         "reference_files": reference_files,
+        "metadata": metadata,
+        "metadata_valid": metadata_valid,
+        "metadata_errors": metadata_errors,
     }
     if use_cache:
         _cache[skill_name] = result
@@ -104,3 +112,14 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
 def load_skill(skill_name: str) -> Dict[str, Any]:
     """相容舊介面：等同 get_skill(skill_name)。"""
     return get_skill(skill_name)
+
+
+def _load_skill_metadata(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
+    metadata_file = skill_dir / "metadata.json"
+    if not metadata_file.exists():
+        return {}
+    raw = metadata_file.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if "name" not in data:
+        data["name"] = skill_name
+    return data

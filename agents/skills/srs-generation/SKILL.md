@@ -11,7 +11,11 @@ description: >
 instructions: >
   Generate a complete Software Requirements Specification following IEEE 830, ISO/IEC/IEEE 29148,
   and Amazon technical specification standards. Use the template at references/template.md and
-  validate against references/checklist.md before finalizing.
+  validate against references/checklist.md before finalizing. Mandatory rules (in order): (1) 禁止硬掰
+  — only transcribe content from the draft and context; do not invent requirements, data models,
+  or placeholders. (2) 缺料就標待補 — where source material is missing, mark "待補" or omit the
+  section; do not leave unreplaced placeholders. (3) Section numbering starts at 1 (1. Introduction,
+  2. Overall Description, …).
 ---
 
 # SRS Generation Skill
@@ -74,11 +78,13 @@ Each functional requirement is structured as a complete use case specification w
 - **Priority**: The importance level of the requirement (P0 = must-have, P1 = should-have, P2 = nice-to-have), consistent with the prioritization used in the upstream PRD.
 - **Source**: A reference back to the PRD item or stakeholder request that originated this requirement.
 
+Each functional requirement also carries a **Priority Rationale** field explaining *why* the assigned priority (P0/P1/P2) was chosen. Stating "P0" without justification is not sufficient — the rationale must connect the priority to a concrete consequence: "P0: the product cannot launch without this because it is the sole entry point for all user actions" or "P2: a manual workaround exists in v1 and user research shows it is acceptable for the first six months." Priority assignments that lack rationale are flagged as incomplete during the quality check.
+
 In addition to individual requirement specifications, the SRS includes a **CRUD matrix** -- a table that maps data entities (rows) against Create, Read, Update, and Delete operations (columns), with each cell indicating which functional requirement governs that operation. The CRUD matrix provides a rapid completeness check: if an entity has no "Delete" operation defined, that may be intentional (soft-delete policy) or an oversight that needs resolution.
 
 ## Non-Functional Requirements Categories
 
-Non-functional requirements define the quality attributes and constraints of the system. Each NFR must include a specific, measurable metric, a target value, and a measurement method. The SRS organizes NFRs into the following categories:
+Non-functional requirements define the quality attributes and constraints of the system. Each NFR must include a specific, measurable metric, a target value, a measurement method, and a **Threshold Rationale** explaining *why this specific target value was chosen* rather than a higher or lower one. The rationale must cite at least one of: a business contract or SLA obligation, observed production baseline data, competitive benchmark, regulatory standard, or a cost/complexity trade-off analysis. NFR targets written without threshold rationale (e.g., "99.9% uptime" with no explanation) are treated as unsubstantiated guesses and flagged during the quality check. The SRS organizes NFRs into the following categories:
 
 - **Performance (NFR-PERF)**: Response times, throughput, latency percentiles (p50, p95, p99), concurrent user capacity, and resource utilization limits.
 - **Security (NFR-SEC)**: Authentication mechanisms, authorization models, encryption standards, data protection measures, vulnerability scanning requirements, and compliance with security frameworks.

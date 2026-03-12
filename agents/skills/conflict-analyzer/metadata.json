@@ -1,0 +1,41 @@
+{
+  "name": "conflict-analyzer",
+  "description": "分析需求或立場衝突，標註信心度與可解決方向。",
+  "triggers": [
+    "需求間有矛盾",
+    "討論中出現 unresolved vote",
+    "需產出 conflict 報告"
+  ],
+  "inputs": {
+    "required": ["requirements"],
+    "optional": ["stakeholders", "system_models", "decisions", "open_questions"]
+  },
+  "tools": {
+    "allowed": [],
+    "external": [],
+    "prerequisites": []
+  },
+  "workflow": {
+    "steps": [
+      "識別衝突候選",
+      "分類 conflict_type",
+      "評估信心度與模糊需求",
+      "輸出 conflict 或 neutral 結果"
+    ]
+  },
+  "outputs": {
+    "artifacts": ["conflicts", "conflict_report", "resolution_options"]
+  },
+  "integration": {
+    "upstream": ["requirements-analyst", "domain-research"],
+    "downstream": ["mediator_discussion", "srs-generation"],
+    "related": ["requirements-analyst"]
+  },
+  "quality": {
+    "acceptance_criteria": [
+      "每筆衝突有明確對應需求或利害關係人",
+      "低信心案例附 ambiguous_requirements",
+      "報告中 resolved/unresolved 計數一致"
+    ]
+  }
+}

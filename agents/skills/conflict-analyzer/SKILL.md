@@ -17,13 +17,6 @@ This skill enables you to:
 4. **Recommend resolutions** - Suggest appropriate resolution strategies
 5. **Generate reports** - Create structured conflict analysis with actionable recommendations
 
-## Conventions in This Flow
-
-- Use only two labels: **Conflict** or **Neutral**. No other labels.
-- Assign IDs: CF-01, CF-02, ... for Conflict items; NF-01, NF-02, ... for Neutral items.
-- Base analysis on existing artifact data and this skill; do not invent conflicts.
-- When participating in meetings: speak as the analyst; cite requirement or conflict IDs; stay neutral; output vote (agreed/unresolved) and open_questions; do not speak for other roles; base arguments on requirements or conflicts.
-
 ## Analysis Workflow
 
 Follow this process when analyzing requirements for conflicts:
@@ -31,7 +24,6 @@ Follow this process when analyzing requirements for conflicts:
 ### Step 1: Catalog All Requirements
 
 Collect and organize all requirements:
-
 - Extract from documents, user stories, tickets
 - Assign unique IDs if not already present
 - Group by feature, component, or domain
@@ -43,14 +35,12 @@ Collect and organize all requirements:
 Use `references/conflict_patterns.md` to scan for 8 conflict types:
 
 **1. Logical Conflicts**
-
 - Direct contradictions (A says yes, B says no)
 - Mutually exclusive features
 - Opposite behaviors
 - Example: "Work offline" vs "Require continuous internet"
 
 **2. Technical Conflicts**
-
 - Platform incompatibilities
 - Technology stack conflicts
 - API/library version mismatches
@@ -58,7 +48,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "Support IE11" vs "Use ES2022 features"
 
 **3. Resource Conflicts**
-
 - Team capacity limitations
 - Budget constraints
 - Infrastructure limits
@@ -66,7 +55,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "1000 concurrent streams" vs "1 Gbps bandwidth limit"
 
 **4. Temporal Conflicts**
-
 - Dependency deadline mismatches
 - Impossible timelines
 - Frequency conflicts
@@ -74,7 +62,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "Dashboard by March 1" depends on "Auth by March 15"
 
 **5. Data Conflicts**
-
 - Format incompatibilities
 - Validation rule conflicts
 - Data type mismatches
@@ -83,7 +70,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "Email must be unique" vs "Allow multiple accounts per email"
 
 **6. State Conflicts**
-
 - Invalid state transitions
 - State definition overlaps
 - Circular state dependencies
@@ -91,7 +77,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "Processing orders can't be modified" vs "Processing orders can be cancelled"
 
 **7. Priority Conflicts**
-
 - Competing stakeholder priorities
 - Performance vs security trade-offs
 - UX vs compliance conflicts
@@ -99,7 +84,6 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Example: "Both features critical for v1" but "Only time for one"
 
 **8. Scope Conflicts**
-
 - Feature outside defined scope
 - Platform expansion beyond bounds
 - Integration beyond standalone scope
@@ -119,7 +103,6 @@ REQ-004   -       -      CONF-2     -
 ```
 
 This reveals:
-
 - Which requirements have most conflicts (hot spots)
 - Clusters of related conflicts
 - Dependencies that propagate conflicts
@@ -129,7 +112,6 @@ This reveals:
 For each conflict, determine severity:
 
 **Critical:**
-
 - Impossible to satisfy both requirements
 - Blocks core functionality
 - Fundamental architectural conflict
@@ -137,7 +119,6 @@ For each conflict, determine severity:
 - Example: "Delete data on request" vs "Retain all data 7 years" (GDPR vs compliance)
 
 **High:**
-
 - Major rework needed to reconcile
 - Significant cost or timeline impact
 - Affects core functionality
@@ -145,7 +126,6 @@ For each conflict, determine severity:
 - Example: Both features need same 3 developers for 8 weeks, same deadline
 
 **Medium:**
-
 - Workaround available but not ideal
 - Moderate effort to resolve
 - Affects secondary features
@@ -153,7 +133,6 @@ For each conflict, determine severity:
 - Example: "Daily email" vs "Weekly email" (both might be needed)
 
 **Low:**
-
 - Minor inconsistency
 - Easy to resolve through clarification
 - No significant impact
@@ -173,7 +152,6 @@ REQ-015 (Offline storage) - depends on sync strategy
 ```
 
 Identify:
-
 - Blocking conflicts (prevent other work)
 - Cascading conflicts (one conflict causes others)
 - Critical path conflicts (on project critical path)
@@ -184,21 +162,18 @@ Use `references/resolution_strategies.md` to propose solutions:
 
 **Strategy Selection Guide:**
 
-
-| Conflict Type | Primary Strategies                                         |
-| ------------- | ---------------------------------------------------------- |
-| Logical       | Prioritization, Conditional Logic, Stakeholder Negotiation |
-| Technical     | Technical Solution, Decomposition, Scope Adjustment        |
-| Resource      | Prioritization, Sequencing, Parallel Tracks                |
-| Temporal      | Sequencing, Relaxation, Scope Adjustment                   |
-| Data          | Technical Solution, Conditional Logic                      |
-| State         | Decomposition, Conditional Logic, Technical Solution       |
-| Priority      | Stakeholder Negotiation, Prioritization, Compromise        |
-| Scope         | Scope Adjustment, Prioritization, Sequencing               |
-
+| Conflict Type | Primary Strategies |
+|--------------|-------------------|
+| Logical | Prioritization, Conditional Logic, Stakeholder Negotiation |
+| Technical | Technical Solution, Decomposition, Scope Adjustment |
+| Resource | Prioritization, Sequencing, Parallel Tracks |
+| Temporal | Sequencing, Relaxation, Scope Adjustment |
+| Data | Technical Solution, Conditional Logic |
+| State | Decomposition, Conditional Logic, Technical Solution |
+| Priority | Stakeholder Negotiation, Prioritization, Compromise |
+| Scope | Scope Adjustment, Prioritization, Sequencing |
 
 **For each conflict, provide:**
-
 1. **Multiple options** (2-3 resolution approaches)
 2. **Pros and cons** of each option
 3. **Implementation effort** (time, cost, complexity)
@@ -338,8 +313,8 @@ Reschedule API redesign to May 1 (internal, less urgent).
 
 ## Output Formats
 
-**Markdown Report** (default) - Comprehensive analysis for stakeholders. When generating the report, use `assets/conflict_report_template.json` as the **structure template**: follow its sections and fields (metadata, conflicts, conflict_matrix, recommendations, unresolved/resolved counts); **output must be Markdown**, not JSON or code fences.
-**JSON Structure** - Same template for programmatic processing
+**Markdown Report** (default) - Comprehensive analysis for stakeholders
+**JSON Structure** - Use `assets/conflict_report_template.json` for programmatic processing
 **Conflict Matrix** - Visual grid showing requirement conflicts
 **Dependency Graph** - Visual representation of requirement dependencies
 **Executive Summary** - High-level overview for leadership
@@ -362,7 +337,6 @@ When format not specified, provide Markdown report.
 ## Common Pitfalls to Avoid
 
 **Don't flag as conflicts when:**
-
 - Requirements are complementary, not contradictory
 - One requirement is subset of another (specialization)
 - Apparent conflict is due to unclear wording (ambiguity issue)
@@ -370,7 +344,6 @@ When format not specified, provide Markdown report.
 - Timeline allows sequential implementation
 
 **Do flag as conflicts when:**
-
 - Literally impossible to satisfy both
 - Would require mutually exclusive technology choices
 - Same resource needed for multiple things simultaneously
@@ -392,25 +365,21 @@ REQ-005: Launch in 2 weeks
 **Conflicts Detected:**
 
 **CONF-001 [CRITICAL]:** Resource vs Performance
-
 - REQ-001 (10k users) + REQ-002 (<1s load) + REQ-004 (free tier)
 - Conflict: Free tier cannot handle 10k concurrent users with 1s response
 - Resolution: Upgrade hosting (paid tier) OR reduce user count OR relax timing
 
 **CONF-002 [HIGH]:** Performance vs Features
-
 - REQ-002 (<1s load) + REQ-003 (500 items with images)
 - Conflict: Loading 500 hi-res images cannot complete in 1 second
 - Resolution: Reduce items per page OR lazy load OR relax timing
 
 **CONF-003 [MEDIUM]:** Timeline vs Scope
-
 - REQ-005 (2 weeks) vs complexity of all features
 - Conflict: Full implementation needs 6-8 weeks minimum
 - Resolution: MVP with core features in 2 weeks OR extend timeline
 
 **Recommended Actions:**
-
 1. Upgrade hosting to support user load (CONF-001)
 2. Reduce to 50 items per page with lazy loading (CONF-002)
 3. Launch MVP in 2 weeks, full features in 6 weeks (CONF-003)
@@ -420,4 +389,3 @@ REQ-005: Launch in 2 weeks
 - `references/conflict_patterns.md` - Comprehensive catalog of 8 conflict types with detection patterns
 - `references/resolution_strategies.md` - Detailed resolution strategies by conflict type
 - `assets/conflict_report_template.json` - JSON structure for conflict reports
-

@@ -1,0 +1,41 @@
+{
+  "name": "requirements-analyst",
+  "description": "將利害關係人輸入整理為需求、範圍與草稿，維持可追溯與可更新。",
+  "triggers": [
+    "初始需求整理",
+    "需求草稿更新",
+    "依會議決策回寫需求"
+  ],
+  "inputs": {
+    "required": ["stakeholders"],
+    "optional": ["scope", "decisions", "discussions", "domain_research"]
+  },
+  "tools": {
+    "allowed": [],
+    "external": [],
+    "prerequisites": []
+  },
+  "workflow": {
+    "steps": [
+      "萃取需求並分類 FR/NFR",
+      "建立 scope 與草稿",
+      "依討論決策更新需求",
+      "維持舊版需求不遺漏"
+    ]
+  },
+  "outputs": {
+    "artifacts": ["requirements", "scope", "draft_markdown"]
+  },
+  "integration": {
+    "upstream": ["user_inputs", "domain-research"],
+    "downstream": ["conflict-analyzer", "srs-generation", "plantuml-ascii"],
+    "related": ["domain-research", "conflict-analyzer"]
+  },
+  "quality": {
+    "acceptance_criteria": [
+      "需求 id 與 priority 格式一致",
+      "文本簡潔可驗證，不貼整段推理",
+      "更新稿保留既有需求 id"
+    ]
+  }
+}

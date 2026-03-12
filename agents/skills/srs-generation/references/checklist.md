@@ -2,6 +2,12 @@
 
 Use this checklist to validate the Software Requirements Specification before finalizing. Every item must pass. If any item fails, revise the document and re-check.
 
+## 0. 禁止硬掰與缺料標待補（最高優先）
+
+- [ ] **禁止硬掰**：文件中未出現草稿或 Context 以外的需求、資料模型、介面規格或技術選型；無憑空新增的 ER 圖、API、資料庫欄位、通訊協定等。
+- [ ] **缺料就標待補**：若某章節（如 References、Open Questions、Data Requirements、External Interface、Change Request Log）在來源中無對應資料，該處已標註「待補」或「本文件無相關資料」，或已省略該表，未留未替換的佔位符（如 [Name]、YYYY-MM-DD、[Describe...]、[PRD document name and link]）。
+- [ ] **章節編號從 1 開始**：正文章節編號依序為 1. Introduction, 2. Overall Description, 3. …, 未從 3 開始。
+
 ## 1. Completeness Check
 
 - [ ] All IEEE 830 sections are present: Introduction, Overall Description, Functional Requirements, Non-Functional Requirements, Data Requirements, External Interface Requirements, Requirements Traceability Matrix, and Appendix
@@ -21,7 +27,7 @@ Use this checklist to validate the Software Requirements Specification before fi
 - [ ] Requirements describe WHAT the system must do, not HOW it should be implemented -- no implementation details, specific algorithms, or technology choices appear in requirement descriptions unless they are genuine constraints
 - [ ] Boundary conditions are specified for all requirements involving numeric ranges, string lengths, file sizes, date ranges, or collection sizes
 - [ ] Error scenarios and alternative flows are documented for each functional requirement, covering invalid input, timeout, unauthorized access, and system failure cases
-- [ ] Every non-functional requirement includes a specific, measurable metric with a quantitative target value and a defined measurement method
+- [ ] Every non-functional requirement includes a specific, measurable metric with a quantitative target value, a defined measurement method, and a **Threshold Rationale** — the rationale must cite at least one concrete source (business SLA, production baseline, competitive benchmark, regulatory standard, or cost/complexity trade-off)
 
 ## 3. Consistency Check
 
@@ -30,6 +36,7 @@ Use this checklist to validate the Software Requirements Specification before fi
 - [ ] No two requirements conflict with each other -- there are no contradictions between functional requirements, between non-functional requirements, or between functional and non-functional requirements
 - [ ] All documents referenced in the body of the SRS are listed in the References table (Section 3.4) with version and date
 - [ ] Priority levels (P0, P1, P2) are assigned consistently and align with the priority scheme used in the upstream PRD
+- [ ] Every functional requirement includes a **Priority Rationale** field that justifies the assigned tier — the rationale must connect the priority to a concrete consequence (e.g., launch risk, user impact, availability of a workaround); a bare P0/P1/P2 label with no justification fails this check
 - [ ] Requirement IDs referenced in the CRUD matrix, the traceability matrix, and cross-references within the document all correspond to defined requirements
 
 ## 4. Format Check
@@ -39,4 +46,4 @@ Use this checklist to validate the Software Requirements Specification before fi
 - [ ] All tables are properly formatted with aligned columns, header rows, and separator rows -- no broken or misaligned table markup
 - [ ] Mermaid diagrams (entity-relationship, context, or other) use valid Mermaid syntax and render correctly without errors
 - [ ] The requirements traceability matrix includes all four columns (PRD ID, PRD Description, SRS ID(s), Coverage Status) and every row is populated
-- [ ] The document follows the section numbering from the template (Sections 1 through 10) with no missing or misnumbered sections
+- [ ] The document follows section numbering starting from 1 (1. Introduction, 2. Overall Description, …) with no missing or misnumbered sections
