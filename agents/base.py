@@ -24,6 +24,7 @@ class BaseAgent:
         self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
         self.registry = registry
         self.skill_names: List[str] = list(skill_names or [])
+        self.policy = None
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
@@ -109,11 +110,13 @@ class BaseAgent:
 - 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌
 - 可適當保留不確定性（例如「依目前資訊看來…」「若在…前提下，建議…」）
 - 論點簡潔有據，需要時再展開說明
+- 建議採「先結論、再依據、再風險/下一步」的會議表達結構
 
 # 約束
 - 只從你的角色專業角度發言，不要代替其他角色
 - statement 必須是完整、有條理的發言內容
 - 論點必須基於已知資訊，禁止捏造
+- 若資訊不足，需明確說明不確定處與待確認事項
 - statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
@@ -148,6 +151,8 @@ class BaseAgent:
             raise ValueError(
                 f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
             )
+        if self.policy and not self.policy.can_agent_use_skill(self.name, skill_name):
+            raise ValueError(f"Policy 禁止 Agent '{self.name}' 使用 skill '{skill_name}'")
         from agents.skills.base import get_skill
 
         skill = get_skill(skill_name)
@@ -193,6 +198,8 @@ class BaseAgent:
     def execute_tool(self, tool_name: str, tool_args: Dict) -> str:
         if tool_name not in self.tools:
             return f"錯誤: 未知工具 '{tool_name}'，可用: {list(self.tools.keys())}"
+        if self.policy and not self.policy.can_agent_use_tool(self.name, tool_name):
+            return f"錯誤: Policy 禁止 Agent '{self.name}' 使用工具 '{tool_name}'"
 
         tool = self.tools[tool_name]
         if not tool.validate_args(**tool_args):

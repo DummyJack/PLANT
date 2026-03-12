@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agents.base import BaseAgent
 
-# 與 ReadExternalFileTool 支援的副檔名一致（供 flow 組裝工具時判斷）
+# 與 FileParserTool 支援的副檔名一致（供 flow 組裝工具時判斷）
 DOC_SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
 
 
@@ -27,7 +27,7 @@ EXPERT_REVIEW_ACTIONS = [
 
 
 class ExpertAgent(BaseAgent):
-    """領域專家 Agent — 賦予 domain-research skill，可搭配 read_external_file 等工具（由 flow 依 enable_tools 注入）。"""
+    """領域專家 Agent — 賦予 domain-research skill，可搭配 file_parser 等工具。"""
 
     name = "expert"
 
@@ -91,7 +91,7 @@ class ExpertAgent(BaseAgent):
             "conflicts": conflicts,
         }
         task = """依 domain-research skill 的 **Output Format: Research Results** 執行領域研究並產出結果。
-審查 Context 中的需求與專案概述，若有 read_external_file 工具可先讀取 doc/ 參考檔案，依專案範圍識別法規/標準/安全規範與 derived_requirements。
+審查 Context 中的需求與專案概述，若有 file_parser 工具可先讀取 doc/ 參考檔案，依專案範圍識別法規/標準/安全規範與 derived_requirements。
 輸出「僅一個」JSON 物件，鍵名 "research_session"，值為物件，須含：
 - id（如 RES-{timestamp}）
 - domain, topic, timestamp
@@ -159,7 +159,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 
         tool_hint = ""
         if self.tools:
-            tool_hint = "\n# 工具使用\n- 可先使用 read_external_file 讀取 doc/ 參考檔案，再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+            tool_hint = "\n# 工具使用\n- 可先使用 file_parser 讀取 doc/ 參考檔案（可選 text 或 json_summary），再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
 
         user_prompt = f"""{topic_text}
 {prev_text}
@@ -168,17 +168,19 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 {tool_hint}
 
 # 思考與發言流程
-1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 不可讓步的要點（須附法規/標準依據）(3) 可接受調整或折衷的要點
-2. 再根據思考結果，撰寫一段完整的發言（statement），針對議題提出你的專業見解與法規依據
+1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 不可讓步的要點（須附法規/標準依據）(3) 可接受調整或折衷的要點 (4) 不合規風險與可能後果
+2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先合規結論、再依據、再風險與建議」順序，針對議題提出你的專業見解與法規依據
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
 
 # 發言風格
-- 以領域專家在會議中的口吻：引用法規/標準時註明來源或條文，說明不合規風險與適用範圍
+- 以真實需求工程會議中的領域專家口吻：先給合規判斷，再說明依據、適用範圍、風險與可行替代方案
+- 引用法規/標準時盡量指出來源線索（條文、章節、機構或文件名稱），不要只給結論
 - 資訊不足時可明確說「這部分需要再查證」或「依目前查到的資料…」，不捏造
 
 # 約束
 - statement 必須包含具體的法規依據和不合規風險，禁止虛構法規或標準名稱
 - 論點必須有客觀依據，無依據則標註「資訊不足」
+- 若引用內容非最終法源（例如二手整理或網頁摘要），需清楚標註可信度與待驗證性
 - 若此議題與法規/標準無直接對應，仍請以領域專家角度簡要說明最佳實務、業界常見做法或技術/風險建議；切勿留空或僅輸出 JSON 結構
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
 - statement、open_questions 的 question 請使用繁體中文
@@ -400,7 +402,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             }
             task = f"""針對以下問題進行領域研究：{query}
 
-請使用可用工具搜尋相關法規標準或讀取 doc/ 參考文件，然後整理研究發現。
+請使用可用工具（web_search 搜尋、file_parser 讀取 doc/ 下檔案）蒐集相關法規標準或參考文件，然後整理研究發現。
 輸出「僅一個」JSON：
 {{
     "findings": ["發現1", "發現2"],

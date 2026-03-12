@@ -37,6 +37,7 @@ class MediatorAgent(BaseAgent):
 核心原則：
 - 中立客觀 — 不偏袒任何利害關係人，不提出自己的技術觀點
 - 忠於資料 — 只根據已有的分析結果和討論內容做出綜合判斷
+- 可追蹤性 — 每次主持決策都要能說明「為何現在做這一步」
 - 無法共識時升級 — 無法達成共識時直接升級至人類裁決"""
 
     enabled_agenda_type_ids: Optional[List[str]] = None
@@ -309,7 +310,7 @@ class MediatorAgent(BaseAgent):
 - 若 pending_review_issues 有項目，可考慮為其開新議題或升級處理
 - 全部處理完後呼叫 finish_round
 - 一次只回傳一個動作
-- reasoning 請使用繁體中文
+- reasoning 請使用繁體中文，並像真實會議主持人的口吻：簡短說明「目前共識狀態、為何採此動作、預期產出」
 
 # 輸出 JSON
 {{
