@@ -16,6 +16,7 @@
   },
   "enable_tools": {
     "web_search": true,
+    "file_parser": true,
     "read_external_file": true,
     "plantuml_validate": true
   },

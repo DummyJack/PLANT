@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 from agents import AgentRegistry
 from agents.profile.analyst import ALLOWED_CONFLICT_TYPES
+from agents.coordinator import BaseAgentCoordinator
+from agents.planner import PlannerService
+from agents.policy import AgentSkillToolPolicy
 from agents.profile import (
     UserAgent,
     AnalystAgent,
@@ -12,12 +15,10 @@ from agents.profile import (
     DocumentorAgent,
 )
 from agents.profile.mediator import AgendaRunner, AGENDA_CATEGORY_LABEL
-from pathlib import Path
 from model import create_model
 from store import Store
 from utils import Logger, Collect
-from agents.profile.expert import has_supported_doc_files
-from agents.tools.read_external_file import ReadExternalFileTool
+from agents.tool_registry import ToolRegistry
 
 
 class Flow:
@@ -33,43 +34,45 @@ class Flow:
         )
 
         self.registry = AgentRegistry()
-        enable_tools = config.get("enable_tools") or {}
         enable_agents = config.get("enable_agents") or {}
+        self.policy = AgentSkillToolPolicy()
+        self.tool_registry = ToolRegistry(config=self.config, policy=self.policy)
+        self.planner = PlannerService(policy=self.policy)
+        self.coordinator = BaseAgentCoordinator(planner=self.planner)
 
-        doc_dir = Path("doc")
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        expert_tools = []
-        if enable_tools.get("web_search", False):
-            from agents.tools import WebSearchTool
-            expert_tools.append(
-                WebSearchTool()
-            )
-        if enable_tools.get("read_external_file", True) and has_supported_doc_files(doc_dir):
-            expert_tools.append(ReadExternalFileTool(base_dir=doc_dir))
+        analyst_tools = self.tool_registry.build_tools_for_agent("analyst")
+        expert_tools = self.tool_registry.build_tools_for_agent("expert")
+        modeler_tools = self.tool_registry.build_tools_for_agent("modeler")
+        documentor_tools = self.tool_registry.build_tools_for_agent("documentor")
+
         self.user_agent = UserAgent(self.model, registry=self.registry)
-        self.analyst_agent = AnalystAgent(self.model, registry=self.registry)
+        self.analyst_agent = AnalystAgent(self.model, tools=analyst_tools, registry=self.registry)
         self.expert_agent = ExpertAgent(
             self.model, tools=expert_tools, registry=self.registry, doc_dir="doc"
         )
         self.mediator_agent = MediatorAgent(self.model, registry=self.registry)
-        modeler_tools = []
-        if enable_tools.get("plantuml_validate", True):
-            from agents.tools import PlantUMLValidatorTool
-            opts = config.get("plantuml_validate") or {}
-            modeler_tools.append(
-                PlantUMLValidatorTool(
-                    jar_path=opts.get("jar_path", "plantuml.jar"),
-                    use_online=opts.get("use_online", True),
-                    server_url=opts.get("server_url", ""),
-                )
-            )
         self.modeler_agent = ModelerAgent(
             self.model, tools=modeler_tools, registry=self.registry
         )
         self.documentor_agent = DocumentorAgent(
             self.model,
             self.store,
+            tools=documentor_tools,
             registry=self.registry,
+        )
+
+        # policy 強制：固定 analyst/expert/modeler/documentor 的 skill/tool 指派
+        self.policy.validate_agent_assignment(
+            "analyst", self.analyst_agent.skill_names, list(self.analyst_agent.tools.keys())
+        )
+        self.policy.validate_agent_assignment(
+            "expert", self.expert_agent.skill_names, list(self.expert_agent.tools.keys())
+        )
+        self.policy.validate_agent_assignment(
+            "modeler", self.modeler_agent.skill_names, list(self.modeler_agent.tools.keys())
+        )
+        self.policy.validate_agent_assignment(
+            "documentor", self.documentor_agent.skill_names, list(self.documentor_agent.tools.keys())
         )
 
         tool_max = config.get("tool_call_max_rounds", 3)
@@ -85,6 +88,7 @@ class Flow:
             agent.low_confidence_threshold = config.get(
                 "low_confidence_threshold", 0.7
             )
+            agent.policy = self.policy
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
 
@@ -116,6 +120,15 @@ class Flow:
         }
 
         self.store.save_artifact(artifact)
+
+        planner_decision = self.coordinator.plan(
+            task=rough_idea,
+            context={
+                "mode": "init_phase",
+                "requirements_count": len(artifact.get("requirements", [])),
+            },
+        )
+        artifact.setdefault("meta", {})["planner_decision_init"] = planner_decision
 
         self.logger.info("=== Phase 0: 初始草稿建立 ===")
         artifact = self.run_init_phase(artifact)
@@ -341,6 +354,18 @@ class Flow:
 
         # 議程由 Mediator Agent 驅動（產生議程、討論、綜合、人類裁決、存檔）
         self.logger.info("議程由 Mediator Agent 驅動")
+        planner_decision = self.coordinator.plan(
+            task=f"meeting_round_{round_num}",
+            context={
+                "mode": "meeting_round",
+                "round_num": round_num,
+                "open_questions": len(artifact.get("open_questions", [])),
+                "conflicts": len(artifact.get("conflicts", [])),
+            },
+        )
+        artifact.setdefault("meta", {}).setdefault("planner_round_decisions", []).append(
+            {"round": round_num, **planner_decision}
+        )
         runner = AgendaRunner(
             self.mediator_agent,
             self.registry,

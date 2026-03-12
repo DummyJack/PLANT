@@ -16,3 +16,4 @@ experiment/results/
 
 # macOS
 .DS_Store
+.vscode/
