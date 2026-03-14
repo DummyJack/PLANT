@@ -79,28 +79,16 @@ class AnalystAgent(BaseAgent):
             self.system_prompt = "\n\n---\n\n".join(parts)
 
     def run_conflict_detection(self, artifact: Dict) -> Dict:
-        """依 conflict-analyzer skill 執行 Conflict 辨識；輸出須為 label: Conflict 或 Neutral，回傳更新後的 artifact。"""
-        stakeholders = artifact.get("stakeholders", [])
+        """依 conflict-analyzer skill 僅針對「需求」做 Conflict 辨識：判斷為衝突則 label=Conflict，無衝突則 label=Neutral。信心分不在此階段產出。"""
         requirements = artifact.get("requirements", [])
-        system_models = artifact.get("system_models") or {}
-        context = {
-            "stakeholders": stakeholders,
-            "requirements": requirements,
-            "system_models": system_models,
-        }
-        threshold = self.low_confidence_threshold
-        task = f"""依 conflict-analyzer skill 的 Conflict 類型與辨識方式，分析 Context 中的利害關係人、需求與系統模型，辨識所有 Conflict。
-輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。每筆須包含：
-- label：只能是 "Conflict" 或 "Neutral"（無 Conflict 時用 Neutral）— 此欄位維持英文
-- 若 label 為 Conflict：須有 description；並依類型填 stakeholder_names（利害關係人 Conflict）或 requirement_ids / related_requirements（需求或設計 Conflict）；conflict_type 須為本 skill 的 8 種類型之一：Logical、Technical、Resource、Temporal、Data、State、Priority、Scope（維持英文）
-- 若 label 為 Conflict，須額外包含：
-  - confidence：0.0 ~ 1.0 浮點數，表示此 Conflict 判斷的信心度。若涉及的需求描述模糊（缺乏量化指標、邊界不清、用語籠統），信心度應較低（< {threshold}）；若需求足夠精確且 Conflict 明顯，信心度應較高（≥ {threshold}）
-  - ambiguous_requirements：陣列，列出此 Conflict 中描述模糊、影響判斷準確性的需求 id（若需求足夠精確則為空陣列）
-- 若 label 為 Neutral：可簡述原因，不需 conflict_type。須包含：
-  - confidence：0.0 ~ 1.0 浮點數，表示「確實無 Conflict」的信心度。若涉及的需求描述模糊導致難以確定是否真的無 Conflict，信心度應較低（< {threshold}）
-  - ambiguous_requirements：若信心度低，列出影響判斷的模糊需求 id（若信心度高則為空陣列）
-- description、stakeholder_names 等所有說明與描述文字請使用繁體中文
-勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
+        context = {"requirements": requirements}
+        task = """依 conflict-analyzer skill 的辨識方式，**僅根據 Context 中的需求（requirements）**辨識是否有 Conflict；本階段不看系統模型或其它回饋。
+- **label**：判斷為衝突時標記為 "Conflict"，沒有衝突則標記 "Neutral"。此欄位維持英文。
+- **conflict_type**：僅用於描述衝突類型。references 中的 8 種類型為參考；若依自身知識判斷屬於其他類型，也可使用其他類型名稱，仍視為 Conflict。
+- 若 label 為 Conflict：須有 description；填 requirement_ids / related_requirements（涉及的需求 id）；conflict_type 為描述用。
+- 若 label 為 Neutral：可簡述原因，不需 conflict_type。
+- description 等說明與描述文字請使用繁體中文。
+輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
 
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
@@ -120,40 +108,17 @@ class AnalystAgent(BaseAgent):
             label = (c.get("label") or "").strip()
             if label == "Neutral":
                 neutral_count += 1
-                raw_nf_conf = c.get("confidence")
-                nf_confidence = (
-                    max(0.0, min(1.0, float(raw_nf_conf)))
-                    if isinstance(raw_nf_conf, (int, float))
-                    else None
-                )
-                nf_ambiguous = c.get("ambiguous_requirements") or []
-                if not isinstance(nf_ambiguous, list):
-                    nf_ambiguous = []
                 nf_entry = {
                     "id": f"NF-{neutral_count:02d}",
                     "label": "Neutral",
                     "description": c.get("description", ""),
                 }
-                if nf_confidence is not None:
-                    nf_entry["confidence"] = nf_confidence
-                if nf_ambiguous:
-                    nf_entry["ambiguous_requirements"] = nf_ambiguous
                 conflicts.append(nf_entry)
                 continue
             if label != "Conflict":
                 continue
+            # conflict_type 為描述用，可為 8 類或模型自訂類型，不限制
             ctype = (c.get("conflict_type") or "").strip()
-            if ctype not in ALLOWED_CONFLICT_TYPES:
-                ctype = ""
-            raw_conf = c.get("confidence")
-            confidence = (
-                max(0.0, min(1.0, float(raw_conf)))
-                if isinstance(raw_conf, (int, float))
-                else None
-            )
-            ambiguous_reqs = c.get("ambiguous_requirements") or []
-            if not isinstance(ambiguous_reqs, list):
-                ambiguous_reqs = []
             rel_reqs = c.get("requirement_ids") or c.get("related_requirements") or []
             if c.get("stakeholder_names"):
                 cf_id = f"CF-{len([x for x in conflicts if x.get('label') == 'Conflict']) + 1:02d}"
@@ -182,10 +147,6 @@ class AnalystAgent(BaseAgent):
                     "description": c.get("description", ""),
                     "requirement_ids": rel_reqs,
                 }
-            if confidence is not None:
-                entry["confidence"] = confidence
-            if ambiguous_reqs:
-                entry["ambiguous_requirements"] = ambiguous_reqs
             conflicts.append(entry)
 
         if conflicts:
@@ -195,6 +156,43 @@ class AnalystAgent(BaseAgent):
                 f"辨識出 {len(conflicts)} 筆（Conflict: {n_conflict}，Neutral: {n_neutral}）"
             )
         return {**artifact, "conflicts": conflicts}
+
+    def assign_conflict_confidence(self, artifact: Dict) -> Dict:
+        """依 feedback 與 system_models 重新檢視每筆 conflict 判斷並打信心分；Conflict 與 Neutral 都要打。覺得判斷有誤時信心分應低於閾值，進入討論。"""
+        conflicts = artifact.get("conflicts", [])
+        if not conflicts:
+            return artifact
+        context = {
+            "stakeholders": artifact.get("stakeholders", []),
+            "requirements": artifact.get("requirements", []),
+            "system_models": artifact.get("system_models") or {},
+            "feedback": artifact.get("feedback") or {},
+            "conflicts": conflicts,
+        }
+        threshold = self.low_confidence_threshold
+        task = f"""請以 Context 中的 **feedback**（如領域研究、合規發現等）與 **system_models**（系統模型）為依據，重新檢視 Context.conflicts 中每一筆的判斷。
+**Conflict 與 Neutral 都要打信心分。**
+- **confidence**：0.0～1.0。若依 feedback 或 system_models 發現先前判斷可能有誤（例如應為 Conflict 卻判成 Neutral，或應為 Neutral 卻判成 Conflict），信心度應**低於** {threshold}，此筆會進入後續討論；若資訊一致、判斷無誤則信心度應 ≥ {threshold}。
+- 若信心度低：可填 **ambiguous_requirements**（陣列，列出影響判斷的需求 id 或說明）。
+輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。陣列中每筆須與輸入對應（依順序），保留原有 id、label、description 等欄位，並加上 confidence；若信心低可加 ambiguous_requirements。勿輸出 Markdown，只輸出該 JSON。"""
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            data = self.parse_topic_response_json(raw)
+        except Exception as e:
+            self.logger.warning(f"Analyst 信心分賦予失敗: {e}")
+            return artifact
+        raw_list = data.get("conflicts", [])
+        if not isinstance(raw_list, list) or len(raw_list) != len(conflicts):
+            return artifact
+        for i, c in enumerate(conflicts):
+            r = raw_list[i] if i < len(raw_list) else {}
+            conf_val = r.get("confidence")
+            if isinstance(conf_val, (int, float)):
+                c["confidence"] = max(0.0, min(1.0, float(conf_val)))
+            amb = r.get("ambiguous_requirements")
+            if isinstance(amb, list) and amb:
+                c["ambiguous_requirements"] = amb
+        return artifact
 
     def generate_scope(self, rough_idea: str, stakeholders: List[Dict]) -> Dict:
         """依 requirements-analyst skill 產出專案範圍（description 為專案概述、依 rough_idea；in_scope / out_of_scope 依利害關係人需求）。"""
@@ -221,22 +219,44 @@ class AnalystAgent(BaseAgent):
         }
 
     def analyze_requirements(self, stakeholders: List[Dict]) -> Dict[str, Any]:
-        """依 requirements-analyst skill 從利害關係人執行需求分析，產出結構化需求清單（尚未正規化為草稿）。"""
-        context = {"stakeholders": stakeholders}
-        task = """依 requirements-analyst skill，根據 Context 的利害關係人產出結構化需求清單。
-輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為陣列。每筆須含：id、text、type（FR 或 NFR）、priority（must / should / could）、source_stakeholders。NFR 須含可量化指標。
-**ID 規則**：功能性需求用 FR-1、FR-2、FR-3 … 依序；非功能性需求用 NFR-1、NFR-2、NFR-3 … 依序（不要加類別前綴如 SEC、PERF）。
-requirements 陣列中的 text 及所有描述性內容請使用繁體中文。id、type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
-        try:
-            raw = self.invoke_skill("requirements-analyst", task, context=context)
-            data = self.parse_topic_response_json(raw)
-        except Exception as e:
-            self.logger.warning(f"需求分析 skill 執行失敗: {e}")
-            return {"requirements": []}
-        requirements = data.get("requirements", [])
-        if not isinstance(requirements, list):
-            return {"requirements": []}
-        return {"requirements": requirements}
+        """依 requirements-analyst skill 從利害關係人執行需求分析，產出結構化需求清單。每位 stakeholder 單獨產出再合併，以減輕單次負擔並提高條目完整度。"""
+        all_requirements = []
+        for idx, one_sh in enumerate(stakeholders):
+            sh_label = one_sh.get("name") or one_sh.get("id") or f"利害關係人{idx + 1}"
+            context = {"stakeholders": [one_sh]}
+            task = f"""依 requirements-analyst skill，根據 Context 中**此單一**利害關係人產出結構化需求清單。
+**重要**：請將該利害關係人提到的**每項**功能或非功能需求都拆成**獨立條目**，勿合併或遺漏；同一段敘述若含多個可驗收要點，應拆成多筆。寧可多拆、勿少列。
+輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為陣列。每筆須含：text、type（FR 或 NFR）、priority（must / should / could）。NFR 須含可量化指標。source_stakeholders 請填 ["{sh_label}"]（此人的識別）。
+本輪僅分析此一人，id 由系統後續統一指派，此處可不填或填暫時編號。
+requirements 陣列中的 text 及所有描述性內容請使用繁體中文。type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
+            try:
+                raw = self.invoke_skill("requirements-analyst", task, context=context)
+                data = self.parse_topic_response_json(raw)
+            except Exception as e:
+                self.logger.warning(f"需求分析 skill 執行失敗（{sh_label}）: {e}")
+                continue
+            reqs = data.get("requirements", [])
+            if not isinstance(reqs, list):
+                continue
+            for r in reqs:
+                if not r.get("text"):
+                    continue
+                r.setdefault("source_stakeholders", [sh_label])
+                all_requirements.append(r)
+
+        # 統一指派 id：FR-1, FR-2, … 與 NFR-1, NFR-2, …
+        fr_list = [r for r in all_requirements if (r.get("type") or "").strip().upper() == "FR"]
+        nfr_list = [r for r in all_requirements if (r.get("type") or "").strip().upper() == "NFR"]
+        other_list = [r for r in all_requirements if r not in fr_list and r not in nfr_list]
+        for i, r in enumerate(fr_list, 1):
+            r["id"] = f"FR-{i}"
+        for i, r in enumerate(nfr_list, 1):
+            r["id"] = f"NFR-{i}"
+        for i, r in enumerate(other_list, 1):
+            r.setdefault("type", "FR")
+            r["id"] = f"FR-{len(fr_list) + i}"  # 接在既有 FR 之後
+        merged = fr_list + nfr_list + other_list
+        return {"requirements": merged}
 
     def create_draft(
         self,
@@ -319,6 +339,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
             "conflicts": artifact.get("conflicts", []),
             "scope": artifact.get("scope", {}),
             "domain_research": artifact.get("feedback", {}).get("domain_research"),
+            "system_models": artifact.get("system_models", {}),
         }
         task = """依 requirements-analyst skill，**以 Context.requirements（現有需求清單）為基礎**更新需求，勿遺漏或刪除既有版本中的條目。
 
@@ -543,6 +564,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
 2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先結論、再依據、再建議」順序，針對議題提出你的分析與可執行建議
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"expert"、"modeler"）
 
+# 表達方式（僅能以文字呈現）
+- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。
+
 # 發言風格
 - 以真實需求工程會議中的需求分析師口吻發言：務實、可追蹤、以需求與證據為核心，避免空泛表態
 - 先說你支持或反對的結論，再用需求 id、Conflict id、會議內容作為依據，最後給出可落地的下一步
@@ -554,7 +578,6 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。i
 - 若資訊不足，需明確指出缺口與需補件項目，不可假設已確認
 - 避免直接給出實作細節（程式碼/框架），聚焦需求定義、驗收邊界、風險與取捨
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
-- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{

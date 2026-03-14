@@ -172,6 +172,9 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先合規結論、再依據、再風險與建議」順序，針對議題提出你的專業見解與法規依據
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
 
+# 表達方式（僅能以文字呈現）
+- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。
+
 # 發言風格
 - 以真實需求工程會議中的領域專家口吻：先給合規判斷，再說明依據、適用範圍、風險與可行替代方案
 - 引用法規/標準時盡量指出來源線索（條文、章節、機構或文件名稱），不要只給結論
@@ -183,7 +186,6 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 - 若引用內容非最終法源（例如二手整理或網頁摘要），需清楚標註可信度與待驗證性
 - 若此議題與法規/標準無直接對應，仍請以領域專家角度簡要說明最佳實務、業界常見做法或技術/風險建議；切勿留空或僅輸出 JSON 結構
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
-- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{

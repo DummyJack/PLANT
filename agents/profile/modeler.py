@@ -25,10 +25,11 @@ class ModelerAgent(BaseAgent):
 核心原則：
 1. UML 2.x 規範 — 嚴格遵守 UML 2.x 標準語法和語意
 2. PlantUML 語法 — 生成的程式碼須符合 PlantUML 語法
-3. 完整性 — 模型必須涵蓋需求中所有主要 Actor 和 Use Case
+3. 完整性 — 模型須涵蓋需求中的主要角色、用例與關鍵結構／流程（依圖型涵蓋對應元素）
 4. 一致性 — 不同圖表之間的元素命名必須一致
 5. 最小變動 — 精煉時只修改受影響的部分，保留未變動的元素
-6. Conflict 敏感 — 識別設計層面或可測試性的 Conflict
+6. 可辨識性 — 產出的模型須完整、可讀，以利後續辨識設計／可測試性 Conflict（辨識由 Analyst 執行）
+7. 關聯可見 — 每種圖表都應善用該圖型的標準元素與關係（如系統邊界、include/extend、關聯、依賴等），讓讀者能看出元素間的結構與流程，而非僅羅列節點；依你的專業判斷該用哪些語法達成。
 
 命名慣例：
 - Actor: PascalCase（如 SystemAdmin, EndUser）
@@ -386,17 +387,23 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
         return self.validate_models(model_data)
 
     def refine_model(
-        self, requirements: List[Dict], prev_models: List[Dict] = None
+        self,
+        requirements: List[Dict],
+        prev_models: List[Dict] = None,
+        stakeholders: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
-        """根據更新的需求精煉系統模型"""
+        """根據更新的需求精煉系統模型；可選傳入 stakeholders 以對應角色與需求來源。"""
         current_model = {"models": prev_models or []}
         current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
         requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+        sh_block = ""
+        if stakeholders:
+            sh_text = json.dumps(stakeholders, ensure_ascii=False, indent=2)
+            sh_block = f"\n# 利害關係人（供對應需求來源與角色）\n{sh_text}\n\n"
 
         task = f"""# 任務
 根據更新後的需求，評估並更新現有系統模型。
-
-# 當前系統模型
+{sh_block}# 當前系統模型
 ```json
 {current_model_json}
 ```
@@ -539,6 +546,9 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先架構結論、再影響分析、再調整建議」順序，聚焦於系統架構、建模、元件邊界的觀點
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"）
 
+# 表達方式（僅能以文字呈現）
+- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。
+
 # 發言風格
 - 以真實需求工程會議中的系統架構/建模專家口吻：先指出關鍵架構判斷，再說明影響範圍與可驗證的調整方案
 - 清楚描述改動對 Use Case / Class / Sequence 的影響，並說明是否會破壞一致性或可測試性
@@ -549,7 +559,6 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 - 避免只講抽象原則，需明確指出「哪個模型元素」會變動與原因
 - 若資訊不足，需說明需補充的介面、事件流程或資料邊界，不可臆測
 - 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
-- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{

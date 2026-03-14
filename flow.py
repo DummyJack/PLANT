@@ -2,7 +2,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Dict, Any
 from agents import AgentRegistry
-from agents.profile.analyst import ALLOWED_CONFLICT_TYPES
 from agents.coordinator import BaseAgentCoordinator
 from agents.planner import PlannerService
 from agents.policy import AgentSkillToolPolicy
@@ -222,65 +221,9 @@ class Flow:
         artifact["requirements"] = analysis["requirements"]
         self.store.save_artifact(artifact)
 
-        self.logger.info("Analyst 執行 Conflict 辨識（含信心度）")
+        self.logger.info("Analyst 執行 Conflict 辨識")
         artifact = self.analyst_agent.run_conflict_detection(artifact)
         self.store.save_artifact(artifact)
-
-        lc_threshold = self.config.get("low_confidence_threshold", 0.7)
-        low_conf = [
-            c for c in artifact.get("conflicts", [])
-            if c.get("label") == "Conflict"
-            and isinstance(c.get("confidence"), (int, float))
-            and c["confidence"] < lc_threshold
-        ]
-        if low_conf:
-            for c in low_conf:
-                amb = c.get("ambiguous_requirements", [])
-                desc = (
-                    f"Conflict {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"：{c.get('description', '')}"
-                )
-                if amb:
-                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
-                artifact.setdefault("open_questions", []).append({
-                    "from_agent": "analyst",
-                    "question": desc,
-                    "status": "pending",
-                    "type": "low_confidence_conflict",
-                    "related_conflict_id": c["id"],
-                })
-            self.logger.info(
-                f"  {len(low_conf)} 個低信心 Conflict 加入 open_questions"
-            )
-
-        low_conf_neutrals = [
-            c for c in artifact.get("conflicts", [])
-            if c.get("label") == "Neutral"
-            and isinstance(c.get("confidence"), (int, float))
-            and c["confidence"] < lc_threshold
-        ]
-        if low_conf_neutrals:
-            for c in low_conf_neutrals:
-                amb = c.get("ambiguous_requirements", [])
-                desc = (
-                    f"Neutral {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"，可能遺漏 Conflict：{c.get('description', '')[:80]}"
-                )
-                if amb:
-                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
-                artifact.setdefault("open_questions", []).append({
-                    "from_agent": "analyst",
-                    "question": desc,
-                    "status": "pending",
-                    "type": "low_confidence_neutral",
-                    "related_neutral_id": c["id"],
-                })
-            self.logger.info(
-                f"  {len(low_conf_neutrals)} 個低信心 Neutral 加入 open_questions"
-            )
-
-        if low_conf or low_conf_neutrals:
-            self.store.save_artifact(artifact)
 
         self.logger.info("Expert 自主領域研究")
         mi = self.config.get("max_iterations") or {}
@@ -335,6 +278,63 @@ class Flow:
             f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個 Conflict"
         )
 
+        # Expert/Modeler 產出後，Analyst 再判斷一次並打信心分；信心低則加入討論
+        self.logger.info("Analyst 對 Conflict 再判斷並打信心分")
+        artifact = self.analyst_agent.assign_conflict_confidence(artifact)
+        lc_threshold = self.config.get("low_confidence_threshold", 0.7)
+        low_conf = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Conflict"
+            and isinstance(c.get("confidence"), (int, float))
+            and c["confidence"] < lc_threshold
+        ]
+        low_conf_neutrals = [
+            c for c in artifact.get("conflicts", [])
+            if c.get("label") == "Neutral"
+            and isinstance(c.get("confidence"), (int, float))
+            and c["confidence"] < lc_threshold
+        ]
+        if low_conf:
+            for c in low_conf:
+                amb = c.get("ambiguous_requirements", [])
+                desc = (
+                    f"Conflict {c['id']} 信心度低（{c.get('confidence', '?')}）"
+                    f"：{c.get('description', '')}"
+                )
+                if amb:
+                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
+                artifact.setdefault("open_questions", []).append({
+                    "from_agent": "analyst",
+                    "question": desc,
+                    "status": "pending",
+                    "type": "low_confidence_conflict",
+                    "related_conflict_id": c["id"],
+                })
+            self.logger.info(
+                f"  {len(low_conf)} 個低信心 Conflict 加入 open_questions，將進入討論"
+            )
+        if low_conf_neutrals:
+            for c in low_conf_neutrals:
+                amb = c.get("ambiguous_requirements", [])
+                desc = (
+                    f"Neutral {c['id']} 信心度低（{c.get('confidence', '?')}）"
+                    f"，可能遺漏 Conflict：{c.get('description', '')[:80]}"
+                )
+                if amb:
+                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
+                artifact.setdefault("open_questions", []).append({
+                    "from_agent": "analyst",
+                    "question": desc,
+                    "status": "pending",
+                    "type": "low_confidence_neutral",
+                    "related_neutral_id": c["id"],
+                })
+            self.logger.info(
+                f"  {len(low_conf_neutrals)} 個低信心 Neutral 加入 open_questions，將進入討論"
+            )
+        if low_conf or low_conf_neutrals:
+            self.store.save_artifact(artifact)
+
         meta = artifact.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
         self.store.save_artifact(artifact)
@@ -376,6 +376,10 @@ class Flow:
             Collect,
             self.logger,
         )
+        # 每輪先直接產出議程，再依 Mediator 決策逐項討論（省去一次「發現 topics 空就選 generate_agenda」的 LLM 呼叫）
+        obs = runner.run("generate_agenda", None)
+        if obs.get("error"):
+            self.logger.warning(f"  產出議程: {obs['error']}")
         observation = None
         while True:
             state = runner.get_state_summary()
@@ -443,8 +447,7 @@ class Flow:
                 new_decisions[i] = d
         artifact["decisions"].extend(new_decisions)
         new_conflicts = list(updates.get("conflicts", artifact["conflicts"]))
-        # 討論中提出的新增 Conflict（漏報補正）：指派 id 後併入
-        valid_conflict_types = set(ALLOWED_CONFLICT_TYPES)
+        # 討論中提出的新增 Conflict（漏報補正）：指派 id 後併入；conflict_type 可為 8 類或模型自訂
         for nc in updates.get("new_conflicts", []):
             if not nc.get("description"):
                 continue
@@ -457,8 +460,6 @@ class Flow:
                     except ValueError:
                         pass
             ctype = (nc.get("conflict_type") or "").strip()
-            if ctype not in valid_conflict_types:
-                ctype = ""
             new_conflicts.append(
                 {
                     "id": f"CF-{max_num + 1:02d}",
@@ -501,7 +502,9 @@ class Flow:
 
         if prev_models:
             model_data = self.modeler_agent.refine_model(
-                artifact["requirements"], prev_models
+                artifact["requirements"],
+                prev_models,
+                stakeholders=artifact.get("stakeholders", []),
             )
         else:
             mi = self.config.get("max_iterations") or {}

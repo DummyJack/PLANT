@@ -109,7 +109,12 @@ class MediatorAgent(BaseAgent):
 
 # 議程類型與開題
 - **低信心**（Conflict 與 Neutral 皆須打信心分；低於閾值者）：open_questions 中 type 為 "low_confidence_conflict" 或 "low_confidence_neutral" 的項目由**系統預設**成一個 requirement_clarification 議題，請勿再為這些 id 重複開議題。
-- **其餘**（高信心 Conflict、高信心 Neutral 等）：是否開題、開哪種類型（conflict_resolution / requirement_clarification / open_question 等）**完全由你依專案狀態與優先順序判斷**，無強制對應。
+- **conflict_resolution**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
+- **requirement_clarification**：除低信心外，當有未回答的開放問題涉及需求模糊、釐清含義時，可開此類；優先排最前。
+- **open_question**：當有未回答的開放問題且不屬低信心時，可開此類或與 requirement_clarification 合併，依內容判斷。
+- **new_requirement**：當「未回答的開放問題」或「領域研究」內容中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；例如 expert 合規建議、討論中有人提議新功能等。
+- **tradeoff**：當需求摘要中有多個 NFR（NFR-1、NFR-2…）或 Conflict 涉及效能、可用性、成本等非功能需求之間的競合取捨時，**應考慮開此類**。
+- 其餘依專案狀態與優先順序判斷，無強制對應。
 
 # 約束
 - 最多開 {limit} 個議程。**需求釐清（requirement_clarification）類議題優先順序排最高**，請排在最前；其餘依你判斷的優先順序排列。
@@ -217,7 +222,7 @@ class MediatorAgent(BaseAgent):
     def build_agenda_context(
         self, artifact: Dict[str, Any], skip_source_ids: set
     ) -> str:
-        """組裝 artifact 摘要供 Mediator 判斷議程用；不含利害關係人、需求摘要。"""
+        """組裝 artifact 摘要供 Mediator 判斷議程用；含需求 id/type 摘要以利開 tradeoff / new_requirement。"""
         parts = []
         scope = artifact.get("scope") or {}
         if (
@@ -227,6 +232,17 @@ class MediatorAgent(BaseAgent):
         ):
             parts.append(
                 "## 專案範圍\n" + json.dumps(scope, ensure_ascii=False, indent=2)
+            )
+        requirements = artifact.get("requirements", [])
+        if requirements:
+            req_summary = [
+                {"id": r.get("id"), "type": r.get("type", "FR")}
+                for r in requirements
+                if r.get("id")
+            ]
+            parts.append(
+                "## 需求摘要（id 與 type，供判斷 NFR 競合等）\n"
+                + json.dumps(req_summary, ensure_ascii=False, indent=2)
             )
         conflicts = [
             c
@@ -289,6 +305,7 @@ class MediatorAgent(BaseAgent):
 
 # 可用動作與參數
 - generate_agenda：產生本輪議程（無參數）。若 topics 已存在則勿重複呼叫。
+- expand_agenda：擴充議程（無參數）。僅當 state.can_expand_agenda 為 true 時可選（本輪議題數未達上限且全部已 save）。**僅在確實有新增待討論項目**（如新開放問題、討論後新衝突、新需求）時才選擇擴充，勿為湊滿上限而開題。
 - start_discussion：對某議題開始討論。params: {{ "topic_id": "T-01" }}（須為 state.topics 中存在的 id）
 - resolve_topic：綜合某議題討論結果。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
 {escalate_action}- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
@@ -306,6 +323,7 @@ class MediatorAgent(BaseAgent):
 # 規則
 - 若 topics 為空，先呼叫 generate_agenda
 - 對每個要討論的 topic 依序：start_discussion → resolve_topic（若共識則直接 save_topic{escalate_hint}）→ save_topic
+- 當 **can_expand_agenda 為 true**（本輪議題數 < agenda_limit 且全部已 save）時，可選 **expand_agenda** 擴充議程至上限，或直接 **finish_round**。僅在確實有新增待討論項目時才選 expand_agenda，勿為湊滿上限而開題。
 - 在 save_topic 後，可視討論內容觸發 expert_review / analyst_review / modeler_review（非每次必要，視需要決定）
 - 若 pending_review_issues 有項目，可考慮為其開新議題或升級處理
 - 全部處理完後呼叫 finish_round
@@ -370,18 +388,26 @@ class MediatorAgent(BaseAgent):
         feedback = artifact.get("feedback", {})
         if feedback:
             out["feedback"] = feedback
+        models = artifact.get("system_models", {}).get("models", [])
+        if models:
+            out["system_models"] = [
+                {"name": m.get("name"), "type": m.get("type")}
+                for m in models
+            ]
         return out
 
     def moderate_sequential(
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
-    ) -> List[Dict]:
+    ) -> tuple:
+        """逐一發言；輪到某人前先讓他即時回答指向他的問題，再發言（可依問答調整立場）。回傳 (contributions, oq_records)。"""
         contributions = []
+        oq_records = []
         speaking_order = topic.get("speaking_order") or topic.get("participants") or []
         if not speaking_order:
             self.logger.warning(
                 f"[{topic['id']}] speaking_order 與 participants 皆為空，無人可發言"
             )
-            return contributions
+            return (contributions, oq_records)
         title = topic.get("title", "") or "（無標題）"
         cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
         self.logger.info(f"[{topic['id']}] {title} [{cat_label}] — 逐一發言: {' → '.join(speaking_order)}")
@@ -392,6 +418,12 @@ class MediatorAgent(BaseAgent):
             if not agent:
                 self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
                 continue
+            # 有人提問給此 agent 時，先即時回答，再發言（發言時可依問答調整）
+            answer_contribs, answer_oq = self._answer_questions_for_agent(
+                contributions, agent_name, registry, snapshot, artifact
+            )
+            contributions.extend(answer_contribs)
+            oq_records.extend(answer_oq)
             try:
                 response = agent.respond_to_topic(
                     topic, previous_responses=contributions, artifact_snapshot=snapshot
@@ -411,8 +443,13 @@ class MediatorAgent(BaseAgent):
                 contributions.append(
                     {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
                 )
+            # 提問者依回答可補充或調整發言
+            follow_ups = self._get_follow_ups_after_answers(
+                contributions, answer_contribs, registry, snapshot, artifact
+            )
+            contributions.extend(follow_ups)
 
-        return contributions
+        return (contributions, oq_records)
 
     def respond_one_simultaneous(
         self,
@@ -493,6 +530,141 @@ class MediatorAgent(BaseAgent):
 
     # ===== Open Question 處理 =====
 
+    def _get_questions_to_agent(
+        self, contributions: List[Dict], to_agent_name: str
+    ) -> List[Dict]:
+        """從 contributions 中蒐集所有指向 to_agent_name 的 open_questions。"""
+        out = []
+        for c in contributions:
+            agent_name = c.get("agent", "")
+            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
+            for q in resp.get("open_questions", []):
+                if isinstance(q, str):
+                    q = {"question": q, "to": "user"}
+                elif not isinstance(q, dict):
+                    continue
+                to_agent = q.get("to", "user")
+                if to_agent != to_agent_name:
+                    continue
+                out.append({
+                    "from_agent": agent_name,
+                    "to_agent": to_agent,
+                    "question": q.get("question", ""),
+                })
+        return [q for q in out if q.get("question")]
+
+    def _answer_questions_for_agent(
+        self,
+        contributions: List[Dict],
+        agent_name: str,
+        registry,
+        snapshot: Dict,
+        artifact: Optional[Dict[str, Any]],
+    ) -> tuple:
+        """讓 agent_name 即時回答目前 contributions 中指向他的問題。回傳 (要 append 的 contributions, oq_records)。"""
+        questions = self._get_questions_to_agent(contributions, agent_name)
+        if not questions:
+            return ([], [])
+        target_agent = registry.get(agent_name) if registry else None
+        if not target_agent:
+            return ([], [{**q, "status": "deferred"} for q in questions])
+        added = []
+        oq_records = []
+        current_contributions = list(contributions)
+        for q_record in questions:
+            try:
+                q_topic = {
+                    "id": "OQ",
+                    "title": f"回答 {q_record['from_agent']} 的問題",
+                    "description": (
+                        f"{q_record['question']}\n\n"
+                        "（請簡要針對此問題回答；若前面發言已涵蓋可寫「如前述」或只補充重點。"
+                        "回答後若尚未發言，可在輪到你發言時依此問答補充或微調立場。）"
+                    ),
+                }
+                response = target_agent.respond_to_topic(
+                    q_topic,
+                    previous_responses=current_contributions,
+                    artifact_snapshot=snapshot,
+                )
+                resp = (
+                    response
+                    if isinstance(response, dict)
+                    else {"content": str(response)}
+                )
+                resp = dict(resp)
+                resp["reply_to_question"] = q_record["question"]
+                resp["reply_to_agent"] = q_record["from_agent"]
+                answer = resp.get("statement") or resp.get("content", "")
+                contrib = {
+                    "agent": agent_name,
+                    "response": resp,
+                    "is_reply": True,
+                }
+                added.append(contrib)
+                current_contributions.append(contrib)
+                oq_records.append({**q_record, "status": "answered", "answer": answer})
+            except Exception:
+                oq_records.append({**q_record, "status": "deferred"})
+        return (added, oq_records)
+
+    def _get_follow_ups_after_answers(
+        self,
+        contributions: List[Dict],
+        answer_contribs: List[Dict],
+        registry,
+        snapshot: Dict,
+        artifact: Optional[Dict[str, Any]],
+    ) -> List[Dict]:
+        """回答完成後，讓提問者依回答簡要補充或調整發言。"""
+        if not answer_contribs:
+            return []
+        asker_qa: Dict[str, List[tuple]] = {}
+        for c in answer_contribs:
+            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
+            from_agent = resp.get("reply_to_agent")
+            if not from_agent:
+                continue
+            q = resp.get("reply_to_question", "")
+            ans = resp.get("statement") or resp.get("content", "")
+            asker_qa.setdefault(from_agent, []).append((q, ans))
+        result = []
+        for asker_name, qa_list in asker_qa.items():
+            agent = registry.get(asker_name) if registry else None
+            if not agent:
+                continue
+            desc_parts = [
+                f"你問：{q}\n對方回答：{a}" for q, a in qa_list
+            ]
+            follow_topic = {
+                "id": "OQ-follow",
+                "title": "依回答補充或調整發言",
+                "description": (
+                    "\n\n".join(desc_parts)
+                    + "\n\n請依上述回答簡要說明你是否要補充或調整你的立場；若無需補充請寫「無需補充」。"
+                ),
+            }
+            try:
+                response = agent.respond_to_topic(
+                    follow_topic,
+                    previous_responses=contributions,
+                    artifact_snapshot=snapshot,
+                )
+                resp = (
+                    response
+                    if isinstance(response, dict)
+                    else {"content": str(response)}
+                )
+                resp = dict(resp)
+                result.append({
+                    "agent": asker_name,
+                    "response": resp,
+                    "is_follow_up": True,
+                })
+            except Exception:
+                pass
+        return result
+
     def handle_open_questions(
         self,
         contributions: List[Dict],
@@ -500,7 +672,7 @@ class MediatorAgent(BaseAgent):
         stakeholders: List[Dict],
         artifact: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
-        """將 open_questions 依 to 欄位路由到對應 agent 回答"""
+        """將 open_questions 依 to 欄位路由到對應 agent 回答（用於 simultaneous 模式：所有人發言後再集中回答）。"""
         oq_records = []
         snapshot = self.build_artifact_snapshot(artifact)
 
@@ -966,6 +1138,68 @@ class AgendaRunner:
             }
             return obs
 
+        if action == "expand_agenda":
+            agenda_limit = self.config.get("agenda_items", 5)
+            if len(self.topics) >= agenda_limit:
+                obs["error"] = "已達議程上限，無法擴充"
+                return obs
+            all_saved = all(
+                self.topic_status.get(t["id"], {}).get("saved", False)
+                for t in self.topics
+            )
+            if not all_saved:
+                obs["error"] = "須先將本輪目前所有議題 save_topic 後才能擴充議程"
+                return obs
+            skip = set()
+            for disc in self.artifact.get("discussions", []):
+                for td in disc.get("topics", []):
+                    for sid in td.get("source_ids", []):
+                        skip.add(sid)
+            for rd in self.round_discussions:
+                for sid in rd.get("source_ids", []):
+                    skip.add(sid)
+            max_items = agenda_limit - len(self.topics)
+            latest_version = self.store.get_draft_version()
+            draft_md = self.store.load_draft(latest_version) if latest_version >= 0 else None
+            new_items = self.mediator.generate_agenda(
+                self.artifact,
+                registry=self.registry,
+                max_items=max_items,
+                skip_source_ids=skip if skip else None,
+                draft_markdown=draft_md,
+            )
+            if not new_items:
+                obs["result"] = {"expanded": 0, "message": "無新增議題"}
+                return obs
+            start_idx = len(self.topics) + 1
+            for i, item in enumerate(new_items):
+                tid = f"T-{start_idx + i:02d}"
+                new_topic = {
+                    "id": tid,
+                    "title": item.get("title", "待討論議題").strip(),
+                    "description": item.get("description", ""),
+                    "category": item.get("category", ""),
+                    "participants": item.get("participants", []),
+                    "discussion_mode": item.get("discussion_mode", "sequential"),
+                    "speaking_order": item.get("speaking_order", []),
+                    "source_ids": item.get("source_ids", []),
+                }
+                self.topics.append(new_topic)
+                self.topic_status[tid] = {
+                    "discussed": False,
+                    "contributions": None,
+                    "resolution": None,
+                    "saved": False,
+                }
+            obs["result"] = {
+                "expanded": len(new_items),
+                "new_topics": [
+                    {"id": t["id"], "title": t["title"], "category": t.get("category", "")}
+                    for t in self.topics[-len(new_items):]
+                ],
+            }
+            return obs
+
         if action == "start_discussion":
             topic_id = params.get("topic_id")
             topic = self.get_topic(topic_id)
@@ -985,14 +1219,15 @@ class AgendaRunner:
                 contributions = self.mediator.moderate_simultaneous(
                     topic, self.registry, artifact=self.artifact
                 )
+                stakeholders = self.artifact.get("stakeholders", [])
+                oq_records = self.mediator.handle_open_questions(
+                    contributions, self.registry, stakeholders, artifact=self.artifact
+                )
             else:
-                contributions = self.mediator.moderate_sequential(
+                # sequential：輪到某人前先即時回答指向他的問題，再發言（可依問答調整）
+                contributions, oq_records = self.mediator.moderate_sequential(
                     topic, self.registry, artifact=self.artifact
                 )
-            stakeholders = self.artifact.get("stakeholders", [])
-            oq_records = self.mediator.handle_open_questions(
-                contributions, self.registry, stakeholders, artifact=self.artifact
-            )
             for oq in oq_records:
                 oq["topic_id"] = topic_id
             self.all_open_questions.extend(oq_records)
@@ -1228,8 +1463,19 @@ class AgendaRunner:
                     "saved": st.get("saved", False),
                 }
             )
+        agenda_limit = self.config.get("agenda_items", 5)
+        topics_count = len(self.topics)
+        all_saved = (
+            topics_count > 0
+            and all(self.topic_status.get(t["id"], {}).get("saved", False) for t in self.topics)
+        )
+        can_expand_agenda = topics_count < agenda_limit and all_saved
         return {
             "round_num": self.round_num,
+            "agenda_limit": agenda_limit,
+            "topics_count": topics_count,
+            "all_current_topics_saved": all_saved,
+            "can_expand_agenda": can_expand_agenda,
             "topics": [
                 {
                     "id": t["id"],

@@ -13,6 +13,12 @@ class BaseAgent:
     tool_call_max_rounds: int = 3
     low_confidence_threshold: float = 0.7
 
+    # 全域輸出慣例：僅格式/語系，不定義角色。子類可覆寫 get_global_conventions_suffix() 回傳 "" 以停用。
+    GLOBAL_CONVENTIONS = (
+        "對人可見的描述、說明、標題、statement、question 等請使用繁體中文；"
+        "id、type、category、label 等結構化欄位與程式/圖表關鍵字維持英文。"
+    )
+
     def __init__(
         self,
         model,
@@ -64,6 +70,12 @@ class BaseAgent:
                 return parsed
             return {"statement": raw, "open_questions": []}
         return self.model.chat_json(messages, **kwargs)
+
+    def get_global_conventions_suffix(self) -> str:
+        """回傳附加在 system 後的全域輸出慣例（語系與格式）。不影響 agent 角色。子類可覆寫回傳 '' 以停用。"""
+        if not self.GLOBAL_CONVENTIONS:
+            return ""
+        return f"\n\n# 全域輸出慣例\n{self.GLOBAL_CONVENTIONS}"
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
@@ -117,7 +129,6 @@ class BaseAgent:
 - statement 必須是完整、有條理的發言內容
 - 論點必須基於已知資訊，禁止捏造
 - 若資訊不足，需明確說明不確定處與待確認事項
-- statement、open_questions 的 question 請使用繁體中文
 
 輸出 JSON:
 {{{{
@@ -177,6 +188,9 @@ class BaseAgent:
         if context is not None:
             user_parts.append(f"\n\n# Context\n{json.dumps(context, ensure_ascii=False, indent=2)}")
 
+        suffix = self.get_global_conventions_suffix()
+        if suffix:
+            system_parts.append(suffix)
         messages = [
             {"role": "system", "content": "".join(system_parts)},
             {"role": "user", "content": "\n".join(user_parts)},
@@ -187,7 +201,8 @@ class BaseAgent:
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []
-        messages.append({"role": "system", "content": self.system_prompt})
+        system_content = self.system_prompt + self.get_global_conventions_suffix()
+        messages.append({"role": "system", "content": system_content})
 
         task_parts = [task]
         if context:

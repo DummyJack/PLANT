@@ -208,7 +208,6 @@ class UserAgent(BaseAgent):
 - statement 須以第一人稱、該角色的日常經驗為基礎撰寫完整發言
 - 禁止提出技術解決方案，只表達「需要什麼」
 - 若資訊不足，可直接說明不確定之處與希望釐清的問題
-- statement、open_questions 的 question 請使用繁體中文
 {f'- speaking_as 的名稱必須從以下選一個或數個：{names_list}' if need_speaking_as else ''}
 
 輸出 JSON:
