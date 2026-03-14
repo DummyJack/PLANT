@@ -2,7 +2,6 @@
 
 import os
 import sys
-import json
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -14,7 +13,7 @@ load_dotenv(dotenv_path=BASE_DIR / "config" / ".env")
 
 
 class BaselineModel:
-    def __init__(self, model_name: str = "gpt-5-nano", temperature: float = 1):
+    def __init__(self, model_name: str = "gpt-4o-mini", temperature: float = 0):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             print("錯誤：未找到 OPENAI_API_KEY 環境變數")

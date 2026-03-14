@@ -12,7 +12,7 @@ log/
 projects/
 
 # 實驗結果
-experiment/results/
+results/
 
 # macOS
 .DS_Store

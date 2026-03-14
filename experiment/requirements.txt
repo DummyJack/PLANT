@@ -1,0 +1,14 @@
+# 實驗環境
+
+# RQ1 基準方法
+gymnasium>=0.26.0
+numpy>=1.21.0
+pyyaml>=6.0
+
+openai
+together
+google-genai
+boto3
+
+pyarrow
+fastparquet

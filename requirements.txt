@@ -5,3 +5,7 @@ python-docx
 ollama
 tavily-python>=0.3.0
 requests>=2.31.0
+
+# 實驗 RQ1（ReqElicitGym）
+gymnasium>=0.26.0
+numpy>=1.21.0
