@@ -84,9 +84,10 @@ class AnalystAgent(BaseAgent):
         context = {"requirements": requirements}
         task = """依 conflict-analyzer skill 的辨識方式，**僅根據 Context 中的需求（requirements）**辨識是否有 Conflict；本階段不看系統模型或其它回饋。
 - **label**：判斷為衝突時標記為 "Conflict"，沒有衝突則標記 "Neutral"。此欄位維持英文。
+- **輸出須同時包含兩種 label**：陣列中除所有辨識為 Conflict 的項目外，也須包含至少若干筆 label=Neutral 的項目（例如：對關鍵需求、易混淆需求對或高優先級需求經檢視後判定為無衝突，簡述原因），以利後續討論與報告完整呈現。
 - **conflict_type**：僅用於描述衝突類型。references 中的 8 種類型為參考；若依自身知識判斷屬於其他類型，也可使用其他類型名稱，仍視為 Conflict。
 - 若 label 為 Conflict：須有 description；填 requirement_ids / related_requirements（涉及的需求 id）；conflict_type 為描述用。
-- 若 label 為 Neutral：可簡述原因，不需 conflict_type。
+- 若 label 為 Neutral：須有 description（可簡述為何判定無衝突）；可選填 requirement_ids 表示檢視過的需求；不需 conflict_type。
 - description 等說明與描述文字請使用繁體中文。
 輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
 
@@ -565,7 +566,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"expert"、"modeler"）
 
 # 表達方式（僅能以文字呈現）
-- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。
+- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。**若有使用表格、流程或圖示，請用 ``` … ``` 程式碼區塊包住，與一般敘述分開，方便閱讀。**
 
 # 發言風格
 - 以真實需求工程會議中的需求分析師口吻發言：務實、可追蹤、以需求與證據為核心，避免空泛表態

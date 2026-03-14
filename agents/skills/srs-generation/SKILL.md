@@ -9,13 +9,15 @@ description: >
   with unique IDs, acceptance criteria, use cases, a CRUD matrix, and a full traceability matrix
   linking back to the upstream PRD.
 instructions: >
-  Generate a complete Software Requirements Specification following IEEE 830, ISO/IEC/IEEE 29148,
+  Generate a complete software requirements specification following IEEE 830, ISO/IEC/IEEE 29148,
   and Amazon technical specification standards. Use the template at references/template.md and
   validate against references/checklist.md before finalizing. Mandatory rules (in order): (1) 禁止硬掰
   — only transcribe content from the draft and context; do not invent requirements, data models,
   or placeholders. (2) 缺料就標待補 — where source material is missing, mark "待補" or omit the
-  section; do not leave unreplaced placeholders. (3) Section numbering starts at 1 (1. Introduction,
-  2. Overall Description, …).
+  section; do not leave unreplaced placeholders. (3) Document title must be "[系統名稱]軟體需求規格書"
+  (e.g. 外送平台系統軟體需求規格書); infer system name from draft/context; do NOT use "Software
+  Requirements Specification" or "SRS" as main title. (4) Section numbering starts at 1 and is
+  consecutive: ## 1. Introduction, ## 2. Overall Description, ## 3. …, through appendix.
 ---
 
 # SRS Generation Skill

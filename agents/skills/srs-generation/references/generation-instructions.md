@@ -4,7 +4,8 @@
 
 1. **禁止硬掰** — 只轉寫「需求草稿（draft_markdown）」與 Context（含 feedback）中已有的需求、範圍、約束與決策。不得憑空新增需求、資料模型、ER 圖、介面規格、技術選型（如 API、資料庫、通訊協定）或範本佔位（如 [Name]、YYYY-MM-DD、[Describe...]、[PRD document name and link]）。若某章節在來源中無對應資料，該節直接標註「**待補**」或「本文件無相關資料」，勿填寫猜測或範例。
 2. **缺料就標待補** — References、Open Questions、Change Request Log 等表單若無實際來源或專案紀錄，應標「**待補**」或省略該表，勿保留未替換的佔位符。資料模型、外部介面等若草稿未提及，該章節標「待補」或「待討論後補入」。
-3. **章節編號從 1 開始** — 產出之 SRS 章節編號依序為：**1.** Introduction、**2.** Overall Description、**3.** …，直至附錄。勿從 3 開始編號。
+3. **標題格式** — 文件主標題必須為「**[系統名稱]軟體需求規格書**」（例如「外送平台系統軟體需求規格書」）。系統名稱從需求草稿或 Context 的 scope、rough_idea 推得。勿使用 "Software Requirements Specification" 或 "SRS" 作為主標題。
+4. **章節編號從 1 開始連續** — 正文第一個一級章節為 **## 1. Introduction**，接著 **## 2. Overall Description**、**## 3. …**，依序連續編號至附錄。勿從 3 或 4 開始，勿跳號。
 
 ---
 
@@ -16,7 +17,8 @@ Load and follow the SRS template from the skill reference file at:
 `skills/srs-generation/references/template.md`
 
 Generate the complete SRS following the template structure. Key requirements:
-- **Section numbering starts at 1**: Use "## 1. Introduction", "## 2. Overall Description", "## 3. …" (do not start at 3).
+- **Document title**: Use "[系統名稱]軟體需求規格書" (e.g. "外送平台系統軟體需求規格書"). Infer system name from draft/context (scope, rough_idea). Do NOT use "Software Requirements Specification" or "SRS" as the main title.
+- **Section numbering starts at 1 and is consecutive**: Use "## 1. Introduction", "## 2. Overall Description", "## 3. …" through to the appendix. Do NOT start at 3 or 4; do NOT skip numbers.
 - Only include content that exists in the draft or context; for any section without source material, write "待補" or "本文件無相關資料" — do not invent requirements, data models, interfaces, or placeholder text.
 - Functional requirement IDs: FR-<MODULE>-<NNN> (e.g., FR-AUTH-001)
 - Non-functional requirement IDs: NFR-<CATEGORY>-<NNN> (e.g., NFR-PERF-001)

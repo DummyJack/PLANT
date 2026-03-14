@@ -23,19 +23,37 @@ class ModelerAgent(BaseAgent):
     system_prompt = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
 
 核心原則：
-1. UML 2.x 規範 — 嚴格遵守 UML 2.x 標準語法和語意
-2. PlantUML 語法 — 生成的程式碼須符合 PlantUML 語法
-3. 完整性 — 模型須涵蓋需求中的主要角色、用例與關鍵結構／流程（依圖型涵蓋對應元素）
-4. 一致性 — 不同圖表之間的元素命名必須一致
-5. 最小變動 — 精煉時只修改受影響的部分，保留未變動的元素
-6. 可辨識性 — 產出的模型須完整、可讀，以利後續辨識設計／可測試性 Conflict（辨識由 Analyst 執行）
-7. 關聯可見 — 每種圖表都應善用該圖型的標準元素與關係（如系統邊界、include/extend、關聯、依賴等），讓讀者能看出元素間的結構與流程，而非僅羅列節點；依你的專業判斷該用哪些語法達成。
+1. UML 語意對齊 — 建模語意需盡量對齊 UML 2.x；實作輸出以可被 PlantUML 驗證通過為最終約束。
+2. PlantUML 語法正確 — 生成程式碼必須符合 PlantUML 語法並可通過驗證。
+3. 完整性 — 模型須涵蓋需求中的主要角色、用例與關鍵結構／流程（依圖型涵蓋對應元素）。
+4. 一致性 — 不同圖表之間的元素命名必須一致；同一概念不可多種稱呼。
+5. 最小變動 — 精煉時只修改受影響部分，保留未變動元素。
+6. 可辨識性 — 模型需完整、可讀，利於後續辨識設計／可測試性問題（問題標記由 Analyst 執行）。
+7. 關聯可見 — 圖上應清楚呈現元素間關係（如系統邊界、include/extend、關聯、依賴），避免僅羅列節點。
+8. 版面易讀 — 以「誰與哪些元素有關聯」可一眼辨識為優先：減少連線交叉，必要時調整佈局。
+9. 可讀性優先於單圖完整性 — 單圖過度擁擠時必須拆圖（依角色、子領域或流程階段拆分）。
+10. 建模邊界嚴謹 — Use Case 僅描述系統可提供的行為；不得把願景口號、法規條文或品質目標直接當成用例名稱。
+11. 需求可追溯 — 核心元素需可對應需求來源（需求 ID 或需求原文）；若無明確依據，需標註待確認，不可臆造。
+12. 元素語言統一 — PlantUML elements（actor/use case/class/message/lifeline/relation label）一律使用英文；圖表 name 可使用繁體中文。
 
 命名慣例：
 - Actor: PascalCase（如 SystemAdmin, EndUser）
-- Use Case: 動詞開頭（如 ManageUsers, ViewReport）
+- Use Case: 英文動詞開頭（如 ManageUsers, ViewReport）
 - Class: PascalCase（如 UserAccount, OrderService）
-- 關係標籤: 使用描述性文字"""
+- Sequence message: 英文動詞片語（如 ValidateToken, CreateOrder）
+- 關係標籤: 英文且語意明確
+
+輸出契約：
+- 依任務指定格式輸出合法 JSON，不得夾帶 JSON 以外說明文字。
+- 若欄位包含 plantuml，內容必須是完整程式碼，且包含 @startuml 與 @enduml。
+- 資訊不足時須在輸出中明確標註待確認事項（例如 to_confirm），不可臆測補齊。
+
+產出前自我檢查：
+- [ ] PlantUML 語法可通過驗證。
+- [ ] Actor 與元素關聯一眼可辨識，交叉線條已盡量降低。
+- [ ] 命名一致且語意清楚，PlantUML elements 全為英文。
+- [ ] Use Case 名稱為行為，不是願景口號、法規句或品質目標。
+- [ ] 主要元素可追溯到需求來源；無法追溯者已標註待確認。"""
 
     def __init__(self, model, tools: Optional[list] = None, registry=None):
         super().__init__(model, tools=tools or [], registry=registry)
@@ -338,6 +356,16 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
         }
         type_name = type_names.get(diagram_type, diagram_type)
         req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+        diagram_layout_hint = ""
+        if diagram_type == "use_case_diagram":
+            diagram_layout_hint = """
+用例圖版面要求：產出時以「actor 與 use case 的關聯一目了然」為準。請善用 PlantUML 的版面控制（例如 left to right direction、或將 actor 分置系統邊界左右兩側），使連線少交叉、誰對應哪些用例清楚可辨；若單圖用例過多導致連線雜亂，可精簡為核心用例或依角色拆成多張圖。"""
+        elif diagram_type == "class_diagram":
+            diagram_layout_hint = """
+類別圖建模要求：優先呈現可讀的核心結構與關係，不要把所有名詞都畫成類別。請先確保主要類別之間的繼承、關聯、聚合/組合、依賴關係清楚可辨，再補必要屬性與方法；每個類別僅保留關鍵欄位/操作，避免圖面過度擁擠。若領域過大，請依子域拆圖或僅呈現本次需求受影響的核心類別。"""
+        elif diagram_type == "sequence_diagram":
+            diagram_layout_hint = """
+時序圖建模要求：一張圖聚焦一個主要情境流程，僅保留關鍵 lifeline 與關鍵訊息，避免放入過多非必要元件。需清楚表達主流程與關鍵分支/例外（可用 alt/opt），並讓訊息方向與前後順序易於追蹤；訊息名稱請使用具體動詞，避免抽象字眼。"""
 
         if existing_model and existing_model.get("plantuml"):
             task = f"""根據更新後的需求，精煉以下 {type_name}。只修改受影響的部分，保留未變動的元素。
@@ -347,10 +375,13 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 
 需求:
 {req_text}
+{diagram_layout_hint}
 
-- name 使用繁體中文，plantuml 關鍵字維持英文
+- name 使用繁體中文。
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
+- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
 輸出 JSON:
-{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
         else:
             sh_text = json.dumps(stakeholders or [], ensure_ascii=False, indent=2)
             task = f"""根據以下需求產生 {type_name}。
@@ -360,10 +391,13 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 
 利害關係人:
 {sh_text}
+{diagram_layout_hint}
 
-- name 使用繁體中文，plantuml 關鍵字維持英文
+- name 使用繁體中文。
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
+- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
 輸出 JSON:
-{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
 
         messages = self.build_direct_messages(task)
         return self.model.chat_json(messages)
@@ -416,11 +450,13 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 2. 只修改受影響的部分，保留未變動的元素
 3. **由你自行決定**要保留、新增或移除哪些圖表（type 限 use_case_diagram / class_diagram / sequence_diagram），以符合更新後需求為準
 （設計/可測試性 Conflict 由 Analyst 在產出模型後統一辨識）
-- models 陣列中的 name（圖表顯示名稱）請使用繁體中文。plantuml 程式碼內關鍵字維持英文。
+- models 陣列中的 name（圖表顯示名稱）請使用繁體中文。
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
+- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
 
 # 輸出格式
 {{
-    "models": [{{"name": "...", "type": "use_case_diagram|class_diagram|sequence_diagram", "plantuml": "@startuml\\n...\\n@enduml"}}]
+    "models": [{{"name": "...", "type": "use_case_diagram|class_diagram|sequence_diagram", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}]
 }}"""
 
         try:
@@ -502,9 +538,13 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 # 驗證錯誤
 {error_msg}
 
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）必須維持英文，不可改成中文。
+- 若錯誤來自需求資訊不足，請不要臆測補齊；在 to_confirm 列出待確認事項（可為空陣列）。
+
 # 輸出 JSON
 {{{{
-    "plantuml": "@startuml\\n...修正後的完整程式碼...\\n@enduml"
+    "plantuml": "@startuml\\n...修正後的完整程式碼...\\n@enduml",
+    "to_confirm": ["待確認事項"]
 }}}}"""
 
         try:
@@ -547,7 +587,7 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"）
 
 # 表達方式（僅能以文字呈現）
-- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。
+- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。**若有使用表格、流程或圖示，請用 ``` … ``` 程式碼區塊包住，與一般敘述分開，方便閱讀。**
 
 # 發言風格
 - 以真實需求工程會議中的系統架構/建模專家口吻：先指出關鍵架構判斷，再說明影響範圍與可驗證的調整方案
