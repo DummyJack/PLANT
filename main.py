@@ -23,21 +23,38 @@ def main():
 
     try:
         config = base_store.load_config()
-        print(f"✓ 載入配置：provider={config.get('provider')}, model={config.get('model')}")
+        am = config.get("agent_models") or {}
+        default_cfg = am.get("default") or next(iter(am.values()), {})
+        if isinstance(default_cfg, dict):
+            print(f"✓ 載入配置：provider={default_cfg.get('provider')}, model={default_cfg.get('model')}")
+        else:
+            print("✓ 載入配置")
     except FileNotFoundError:
         print("錯誤：找不到 config/config.json 檔案")
         sys.exit(1)
 
-    provider = config.get("provider", "openai")
+    agent_models = config.get("agent_models") or {}
+    providers_to_check = set()
+    for agent_cfg in agent_models.values():
+        if isinstance(agent_cfg, dict) and agent_cfg.get("provider"):
+            providers_to_check.add(agent_cfg["provider"])
+    if not providers_to_check and config.get("provider"):
+        providers_to_check.add(config.get("provider"))
+
     api_key_env = {
         "openai": "OPENAI_API_KEY",
         "ollama": None
     }
 
-    if provider != "ollama":
-        required_key = api_key_env.get(provider)
+    for used_provider in providers_to_check:
+        if used_provider == "ollama":
+            continue
+        required_key = api_key_env.get(used_provider)
+        if not required_key:
+            print(f"錯誤：不支援的 provider: {used_provider}")
+            sys.exit(1)
         if not os.getenv(required_key):
-            print(f"錯誤：找不到 {required_key} 環境變數")
+            print(f"錯誤：找不到 {required_key} 環境變數（provider={used_provider}）")
             print(f"請在 config/.env 檔案中設定 {required_key}=your_api_key")
             sys.exit(1)
 

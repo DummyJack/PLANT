@@ -26,11 +26,14 @@ class Flow:
         self.store = store
         self.logger = logger
 
-        self.model = create_model(
-            provider=config.get("provider"),
-            model_name=config.get("model"),
-            temperature=config.get("temperature"),
-        )
+        self.agent_models = {
+            "user": self.build_agent_model("user"),
+            "analyst": self.build_agent_model("analyst"),
+            "expert": self.build_agent_model("expert"),
+            "mediator": self.build_agent_model("mediator"),
+            "modeler": self.build_agent_model("modeler"),
+            "documentor": self.build_agent_model("documentor"),
+        }
 
         self.registry = AgentRegistry()
         enable_agents = config.get("enable_agents") or {}
@@ -44,17 +47,26 @@ class Flow:
         modeler_tools = self.tool_registry.build_tools_for_agent("modeler")
         documentor_tools = self.tool_registry.build_tools_for_agent("documentor")
 
-        self.user_agent = UserAgent(self.model, registry=self.registry)
-        self.analyst_agent = AnalystAgent(self.model, tools=analyst_tools, registry=self.registry)
-        self.expert_agent = ExpertAgent(
-            self.model, tools=expert_tools, registry=self.registry, doc_dir="doc"
+        self.user_agent = UserAgent(
+            self.agent_models["user"], registry=self.registry
         )
-        self.mediator_agent = MediatorAgent(self.model, registry=self.registry)
+        self.analyst_agent = AnalystAgent(
+            self.agent_models["analyst"], tools=analyst_tools, registry=self.registry
+        )
+        self.expert_agent = ExpertAgent(
+            self.agent_models["expert"],
+            tools=expert_tools,
+            registry=self.registry,
+            doc_dir="doc",
+        )
+        self.mediator_agent = MediatorAgent(
+            self.agent_models["mediator"], registry=self.registry
+        )
         self.modeler_agent = ModelerAgent(
-            self.model, tools=modeler_tools, registry=self.registry
+            self.agent_models["modeler"], tools=modeler_tools, registry=self.registry
         )
         self.documentor_agent = DocumentorAgent(
-            self.model,
+            self.agent_models["documentor"],
             self.store,
             tools=documentor_tools,
             registry=self.registry,
@@ -100,6 +112,20 @@ class Flow:
             self.mediator_agent.enabled_agenda_type_ids = [
                 k for k, v in eat.items() if v
             ]
+
+    def build_agent_model(self, agent_name: str):
+        am = self.config.get("agent_models") or {}
+        default_cfg = am.get("default") or {}
+        per_agent = am.get(agent_name) or default_cfg
+        provider = per_agent.get("provider", self.config.get("provider"))
+        model_name = per_agent.get("model", self.config.get("model"))
+        temperature = per_agent.get("temperature", self.config.get("temperature"))
+        max_tokens = per_agent.get("max_tokens")
+
+        kwargs = {"temperature": temperature}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return create_model(provider=provider, model_name=model_name, **kwargs)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
@@ -564,3 +590,34 @@ class Flow:
         self.logger.info("✓ 產生 design_rationale.md")
         self.store.save_markdown(srs_md, "srs.md")
         self.logger.info("✓ 產生 srs.md")
+
+        cost_by_agent = {}
+        for agent_name, model in self.agent_models.items():
+            if not hasattr(model, "getCostSummary"):
+                continue
+            summary = model.getCostSummary()
+            if summary:
+                cost_by_agent[agent_name] = summary
+
+        if cost_by_agent:
+            total_input = sum(v.get("input_tokens", 0) for v in cost_by_agent.values())
+            total_output = sum(v.get("output_tokens", 0) for v in cost_by_agent.values())
+            total_tokens = sum(v.get("total_tokens", 0) for v in cost_by_agent.values())
+            total_elapsed = sum(v.get("elapsed_seconds", 0.0) for v in cost_by_agent.values())
+            total_cost = sum(v.get("estimated_cost_usd", 0.0) for v in cost_by_agent.values())
+            cost_summary = {
+                "project_id": self.store.project_id,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "agents": cost_by_agent,
+                "totals": {
+                    "input_tokens": total_input,
+                    "output_tokens": total_output,
+                    "total_tokens": total_tokens,
+                    "elapsed_seconds": round(total_elapsed, 4),
+                    "estimated_cost_usd": round(total_cost, 8),
+                },
+            }
+            self.store.save_json(cost_summary, self.store.project_dir / "cost_summary.json")
+            self.logger.info("✓ 已儲存 cost_summary.json")
+        else:
+            self.logger.info("模型無定價資訊，略過輸出 cost_summary.json")

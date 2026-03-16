@@ -1,8 +1,10 @@
 import logging
+import threading
 
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
+from time import perf_counter
 from store import Store
 
 
@@ -233,3 +235,125 @@ class ProjectManager:
             discussions = artifact.get("discussions", [])
             print(f"已完成輪數: {len(discussions)}")
         print("="*60 + "\n")
+
+
+class CostTracker:
+    """
+    追蹤 LLM token 使用量、執行時間與估算成本。
+    """
+
+    # 單位：USD / 1M tokens
+    DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
+        # OpenAI 官方定價（Text tokens, Standard）
+        "gpt-5.4": {"input": 2.50, "output": 15.00},
+        "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    }
+
+    def __init__(
+        self,
+        model_name: str,
+        pricing_per_1m_tokens: Optional[Dict[str, Dict[str, float]]] = None,
+    ):
+        self.model_name = model_name
+        self.pricing_per_1m_tokens = (
+            pricing_per_1m_tokens or self.DEFAULT_PRICING_PER_1M_TOKENS
+        )
+
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.total_tokens = 0
+        self.elapsed_seconds = 0.0
+        self.estimated_cost_usd = 0.0
+
+        self.startedAt = None
+        self.lock = threading.Lock()
+
+    def start(self):
+        with self.lock:
+            self.startedAt = perf_counter()
+
+    def stop(self) -> float:
+        with self.lock:
+            if self.startedAt is None:
+                return self.elapsed_seconds
+            self.elapsed_seconds += perf_counter() - self.startedAt
+            self.startedAt = None
+            return self.elapsed_seconds
+
+    def addUsage(self, usage: Optional[Dict[str, Any]]):
+        """
+        支援多種欄位命名：
+        - prompt_tokens / completion_tokens
+        - input_tokens / output_tokens
+        - total_tokens（若缺少會自動相加）
+        """
+        if not usage:
+            return
+
+        input_count = int(
+            usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+        )
+        output_count = int(
+            usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+        )
+        total_count = int(usage.get("total_tokens", input_count + output_count) or 0)
+
+        with self.lock:
+            self.input_tokens += input_count
+            self.output_tokens += output_count
+            self.total_tokens += total_count
+            self.estimated_cost_usd += self.estimateCost(input_count, output_count)
+
+    def reset(self):
+        with self.lock:
+            self.input_tokens = 0
+            self.output_tokens = 0
+            self.total_tokens = 0
+            self.elapsed_seconds = 0.0
+            self.estimated_cost_usd = 0.0
+            self.startedAt = None
+
+    def summary(self) -> Optional[Dict[str, Any]]:
+        pricing = self.resolvePricing(self.model_name)
+        if pricing is None:
+            return None
+
+        with self.lock:
+            current_elapsed = self.elapsed_seconds
+            if self.startedAt is not None:
+                current_elapsed += perf_counter() - self.startedAt
+
+        return {
+            "model": self.model_name,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "elapsed_seconds": round(current_elapsed, 4),
+            "estimated_cost_usd": round(self.estimated_cost_usd, 8),
+            "input_price_per_1m_tokens_usd": float(pricing.get("input", 0.0)),
+            "output_price_per_1m_tokens_usd": float(pricing.get("output", 0.0)),
+        }
+
+    def resolvePricing(self, model_name: str) -> Optional[Dict[str, float]]:
+        if model_name in self.pricing_per_1m_tokens:
+            return self.pricing_per_1m_tokens[model_name]
+
+        # 支援前綴比對，例如 gpt-4o-2024-xx
+        for key, value in self.pricing_per_1m_tokens.items():
+            if key != "default" and model_name.startswith(key):
+                return value
+
+        return None
+
+    def estimateCost(self, input_tokens: int, output_tokens: int) -> float:
+        pricing = self.resolvePricing(self.model_name)
+        if not pricing:
+            return 0.0
+
+        input_price = float(pricing.get("input", 0.0))
+        output_price = float(pricing.get("output", 0.0))
+
+        input_cost = (input_tokens / 1_000_000) * input_price
+        output_cost = (output_tokens / 1_000_000) * output_price
+        return input_cost + output_cost

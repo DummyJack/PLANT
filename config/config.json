@@ -1,18 +1,15 @@
 {
-  "provider": "openai",
-  "model": "gpt-4o-mini",
-  "temperature": 0,
   "rounds": 1,
-  "agenda_items": 3,
+  "agenda_items": 5,
   "max_stakeholders": 5,
   "low_confidence_threshold": 0.7,
   "tool_call_max_rounds": 3,
   "max_iterations": {
     "expert_phase0": 3,
-    "expert_review": 5,
-    "analyst_review": 5,
-    "modeler_review": 5,
-    "modeler_phase0": 3
+    "modeler_phase0": 3,
+    "expert_review": 3,
+    "analyst_review": 3,
+    "modeler_review": 3
   },
   "enable_tools": {
     "web_search": true,
@@ -35,5 +32,42 @@
     "mediator": true,
     "modeler": true,
     "documentor": true
+  },
+  "agent_models": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 0
+    },
+    "user": {
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "temperature": 1
+    },
+    "analyst": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 1
+    },
+    "expert": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 1
+    },
+    "mediator": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 1
+    },
+    "modeler": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 1
+    },
+    "documentor": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 0
+    }
   }
 }

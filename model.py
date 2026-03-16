@@ -2,9 +2,10 @@ import ollama
 import json
 import os
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
 from openai import OpenAI
+from utils import CostTracker
 
 
 class BaseLLM(ABC):
@@ -15,6 +16,7 @@ class BaseLLM(ABC):
         self.default_temperature = kwargs.pop("temperature", None)
         self.default_max_tokens = kwargs.pop("max_tokens", None)
         self.kwargs = kwargs
+        self.costTracker = CostTracker(model_name=model_name)
 
     def build_kwargs(self, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Dict:
         kwargs = self.kwargs.copy()
@@ -36,6 +38,15 @@ class BaseLLM(ABC):
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None) -> Dict: ...
 
+    def addUsage(self, usage: Optional[Dict[str, Any]]):
+        self.costTracker.addUsage(usage)
+
+    def getCostSummary(self) -> Optional[Dict[str, Any]]:
+        return self.costTracker.summary()
+
+    def resetCostSummary(self):
+        self.costTracker.reset()
+
 
 class OpenAIModel(BaseLLM):
     def __init__(self, model_name: str, **kwargs):
@@ -48,10 +59,23 @@ class OpenAIModel(BaseLLM):
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None) -> str:
         kwargs = self.build_kwargs(temperature, max_tokens)
-        response = self.client.chat.completions.create(
-            model=self.model_name, messages=messages, **kwargs
-        )
-        return response.choices[0].message.content
+        self.costTracker.start()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name, messages=messages, **kwargs
+            )
+            usage = getattr(response, "usage", None)
+            if usage:
+                self.addUsage(
+                    {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(usage, "completion_tokens", 0),
+                        "total_tokens": getattr(usage, "total_tokens", 0),
+                    }
+                )
+            return response.choices[0].message.content
+        finally:
+            self.costTracker.stop()
 
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None) -> Dict:
@@ -63,11 +87,24 @@ class OpenAIModel(BaseLLM):
             messages = list(messages)
             messages.append({"role": "user", "content": "請以 JSON 格式回應。"})
 
-        response = self.client.chat.completions.create(
-            model=self.model_name, messages=messages,
-            response_format={"type": "json_object"}, **kwargs,
-        )
-        return json.loads(response.choices[0].message.content)
+        self.costTracker.start()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name, messages=messages,
+                response_format={"type": "json_object"}, **kwargs,
+            )
+            usage = getattr(response, "usage", None)
+            if usage:
+                self.addUsage(
+                    {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(usage, "completion_tokens", 0),
+                        "total_tokens": getattr(usage, "total_tokens", 0),
+                    }
+                )
+            return json.loads(response.choices[0].message.content)
+        finally:
+            self.costTracker.stop()
 
 
 class OllamaModel(BaseLLM):
@@ -90,11 +127,21 @@ class OllamaModel(BaseLLM):
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None) -> str:
         options = self.build_ollama_options(temperature, max_tokens)
-        response = self.client.chat(
-            model=self.model_name, messages=messages,
-            options=options if options else None
-        )
-        return response["message"]["content"]
+        self.costTracker.start()
+        try:
+            response = self.client.chat(
+                model=self.model_name, messages=messages,
+                options=options if options else None
+            )
+            self.addUsage(
+                {
+                    "input_tokens": response.get("prompt_eval_count", 0),
+                    "output_tokens": response.get("eval_count", 0),
+                }
+            )
+            return response["message"]["content"]
+        finally:
+            self.costTracker.stop()
 
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None) -> Dict:
