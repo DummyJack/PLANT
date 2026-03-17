@@ -603,17 +603,17 @@ class Flow:
             total_input = sum(v.get("input_tokens", 0) for v in cost_by_agent.values())
             total_output = sum(v.get("output_tokens", 0) for v in cost_by_agent.values())
             total_tokens = sum(v.get("total_tokens", 0) for v in cost_by_agent.values())
-            total_elapsed = sum(v.get("run_time", 0.0) for v in cost_by_agent.values())
+            total_elapsed = sum(v.get("run_time(s)", 0.0) for v in cost_by_agent.values())
             total_cost = sum(v.get("estimated_cost(USD)", 0.0) for v in cost_by_agent.values())
             cost_summary = {
                 "project_id": self.store.project_id,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "agents": cost_by_agent,
                 "totals": {
                     "input_tokens": total_input,
                     "output_tokens": total_output,
                     "total_tokens": total_tokens,
-                    "run_time": round(total_elapsed, 4),
+                    "run_time(s)": round(total_elapsed, 3),
                     "estimated_cost(USD)": round(total_cost, 8),
                 },
             }
