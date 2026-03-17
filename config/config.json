@@ -47,22 +47,22 @@
     "analyst": {
       "provider": "openai",
       "model": "gpt-4.1",
-      "temperature": 1
+      "temperature": 0
     },
     "expert": {
       "provider": "openai",
       "model": "gpt-4.1",
-      "temperature": 1
+      "temperature": 0
     },
     "mediator": {
       "provider": "openai",
       "model": "gpt-4.1",
-      "temperature": 1
+      "temperature": 0
     },
     "modeler": {
       "provider": "openai",
       "model": "gpt-4.1",
-      "temperature": 1
+      "temperature": 0
     },
     "documentor": {
       "provider": "openai",

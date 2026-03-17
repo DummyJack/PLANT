@@ -2,7 +2,7 @@
   {
     "id": "conflict_resolution",
     "label": "衝突協調",
-    "description": "利害關係人間對需求或設計的 Conflict 已確認，需協調立場、投票或人類裁決以達成共識"
+    "description": "利害關係人之間的衝突，需協調立場、投票或人類裁決以達成共識"
   },
   {
     "id": "requirement_clarification",
@@ -17,7 +17,7 @@
   {
     "id": "new_requirement",
     "label": "提出新需求",
-    "description": "User/Expert/Modeler 提出新功能、新限制或新例外情境"
+    "description": "User/Expert 提出新功能、新限制"
   },
   {
     "id": "tradeoff",
