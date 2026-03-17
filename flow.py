@@ -603,8 +603,8 @@ class Flow:
             total_input = sum(v.get("input_tokens", 0) for v in cost_by_agent.values())
             total_output = sum(v.get("output_tokens", 0) for v in cost_by_agent.values())
             total_tokens = sum(v.get("total_tokens", 0) for v in cost_by_agent.values())
-            total_elapsed = sum(v.get("elapsed_seconds", 0.0) for v in cost_by_agent.values())
-            total_cost = sum(v.get("estimated_cost_usd", 0.0) for v in cost_by_agent.values())
+            total_elapsed = sum(v.get("run_time", 0.0) for v in cost_by_agent.values())
+            total_cost = sum(v.get("estimated_cost(USD)", 0.0) for v in cost_by_agent.values())
             cost_summary = {
                 "project_id": self.store.project_id,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -613,8 +613,8 @@ class Flow:
                     "input_tokens": total_input,
                     "output_tokens": total_output,
                     "total_tokens": total_tokens,
-                    "elapsed_seconds": round(total_elapsed, 4),
-                    "estimated_cost_usd": round(total_cost, 8),
+                    "run_time": round(total_elapsed, 4),
+                    "estimated_cost(USD)": round(total_cost, 8),
                 },
             }
             self.store.save_json(cost_summary, self.store.project_dir / "cost_summary.json")

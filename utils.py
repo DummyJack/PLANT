@@ -329,10 +329,9 @@ class CostTracker:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
-            "elapsed_seconds": round(current_elapsed, 4),
-            "estimated_cost_usd": round(self.estimated_cost_usd, 8),
-            "input_price_per_1m_tokens_usd": float(pricing.get("input", 0.0)),
-            "output_price_per_1m_tokens_usd": float(pricing.get("output", 0.0)),
+            "run_time": round(current_elapsed, 3),
+            "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
+            "time": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
         }
 
     def resolvePricing(self, model_name: str) -> Optional[Dict[str, float]]:
