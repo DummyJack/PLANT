@@ -25,7 +25,7 @@ DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
 CONFIG_PATH = RQ2_DIR / "config_RQ2.json"
 
-load_dotenv(BASE_DIR / "config" / ".env")
+load_dotenv(BASE_DIR / ".env")
 
 
 def get_analyst():

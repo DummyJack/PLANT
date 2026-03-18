@@ -7,9 +7,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# 載入環境變數
+# 載入環境變數（專案主目錄 .env）
 BASE_DIR = Path(__file__).parent.parent
-load_dotenv(dotenv_path=BASE_DIR / "config" / ".env")
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 
 class BaselineModel:

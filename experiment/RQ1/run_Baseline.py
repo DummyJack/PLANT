@@ -20,8 +20,8 @@ from dotenv import load_dotenv
 
 # 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
 RQ1_DIR = Path(__file__).resolve().parent
-# 從專案 config/.env 讀取（含 OPENAI_API_KEY）
-_env_path = RQ1_DIR.parent.parent / "config" / ".env"
+# 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
+_env_path = RQ1_DIR.parent.parent / ".env"
 load_dotenv(_env_path)
 BASELINE_DIR = RQ1_DIR / "Baseline"
 RESULTS_DIR = RQ1_DIR / "results"
@@ -94,7 +94,7 @@ def main():
     user_base_url = os.getenv("USER_BASE_URL", base_url)
 
     if not api_key:
-        print("錯誤：請在 config/.env 中設定 OPENAI_API_KEY，或設定環境變數 / 使用 --api-key 參數")
+        print("錯誤：請在專案主目錄 .env 中設定 OPENAI_API_KEY，或設定環境變數 / 使用 --api-key 參數")
         sys.exit(1)
 
     # 檢查資料檔案

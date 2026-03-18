@@ -16,7 +16,7 @@ def main():
 
     base_dir = Path(__file__).parent
 
-    env_path = base_dir / "config" / ".env"
+    env_path = base_dir / ".env"
     load_dotenv(dotenv_path=env_path)
 
     base_store = Store(base_dir)
@@ -30,7 +30,7 @@ def main():
         else:
             print("✓ 載入配置")
     except FileNotFoundError:
-        print("錯誤：找不到 config/config.json 檔案")
+        print("錯誤：找不到 config.json 檔案（請放在專案主目錄）")
         sys.exit(1)
 
     agent_models = config.get("agent_models") or {}
@@ -55,7 +55,7 @@ def main():
             sys.exit(1)
         if not os.getenv(required_key):
             print(f"錯誤：找不到 {required_key} 環境變數（provider={used_provider}）")
-            print(f"請在 config/.env 檔案中設定 {required_key}=your_api_key")
+            print(f"請在專案主目錄的 .env 檔案中設定 {required_key}=your_api_key")
             sys.exit(1)
 
     project_id, is_continue = ProjectManager.select_or_create_project(base_store)

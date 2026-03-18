@@ -1,8 +1,6 @@
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Dict, Any
 from agents import AgentRegistry
-from agents.coordinator import BaseAgentCoordinator
 from agents.planner import PlannerService
 from agents.policy import AgentSkillToolPolicy
 from agents.profile import (
@@ -13,11 +11,12 @@ from agents.profile import (
     ModelerAgent,
     DocumentorAgent,
 )
-from agents.profile.mediator import AgendaRunner, AGENDA_CATEGORY_LABEL
+from agents.agenda import AgendaRunner
+from agents.profile.mediator import AGENDA_CATEGORY_LABEL
 from model import create_model
 from store import Store
 from utils import Logger, Collect
-from agents.tool_registry import ToolRegistry
+from agents.tools import ToolRegistry
 
 
 class Flow:
@@ -40,7 +39,6 @@ class Flow:
         self.policy = AgentSkillToolPolicy()
         self.tool_registry = ToolRegistry(config=self.config, policy=self.policy)
         self.planner = PlannerService(policy=self.policy)
-        self.coordinator = BaseAgentCoordinator(planner=self.planner)
 
         analyst_tools = self.tool_registry.build_tools_for_agent("analyst")
         expert_tools = self.tool_registry.build_tools_for_agent("expert")
@@ -146,7 +144,7 @@ class Flow:
 
         self.store.save_artifact(artifact)
 
-        planner_decision = self.coordinator.plan(
+        planner_decision = self.planner.plan(
             task=rough_idea,
             context={
                 "mode": "init_phase",
@@ -380,7 +378,7 @@ class Flow:
 
         # 議程由 Mediator Agent 驅動（產生議程、討論、綜合、人類裁決、存檔）
         self.logger.info("議程由 Mediator Agent 驅動")
-        planner_decision = self.coordinator.plan(
+        planner_decision = self.planner.plan(
             task=f"meeting_round_{round_num}",
             context={
                 "mode": "meeting_round",
@@ -577,17 +575,8 @@ class Flow:
     # Finalization
 
     def finalize(self, artifact: Dict[str, Any]):
-        self.logger.info("Step F1 & F2: 並行產生 Design Rationale 與 SRS")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f_dr = executor.submit(
-                self.documentor_agent.generate_design_rationale, artifact
-            )
-            f_srs = executor.submit(self.documentor_agent.generate_srs, artifact)
-            dr_md = f_dr.result()
-            srs_md = f_srs.result()
-
-        self.store.save_markdown(dr_md, "design_rationale.md")
-        self.logger.info("✓ 產生 design_rationale.md")
+        self.logger.info("Step F2: 產生 SRS（Design Rationale 由 Mediator 於議題存檔時持續更新）")
+        srs_md = self.documentor_agent.generate_srs(artifact)
         self.store.save_markdown(srs_md, "srs.md")
         self.logger.info("✓ 產生 srs.md")
 

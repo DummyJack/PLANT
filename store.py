@@ -139,10 +139,10 @@ class Store:
     # Config
 
     def load_config(self) -> Dict[str, Any]:
-        return self.load_json(self.config_dir / "config.json")
+        return self.load_json(self.base_dir / "config.json")
 
     def save_config(self, config: Dict[str, Any]):
-        with open(self.config_dir / "config.json", 'w', encoding='utf-8') as f:
+        with open(self.base_dir / "config.json", 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
 
     # Markdown
