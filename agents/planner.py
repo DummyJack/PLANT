@@ -68,6 +68,17 @@ class PlannerService:
             "step": step.__dict__,
         }
 
+    def plan(self, task: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """協調入口：產出決策可觀測資料（原 BaseAgentCoordinator.plan 行為）。"""
+        result = self.build_plan(task=task, context=context or {})
+        step = result.get("step") or {}
+        return {
+            "decision": step.get("kind", "no_skill"),
+            "rationale": step.get("rationale", ""),
+            "plan_steps": step,
+            "raw": result,
+        }
+
     def _classify_intent(self, task: str) -> str:
         q = (task or "").lower()
         if any(k in q for k in ["uml", "plantuml", "圖", "diagram", "模型"]):

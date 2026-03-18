@@ -25,39 +25,6 @@ class DocumentorAgent(BaseAgent):
         )
         self.store = store
 
-    def generate_design_rationale(self, artifact: Dict[str, Any]) -> str:
-        """Step F1: 產生 Design Rationale（Markdown）"""
-        context = {
-            "decisions": artifact.get("decisions", []),
-            "conflicts": artifact.get("conflicts", []),
-            "discussions": artifact.get("discussions", []),
-            "feedback": artifact.get("feedback", {}),
-        }
-        context_text = json.dumps(context, ensure_ascii=False, indent=2)
-
-        user_prompt = f"""# 任務
-根據以下討論記錄和決策資料，整理出設計緣由文件。
-
-# 資料
-{context_text}
-
-# 整理結構（Markdown 格式）
-
-提取每個議題的最終決策，每個決策包含：背景、選項、理由、依據與參考(專家引用的法規、標準、文件 or 人類裁決的決策依據 or agent 共識的推理過程)。
-
-# 約束
-- 只整理已有資料，禁止推測或添加不存在的決策
-- 若某個章節沒有對應資料，標註「本輪無相關資料」
-- 對資料不足但又影響判讀的內容，請明確標註「待確認」或「假設前提」
-- 清楚區分「已決議」與「尚在討論中」內容，避免混寫
-- 產出內容請使用繁體中文
-- 以 Markdown 格式輸出"""
-
-        messages = self.build_direct_messages(user_prompt)
-        dr_md = self.model.chat(messages)
-        dr_md = self.strip_code_fences(dr_md)
-        return dr_md
-
     def generate_srs(self, artifact: Optional[Dict[str, Any]] = None) -> str:
         """Step F2: 以 store 中最新需求草稿為輸入，invoke srs-generation skill 產出正式 SRS（ISO 29148），回傳 SRS Markdown。"""
         latest_version = self.store.get_draft_version()

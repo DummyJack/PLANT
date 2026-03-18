@@ -1,7 +1,8 @@
-import json
+from pathlib import Path
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any, Dict, List
+
 
 # Agent 工具的抽象基礎類別
 class BaseTool(ABC):
@@ -34,3 +35,44 @@ class BaseTool(ABC):
             if param_info.get("required", False) and param_name not in kwargs:
                 return False
         return True
+
+
+class ToolRegistry:
+    """宣告式工具註冊與配置入口。"""
+
+    def __init__(self, config: Dict[str, Any], policy):
+        self.config = config
+        self.policy = policy
+        self.enable_tools = config.get("enable_tools") or {}
+
+    def build_tools_for_agent(self, agent_name: str) -> List[Any]:
+        from agents.profile.expert import has_supported_doc_files
+        from .web_search import WebSearchTool
+        from .plantuml_validator import PlantUMLValidatorTool
+        from .file_parser import FileParserTool
+
+        allowed = set(self.policy.allowed_tools_for_agent(agent_name))
+        built: List[Any] = []
+
+        if "web_search" in allowed and self.enable_tools.get("web_search", False):
+            built.append(WebSearchTool())
+
+        if "file_parser" in allowed and (
+            self.enable_tools.get("file_parser", self.enable_tools.get("read_external_file", True))
+        ):
+            doc_dir = Path("doc")
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            if has_supported_doc_files(doc_dir):
+                built.append(FileParserTool(base_dir=doc_dir))
+
+        if "plantuml_validate" in allowed and self.enable_tools.get("plantuml_validate", True):
+            opts = self.config.get("plantuml_validate") or {}
+            built.append(
+                PlantUMLValidatorTool(
+                    jar_path=opts.get("jar_path", "plantuml.jar"),
+                    use_online=opts.get("use_online", True),
+                    server_url=opts.get("server_url", ""),
+                )
+            )
+
+        return built

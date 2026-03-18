@@ -222,27 +222,53 @@ class ModelerAgent(BaseAgent):
                 ],
             }
             ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
-            task = f"""分析需求與現有模型，判斷哪些圖表需要更新或新建。
+            task = f"""分析需求與現有模型，完成兩件事：(1) 判斷哪些圖表需要更新或新建；(2) 產出與需求的一致性說明與缺口報告。
 
 # Context
 {ctx_text}
+
+# 輸出要求
+- models_to_update：需更新的 diagram type 列表（如 use_case_diagram, class_diagram, sequence_diagram）
+- models_to_create：需新建的 diagram type 列表
+- impact_summary：影響摘要（繁體中文）
+- consistency_summary：與需求一致性的整體說明（繁體中文），例如：一致、部分一致、有缺口、或簡述哪些部分對齊、哪些未對齊
+- gaps：缺口或不一致項目列表，每項一句話描述（繁體中文）。例如：需求 FR-01 在模型中無對應、某圖與某圖命名不一致、某需求未被涵蓋。若無缺口則為空陣列 []
 
 輸出 JSON:
 {{
     "models_to_update": ["需更新的 diagram type"],
     "models_to_create": ["需新建的 diagram type"],
-    "impact_summary": "影響摘要"
+    "impact_summary": "影響摘要",
+    "consistency_summary": "與需求一致性的整體說明",
+    "gaps": ["缺口或不一致項目1", "缺口或不一致項目2"]
 }}
-impact_summary 請使用繁體中文。只輸出 JSON。"""
+只輸出 JSON。"""
             messages = self.build_direct_messages(task)
             try:
                 result = self.model.chat_json(messages)
                 obs["result"] = result
                 to_update = result.get("models_to_update", [])
                 to_create = result.get("models_to_create", [])
+                consistency_summary = result.get("consistency_summary", "")
+                gaps = result.get("gaps", [])
+                if not isinstance(gaps, list):
+                    gaps = []
                 obs["summary"] = (
                     f"影響評估: 更新 {len(to_update)}, 新建 {len(to_create)}"
                 )
+                if consistency_summary:
+                    obs["summary"] += f"；一致性: {consistency_summary[:60]}{'…' if len(consistency_summary) > 60 else ''}"
+                if gaps:
+                    obs["summary"] += f"；缺口 {len(gaps)} 項"
+                # 寫入 artifact 供後續查閱
+                report = {
+                    "consistency_summary": consistency_summary,
+                    "gaps": gaps,
+                    "models_to_update": to_update,
+                    "models_to_create": to_create,
+                    "impact_summary": result.get("impact_summary", ""),
+                }
+                artifact.setdefault("system_models", {})["last_consistency_report"] = report
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"影響評估失敗: {e}"
