@@ -772,6 +772,44 @@ class MediatorAgent(BaseAgent):
 
         return oq_records
 
+    def collect_final_votes(
+        self,
+        topic: Dict,
+        contributions: List[Dict],
+        registry,
+        artifact: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, str]:
+        """在完整討論結束後，向各參與者收集最終投票。"""
+        main_contribs = [c for c in contributions if not c.get("is_reply", False)]
+
+        voters = topic.get("speaking_order") or topic.get("participants") or []
+        if not voters:
+            # fallback：以實際有主發言的 agent 順序作為投票者
+            voters = [c.get("agent") for c in main_contribs if c.get("agent")]
+
+        snapshot = self.build_artifact_snapshot(artifact)
+        votes: Dict[str, str] = {}
+        for agent_name in voters:
+            agent = registry.get(agent_name) if registry else None
+            if not agent:
+                self.logger.warning(f"投票階段找不到 Agent '{agent_name}'，略過")
+                continue
+            try:
+                if hasattr(agent, "vote_on_topic"):
+                    vote_resp = agent.vote_on_topic(
+                        topic,
+                        previous_responses=main_contribs,
+                        artifact_snapshot=snapshot,
+                    )
+                    v = (vote_resp.get("vote") or "").strip().lower()
+                    votes[agent_name] = "agreed" if v == "agreed" else "unresolved"
+                else:
+                    votes[agent_name] = "unresolved"
+            except Exception as e:
+                self.logger.warning(f"  {agent_name} 最終投票失敗，視為 unresolved: {e}")
+                votes[agent_name] = "unresolved"
+        return votes
+
     def generate_meeting_markdown(
         self,
         topic: Dict,
@@ -805,13 +843,8 @@ class MediatorAgent(BaseAgent):
         md += f"- **Participants**: {', '.join(participants) if participants else '（無參與者）'}\n"
         md += f"- **Discussion mode**: {mode}\n"
 
-        votes_line = []
-        for c in contributions:
-            if c.get("is_reply", False):
-                continue
-            resp = c.get("response", {})
-            v = resp.get("vote", "unresolved")
-            votes_line.append(f"{c.get('agent', '?')}: {v}")
+        votes = resolution.get("votes", {}) or {}
+        votes_line = [f"{agent}: {vote}" for agent, vote in votes.items()]
         if votes_line:
             md += f"- **Votes**: {', '.join(votes_line)}\n"
         md += "\n"
@@ -825,12 +858,9 @@ class MediatorAgent(BaseAgent):
                 agent = c.get("agent", "?")
                 resp = c.get("response", {})
                 statement = resp.get("statement", "")
-                vote = resp.get("vote", "")
                 md += f"### {agent}\n\n"
                 if statement:
                     md += f"{statement}\n\n"
-                if vote:
-                    md += f"> **Vote**: {vote}\n\n"
 
         oq_pairs = []
         for c in contributions:
@@ -853,8 +883,13 @@ class MediatorAgent(BaseAgent):
 
         return md
 
-    def synthesize_and_resolve(self, topic: Dict, contributions: List[Dict]) -> Dict:
-        """依各 agent 的投票（vote）以多數決決定是否達成共識；agreed 時由 LLM 產出 summary 與 decision。"""
+    def synthesize_and_resolve(
+        self,
+        topic: Dict,
+        contributions: List[Dict],
+        final_votes: Optional[Dict[str, str]] = None,
+    ) -> Dict:
+        """依最終投票（final_votes）以多數決決定是否達成共識；agreed 時由 LLM 產出 summary 與 decision。"""
         if not contributions:
             self.logger.warning(
                 f"  [{topic.get('id', '?')}] 無發言紀錄，直接標記為 unresolved"
@@ -866,15 +901,15 @@ class MediatorAgent(BaseAgent):
                 "votes": {},
                 "votes_summary": "無投票（0/0）",
             }
-        main_contributions = [c for c in contributions if not c.get("is_reply", False)]
-        votes_list = []
+
         votes_by_agent = {}
-        for c in main_contributions:
-            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-            v = (resp.get("vote") or "unresolved").strip().lower()
-            v_normalized = "agreed" if v == "agreed" else "unresolved"
-            votes_list.append(v_normalized)
-            votes_by_agent[c.get("agent", "?")] = v_normalized
+        if final_votes:
+            for agent, vote in final_votes.items():
+                v = (vote or "").strip().lower()
+                votes_by_agent[agent] = "agreed" if v == "agreed" else "unresolved"
+        # 未傳入 final_votes 時無票可計，resolution 將為 unresolved
+
+        votes_list = list(votes_by_agent.values())
 
         agreed_count = sum(1 for v in votes_list if v == "agreed")
         n = len(votes_list)
@@ -1255,7 +1290,12 @@ class AgendaRunner:
             contributions = st.get("contributions") or []
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  綜合決議: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
-            resolution = self.mediator.synthesize_and_resolve(topic, contributions)
+            final_votes = self.mediator.collect_final_votes(
+                topic, contributions, self.registry, artifact=self.artifact
+            )
+            resolution = self.mediator.synthesize_and_resolve(
+                topic, contributions, final_votes=final_votes
+            )
             self.topic_status[topic_id]["resolution"] = resolution
             votes = resolution.get("votes", {})
             votes_summary = resolution.get("votes_summary", "")
@@ -1310,7 +1350,12 @@ class AgendaRunner:
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  存檔議題: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             if not resolution:
-                resolution = self.mediator.synthesize_and_resolve(topic, contributions)
+                final_votes = self.mediator.collect_final_votes(
+                    topic, contributions, self.registry, artifact=self.artifact
+                )
+                resolution = self.mediator.synthesize_and_resolve(
+                    topic, contributions, final_votes=final_votes
+                )
                 self.topic_status[topic_id]["resolution"] = resolution
             self.topic_idx += 1
             meeting_md = self.mediator.generate_meeting_markdown(

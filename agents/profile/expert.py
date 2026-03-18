@@ -185,12 +185,11 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 - 論點必須有客觀依據，無依據則標註「資訊不足」
 - 若引用內容非最終法源（例如二手整理或網頁摘要），需清楚標註可信度與待驗證性
 - 若此議題與法規/標準無直接對應，仍請以領域專家角度簡要說明最佳實務、業界常見做法或技術/風險建議；切勿留空或僅輸出 JSON 結構
-- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
+- 投票將在討論結束後另行進行，發言時只需專注法規與風險說明
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容（含法規依據與風險說明）",
-    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -217,7 +216,6 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
         return {
             "agent": self.name,
             "statement": statement,
-            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
 

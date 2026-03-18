@@ -598,12 +598,11 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
 - statement 須聚焦系統架構與建模觀點，評估需求變更對 UML 模型的影響
 - 避免只講抽象原則，需明確指出「哪個模型元素」會變動與原因
 - 若資訊不足，需說明需補充的介面、事件流程或資料邊界，不可臆測
-- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
+- 投票將在討論結束後另行進行，發言時只需專注架構與建模觀點
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
-    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -613,6 +612,5 @@ impact_summary 請使用繁體中文。只輸出 JSON。"""
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
-            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }

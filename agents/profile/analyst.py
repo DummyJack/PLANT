@@ -578,12 +578,11 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 - statement 必須是完整、有條理的發言，論點須有具體需求依據
 - 若資訊不足，需明確指出缺口與需補件項目，不可假設已確認
 - 避免直接給出實作細節（程式碼/框架），聚焦需求定義、驗收邊界、風險與取捨
-- 依你的立場投票（vote）：agreed 表示可達成共識；unresolved 表示仍有 Conflict 需升級
+- 投票將在討論結束後另行進行，發言時只需專注分析與建議
 
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
-    "vote": "agreed 或 unresolved",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
 }}}}"""
 
@@ -593,7 +592,6 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
-            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
 
@@ -770,7 +768,6 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                     contribs.append({
                         "agent": c.get("agent"),
                         "statement": (resp.get("statement") or "")[:300],
-                        "vote": resp.get("vote"),
                     })
                 resolution = disc.get("resolution", {})
                 truncated.append({

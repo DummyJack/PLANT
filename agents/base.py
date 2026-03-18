@@ -116,7 +116,7 @@ class BaseAgent:
 # 要求
 - 撰寫一段完整的發言（statement），針對議題表達你的觀點、建議與論述
 - 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"、"modeler"）
-- 依你的立場投票（vote）：agreed 表示你認為本議題可達成共識、可形成決策；unresolved 表示你認為仍有 Conflict 或無法接受，需升級裁決
+- 投票將在討論結束後另行進行，發言時只需專注表達觀點
 
 # 發言風格（像現實會議中的專家）
 - 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌
@@ -133,7 +133,6 @@ class BaseAgent:
 輸出 JSON:
 {{{{
     "statement": "針對此議題的完整發言內容",
-    "vote": "agreed 或 unresolved（依你的立場）",
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題內容"}}}}]
 }}}}"""
 
@@ -143,9 +142,67 @@ class BaseAgent:
         return {
             "agent": self.name,
             "statement": response.get("statement", ""),
-            "vote": response.get("vote", "unresolved"),
             "open_questions": response.get("open_questions", []),
         }
+
+    def vote_on_topic(
+        self,
+        topic: Dict,
+        previous_responses: Optional[List[Dict]] = None,
+        artifact_snapshot: Optional[Dict] = None,
+    ) -> Dict[str, str]:
+        """議題討論完成後的最終投票。僅回傳 vote 與簡短理由。"""
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+
+        prev_text = ""
+        if previous_responses:
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
+            prev_text = "\n# 本議題討論摘要（依發言順序）\n" + "\n\n".join(parts)
+
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        user_prompt = f"""你正在進行本議題的「最終投票」。
+
+{topic_text}
+{prev_text}
+{snapshot_text}
+
+# 任務
+- 根據你在本議題中的專業立場，進行最終表決
+- 只需給出 vote 與簡短 rationale（1-2 句）
+
+# 投票規則
+- vote 只能是 "agreed" 或 "unresolved"
+- agreed：你認為本議題可形成決策
+- unresolved：你認為仍有重要衝突或關鍵不確定，暫不應定案
+
+# 約束
+- 不要重寫長篇發言
+- 不要新增 open_questions
+- 若資訊不足，請投 unresolved 並在 rationale 說明原因
+
+輸出 JSON:
+{{
+    "vote": "agreed 或 unresolved",
+    "rationale": "簡短理由"
+}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        response = self.chat_for_topic_response(messages)
+        v = (response.get("vote") or "").strip().lower()
+        vote = "agreed" if v == "agreed" else "unresolved"
+        rationale = (
+            response.get("rationale")
+            or response.get("reason")
+            or response.get("statement")
+            or ""
+        )
+        return {"agent": self.name, "vote": vote, "rationale": rationale}
 
     def invoke_skill(
         self,
