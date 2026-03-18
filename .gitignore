@@ -3,7 +3,7 @@ __pycache__/
 venv/
 
 # 環境變數
-config/.env
+.env
 
 # 日誌
 log/
