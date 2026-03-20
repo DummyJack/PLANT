@@ -43,7 +43,11 @@ def main():
 
     api_key_env = {
         "openai": "OPENAI_API_KEY",
-        "ollama": None
+        "ollama": None,
+        "anthropic": "ANTHROPIC_API_KEY",
+        "claude": "ANTHROPIC_API_KEY",
+        "gemini": "GOOGLE_API_KEY",
+        "google": "GOOGLE_API_KEY",
     }
 
     for used_provider in providers_to_check:

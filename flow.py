@@ -118,11 +118,17 @@ class Flow:
         provider = per_agent.get("provider", self.config.get("provider"))
         model_name = per_agent.get("model", self.config.get("model"))
         temperature = per_agent.get("temperature", self.config.get("temperature"))
-        max_tokens = per_agent.get("max_tokens")
+        max_output_tokens = per_agent.get("max_output_tokens")
+        if max_output_tokens is None:
+            max_output_tokens = default_cfg.get("max_output_tokens")
+        if max_output_tokens is None:
+            max_output_tokens = per_agent.get("max_tokens")
+        if max_output_tokens is None:
+            max_output_tokens = default_cfg.get("max_tokens")
 
         kwargs = {"temperature": temperature}
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        if max_output_tokens is not None:
+            kwargs["max_output_tokens"] = max_output_tokens
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
