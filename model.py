@@ -331,21 +331,20 @@ class AnthropicModel(BaseLLM):
 
 
 class GeminiModel(BaseLLM):
-    """Google Gemini（google-generativeai）。需安裝套件與 GOOGLE_API_KEY。"""
+    """Google Gemini（google-genai / google.genai）。需安裝套件與 GOOGLE_API_KEY。"""
 
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
         try:
-            import google.generativeai as genai
+            from google import genai
         except ImportError as e:
             raise ImportError(
-                "使用 Gemini 請先安裝：pip install google-generativeai"
+                "使用 Gemini 請先安裝：pip install google-genai"
             ) from e
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY not found in environment")
-        self._genai = genai
-        genai.configure(api_key=api_key)
+        self._client = genai.Client(api_key=api_key)
 
     def _gemini_response_text(self, response: Any) -> str:
         """取得 Gemini 文字；部分情況下 .text 會拋錯（例如安全阻擋）。"""
@@ -355,34 +354,98 @@ class GeminiModel(BaseLLM):
                 return t
         except Exception:
             pass
-        if getattr(response, "candidates", None):
+        cands = getattr(response, "candidates", None)
+        if cands:
             parts: List[str] = []
-            for c in response.candidates:
-                for p in getattr(c.content, "parts", []) or []:
+            for c in cands:
+                content = getattr(c, "content", None)
+                for p in getattr(content, "parts", []) or []:
                     if getattr(p, "text", None):
                         parts.append(p.text)
             return "".join(parts)
         return ""
 
-    def _make_generation_config(
+    def _contents_dicts_to_genai(
+        self, contents: List[Dict[str, Any]]
+    ) -> List[Any]:
+        from google.genai import types
+
+        out: List[Any] = []
+        for item in contents:
+            role = item.get("role", "user")
+            parts: List[Any] = []
+            for p in item.get("parts", []):
+                text = p if isinstance(p, str) else str(p)
+                parts.append(types.Part.from_text(text=text))
+            out.append(types.Content(role=role, parts=parts))
+        return out
+
+    def _make_generate_config(
         self,
+        system_instruction: Optional[str],
         temperature: Optional[float],
         max_tokens: Optional[int],
         max_output_tokens: Optional[int] = None,
         response_mime_type: Optional[str] = None,
-    ):
+    ) -> Optional[Any]:
+        from google.genai import types
+
         kw = self.build_kwargs(temperature, max_tokens, max_output_tokens)
-        gkw: Dict[str, Any] = {}
+        cfg_kw: Dict[str, Any] = {}
+        if system_instruction:
+            cfg_kw["system_instruction"] = system_instruction
         if kw.get("temperature") is not None:
-            gkw["temperature"] = kw["temperature"]
+            cfg_kw["temperature"] = kw["temperature"]
         mt = kw.get("max_tokens")
         if mt is not None:
-            gkw["max_output_tokens"] = int(mt)
+            cfg_kw["max_output_tokens"] = int(mt)
         if response_mime_type:
-            gkw["response_mime_type"] = response_mime_type
-        if not gkw:
+            cfg_kw["response_mime_type"] = response_mime_type
+        if not cfg_kw:
             return None
-        return self._genai.GenerationConfig(**gkw)
+        return types.GenerateContentConfig(**cfg_kw)
+
+    def _generate(
+        self,
+        system_instruction: Optional[str],
+        contents: List[Dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        max_output_tokens: Optional[int],
+        response_mime_type: Optional[str],
+    ) -> Any:
+        gen_cfg = self._make_generate_config(
+            system_instruction,
+            temperature,
+            max_tokens,
+            max_output_tokens,
+            response_mime_type,
+        )
+        gen_contents = self._contents_dicts_to_genai(contents)
+        call_kw: Dict[str, Any] = {
+            "model": self.model_name,
+            "contents": gen_contents,
+        }
+        if gen_cfg is not None:
+            call_kw["config"] = gen_cfg
+        return self._client.models.generate_content(**call_kw)
+
+    def _add_usage_from_response(self, response: Any) -> None:
+        um = getattr(response, "usage_metadata", None)
+        if not um:
+            return
+        prompt = getattr(um, "prompt_token_count", 0) or 0
+        cand = getattr(um, "candidates_token_count", 0) or 0
+        total = getattr(um, "total_token_count", None)
+        if total is None:
+            total = prompt + cand
+        self.addUsage(
+            {
+                "prompt_tokens": prompt,
+                "completion_tokens": cand,
+                "total_tokens": total,
+            }
+        )
 
     def chat(
         self,
@@ -392,33 +455,17 @@ class GeminiModel(BaseLLM):
         max_output_tokens: Optional[int] = None,
     ) -> str:
         system_instruction, contents = _gemini_split_messages(messages)
-        gen_config = self._make_generation_config(
-            temperature, max_tokens, max_output_tokens, response_mime_type=None
-        )
-        model = self._genai.GenerativeModel(
-            self.model_name,
-            system_instruction=system_instruction,
-        )
         self.costTracker.start()
         try:
-            response = model.generate_content(
+            response = self._generate(
+                system_instruction,
                 contents,
-                generation_config=gen_config,
+                temperature,
+                max_tokens,
+                max_output_tokens,
+                response_mime_type=None,
             )
-            um = getattr(response, "usage_metadata", None)
-            if um:
-                prompt = getattr(um, "prompt_token_count", 0) or 0
-                cand = getattr(um, "candidates_token_count", 0) or 0
-                total = getattr(um, "total_token_count", None)
-                if total is None:
-                    total = prompt + cand
-                self.addUsage(
-                    {
-                        "prompt_tokens": prompt,
-                        "completion_tokens": cand,
-                        "total_tokens": total,
-                    }
-                )
+            self._add_usage_from_response(response)
             text = self._gemini_response_text(response)
             if text:
                 return text
@@ -440,36 +487,18 @@ class GeminiModel(BaseLLM):
         if not has_json_mention:
             messages.append({"role": "user", "content": "請只輸出合法 JSON。"})
         system_instruction, contents = _gemini_split_messages(messages)
-        gen_config = self._make_generation_config(
-            temperature,
-            max_tokens,
-            max_output_tokens,
-            response_mime_type="application/json",
-        )
-        model = self._genai.GenerativeModel(
-            self.model_name,
-            system_instruction=system_instruction,
-        )
         self.costTracker.start()
+        text = ""
         try:
-            response = model.generate_content(
+            response = self._generate(
+                system_instruction,
                 contents,
-                generation_config=gen_config,
+                temperature,
+                max_tokens,
+                max_output_tokens,
+                response_mime_type="application/json",
             )
-            um = getattr(response, "usage_metadata", None)
-            if um:
-                prompt = getattr(um, "prompt_token_count", 0) or 0
-                cand = getattr(um, "candidates_token_count", 0) or 0
-                total = getattr(um, "total_token_count", None)
-                if total is None:
-                    total = prompt + cand
-                self.addUsage(
-                    {
-                        "prompt_tokens": prompt,
-                        "completion_tokens": cand,
-                        "total_tokens": total,
-                    }
-                )
+            self._add_usage_from_response(response)
             text = self._gemini_response_text(response).strip()
             return json.loads(text)
         except json.JSONDecodeError:

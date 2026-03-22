@@ -18,11 +18,11 @@ class Logger:
 
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             handlers=[
-                logging.FileHandler(log_file, encoding='utf-8'),
-                logging.StreamHandler()
-            ]
+                logging.FileHandler(log_file, encoding="utf-8"),
+                logging.StreamHandler(),
+            ],
         )
         self.logger = logging.getLogger("Plant")
 
@@ -38,13 +38,17 @@ class Logger:
 
 class Collect:
     @staticmethod
-    def user_selection(proposed: List[Dict[str, str]], max_select: int = 5) -> List[int]:
+    def user_selection(
+        proposed: List[Dict[str, str]], max_select: int = 5
+    ) -> List[int]:
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
                 print(f"{i}. {sh['name']}，理由: {sh['reason']}")
 
-            print("\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)")
+            print(
+                "\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)"
+            )
             user_input = input(f"\n請選擇利害關係人(最多 {max_select} 位)：").strip()
 
             if not user_input:
@@ -53,7 +57,7 @@ class Collect:
 
             try:
                 selected_indices = []
-                parts = [x.strip() for x in user_input.split(',')]
+                parts = [x.strip() for x in user_input.split(",")]
 
                 for part in parts:
                     try:
@@ -165,10 +169,10 @@ class Collect:
         except ValueError:
             print("無效的輸入，暫緩處理")
             return {
-                    "resolution": "unresolved",
-                    "summary": "無效輸入",
-                    "decision": "暫緩處理",
-                }
+                "resolution": "unresolved",
+                "summary": "無效輸入",
+                "decision": "暫緩處理",
+            }
 
 
 class ProjectManager:
@@ -181,7 +185,7 @@ class ProjectManager:
             print("\n目前沒有任何專案，將創建新專案")
             return None, False
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("現有專案列表\n")
 
         for i, project in enumerate(projects, 1):
@@ -196,7 +200,7 @@ class ProjectManager:
             print(f"   創建時間: {created_at}")
             print(f"   初始想法: {project.get('rough_idea', '未知')}\n")
 
-        print("="*60)
+        print("=" * 60)
         print("0. 創建新專案\n")
 
         while True:
@@ -224,17 +228,19 @@ class ProjectManager:
 
         created_at = "未知"
         if store.project_dir.exists():
-            created_at = datetime.fromtimestamp(store.project_dir.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+            created_at = datetime.fromtimestamp(
+                store.project_dir.stat().st_ctime
+            ).strftime("%Y-%m-%d %H:%M:%S")
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(f"專案資訊：{project_id}")
-        print("="*60)
+        print("=" * 60)
         print(f"創建時間: {created_at}")
         if artifact:
             print(f"初始想法: {artifact.get('rough_idea', '未知')}")
             discussions = artifact.get("discussions", [])
             print(f"已完成輪數: {len(discussions)}")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
 
 class CostTracker:
@@ -244,10 +250,12 @@ class CostTracker:
 
     # 單位：USD / 1M tokens
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
-        # OpenAI 官方定價（Text tokens, Standard）
+        # 官方定價（Text tokens, Standard）
         "gpt-5.4": {"input": 2.50, "output": 15.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gemini-3.1-flash-lite-preview": {"input": 0.25, "output": 1.50},
+        "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
     }
 
     def __init__(
@@ -291,9 +299,7 @@ class CostTracker:
         if not usage:
             return
 
-        input_count = int(
-            usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-        )
+        input_count = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
         output_count = int(
             usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
         )

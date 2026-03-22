@@ -14,9 +14,10 @@ sys.path.insert(0, str(RQ2_DIR.parent))
 from baseline import BaselineModel
 from metric import Metric
 
-# 資料與結果路徑（cn_pairs.csv 在 RQ2 目錄下）
+# 資料與結果路徑（cn_pairs.csv、config 在 RQ2 目錄下）
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
+CONFIG_PATH = RQ2_DIR / "config_RQ2.json"
 
 
 # 衝突測試
@@ -109,7 +110,7 @@ def run_conflict(model: BaselineModel, count: int = 0):
 
     result = {
         "task": "conflict_detection",
-        "model": model.model_name,
+        "model": f"{getattr(model, 'provider', 'openai')}_{model.model_name}",
         "total": total,
         "count": {
             "conflict": n_conflict,
@@ -135,7 +136,14 @@ def run_conflict(model: BaselineModel, count: int = 0):
 
 
 if __name__ == "__main__":
-    model = BaselineModel()
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    model = BaselineModel(
+        provider=cfg.get("provider", "openai"),
+        model_name=cfg.get("model"),
+        temperature=float(cfg.get("temperature", 0)),
+    )
+    print(f"Baseline provider={model.provider} model={model.model_name}")
 
     count = int(input("實驗幾筆資料 (0:全做): ").strip() or "0")
     run_conflict(model, count=count)
