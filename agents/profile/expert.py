@@ -417,7 +417,9 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             try:
                 raw = (
                     self.chat_with_tools(
-                        messages, max_rounds=tool_rounds,
+                        messages,
+                        max_rounds=tool_rounds,
+                        active_skill="domain-research",
                     )
                     if self.tools
                     else self.model.chat(messages)

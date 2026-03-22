@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from typing import Dict, Any
 from agents import AgentRegistry
-from agents.planner import PlannerService
 from agents.policy import AgentSkillToolPolicy
 from agents.profile import (
     UserAgent,
@@ -38,7 +37,6 @@ class Flow:
         enable_agents = config.get("enable_agents") or {}
         self.policy = AgentSkillToolPolicy()
         self.tool_registry = ToolRegistry(config=self.config, policy=self.policy)
-        self.planner = PlannerService(policy=self.policy)
 
         analyst_tools = self.tool_registry.build_tools_for_agent("analyst")
         expert_tools = self.tool_registry.build_tools_for_agent("expert")
@@ -149,15 +147,6 @@ class Flow:
         }
 
         self.store.save_artifact(artifact)
-
-        planner_decision = self.planner.plan(
-            task=rough_idea,
-            context={
-                "mode": "init_phase",
-                "requirements_count": len(artifact.get("requirements", [])),
-            },
-        )
-        artifact.setdefault("meta", {})["planner_decision_init"] = planner_decision
 
         self.logger.info("=== Phase 0: 初始草稿建立 ===")
         artifact = self.run_init_phase(artifact)
@@ -384,18 +373,6 @@ class Flow:
 
         # 議程由 Mediator Agent 驅動（產生議程、討論、綜合、人類裁決、存檔）
         self.logger.info("議程由 Mediator Agent 驅動")
-        planner_decision = self.planner.plan(
-            task=f"meeting_round_{round_num}",
-            context={
-                "mode": "meeting_round",
-                "round_num": round_num,
-                "open_questions": len(artifact.get("open_questions", [])),
-                "conflicts": len(artifact.get("conflicts", [])),
-            },
-        )
-        artifact.setdefault("meta", {}).setdefault("planner_round_decisions", []).append(
-            {"round": round_num, **planner_decision}
-        )
         runner = AgendaRunner(
             self.mediator_agent,
             self.registry,

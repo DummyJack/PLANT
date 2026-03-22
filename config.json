@@ -45,7 +45,7 @@
       "temperature": 1
     },
     "analyst": {
-      "provider": "openai",
+      "provider": "gemini",
       "model": "gemini-3.1-flash-lite-preview",
       "temperature": 0
     },
@@ -60,13 +60,13 @@
       "temperature": 0
     },
     "modeler": {
-      "provider": "gemini",
-      "model": "gemini-4.1",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "temperature": 0
     },
     "documentor": {
-      "provider": "gemini",
-      "model": "gemini-4.1",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "temperature": 0
     }
   }

@@ -6,21 +6,7 @@ from typing import Dict, Any, Optional, List
 from agents.base import BaseAgent
 
 
-MODELER_REVIEW_ACTIONS = [
-    "assess_impact",
-    "update_diagram",
-    "validate_diagram",
-    "fix_diagram",
-    "done",
-]
-
-
-class ModelerAgent(BaseAgent):
-    """系統建模 Agent — 產生 UML 系統模型（PlantUML 格式）+ 設計 Conflict 辨識"""
-
-    name = "modeler"
-
-    system_prompt = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
+_MODELER_ROLE_PROMPT = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
 
 核心原則：
 1. UML 語意對齊 — 建模語意需盡量對齊 UML 2.x；實作輸出以可被 PlantUML 驗證通過為最終約束。
@@ -55,8 +41,53 @@ class ModelerAgent(BaseAgent):
 - [ ] Use Case 名稱為行為，不是願景口號、法規句或品質目標。
 - [ ] 主要元素可追溯到需求來源；無法追溯者已標註待確認。"""
 
+
+MODELER_REVIEW_ACTIONS = [
+    "assess_impact",
+    "update_diagram",
+    "validate_diagram",
+    "fix_diagram",
+    "done",
+]
+
+
+class ModelerAgent(BaseAgent):
+    """系統建模 Agent — 產生 UML 系統模型（PlantUML 格式）+ 設計 Conflict 辨識"""
+
+    name = "modeler"
+
+    system_prompt = _MODELER_ROLE_PROMPT
+
     def __init__(self, model, tools: Optional[list] = None, registry=None):
-        super().__init__(model, tools=tools or [], registry=registry)
+        super().__init__(
+            model,
+            tools=tools or [],
+            registry=registry,
+            skill_names=["plantuml-ascii"],
+        )
+        from agents.skills.base import get_skill
+
+        skill = get_skill("plantuml-ascii")
+        # 僅附加 SKILL.md 中 <!-- system end --> 前的短文（Plant 對齊說明）。
+        # content_user 為長篇 ASCII 教學（逾數千 token），若每則 Modeler 請求都附上會暴增
+        # 成本；完整正文請用 invoke_skill("plantuml-ascii", ...) 或讀 SKILL.md。
+        cs = (skill.get("content_system") or "").strip()
+        self._plantuml_skill_user_block = cs
+
+    def build_direct_messages(
+        self, task: str, context: Optional[Dict] = None
+    ) -> List[Dict]:
+        messages = super().build_direct_messages(task, context)
+        block = (getattr(self, "_plantuml_skill_user_block", None) or "").strip()
+        if block and messages:
+            last = messages[-1]
+            if last.get("role") == "user" and isinstance(last.get("content"), str):
+                last["content"] = (
+                    last["content"]
+                    + "\n\n---\n\n# plantuml-ascii（skill 參考，請依任務取用之）\n\n"
+                    + block
+                )
+        return messages
 
     # ===== 子 OODA 循環（UML 產出／更新） =====
 
@@ -332,7 +363,9 @@ class ModelerAgent(BaseAgent):
                 obs["error"] = f"{diagram_type} 無 PlantUML 內容"
                 return obs
             result = self.execute_tool(
-                "plantuml_validate", {"plantuml_code": code}
+                "plantuml_validate",
+                {"plantuml_code": code},
+                active_skill="plantuml-ascii",
             )
             if "通過" in result:
                 obs["result"] = {"valid": True}
@@ -517,7 +550,11 @@ class ModelerAgent(BaseAgent):
             code = m.get("plantuml", "")
             if not code:
                 return (idx, m, None)
-            result = self.execute_tool("plantuml_validate", {"plantuml_code": code})
+            result = self.execute_tool(
+                "plantuml_validate",
+                {"plantuml_code": code},
+                active_skill="plantuml-ascii",
+            )
             return (idx, m, result)
 
         max_workers = min(len(models), 6)

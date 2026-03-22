@@ -5,6 +5,16 @@ license: MIT
 allowed-tools: Bash, Write, Read
 ---
 
+# Plant 系統建模（Modeler）對齊說明
+
+本 Agent 主要產出**標準 PlantUML 原始碼**（`@startuml` … `@enduml`），供 `plantuml_validate` 與後續渲染；與下方關於 **ASCII 文字圖**（`-txt` / `-utxt`）的說明為不同用途。
+
+- 語法須可被 PlantUML 解析；元素命名、關聯與版面須可讀，並盡量對應需求來源。
+- 任務若要求 JSON，請嚴格依指定欄位輸出；`plantuml` 欄位必須為完整原始碼字串（含 `@startuml` 與 `@enduml`）。
+- 下方 skill 正文中的語法示例、圖型要素可作為參考；**除非任務明確要求產出終端用 ASCII 圖，否則仍以標準 PlantUML 語法為主**，勿改以純 ASCII 示意取代可驗證的原始碼。
+
+<!-- system end -->
+
 # PlantUML ASCII Art Diagram Generator
 
 ## Overview

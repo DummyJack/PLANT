@@ -1,8 +1,11 @@
-import ollama
 import json
+import logging
 import os
 
-from typing import Dict, List, Optional, Any, Tuple
+import ollama
+
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from abc import ABC, abstractmethod
 from openai import OpenAI
 from utils import CostTracker
@@ -446,6 +449,236 @@ class GeminiModel(BaseLLM):
                 "total_tokens": total,
             }
         )
+
+    def _openai_tool_schemas_to_gemini_tools(
+        self, openai_style_schemas: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """將 BaseAgent.get_tool_schemas() 的 OpenAI function 格式轉成 google.genai Tool。"""
+        from google.genai import types
+
+        decls: List[Any] = []
+        for item in openai_style_schemas:
+            fn = item.get("function") or {}
+            name = fn.get("name") or ""
+            if not name:
+                continue
+            params = fn.get("parameters") or {
+                "type": "object",
+                "properties": {},
+            }
+            decls.append(
+                types.FunctionDeclaration(
+                    name=name,
+                    description=fn.get("description") or "",
+                    parameters_json_schema=params,
+                )
+            )
+        if not decls:
+            return []
+        return [types.Tool(function_declarations=decls)]
+
+    def _make_generate_config_with_tools(
+        self,
+        system_instruction: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        max_output_tokens: Optional[int],
+        gemini_tools: List[Any],
+    ) -> Any:
+        from google.genai import types
+
+        kw = self.build_kwargs(temperature, max_tokens, max_output_tokens)
+        cfg_kw: Dict[str, Any] = {
+            "tools": gemini_tools,
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+            "tool_config": types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.AUTO
+                )
+            ),
+        }
+        if system_instruction:
+            cfg_kw["system_instruction"] = system_instruction
+        if kw.get("temperature") is not None:
+            cfg_kw["temperature"] = kw["temperature"]
+        mt = kw.get("max_tokens")
+        if mt is not None:
+            cfg_kw["max_output_tokens"] = int(mt)
+        return types.GenerateContentConfig(**cfg_kw)
+
+    def _model_content_function_calls(
+        self, response: Any
+    ) -> Tuple[Optional[Any], List[Any], str]:
+        """從 generate_content 回傳解析 model 的 Content、其中的 FunctionCall 列表、純文字。"""
+        cands = getattr(response, "candidates", None) or []
+        if not cands:
+            return None, [], self._gemini_response_text(response)
+        c0 = cands[0]
+        content = getattr(c0, "content", None)
+        if not content:
+            return None, [], self._gemini_response_text(response)
+        texts: List[str] = []
+        calls: List[Any] = []
+        for p in getattr(content, "parts", []) or []:
+            fc = getattr(p, "function_call", None)
+            if fc is not None:
+                calls.append(fc)
+            elif getattr(p, "text", None):
+                texts.append(p.text)
+        return content, calls, "".join(texts)
+
+    def gemini_chat_with_tools(
+        self,
+        messages: List[Dict],
+        *,
+        openai_style_tool_schemas: List[Dict[str, Any]],
+        execute_tool_fn: Callable[[str, Dict[str, Any]], str],
+        max_rounds: int = 3,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        Gemini 手動 function calling 迴圈（與 OpenAI chat.completions tools 對齊）。
+        openai_style_tool_schemas：與 get_tool_schemas() 相同格式。
+        """
+        from google.genai import types
+
+        log = logging.getLogger("Plant.GeminiModel")
+        gemini_tools = self._openai_tool_schemas_to_gemini_tools(
+            openai_style_tool_schemas
+        )
+        if not gemini_tools:
+            return self.chat(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_output_tokens=max_output_tokens,
+            )
+
+        system_instruction, contents_dicts = _gemini_split_messages(messages)
+        contents_genai = self._contents_dicts_to_genai(contents_dicts)
+
+        self.costTracker.start()
+        try:
+            for _ in range(max_rounds):
+                cfg = self._make_generate_config_with_tools(
+                    system_instruction,
+                    temperature,
+                    max_tokens,
+                    max_output_tokens,
+                    gemini_tools,
+                )
+                response = self._client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents_genai,
+                    config=cfg,
+                )
+                self._add_usage_from_response(response)
+
+                model_content, fn_calls, text_out = self._model_content_function_calls(
+                    response
+                )
+                if not fn_calls:
+                    if (text_out or "").strip():
+                        return text_out
+                    return text_out or ""
+
+                if model_content is not None:
+                    contents_genai.append(model_content)
+
+                if len(fn_calls) == 1:
+                    fc = fn_calls[0]
+                    fname = getattr(fc, "name", None) or ""
+                    fargs = dict(getattr(fc, "args", None) or {})
+                    log.info(f"🔧 {fname}({fargs})")
+                    result = execute_tool_fn(fname, fargs)
+                    resp_kw: Dict[str, Any] = {
+                        "name": fname,
+                        "response": {"result": result},
+                    }
+                    fid = getattr(fc, "id", None)
+                    if fid:
+                        resp_kw["id"] = fid
+                    contents_genai.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    function_response=types.FunctionResponse(
+                                        **resp_kw
+                                    )
+                                )
+                            ],
+                        )
+                    )
+                else:
+
+                    def run_one(
+                        idx: int, fc_obj: Any
+                    ) -> Tuple[int, str, Optional[str], str]:
+                        fn = getattr(fc_obj, "name", None) or ""
+                        ag = dict(getattr(fc_obj, "args", None) or {})
+                        log.info(f"🔧 {fn}({ag})")
+                        try:
+                            out = execute_tool_fn(fn, ag)
+                        except Exception as e:
+                            out = f"工具執行失敗: {e}"
+                        return idx, fn, getattr(fc_obj, "id", None), out
+
+                    max_workers = min(len(fn_calls), 6)
+                    by_index: Dict[int, str] = {}
+                    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                        futs = [
+                            ex.submit(run_one, i, fc)
+                            for i, fc in enumerate(fn_calls)
+                        ]
+                        for fut in as_completed(futs):
+                            try:
+                                i, _fn, _fid, out = fut.result()
+                                by_index[i] = out
+                            except Exception as e:
+                                log.warning("並行工具 future 例外: %s", e)
+                    resp_parts: List[Any] = []
+                    for i, fc_obj in enumerate(fn_calls):
+                        fn = getattr(fc_obj, "name", None) or ""
+                        fid = getattr(fc_obj, "id", None)
+                        res_text = by_index.get(
+                            i, f"工具執行失敗: 無法對應結果（索引 {i}）"
+                        )
+                        rkw: Dict[str, Any] = {
+                            "name": fn,
+                            "response": {"result": res_text},
+                        }
+                        if fid:
+                            rkw["id"] = fid
+                        resp_parts.append(
+                            types.Part(
+                                function_response=types.FunctionResponse(**rkw)
+                            )
+                        )
+                    contents_genai.append(
+                        types.Content(role="user", parts=resp_parts)
+                    )
+
+            final_cfg = self._make_generate_config(
+                system_instruction,
+                temperature,
+                max_tokens,
+                max_output_tokens,
+                response_mime_type=None,
+            )
+            final_resp = self._client.models.generate_content(
+                model=self.model_name,
+                contents=contents_genai,
+                config=final_cfg,
+            )
+            self._add_usage_from_response(final_resp)
+            return self._gemini_response_text(final_resp) or ""
+        finally:
+            self.costTracker.stop()
 
     def chat(
         self,

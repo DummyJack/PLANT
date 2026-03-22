@@ -5,7 +5,7 @@ from typing import Dict, List, Set
 DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
     "analyst": ["requirements-analyst", "conflict-analyzer"],
     "expert": ["domain-research"],
-    "modeler": [],
+    "modeler": ["plantuml-ascii"],
     "documentor": ["srs-generation"],
     "mediator": [],
     "user": [],

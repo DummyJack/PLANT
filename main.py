@@ -8,6 +8,23 @@ from flow import Flow
 from store import Store
 from utils import Logger, ProjectManager
 
+def _format_loaded_models_summary(config: dict) -> str:
+    """僅依 config 內 agent_models 原樣列出；不顯示 default 槽位。"""
+    am = config.get("agent_models") or {}
+    parts: list[str] = []
+    for name, slot in am.items():
+        if name == "default":
+            continue
+        if not isinstance(slot, dict):
+            continue
+        raw = slot.get("model")
+        model_name = raw if (raw is not None and str(raw).strip() != "") else "—"
+        parts.append(f"{name}: {model_name}")
+    if not parts:
+        return "✓ 載入配置（agent_models 無有效項目）"
+    return "✓ 載入配置 — " + "；".join(parts)
+
+
 def main():
     print("=" * 60)
     print("Plant 系統")
@@ -23,12 +40,7 @@ def main():
 
     try:
         config = base_store.load_config()
-        am = config.get("agent_models") or {}
-        default_cfg = am.get("default") or next(iter(am.values()), {})
-        if isinstance(default_cfg, dict):
-            print(f"✓ 載入配置：provider={default_cfg.get('provider')}, model={default_cfg.get('model')}")
-        else:
-            print("✓ 載入配置")
+        print(_format_loaded_models_summary(config))
     except FileNotFoundError:
         print("錯誤：找不到 config.json 檔案（請放在專案主目錄）")
         sys.exit(1)
@@ -66,7 +78,9 @@ def main():
 
     artifact = None
     if not is_continue:
-        rough_idea = input("\n請輸入您的初始想法(可以是一個模糊的系統概念、問題描述或需求)：").strip()
+        rough_idea = input(
+            "\n請輸入您的初始想法(可以是一個模糊的系統概念、問題描述或需求)："
+        ).strip()
 
         if not rough_idea:
             print("錯誤：請提供初始想法")

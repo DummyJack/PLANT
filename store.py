@@ -27,7 +27,12 @@ class Store:
         self.artifact_dir = self.project_dir / "artifact"
         self.output_dir = self.project_dir / "output"
 
-        for dir_path in [self.config_dir, self.artifact_dir, self.output_dir, self.log_dir]:
+        for dir_path in [
+            self.config_dir,
+            self.artifact_dir,
+            self.output_dir,
+            self.log_dir,
+        ]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
     # 專案管理
@@ -39,14 +44,16 @@ class Store:
         rough_idea = "未知"
         if artifact_file.exists():
             try:
-                with open(artifact_file, 'r', encoding='utf-8') as f:
+                with open(artifact_file, "r", encoding="utf-8") as f:
                     artifact = json.load(f)
                     rough_idea = artifact.get("rough_idea", "未知")
             except Exception:
                 pass
         return {
             "project_id": project_path.name,
-            "created_at": datetime.fromtimestamp(project_path.stat().st_ctime).isoformat(),
+            "created_at": datetime.fromtimestamp(
+                project_path.stat().st_ctime
+            ).isoformat(),
             "rough_idea": rough_idea,
         }
 
@@ -61,7 +68,9 @@ class Store:
         projects = []
         max_workers = min(len(paths), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_path = {executor.submit(self._load_one_project, p): p for p in paths}
+            future_to_path = {
+                executor.submit(self._load_one_project, p): p for p in paths
+            }
             for future in as_completed(future_to_path):
                 try:
                     proj = future.result()
@@ -81,7 +90,7 @@ class Store:
         artifact_file = self.artifact_dir / "artifact.json"
         if not artifact_file.exists():
             return None
-        with open(artifact_file, 'r', encoding='utf-8') as f:
+        with open(artifact_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     # JSON 讀寫
@@ -92,7 +101,7 @@ class Store:
             path = self.base_dir / filepath
         if not path.exists():
             raise FileNotFoundError(f"檔案不存在: {path}")
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
@@ -100,7 +109,7 @@ class Store:
         if not path.is_absolute():
             path = self.base_dir / filepath
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=indent)
 
     # Artifact
@@ -111,7 +120,7 @@ class Store:
     def save_draft(self, content: str, version: int):
         """儲存需求草稿為 draft_v{version}.md（Markdown）到 artifact 目錄"""
         path = self.artifact_dir / f"draft_v{version}.md"
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
     def get_draft_version(self) -> int:
@@ -122,7 +131,7 @@ class Store:
         for f in self.artifact_dir.iterdir():
             if f.name.startswith("draft_v") and f.name.endswith(".md"):
                 try:
-                    v = int(f.name[len("draft_v"):-len(".md")])
+                    v = int(f.name[len("draft_v") : -len(".md")])
                     max_v = max(max_v, v)
                 except ValueError:
                     pass
@@ -133,7 +142,7 @@ class Store:
         path = self.artifact_dir / f"draft_v{version}.md"
         if not path.exists():
             return None
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
     # Config
@@ -142,14 +151,14 @@ class Store:
         return self.load_json(self.base_dir / "config.json")
 
     def save_config(self, config: Dict[str, Any]):
-        with open(self.base_dir / "config.json", 'w', encoding='utf-8') as f:
+        with open(self.base_dir / "config.json", "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
 
     # Markdown
 
     def save_markdown(self, content: str, filename: str):
         filepath = self.output_dir / filename
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
 
     # PlantUML
@@ -158,9 +167,13 @@ class Store:
         plantuml_code = model.get("plantuml", "")
         if not plantuml_code:
             return None
-        safe_name = "".join(c for c in model.get("name", "unnamed") if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = "".join(
+            c
+            for c in model.get("name", "unnamed")
+            if c.isalnum() or c in (" ", "-", "_")
+        ).strip()
         filepath = self.output_dir / f"{safe_name}.plantuml"
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write(plantuml_code)
         return f"{safe_name}.plantuml"
 

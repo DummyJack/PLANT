@@ -253,7 +253,11 @@ class BaseAgent:
             {"role": "user", "content": "\n".join(user_parts)},
         ]
         if self.tools:
-            return self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
+            return self.chat_with_tools(
+                messages,
+                max_rounds=self.tool_call_max_rounds,
+                active_skill=skill_name,
+            )
         return self.model.chat(messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
@@ -267,11 +271,21 @@ class BaseAgent:
         messages.append({"role": "user", "content": "\n".join(task_parts)})
         return messages
 
-    def execute_tool(self, tool_name: str, tool_args: Dict) -> str:
+    def execute_tool(
+        self, tool_name: str, tool_args: Dict, *, active_skill: Optional[str] = None
+    ) -> str:
         if tool_name not in self.tools:
             return f"錯誤: 未知工具 '{tool_name}'，可用: {list(self.tools.keys())}"
         if self.policy and not self.policy.can_agent_use_tool(self.name, tool_name):
             return f"錯誤: Policy 禁止 Agent '{self.name}' 使用工具 '{tool_name}'"
+        if (
+            active_skill
+            and self.policy
+            and not self.policy.can_skill_use_tool(active_skill, tool_name)
+        ):
+            return (
+                f"錯誤: Policy 禁止在 skill '{active_skill}' 使用工具 '{tool_name}'"
+            )
 
         tool = self.tools[tool_name]
         if not tool.validate_args(**tool_args):
@@ -317,10 +331,30 @@ class BaseAgent:
         except Exception:
             return False
 
-    def chat_with_tools(self, messages: List[Dict], max_rounds: int = 3) -> str:
-        """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果。若 client 不支援 tool calling 則改為普通 chat。"""
+    def supports_gemini_tool_calling(self) -> bool:
+        """Gemini（google-genai）手動 function calling，見 GeminiModel.gemini_chat_with_tools。"""
+        return callable(getattr(self.model, "gemini_chat_with_tools", None))
+
+    def chat_with_tools(
+        self,
+        messages: List[Dict],
+        max_rounds: int = 3,
+        *,
+        active_skill: Optional[str] = None,
+    ) -> str:
+        """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果。若 client 不支援 tool calling 則改為普通 chat。
+        active_skill：若為 skill 情境（如 domain-research），會額外套用 policy.can_skill_use_tool。"""
         if not self.tools:
             return self.model.chat(messages)
+        if self.supports_gemini_tool_calling():
+            return self.model.gemini_chat_with_tools(
+                messages,
+                openai_style_tool_schemas=self.get_tool_schemas(),
+                execute_tool_fn=lambda name, args: self.execute_tool(
+                    name, args, active_skill=active_skill
+                ),
+                max_rounds=max_rounds,
+            )
         if not self.supports_tool_calling():
             self.logger.warning("目前 model client 不支援 tool calling，改為普通 chat（工具不會被呼叫）")
             return self.model.chat(messages)
@@ -354,7 +388,9 @@ class BaseAgent:
                 except json.JSONDecodeError:
                     fargs = {}
                 self.logger.info(f"🔧 {fname}({fargs})")
-                result = self.execute_tool(fname, fargs)
+                result = self.execute_tool(
+                    fname, fargs, active_skill=active_skill
+                )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -368,7 +404,9 @@ class BaseAgent:
                     except json.JSONDecodeError:
                         fargs = {}
                     self.logger.info(f"🔧 {fname}({fargs})")
-                    result = self.execute_tool(fname, fargs)
+                    result = self.execute_tool(
+                        fname, fargs, active_skill=active_skill
+                    )
                     return (tc.id, result)
 
                 max_workers = min(len(tool_calls_list), 6)
