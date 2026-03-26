@@ -13,7 +13,7 @@ _SKILLS_ROOT = Path(__file__).resolve().parent
 _cache: Dict[str, Dict[str, Any]] = {}
 
 
-def _parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
+def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
     """從 SKILL.md 抽出 YAML frontmatter（---...---）與 body。回傳 (attrs, body)。"""
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
     if not match:
@@ -59,7 +59,7 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         raise FileNotFoundError(f"SKILL.md 不存在: {skill_md}")
 
     raw = skill_md.read_text(encoding="utf-8")
-    attrs, body = _parse_frontmatter(raw)
+    attrs, body = parse_frontmatter(raw)
     name = attrs.get("name", skill_name)
     description = attrs.get("description", "")
 
@@ -88,7 +88,7 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         for f in assets_dir.glob("*.md"):
             reference_files[f.name] = f.read_text(encoding="utf-8")
 
-    metadata = _load_skill_metadata(skill_dir, skill_name)
+    metadata = load_skill_metadata(skill_dir, skill_name)
     metadata_valid, metadata_errors = validate_skill_metadata(metadata) if metadata else (False, ["metadata not found"])
 
     result = {
@@ -114,7 +114,7 @@ def load_skill(skill_name: str) -> Dict[str, Any]:
     return get_skill(skill_name)
 
 
-def _load_skill_metadata(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
+def load_skill_metadata(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
     metadata_file = skill_dir / "metadata.json"
     if not metadata_file.exists():
         return {}

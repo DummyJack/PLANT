@@ -8,7 +8,7 @@ from flow import Flow
 from store import Store
 from utils import Logger, ProjectManager
 
-def _format_loaded_models_summary(config: dict) -> str:
+def format_loaded_models_summary(config: dict) -> str:
     """僅依 config 內 agent_models 原樣列出；不顯示 default 槽位。"""
     am = config.get("agent_models") or {}
     parts: list[str] = []
@@ -40,7 +40,7 @@ def main():
 
     try:
         config = base_store.load_config()
-        print(_format_loaded_models_summary(config))
+        print(format_loaded_models_summary(config))
     except FileNotFoundError:
         print("錯誤：找不到 config.json 檔案（請放在專案主目錄）")
         sys.exit(1)

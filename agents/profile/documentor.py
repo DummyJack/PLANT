@@ -2,6 +2,7 @@ import json
 import re
 from typing import Dict, Any, Optional
 from agents.base import BaseAgent
+from utils import documentor_srs_body_lang, srs_title_instruction
 
 
 class DocumentorAgent(BaseAgent):
@@ -44,15 +45,17 @@ class DocumentorAgent(BaseAgent):
             "scope": scope,
             "rough_idea": rough_idea,
         }
-        task = """依 srs-generation skill、範本與檢查清單，僅根據 Context 的**最新需求草稿**（draft_markdown）與 **feedback**（如有）產出正式軟體需求規格書（Markdown）。
+        title_rule = srs_title_instruction(self.output_language)
+        body_lang = documentor_srs_body_lang(self.output_language)
+        task = f"""依 srs-generation skill、範本與檢查清單，僅根據 Context 的**最新需求草稿**（draft_markdown）與 **feedback**（如有）產出正式軟體需求規格書（Markdown）。
 
 強制規則（依序遵守）：
 1. 禁止硬掰：只轉寫草稿與 Context 中已有的需求、範圍、約束與決策；不得憑空新增需求、資料模型、介面規格、技術選型或佔位符（如 [Name]、YYYY-MM-DD、[Describe...]）。若某章節在來源中無對應資料，該節直接標註「待補」或「本文件無相關資料」，勿填寫猜測或範例。
 2. 缺料就標待補：對無來源的 References、Open Questions、Change Request 等表單，若無實際資料則標「待補」或省略該表，勿留範本佔位。
-3. 標題格式：文件主標題必須為「[系統名稱]軟體需求規格書」，例如「外送平台系統軟體需求規格書」。系統名稱請從 Context 的 scope、rough_idea 或 draft 內容推得（如外送平台系統、選課系統）。勿使用 "Software Requirements Specification" 或 "SRS" 作為主標題。
+3. 標題格式：{title_rule}
 4. 章節編號從 1 開始連續編號：正文第一個一級章節為「## 1. Introduction」，接著「## 2. Overall Description」、「## 3. …」，依序連續編號至附錄。勿從 3 或 4 開始，勿跳號。
 
-其他要求：以草稿為唯一輸入來源，忠實轉寫為符合 ISO/IEC/IEEE 29148；使用 FR-<MODULE>-<NNN>、NFR-<CATEGORY>-<NNN> 編號；產出須通過 skill 品質檢查清單。產出的 SRS 全文請使用繁體中文，需求編號格式維持英文。只輸出 SRS Markdown，勿包程式碼區塊。"""
+其他要求：以草稿為唯一輸入來源，忠實轉寫為符合 ISO/IEC/IEEE 29148；使用 FR-<MODULE>-<NNN>、NFR-<CATEGORY>-<NNN> 編號；產出須通過 skill 品質檢查清單。{body_lang} 只輸出 SRS Markdown，勿包程式碼區塊。"""
 
         srs_md_full = self.invoke_skill("srs-generation", task, context=context)
         srs_md_full = self.strip_code_fences(srs_md_full)

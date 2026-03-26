@@ -3,6 +3,12 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 from agents.base import BaseAgent
+from utils import (
+    OUTPUT_LANG_EN,
+    expert_fallback_viewpoint,
+    expert_topic_bullets_task,
+    short_reasoning_line,
+)
 
 # 與 FileParserTool 支援的副檔名一致（供 flow 組裝工具時判斷）
 DOC_SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
@@ -50,6 +56,10 @@ class ExpertAgent(BaseAgent):
             skill_names=["domain-research"],
         )
 
+    def has_doc_reference_files(self) -> bool:
+        """與 ToolRegistry 一致：doc/ 下是否有至少一個可給 file_parser 使用的檔案。"""
+        return has_supported_doc_files(self.doc_dir)
+
     @staticmethod
     def parse_first_json(raw: str) -> Dict:
         """從可能含多個 JSON 或後綴文字的內容中，只解析第一個完整 JSON 物件。"""
@@ -90,16 +100,23 @@ class ExpertAgent(BaseAgent):
             "requirements": requirements,
             "conflicts": conflicts,
         }
-        task = """依 domain-research skill 的 **Output Format: Research Results** 執行領域研究並產出結果。
-審查 Context 中的需求與專案概述，若有 file_parser 工具可先讀取 doc/ 參考檔案，依專案範圍識別法規/標準/安全規範與 derived_requirements。
+        doc_hint = ""
+        if self.has_doc_reference_files():
+            doc_hint = (
+                "若有 file_parser 工具：建議先 action=search_chunks 檢索 doc/，"
+                "再 action=read_chunks 讀回片段後綜合；若已知檔名且需全文可 action=read_full。"
+            )
+        task = f"""依 domain-research skill 的 **Output Format: Research Results** 執行領域研究並產出結果。
+審查 Context 中的需求與專案概述，依專案範圍識別法規/標準/安全規範與 derived_requirements。
+{doc_hint}
 輸出「僅一個」JSON 物件，鍵名 "research_session"，值為物件，須含：
-- id（如 RES-{timestamp}）
+- id（如 RES-{{timestamp}}）
 - domain, topic, timestamp
 - findings（domain_context, best_practices, regulatory, competitive 等陣列）
 - derived_requirements（陣列，每筆含 id, text, source, source_detail, confidence, needs_validation, category；法規/約束類請產出於此）
 - recommendations（選填）
 - gaps_in_research（選填）
-findings、derived_requirements 的 text/source_detail、recommendations、gaps_in_research 等所有描述與說明文字請使用繁體中文。id、category 等欄位名維持英文。勿輸出 Markdown，只輸出該 JSON。"""
+id、category 等欄位名維持英文。勿輸出 Markdown，只輸出該 JSON。"""
         raw = self.invoke_skill("domain-research", task, context=context)
         response = self.parse_first_json(raw or "")
         research_session = response.get("research_session")
@@ -129,10 +146,10 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
         if "domain-research" not in self.skill_names:
             return None
         context = {"topic": topic, "artifact_snapshot": artifact_snapshot or {}}
-        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點法規/合規/安全相關要點（可含適用範圍與風險），供會議發言參考。請使用繁體中文。只輸出簡短條列文字，勿 JSON。"""
+        task = expert_topic_bullets_task(self.output_language)
         try:
             raw = self.invoke_skill("domain-research", task, context=context)
-            return (raw or "").strip()[:1500]
+            return (raw or "").strip()
         except Exception as e:
             self.logger.debug("議程中觸發 domain-research 失敗: %s", e)
             return None
@@ -159,7 +176,17 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 
         tool_hint = ""
         if self.tools:
-            tool_hint = "\n# 工具使用\n- 可先使用 file_parser 讀取 doc/ 參考檔案（可選 text 或 json_summary），再根據結果撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+            fp_line = ""
+            if self.has_doc_reference_files():
+                fp_line = (
+                    "- file_parser：建議 search_chunks → read_chunks 再綜合；"
+                    "或 read_full 讀單檔（text / json_summary）。\n"
+                )
+            tool_hint = (
+                "\n# 工具使用\n"
+                f"{fp_line}"
+                "- 最後**必須**輸出下列 JSON。"
+            )
 
         user_prompt = f"""{topic_text}
 {prev_text}
@@ -168,9 +195,10 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 {tool_hint}
 
 # 思考與發言流程
-1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 不可讓步的要點（須附法規/標準依據）(3) 可接受調整或折衷的要點 (4) 不合規風險與可能後果
-2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先合規結論、再依據、再風險與建議」順序，針對議題提出你的專業見解與法規依據
-3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
+1. 先思考：(1) 此議題相關的法規、標準或技術限制 (2) 你作為專家在此議題上必須堅守的底線（須能附法規/標準依據）(3) 在合規前提下可接受的調整或折衷空間 (4) 不合規風險與可能後果
+2. 上述 (2)(3) 只用來**內部**整理立場；撰寫 statement 時請勿以「我可讓步的點是…」「不可讓步的點是…」或類似小標／口頭套語作答，應把堅持與彈性**自然融入**合規結論、依據與建議的敘述中，如同真實會議發言。
+3. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先合規結論、再依據、再風險與建議」順序，針對議題提出你的專業見解與法規依據
+4. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"modeler"）
 
 # 表達方式（僅能以文字呈現）
 - 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。**若有使用表格、流程或圖示，請用 ``` … ``` 程式碼區塊包住，與一般敘述分開，方便閱讀。**
@@ -199,19 +227,18 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 
         # 若仍為空（例如模型只回 JSON 殼、或議題非純法規導致拒答），用簡短重試強制產出內容
         if not statement:
-            fallback_prompt = (
-                f"{topic_text}\n\n"
-                "請以領域專家身份，用 2～4 句話簡要說明你對上述議題的專業看法（可含法規、最佳實務、技術建議或風險提醒）。勿留空，直接輸出繁體中文內容。"
-            )
+            fallback_prompt = f"{topic_text}\n\n{expert_fallback_viewpoint(self.output_language)}"
             fallback_messages = self.build_direct_messages(fallback_prompt)
             try:
                 raw_fallback = self.model.chat(fallback_messages)
                 statement = (raw_fallback or "").strip()
-                if len(statement) > 2000:
-                    statement = statement[:2000] + "…"
             except Exception as e:
                 self.logger.warning("expert 簡短重試失敗: %s", e)
-                statement = "（依目前資訊暫無法提供具體法規依據，建議會後再查證後補充分享。）"
+                statement = (
+                    "(Insufficient information to cite specific regulations; please verify after the meeting.)"
+                    if self.output_language == OUTPUT_LANG_EN
+                    else "（依目前資訊暫無法提供具體法規依據，建議會後再查證後補充分享。）"
+                )
 
         return {
             "agent": self.name,
@@ -231,7 +258,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
         i = 0
 
         while i < effective_max:
-            state = self._build_review_state(
+            state = self.build_review_state(
                 artifact, recent_discussions, actions_taken,
                 research_results, i, effective_max,
             )
@@ -250,7 +277,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                 break
 
             params = decision.get("params") or {}
-            observation = self._execute_review_action(
+            observation = self.execute_review_action(
                 action, params, artifact, pending_issues, research_results,
             )
             actions_taken.append({
@@ -302,7 +329,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 - 研究到足夠深度後呼叫 update_findings 寫入
 - 發現重大合規風險時呼叫 flag_compliance_risk
 - 無需進一步研究時呼叫 done
-- reasoning 請使用繁體中文
+- {short_reasoning_line(self.output_language)}
 
 輸出 JSON:
 {{
@@ -331,26 +358,25 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             out["max_iterations"] = response["max_iterations"]
         return out
 
-    def _build_review_state(
+    def build_review_state(
         self, artifact, recent_discussions, actions_taken,
         research_results, iteration, max_iterations,
     ):
         reqs = artifact.get("requirements", [])
         summary_reqs = [
             {"id": r.get("id"), "type": r.get("type"),
-             "text": (r.get("text") or "")[:120]}
+             "text": (r.get("text") or "")}
             for r in reqs
         ]
         conflicts = [
             {"id": c.get("id"),
-             "description": (c.get("description") or "")[:120]}
+             "description": (c.get("description") or "")}
             for c in artifact.get("conflicts", [])
             if c.get("label") == "Conflict"
         ]
         neutrals = [
             {"id": c.get("id"),
-             "confidence": c.get("confidence"),
-             "description": (c.get("description") or "")[:120]}
+             "description": (c.get("description") or "")}
             for c in artifact.get("conflicts", [])
             if c.get("label") == "Neutral"
         ]
@@ -362,7 +388,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                 "topic_id": topic.get("id"),
                 "title": topic.get("title"),
                 "resolution": resolution.get("resolution"),
-                "summary": (resolution.get("summary") or "")[:200],
+                "summary": (resolution.get("summary") or ""),
             })
         existing = artifact.get("feedback", {}).get("domain_research", {})
         return {
@@ -379,7 +405,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
             "max_iterations": max_iterations,
         }
 
-    def _execute_review_action(
+    def execute_review_action(
         self, action, params, artifact, pending_issues, research_results,
     ):
         obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
@@ -400,9 +426,15 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                     "description", ""
                 ),
             }
+            tool_part = "web_search 搜尋時可帶 user_question 以利停止條件"
+            if self.has_doc_reference_files():
+                tool_part += (
+                    "；file_parser 請優先 search_chunks 再 read_chunks 讀 doc/，"
+                    "必要時 read_full"
+                )
             task = f"""針對以下問題進行領域研究：{query}
 
-請使用可用工具（web_search 搜尋、file_parser 讀取 doc/ 下檔案）蒐集相關法規標準或參考文件，然後整理研究發現。
+請使用可用工具（{tool_part}）蒐集相關法規標準或參考文件，然後整理研究發現。
 輸出「僅一個」JSON：
 {{
     "findings": ["發現1", "發現2"],
@@ -412,7 +444,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
     ],
     "compliance_risks": ["風險描述"]
 }}
-文字請使用繁體中文。只輸出 JSON。"""
+只輸出 JSON。"""
             messages = self.build_direct_messages(task, context=context)
             try:
                 raw = (
@@ -426,11 +458,11 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                 )
                 result = self.parse_first_json(raw)
                 if not result:
-                    result = {"findings": [(raw or "")[:500]]}
+                    result = {"findings": [(raw or "")]}
                 research_results.append({"query": query, **result})
                 obs["result"] = result
                 obs["summary"] = (
-                    f"研究 '{query[:40]}': "
+                    f"研究 '{query}': "
                     f"{len(result.get('findings', []))} 項發現"
                 )
             except Exception as e:
@@ -452,7 +484,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
 - findings（合併新舊研究發現）
 - derived_requirements（合併新舊，勿重複）
 - recommendations（選填）
-文字使用繁體中文。只輸出 JSON。"""
+只輸出 JSON。"""
             try:
                 raw = self.invoke_skill("domain-research", task, context=context)
                 result = self.parse_first_json(raw)
@@ -478,7 +510,7 @@ findings、derived_requirements 的 text/source_detail、recommendations、gaps_
                 "description": desc,
                 "source": "expert",
             })
-            obs["summary"] = f"已標記合規風險: {desc[:80]}"
+            obs["summary"] = f"已標記合規風險: {desc}"
             return obs
 
         obs["error"] = f"未知動作: {action}"

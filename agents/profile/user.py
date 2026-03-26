@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List, Optional
 from agents.base import BaseAgent
+from utils import user_requirement_cards, user_stakeholder_name_reason
 
 
 class UserAgent(BaseAgent):
@@ -33,7 +34,7 @@ class UserAgent(BaseAgent):
 - 避免角色重疊
 - name 只填名稱，不要用括號補充說明
 - reason 選擇理由用一句話即可
-- name、reason 請使用繁體中文
+- {user_stakeholder_name_reason(self.output_language)}
 
 # 輸出 JSON
 {{{{
@@ -72,7 +73,7 @@ class UserAgent(BaseAgent):
 # 約束
 - 每位利害關係人提出 3-5 條獨立需求（text 陣列）
 - 以該角色的日常經驗出發
-- name、text 陣列內容請使用繁體中文
+- {user_requirement_cards(self.output_language)}
 
 # 輸出 JSON
 {{{{
@@ -195,6 +196,7 @@ class UserAgent(BaseAgent):
 
 # 思考與發言流程
 {flow_hint}
+發言前請在內心區分：哪些是你必須堅持的核心需求／底線，哪些條件可以談；此區分僅供醞釀，**勿**在 statement 中以「我可讓步的點是…」「不可讓步的點是…」或類似框架分段作答，應以第一人稱自然說出情境、期待與底線。
 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "analyst"、"expert"、"modeler"）
 
 # 發言風格

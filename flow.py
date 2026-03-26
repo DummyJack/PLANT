@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 from agents import AgentRegistry
 from agents.policy import AgentSkillToolPolicy
 from agents.profile import (
@@ -16,6 +16,7 @@ from model import create_model
 from store import Store
 from utils import Logger, Collect
 from agents.tools import ToolRegistry
+from utils import resolve_output_language
 
 
 class Flow:
@@ -92,9 +93,6 @@ class Flow:
             ("documentor", self.documentor_agent),
         ]:
             agent.tool_call_max_rounds = tool_max
-            agent.low_confidence_threshold = config.get(
-                "low_confidence_threshold", 0.7
-            )
             agent.policy = self.policy
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
@@ -108,6 +106,19 @@ class Flow:
             self.mediator_agent.enabled_agenda_type_ids = [
                 k for k, v in eat.items() if v
             ]
+
+    def sync_output_language(self, lang: str, artifact: Dict[str, Any]) -> None:
+        """依專案語系設定所有 agent，並寫入 artifact.meta。"""
+        artifact.setdefault("meta", {})["output_language"] = lang
+        for agent in (
+            self.user_agent,
+            self.analyst_agent,
+            self.expert_agent,
+            self.mediator_agent,
+            self.modeler_agent,
+            self.documentor_agent,
+        ):
+            agent.output_language = lang
 
     def build_agent_model(self, agent_name: str):
         am = self.config.get("agent_models") or {}
@@ -129,6 +140,82 @@ class Flow:
             kwargs["max_output_tokens"] = max_output_tokens
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
+    def _enqueue_requirement_clarification_questions(
+        self, artifact: Dict[str, Any], requests: List[Dict[str, Any]]
+    ) -> int:
+        """把 Analyst 判定需要深入討論的項目加入 open_questions。"""
+        if not requests:
+            return 0
+        oqs = artifact.setdefault("open_questions", [])
+        existing_keys = {
+            (
+                q.get("type"),
+                q.get("source_conflict_id"),
+                q.get("question"),
+            )
+            for q in oqs
+            if q.get("status") != "answered"
+        }
+        added = 0
+        for req in requests:
+            cid = req.get("conflict_id")
+            question = (req.get("question") or "").strip()
+            if not cid or not question:
+                continue
+            dedup_key = ("requirement_clarification", cid, question)
+            if dedup_key in existing_keys:
+                continue
+            oqs.append(
+                {
+                    "from_agent": "analyst",
+                    "question": question,
+                    "status": "pending",
+                    "type": "requirement_clarification",
+                    "priority": "highest",
+                    "source_conflict_id": cid,
+                    "requirement_ids": req.get("requirement_ids", []),
+                    "reason": req.get("reason", ""),
+                }
+            )
+            existing_keys.add(dedup_key)
+            added += 1
+        return added
+
+    def _run_pre_discussion_conflict_reassessment(
+        self, artifact: Dict[str, Any], stage: str
+    ) -> Dict[str, Any]:
+        """會前讓 Analyst 依 feedback + system model 複核衝突，並決定是否需 deeper discussion。"""
+        result = self.analyst_agent.reassess_conflicts_with_feedback_and_model(
+            artifact, stage=stage
+        )
+        reassessed_conflicts = result.get("conflicts")
+        if isinstance(reassessed_conflicts, list) and reassessed_conflicts:
+            artifact["conflicts"] = reassessed_conflicts
+        added = self._enqueue_requirement_clarification_questions(
+            artifact, result.get("clarification_requests", [])
+        )
+        changed = len(result.get("changed_conflict_ids", []))
+        self.logger.info(
+            "  Analyst 複核完成：直接更改 %s 筆、需 requirement_clarification %s 筆",
+            changed,
+            added,
+        )
+        return artifact
+
+    def _mark_clarification_questions_answered(
+        self, artifact: Dict[str, Any], conflict_ids: List[str], round_num: int
+    ) -> None:
+        if not conflict_ids:
+            return
+        cid_set = set(conflict_ids)
+        for q in artifact.get("open_questions", []):
+            if q.get("type") != "requirement_clarification":
+                continue
+            if q.get("source_conflict_id") not in cid_set:
+                continue
+            q["status"] = "answered"
+            q["answered_round"] = round_num
+
     def run(self, rough_idea: str) -> Dict[str, Any]:
         rounds = self.config.get("rounds", 1)
         now = datetime.now(timezone.utc).isoformat()
@@ -145,6 +232,10 @@ class Flow:
             "open_questions": [],
             "meta": {"created_at": now, "updated_at": now, "last_round": 0},
         }
+
+        lang = resolve_output_language(self.config)
+        self.sync_output_language(lang, artifact)
+        self.logger.info(f"輸出語系（config 強制）: {lang}")
 
         self.store.save_artifact(artifact)
 
@@ -180,6 +271,10 @@ class Flow:
         )
         artifact.setdefault("feedback", {})
         artifact.setdefault("meta", {})
+        lang = resolve_output_language(self.config)
+        self.sync_output_language(lang, artifact)
+        self.logger.info(f"輸出語系（config 強制）: {lang}")
+
         self.user_agent.stakeholders = artifact.get("stakeholders", [])
 
         rounds = self.config.get("rounds", 1)
@@ -286,6 +381,12 @@ class Flow:
         self.logger.info(f"  ✓ 產生 {model_count} 張 UML 圖")
         self.store.save_plantuml_files(model_data)
 
+        self.logger.info("Analyst 依 feedback + system model 複核衝突與需求釐清需求")
+        artifact = self._run_pre_discussion_conflict_reassessment(
+            artifact, stage="phase0_pre_meeting"
+        )
+        self.store.save_artifact(artifact)
+
         self.logger.info("Analyst 草稿化")
         draft_md = self.analyst_agent.create_draft(
             artifact,
@@ -296,63 +397,6 @@ class Flow:
         self.logger.info(
             f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個 Conflict"
         )
-
-        # Expert/Modeler 產出後，Analyst 再判斷一次並打信心分；信心低則加入討論
-        self.logger.info("Analyst 對 Conflict 再判斷並打信心分")
-        artifact = self.analyst_agent.assign_conflict_confidence(artifact)
-        lc_threshold = self.config.get("low_confidence_threshold", 0.7)
-        low_conf = [
-            c for c in artifact.get("conflicts", [])
-            if c.get("label") == "Conflict"
-            and isinstance(c.get("confidence"), (int, float))
-            and c["confidence"] < lc_threshold
-        ]
-        low_conf_neutrals = [
-            c for c in artifact.get("conflicts", [])
-            if c.get("label") == "Neutral"
-            and isinstance(c.get("confidence"), (int, float))
-            and c["confidence"] < lc_threshold
-        ]
-        if low_conf:
-            for c in low_conf:
-                amb = c.get("ambiguous_requirements", [])
-                desc = (
-                    f"Conflict {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"：{c.get('description', '')}"
-                )
-                if amb:
-                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
-                artifact.setdefault("open_questions", []).append({
-                    "from_agent": "analyst",
-                    "question": desc,
-                    "status": "pending",
-                    "type": "low_confidence_conflict",
-                    "related_conflict_id": c["id"],
-                })
-            self.logger.info(
-                f"  {len(low_conf)} 個低信心 Conflict 加入 open_questions，將進入討論"
-            )
-        if low_conf_neutrals:
-            for c in low_conf_neutrals:
-                amb = c.get("ambiguous_requirements", [])
-                desc = (
-                    f"Neutral {c['id']} 信心度低（{c.get('confidence', '?')}）"
-                    f"，可能遺漏 Conflict：{c.get('description', '')[:80]}"
-                )
-                if amb:
-                    desc += f"（涉及模糊需求: {', '.join(amb)}）"
-                artifact.setdefault("open_questions", []).append({
-                    "from_agent": "analyst",
-                    "question": desc,
-                    "status": "pending",
-                    "type": "low_confidence_neutral",
-                    "related_neutral_id": c["id"],
-                })
-            self.logger.info(
-                f"  {len(low_conf_neutrals)} 個低信心 Neutral 加入 open_questions，將進入討論"
-            )
-        if low_conf or low_conf_neutrals:
-            self.store.save_artifact(artifact)
 
         meta = artifact.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -370,6 +414,12 @@ class Flow:
         prev_draft_md = self.store.load_draft(prev_version)
         if prev_draft_md:
             self.logger.info(f"載入 draft_v{prev_version}.md 作為本輪基礎")
+
+        self.logger.info("會前：Analyst 依 feedback + system model 判斷是否需進一步需求釐清")
+        artifact = self._run_pre_discussion_conflict_reassessment(
+            artifact, stage=f"round_{round_num}_pre_meeting"
+        )
+        self.store.save_artifact(artifact)
 
         # 議程由 Mediator Agent 驅動（產生議程、討論、綜合、人類裁決、存檔）
         self.logger.info("議程由 Mediator Agent 驅動")
@@ -431,6 +481,7 @@ class Flow:
 
         # Step 5.1: Mediator 更新決策與 Conflict（含討論中提出的新增 Conflict，可補辨識漏報）
         self.logger.info("Step 5.1: Mediator 更新決策與 Conflict")
+        baseline_conflicts = [dict(c) for c in artifact.get("conflicts", [])]
         prev_conflicts_by_id = {
             c.get("id"): c for c in artifact.get("conflicts", []) if c.get("id")
         }
@@ -497,6 +548,28 @@ class Flow:
                         "resolved_by_decision_id", orig["resolved_by_decision_id"]
                     )
         artifact["conflicts"] = new_conflicts
+
+        # Step 5.1b: requirement_clarification 討論後，最終由 Analyst 決定是否更改衝突結果
+        self.logger.info("Step 5.1b: Analyst 依需求釐清討論最終判定衝突結果")
+        final_conflict_result = self.analyst_agent.finalize_conflicts_after_clarification(
+            artifact,
+            round_discussions,
+            baseline_conflicts=baseline_conflicts,
+        )
+        finalized_conflicts = final_conflict_result.get("conflicts")
+        if isinstance(finalized_conflicts, list) and finalized_conflicts:
+            artifact["conflicts"] = finalized_conflicts
+        handled_conflicts = final_conflict_result.get("handled_conflict_ids", [])
+        changed_after_discussion = len(final_conflict_result.get("changed_conflict_ids", []))
+        if handled_conflicts:
+            self._mark_clarification_questions_answered(
+                artifact, handled_conflicts, round_num
+            )
+        self.logger.info(
+            "  Analyst 會後最終判定：處理 %s 筆釐清議題、最終更改 %s 筆 Conflict label",
+            len(handled_conflicts),
+            changed_after_discussion,
+        )
 
         # Step 5.2: Analyst 更新需求草稿
         self.logger.info("Step 5.2: Analyst 更新需求草稿")

@@ -7,7 +7,7 @@
   {
     "id": "requirement_clarification",
     "label": "需求釐清",
-    "description": "因需求描述模糊導致 Conflict 判斷不確定（低信心 Conflict 或低信心 Neutral），需先釐清需求的具體含義再判定 Conflict 是否成立"
+    "description": "需求描述模糊或含義待釐清時，需先釐清再後續判定或協調 Conflict"
   },
   {
     "id": "open_question",

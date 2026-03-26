@@ -5,6 +5,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from agents.base import BaseAgent
+from utils import (
+    OUTPUT_LANG_EN,
+    mediator_agenda_language_line,
+    mediator_collect_line,
+    mediator_human_options_line,
+    mediator_prose_line,
+    mediator_reasoning_line,
+    mediator_summary_decision_line,
+    mediator_unresolved_vote_task_line,
+)
 
 _AGENTS_DIR = Path(__file__).resolve().parent.parent
 with open(_AGENTS_DIR / "agenda" / "agenda_types.json", "r", encoding="utf-8") as f:
@@ -14,6 +24,7 @@ AGENDA_CATEGORY_LABEL = {t["id"]: t["label"] for t in AGENDA_TYPES}
 
 AGENDA_ACTIONS = [
     "generate_agenda",
+    "expand_agenda",
     "start_discussion",
     "resolve_topic",
     "escalate_to_human",
@@ -33,7 +44,7 @@ class MediatorAgent(BaseAgent):
 核心職責：
 1. 議程安排 — 分析需求與 Conflict，自行判斷應開哪些議程並排定優先順序
 2. 討論主持 — 決定討論模式（逐一發言/同時發言），維持討論秩序
-3. 共識促成 — 綜合各方的不可讓步項與可讓步項，嘗試達成共識
+3. 共識促成 — 內部可辨識各方核心堅持與可協調空間；**表決前**須形成單一「主持人折衷方案」供投票；各參與者表決的是**是否採納該方案**，而非互評他人發言
 4. 決策彙整 — 彙整每輪討論的決策並更新 Conflict 標記
 
 核心原則：
@@ -48,7 +59,7 @@ class MediatorAgent(BaseAgent):
     def __init__(self, model, tools: Optional[list] = None, registry=None):
         super().__init__(model, tools=tools, registry=registry)
 
-    def _get_active_agenda_types(self):
+    def get_active_agenda_types(self):
         """回傳啟用的議程類型（tuple of dicts）和 id 列表。"""
         if self.enabled_agenda_type_ids is None:
             return AGENDA_TYPES, AGENDA_TYPE_IDS
@@ -67,7 +78,7 @@ class MediatorAgent(BaseAgent):
         skip_source_ids: Optional[set] = None,
         draft_markdown: Optional[str] = None,
     ) -> List[Dict]:
-        """由 Mediator LLM 根據專案狀態與已討論項目自行決定要開哪些議程。draft_markdown 保留參數相容，未使用。"""
+        """由 Mediator LLM 根據最新需求草稿（優先）或專案摘要與已討論項目自行決定要開哪些議程。"""
         limit = max_items or 5
         exclude = {"mediator", "documentor"}
         if registry:
@@ -76,21 +87,24 @@ class MediatorAgent(BaseAgent):
             registered = ["user", "analyst", "expert", "modeler"]
 
         skip = skip_source_ids or set()
-        context = self.build_agenda_context(artifact, skip)
+        context = self.build_agenda_context(
+            artifact, skip, draft_markdown=draft_markdown
+        )
         if not context.strip():
             self.logger.info("無足夠專案內容或草稿可供判斷議程")
             return []
 
-        active_types, active_ids = self._get_active_agenda_types()
+        active_types, active_ids = self.get_active_agenda_types()
         types_text = json.dumps(active_types, ensure_ascii=False, indent=2)
         user_prompt = f"""# 任務
-你是需求調解主持人。請根據「當前專案狀態」與「已討論過項目」，自行判斷本輪應開哪些議程。
+你是需求調解主持人。請根據下方「議程排程依據」與「已討論過項目」，自行判斷本輪應開哪些議程。
+若有提供**最新需求草稿**，該草稿為**唯一依據**（含其中的需求表、Conflict、開放問題等章節——開放問題應已寫在草稿內）；請依草稿內文與 id 撰寫議程標題與描述。若僅有專案摘要（無草稿檔），則依該摘要判斷。
 議程類型必須從下方「議程類型定義」中選擇，每項議程需決定：標題、描述、類型、參與者、討論模式、發言順序。
 
 # 議程類型定義（category 必須為以下 id 之一）
 {types_text}
 
-# 當前專案狀態
+# 議程排程依據
 {context}
 
 # 已在本輪或前輪討論過的項目（可略過或合併，勿重複開相同議題）
@@ -110,11 +124,10 @@ class MediatorAgent(BaseAgent):
 - 範例：標題可為「管理員權限與一般使用者隱私的 Conflict 如何取捨」而非「Conflict 討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
 
 # 議程類型與開題
-- **低信心**（Conflict 與 Neutral 皆須打信心分；低於閾值者）：open_questions 中 type 為 "low_confidence_conflict" 或 "low_confidence_neutral" 的項目由**系統預設**成一個 requirement_clarification 議題，請勿再為這些 id 重複開議題。
 - **conflict_resolution**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
-- **requirement_clarification**：除低信心外，當有未回答的開放問題涉及需求模糊、釐清含義時，可開此類；優先排最前。
-- **open_question**：當有未回答的開放問題且不屬低信心時，可開此類或與 requirement_clarification 合併，依內容判斷。
-- **new_requirement**：當「未回答的開放問題」或「領域研究」內容中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；例如 expert 合規建議、討論中有人提議新功能等。
+- **requirement_clarification**：當草稿（或摘要）中**開放問題**涉及需求模糊、須釐清含義時，可開此類；優先排最前。
+- **open_question**：當草稿（或摘要）中有待處理開放問題時，可開此類或與 requirement_clarification 合併，依內容判斷。
+- **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；例如合規建議、討論中有人提議新功能等。
 - **tradeoff**：當需求摘要中有多個 NFR（NFR-1、NFR-2…）或 Conflict 涉及效能、可用性、成本等非功能需求之間的競合取捨時，**應考慮開此類**。
 - 其餘依專案狀態與優先順序判斷，無強制對應。
 
@@ -124,7 +137,7 @@ class MediatorAgent(BaseAgent):
 - category 只能是上述類型定義中的 id
 - discussion_mode 依上表情境選擇 "sequential" 或 "simultaneous"
 - 若有對應的 Conflict/需求/問題 id，請填在 source_ids 方便追蹤
-- title、description 請使用繁體中文；category、discussion_mode、participants 等 id 維持英文
+- {mediator_agenda_language_line(self.output_language)}
 
 # 輸出 JSON
 {{
@@ -150,46 +163,22 @@ class MediatorAgent(BaseAgent):
 
         raw_items = response.get("items", [])
 
-        # 低信心 Conflict 與 Neutral：合併成一個 requirement_clarification 議題一併討論
-        low_conf_source_ids = set()
-        for q in artifact.get("open_questions", []):
-            if q.get("status") == "answered":
-                continue
-            if q.get("type") not in ("low_confidence_conflict", "low_confidence_neutral"):
-                continue
-            cid = q.get("related_conflict_id")
-            nid = q.get("related_neutral_id")
-            if cid and cid not in skip:
-                low_conf_source_ids.add(cid)
-            if nid and nid not in skip:
-                low_conf_source_ids.add(nid)
-
-        if low_conf_source_ids:
-            low_conf_topic = {
-                "title": "低信心 Conflict 與 Neutral 一併釐清",
-                "description": f"以下項目信心度低於閾值，一併釐清需求與是否為真實 Conflict：{', '.join(sorted(low_conf_source_ids))}",
-                "category": "requirement_clarification",
-                "participants": list(registered),
-                "discussion_mode": "sequential",
-                "speaking_order": list(registered),
-                "source_ids": sorted(low_conf_source_ids),
-            }
-            # 移除 LLM 回傳中「僅含這些低信心 id」的 requirement_clarification，避免重複
-            raw_items = [
-                i for i in raw_items
-                if not (
-                    i.get("category") == "requirement_clarification"
-                    and set(i.get("source_ids") or []) <= low_conf_source_ids
-                )
-            ]
-            raw_items = [low_conf_topic] + raw_items
-
         if not raw_items:
             self.logger.info("Mediator 判斷本輪無需新增議程")
             return []
 
+        # requirement_clarification 一律置頂，確保最優先進入討論。
+        prioritized_items = []
+        normal_items = []
+        for item in raw_items:
+            if (item.get("category") or "").strip() == "requirement_clarification":
+                prioritized_items.append(item)
+            else:
+                normal_items.append(item)
+        ordered_items = (prioritized_items + normal_items)[:limit]
+
         agenda_items = []
-        for idx, item in enumerate(raw_items[:limit], 1):
+        for idx, item in enumerate(ordered_items, 1):
             category = item.get("category", "")
             if category not in active_ids:
                 category = active_ids[0] if active_ids else AGENDA_TYPE_IDS[0]
@@ -222,9 +211,16 @@ class MediatorAgent(BaseAgent):
         return agenda_items
 
     def build_agenda_context(
-        self, artifact: Dict[str, Any], skip_source_ids: set
+        self,
+        artifact: Dict[str, Any],
+        skip_source_ids: set,
+        draft_markdown: Optional[str] = None,
     ) -> str:
-        """組裝 artifact 摘要供 Mediator 判斷議程用；含需求 id/type 摘要以利開 tradeoff / new_requirement。"""
+        """有最新草稿時僅回傳該份 Markdown（開放問題等皆應已寫在草稿內）；否則回傳 artifact 結構化摘要作為後備。"""
+        dm = (draft_markdown or "").strip()
+        if dm:
+            return "## 最新需求草稿（Markdown，議程唯一依據）\n" + dm
+
         parts = []
         scope = artifact.get("scope") or {}
         if (
@@ -279,7 +275,13 @@ class MediatorAgent(BaseAgent):
                 "## 領域研究（Phase 0）\n"
                 + json.dumps(domain_research, ensure_ascii=False, indent=2)
             )
-        return "\n\n".join(parts) if parts else ""
+
+        if parts:
+            return (
+                "## 專案狀態摘要（無可用需求草稿檔時之後備依據）\n"
+                + "\n\n".join(parts)
+            )
+        return ""
 
     # ===== 議程 Agent 決策（供執行層迴圈呼叫）=====
 
@@ -330,7 +332,7 @@ class MediatorAgent(BaseAgent):
 - 若 pending_review_issues 有項目，可考慮為其開新議題或升級處理
 - 全部處理完後呼叫 finish_round
 - 一次只回傳一個動作
-- reasoning 請使用繁體中文，並像真實會議主持人的口吻：簡短說明「目前共識狀態、為何採此動作、預期產出」
+- {mediator_reasoning_line(self.output_language)}
 
 # 輸出 JSON
 {{
@@ -373,9 +375,12 @@ class MediatorAgent(BaseAgent):
             for r in reqs
         ]
         conflicts = [
-            {"id": c.get("id"), "description": (c.get("description") or "")}
+            {
+                "id": c.get("id"),
+                "label": c.get("label"),
+                "description": (c.get("description") or ""),
+            }
             for c in artifact.get("conflicts", [])
-            if c.get("label") == "Conflict"
         ]
         oqs = [
             {"from_agent": q.get("from_agent"), "question": (q.get("question") or "")}
@@ -421,7 +426,7 @@ class MediatorAgent(BaseAgent):
                 self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
                 continue
             # 有人提問給此 agent 時，先即時回答，再發言（發言時可依問答調整）
-            answer_contribs, answer_oq = self._answer_questions_for_agent(
+            answer_contribs, answer_oq = self.answer_questions_for_agent(
                 contributions, agent_name, registry, snapshot, artifact
             )
             contributions.extend(answer_contribs)
@@ -446,7 +451,7 @@ class MediatorAgent(BaseAgent):
                     {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
                 )
             # 提問者依回答可補充或調整發言
-            follow_ups = self._get_follow_ups_after_answers(
+            follow_ups = self.get_follow_ups_after_answers(
                 contributions, answer_contribs, registry, snapshot, artifact
             )
             contributions.extend(follow_ups)
@@ -532,7 +537,7 @@ class MediatorAgent(BaseAgent):
 
     # ===== Open Question 處理 =====
 
-    def _get_questions_to_agent(
+    def get_questions_to_agent(
         self, contributions: List[Dict], to_agent_name: str
     ) -> List[Dict]:
         """從 contributions 中蒐集所有指向 to_agent_name 的 open_questions。"""
@@ -555,7 +560,7 @@ class MediatorAgent(BaseAgent):
                 })
         return [q for q in out if q.get("question")]
 
-    def _answer_questions_for_agent(
+    def answer_questions_for_agent(
         self,
         contributions: List[Dict],
         agent_name: str,
@@ -564,7 +569,7 @@ class MediatorAgent(BaseAgent):
         artifact: Optional[Dict[str, Any]],
     ) -> tuple:
         """讓 agent_name 即時回答目前 contributions 中指向他的問題。回傳 (要 append 的 contributions, oq_records)。"""
-        questions = self._get_questions_to_agent(contributions, agent_name)
+        questions = self.get_questions_to_agent(contributions, agent_name)
         if not questions:
             return ([], [])
         target_agent = registry.get(agent_name) if registry else None
@@ -610,7 +615,7 @@ class MediatorAgent(BaseAgent):
                 oq_records.append({**q_record, "status": "deferred"})
         return (added, oq_records)
 
-    def _get_follow_ups_after_answers(
+    def get_follow_ups_after_answers(
         self,
         contributions: List[Dict],
         answer_contribs: List[Dict],
@@ -774,15 +779,80 @@ class MediatorAgent(BaseAgent):
 
         return oq_records
 
+    def propose_compromise_for_vote(
+        self,
+        topic: Dict,
+        contributions: List[Dict],
+    ) -> Dict[str, str]:
+        """討論結束後由主持人整理單一折衷方案，作為後續投票的唯一標的。"""
+        main_contribs = [c for c in contributions if not c.get("is_reply", False)]
+        discussion_text = ""
+        for c in main_contribs:
+            agent = c.get("agent", "?")
+            statement = (c.get("response") or {}).get("statement", "")
+            discussion_text += f"\n【{agent}】\n{statement}\n"
+
+        if self.output_language == OUTPUT_LANG_EN:
+            lang = "Write title, description, and rationale in English."
+        else:
+            lang = "請以繁體中文撰寫標題、方案內容與理由。"
+
+        user_prompt = f"""你是需求會議的主持人。請在完整閱讀各方發言後，整理出**一個**具體的折衷方案（單一決議 package），
+供各參與者下一步投票表決「是否同意採納」；**不要**改成羅列多套互斥選項讓人各選各的。
+
+# 議題
+標題: {topic.get("title", "")}
+描述: {topic.get("description", "")}
+
+# 各方發言
+{discussion_text or "（無發言紀錄）"}
+
+# 要求
+- 方案須可執行、條文明確，並簡要說明如何銜接各方立場
+- {lang}
+
+# 輸出 JSON
+{{
+    "title": "方案短標題",
+    "description": "方案具體內容",
+    "rationale": "為何此方案能平衡各方關切"
+}}
+只輸出 JSON。"""
+        messages = self.build_direct_messages(user_prompt)
+        try:
+            response = self.model.chat_json(messages)
+            title = (response.get("title") or "").strip()
+            description = (response.get("description") or "").strip()
+            rationale = (response.get("rationale") or "").strip()
+            if not description and not title:
+                raise ValueError("empty compromise")
+            return {
+                "title": title or "主持人折衷方案",
+                "description": description,
+                "rationale": rationale,
+            }
+        except Exception as e:
+            self.logger.warning("主持人折衷方案產生失敗: %s", e)
+            return {"title": "", "description": "", "rationale": ""}
+
     def collect_final_votes(
         self,
         topic: Dict,
         contributions: List[Dict],
         registry,
         artifact: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, str]:
-        """在完整討論結束後，向各參與者收集最終投票。"""
+    ) -> Dict[str, Any]:
+        """在完整討論結束後，先由主持人提出折衷方案，再向各參與者收集對該方案之投票。
+
+        回傳 { "votes": {...}, "mediator_compromise": { title, description, rationale } }
+        """
         main_contribs = [c for c in contributions if not c.get("is_reply", False)]
+
+        mediator_compromise: Dict[str, str]
+        if main_contribs:
+            mediator_compromise = self.propose_compromise_for_vote(topic, contributions)
+        else:
+            mediator_compromise = {"title": "", "description": "", "rationale": ""}
 
         voters = topic.get("speaking_order") or topic.get("participants") or []
         if not voters:
@@ -802,6 +872,7 @@ class MediatorAgent(BaseAgent):
                         topic,
                         previous_responses=main_contribs,
                         artifact_snapshot=snapshot,
+                        mediator_compromise=mediator_compromise,
                     )
                     v = (vote_resp.get("vote") or "").strip().lower()
                     votes[agent_name] = "agreed" if v == "agreed" else "unresolved"
@@ -810,10 +881,10 @@ class MediatorAgent(BaseAgent):
             except Exception as e:
                 self.logger.warning(f"  {agent_name} 最終投票失敗，視為 unresolved: {e}")
                 votes[agent_name] = "unresolved"
-        return votes
+        return {"votes": votes, "mediator_compromise": mediator_compromise}
 
     @staticmethod
-    def _extract_traceability_ids(topic: Dict, contributions: List[Dict], resolution: Dict) -> List[str]:
+    def extract_traceability_ids(topic: Dict, contributions: List[Dict], resolution: Dict) -> List[str]:
         """從 source_ids 與討論/決議文字抓出可追溯 id（如 FR-1、NFR-2、CF-01）。"""
         ids = set()
         for sid in topic.get("source_ids", []) or []:
@@ -886,14 +957,14 @@ class MediatorAgent(BaseAgent):
                 "votes": resolution.get("votes", {}),
                 "votes_summary": resolution.get("votes_summary", ""),
             },
-            "traceability_ids": self._extract_traceability_ids(topic, contributions, resolution),
+            "traceability_ids": self.extract_traceability_ids(topic, contributions, resolution),
             "metadata": {
                 "round": round_num,
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
         }
 
-    def _generate_design_rationale_entry(self, topic_context: Dict[str, Any]) -> str:
+    def generate_design_rationale_entry(self, topic_context: Dict[str, Any]) -> str:
         """生成單一議題的 Design Rationale 章節。"""
         context_text = json.dumps(topic_context, ensure_ascii=False, indent=2)
         user_prompt = f"""# 任務
@@ -919,7 +990,7 @@ class MediatorAgent(BaseAgent):
 # 重要規則
 - 僅根據上下文內容整理，禁止捏造不存在的決策、方案或需求。
 - 若某小節資訊不足，請明確寫「待補」。
-- 用繁體中文撰寫；id 與欄位名稱可維持英文。
+- {mediator_prose_line(self.output_language)}
 - 「替代方案」與「方案評估」至少列出上下文中有跡可循的選項；若無法辨識則寫「待補」。
 - 「需求追蹤」需優先使用 traceability_ids 與 source_ids。
 - 「會議資訊」至少包含：Round、議題 id、參與者、投票結果、產生時間。
@@ -932,7 +1003,7 @@ class MediatorAgent(BaseAgent):
     def generate_design_rationale(self, topic_context: Dict[str, Any]) -> str:
         """初次建立 design_rationale.md。"""
         topic_id = (topic_context.get("topic") or {}).get("id", "")
-        entry = self._generate_design_rationale_entry(topic_context)
+        entry = self.generate_design_rationale_entry(topic_context)
         header = "# Design Rationale\n\n"
         header += "> 本文件由 Mediator 於每個議題討論完成後持續維護與更新。\n\n"
         if not entry:
@@ -942,7 +1013,7 @@ class MediatorAgent(BaseAgent):
     def update_design_rationale(self, existing_md: str, topic_context: Dict[str, Any]) -> str:
         """既有 design_rationale.md 追加單一議題章節。"""
         base = (existing_md or "").rstrip()
-        entry = self._generate_design_rationale_entry(topic_context)
+        entry = self.generate_design_rationale_entry(topic_context)
         if not entry:
             topic_id = (topic_context.get("topic") or {}).get("id", "")
             entry = f"## {topic_id or 'T-??'}\n\n待補\n"
@@ -989,6 +1060,19 @@ class MediatorAgent(BaseAgent):
             md += f"- **Votes**: {', '.join(votes_line)}\n"
         md += "\n"
 
+        mc = resolution.get("mediator_compromise") or {}
+        mc_title = (mc.get("title") or "").strip()
+        mc_desc = (mc.get("description") or "").strip()
+        mc_rat = (mc.get("rationale") or "").strip()
+        if mc_title or mc_desc:
+            md += "## 主持人折衷方案（表決標的）\n\n"
+            if mc_title:
+                md += f"**{mc_title}**\n\n"
+            if mc_desc:
+                md += f"{mc_desc}\n\n"
+            if mc_rat:
+                md += f"*理由*: {mc_rat}\n\n"
+
         main_contribs = [c for c in contributions if not c.get("is_reply", False)]
         md += "## 討論內容\n\n"
         if not main_contribs:
@@ -1028,6 +1112,7 @@ class MediatorAgent(BaseAgent):
         topic: Dict,
         contributions: List[Dict],
         final_votes: Optional[Dict[str, str]] = None,
+        mediator_compromise: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """依最終投票（final_votes）以多數決決定是否達成共識；agreed 時由 LLM 產出 summary 與 decision。"""
         if not contributions:
@@ -1040,6 +1125,7 @@ class MediatorAgent(BaseAgent):
                 "decision": "",
                 "votes": {},
                 "votes_summary": "無投票（0/0）",
+                "mediator_compromise": {"title": "", "description": "", "rationale": ""},
             }
 
         votes_by_agent = {}
@@ -1066,22 +1152,35 @@ class MediatorAgent(BaseAgent):
             statement = resp.get("statement", "")
             discussion_text += f"\n【{agent}】\n{statement}\n"
 
+        mc = mediator_compromise or {}
+        mc_title = (mc.get("title") or "").strip()
+        mc_desc = (mc.get("description") or "").strip()
+        mc_rat = (mc.get("rationale") or "").strip()
+        compromise_block = ""
+        if mc_desc or mc_title:
+            compromise_block = f"""# 表決標的（主持人折衷方案）
+標題: {mc_title}
+內容: {mc_desc}
+說明: {mc_rat}
+
+"""
+
         # 僅用 LLM 產出 summary 與 decision（不再由 LLM 判斷 resolution）
         if resolution == "agreed":
             user_prompt = f"""# 任務
-以下議題經討論後以多數決判定為「達成共識」。請根據各方發言整理出摘要與具體決策內容。
+以下議題經討論後，各參與者已對「主持人折衷方案」投票，且多數決判定為「達成共識」。請根據該方案與各方發言整理摘要與具體決策內容；decision 應與通過之主持人方案主旨一致。
 
 # 議題資訊
 標題: {topic.get('title', '')}
 描述: {topic.get('description', '')}
 
-# 各方討論內容
+{compromise_block}# 各方討論內容
 {discussion_text}
 
 # 要求
 - summary：總結討論內容與共識要點
 - decision：具體可執行的決策內容
-- summary、decision 請使用繁體中文
+- {mediator_summary_decision_line(self.output_language)}
 
 # 輸出 JSON
 {{{{
@@ -1090,13 +1189,13 @@ class MediatorAgent(BaseAgent):
 }}}}"""
         else:
             user_prompt = f"""# 任務
-以下議題經討論後以多數決判定為「未達成共識」。請簡要總結各方討論重點（summary 即可，decision 留空）。summary 請使用繁體中文。
+{mediator_unresolved_vote_task_line(self.output_language)}
 
 # 議題資訊
 標題: {topic.get('title', '')}
 描述: {topic.get('description', '')}
 
-# 各方討論內容
+{compromise_block}# 各方討論內容
 {discussion_text}
 
 # 輸出 JSON
@@ -1112,7 +1211,10 @@ class MediatorAgent(BaseAgent):
             decision = response.get("decision", "") if resolution == "agreed" else ""
         except Exception as e:
             self.logger.warning(f"共識摘要 LLM 失敗: {e}")
-            summary = "（多數決結果：%s；摘要產生失敗）" % resolution
+            if self.output_language == OUTPUT_LANG_EN:
+                summary = f"(Majority outcome: {resolution}; summary generation failed)"
+            else:
+                summary = "（多數決結果：%s；摘要產生失敗）" % resolution
             decision = ""
 
         return {
@@ -1121,6 +1223,11 @@ class MediatorAgent(BaseAgent):
             "decision": decision,
             "votes": votes_by_agent,
             "votes_summary": f"{agreed_count} agreed, {unresolved_count} unresolved",
+            "mediator_compromise": {
+                "title": mc_title,
+                "description": mc_desc,
+                "rationale": mc_rat,
+            },
         }
 
     # ===== 人類裁決 =====
@@ -1145,8 +1252,8 @@ class MediatorAgent(BaseAgent):
 
 # 要求
 1. 從討論中提取 3 個最具體、可行性最高的方案
-2. 另外設計 1 個折衷方案，結合各方可讓步的部分
-3. title、description、rationale 等所有輸出文字請使用繁體中文
+2. 另外設計 1 個折衷方案，整合各方願意放寬或調整的面向（描述時無須使用「可讓步」等字眼）
+3. {mediator_human_options_line(self.output_language)}
 
 # 輸出 JSON
 {{{{
@@ -1213,7 +1320,7 @@ class MediatorAgent(BaseAgent):
 - 其餘依討論結果維持原 label。輸出 conflicts 時請保留每筆原有的所有欄位（id、description、conflict_type、requirement_ids、stakeholder_names 等），僅依討論結果更新 label
 - 每個 new_decisions 項目請填寫 resolved_conflict_ids：此決策所解決的 Conflict id 列表（若該議題討論解決了某個 Conflict 則填其 CF-xx id，否則空陣列）
 - 若本輪討論中有人指出「尚未列在當前 Conflict 列表中的需求/立場 Conflict」（辨識漏報），請將該筆填入 new_conflicts，格式見下方。id 留空由系統指派。
-- new_conflicts 的 description、new_decisions 中與決策相關的描述文字請使用繁體中文。label、conflict_type 維持英文。
+- {mediator_collect_line(self.output_language)}
 
 # 輸出 JSON
 {{{{

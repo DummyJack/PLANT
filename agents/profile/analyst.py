@@ -1,16 +1,13 @@
 import json
-import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from agents.base import BaseAgent
-
-CONFLICT_PATTERNS_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "skills"
-    / "conflict-analyzer"
-    / "references"
-    / "conflict_patterns.md"
+from utils import (
+    OUTPUT_LANG_EN,
+    analyst_draft_decision_table_note,
+    short_reasoning_line,
 )
+
 CONFLICT_REPORT_TEMPLATE_PATH = (
     Path(__file__).resolve().parent.parent
     / "skills"
@@ -18,32 +15,6 @@ CONFLICT_REPORT_TEMPLATE_PATH = (
     / "assets"
     / "conflict_report_template.json"
 )
-
-
-def parse_conflict_types_from_patterns(path: Path) -> tuple:
-    """從 conflict_patterns.md 的 ## X Conflicts 標題解析出類型 id 順序。"""
-    text = path.read_text(encoding="utf-8")
-    ids = []
-    for m in re.finditer(r"^## (\w+) Conflicts", text, re.MULTILINE):
-        if m.group(1) != "Table":
-            ids.append(m.group(1))
-    return (
-        tuple(ids)
-        if ids
-        else (
-            "Logical",
-            "Technical",
-            "Resource",
-            "Temporal",
-            "Data",
-            "State",
-            "Priority",
-            "Scope",
-        )
-    )
-
-
-ALLOWED_CONFLICT_TYPES = parse_conflict_types_from_patterns(CONFLICT_PATTERNS_PATH)
 
 ANALYST_REVIEW_ACTIONS = [
     "scan_discussions",
@@ -79,7 +50,7 @@ class AnalystAgent(BaseAgent):
             self.system_prompt = "\n\n---\n\n".join(parts)
 
     def run_conflict_detection(self, artifact: Dict) -> Dict:
-        """依 conflict-analyzer skill 僅針對「需求」做 Conflict 辨識：判斷為衝突則 label=Conflict，無衝突則 label=Neutral。信心分不在此階段產出。"""
+        """依 conflict-analyzer skill 僅針對「需求」做 Conflict 辨識：判斷為衝突則 label=Conflict，無衝突則 label=Neutral。"""
         requirements = artifact.get("requirements", [])
         context = {"requirements": requirements}
         task = """依 conflict-analyzer skill 的辨識方式，**僅根據 Context 中的需求（requirements）**辨識是否有 Conflict；本階段不看系統模型或其它回饋。
@@ -88,7 +59,6 @@ class AnalystAgent(BaseAgent):
 - **conflict_type**：僅用於描述衝突類型。references 中的 8 種類型為參考；若依自身知識判斷屬於其他類型，也可使用其他類型名稱，仍視為 Conflict。
 - 若 label 為 Conflict：須有 description；填 requirement_ids / related_requirements（涉及的需求 id）；conflict_type 為描述用。
 - 若 label 為 Neutral：須有 description（可簡述為何判定無衝突）；可選填 requirement_ids 表示檢視過的需求；不需 conflict_type。
-- description 等說明與描述文字請使用繁體中文。
 輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
 
         try:
@@ -158,42 +128,223 @@ class AnalystAgent(BaseAgent):
             )
         return {**artifact, "conflicts": conflicts}
 
-    def assign_conflict_confidence(self, artifact: Dict) -> Dict:
-        """依 feedback 與 system_models 重新檢視每筆 conflict 判斷並打信心分；Conflict 與 Neutral 都要打。覺得判斷有誤時信心分應低於閾值，進入討論。"""
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes", "y")
+        return False
+
+    def reassess_conflicts_with_feedback_and_model(
+        self, artifact: Dict, stage: str = "pre_meeting"
+    ) -> Dict[str, Any]:
+        """Analyst 依 feedback + system_models 複核衝突，並判斷是否要進 requirement_clarification。"""
         conflicts = artifact.get("conflicts", [])
         if not conflicts:
-            return artifact
+            return {
+                "conflicts": [],
+                "clarification_requests": [],
+                "changed_conflict_ids": [],
+            }
+
         context = {
-            "stakeholders": artifact.get("stakeholders", []),
+            "stage": stage,
             "requirements": artifact.get("requirements", []),
-            "system_models": artifact.get("system_models") or {},
-            "feedback": artifact.get("feedback") or {},
             "conflicts": conflicts,
+            "feedback": artifact.get("feedback") or {},
+            "system_models": artifact.get("system_models") or {},
         }
-        threshold = self.low_confidence_threshold
-        task = f"""請以 Context 中的 **feedback**（如領域研究、合規發現等）與 **system_models**（系統模型）為依據，重新檢視 Context.conflicts 中每一筆的判斷。
-**Conflict 與 Neutral 都要打信心分。**
-- **confidence**：0.0～1.0。若依 feedback 或 system_models 發現先前判斷可能有誤（例如應為 Conflict 卻判成 Neutral，或應為 Neutral 卻判成 Conflict），信心度應**低於** {threshold}，此筆會進入後續討論；若資訊一致、判斷無誤則信心度應 ≥ {threshold}。
-- 若信心度低：可填 **ambiguous_requirements**（陣列，列出影響判斷的需求 id 或說明）。
-輸出「僅一個」JSON 物件，鍵名為 "conflicts"，值為陣列。陣列中每筆須與輸入對應（依順序），保留原有 id、label、description 等欄位，並加上 confidence；若信心低可加 ambiguous_requirements。勿輸出 Markdown，只輸出該 JSON。"""
+        task = """請依 Context.feedback 與 Context.system_models，逐筆檢視 Context.conflicts 的判斷是否需要調整，並判斷是否必須先做「更深入討論」才能解決。
+輸出「僅一個」JSON 物件，格式：
+{
+  "assessments": [
+    {
+      "conflict_id": "CF-01 或 NF-01",
+      "change_conflict_result": true 或 false,
+      "new_label": "Conflict 或 Neutral",
+      "needs_deeper_discussion": true 或 false,
+      "reason": "繁體中文，簡短理由",
+      "clarification_question": "若 needs_deeper_discussion=true，請提供具體要釐清的問題",
+      "requirement_ids": ["FR-1", "NFR-2"]
+    }
+  ]
+}
+規則：
+- change_conflict_result=true 表示你判斷「原本結果應更改」。
+- needs_deeper_discussion=true 表示需要進入 requirement_clarification 議題再判定，且此時先不要直接改 label。
+- needs_deeper_discussion=false 且 change_conflict_result=true 時，可直接套用 new_label。
+- 僅輸出 JSON，不要 Markdown 或其他文字。"""
+
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
             data = self.parse_topic_response_json(raw)
         except Exception as e:
-            self.logger.warning(f"Analyst 信心分賦予失敗: {e}")
-            return artifact
-        raw_list = data.get("conflicts", [])
-        if not isinstance(raw_list, list) or len(raw_list) != len(conflicts):
-            return artifact
-        for i, c in enumerate(conflicts):
-            r = raw_list[i] if i < len(raw_list) else {}
-            conf_val = r.get("confidence")
-            if isinstance(conf_val, (int, float)):
-                c["confidence"] = max(0.0, min(1.0, float(conf_val)))
-            amb = r.get("ambiguous_requirements")
-            if isinstance(amb, list) and amb:
-                c["ambiguous_requirements"] = amb
-        return artifact
+            self.logger.warning("Analyst 複核衝突（feedback+model）失敗: %s", e)
+            return {
+                "conflicts": list(conflicts),
+                "clarification_requests": [],
+                "changed_conflict_ids": [],
+            }
+
+        assessments = data.get("assessments", [])
+        if not isinstance(assessments, list):
+            return {
+                "conflicts": list(conflicts),
+                "clarification_requests": [],
+                "changed_conflict_ids": [],
+            }
+
+        updated_conflicts = [dict(c) for c in conflicts]
+        by_id = {c.get("id"): c for c in updated_conflicts if c.get("id")}
+        clarification_requests = []
+        changed_conflict_ids = []
+
+        for item in assessments:
+            if not isinstance(item, dict):
+                continue
+            cid = (item.get("conflict_id") or "").strip()
+            if not cid or cid not in by_id:
+                continue
+            target = by_id[cid]
+            needs_discuss = self._as_bool(item.get("needs_deeper_discussion"))
+            change_result = self._as_bool(item.get("change_conflict_result"))
+            new_label = (item.get("new_label") or "").strip()
+            if new_label not in ("Conflict", "Neutral"):
+                new_label = target.get("label")
+
+            target["needs_deeper_discussion"] = needs_discuss
+            if (not needs_discuss) and change_result and new_label in ("Conflict", "Neutral"):
+                if target.get("label") != new_label:
+                    target["label"] = new_label
+                    changed_conflict_ids.append(cid)
+                    reason = (item.get("reason") or "").strip()
+                    if reason:
+                        target["analyst_reassessment_reason"] = reason
+
+            if needs_discuss:
+                q = (item.get("clarification_question") or "").strip()
+                if not q:
+                    q = f"請釐清 {cid} 涉及需求的驗收邊界與衝突判定依據。"
+                req_ids = item.get("requirement_ids") or []
+                if not isinstance(req_ids, list):
+                    req_ids = []
+                clarification_requests.append(
+                    {
+                        "conflict_id": cid,
+                        "question": q,
+                        "requirement_ids": req_ids,
+                        "reason": (item.get("reason") or "").strip(),
+                    }
+                )
+
+        return {
+            "conflicts": updated_conflicts,
+            "clarification_requests": clarification_requests,
+            "changed_conflict_ids": changed_conflict_ids,
+        }
+
+    def finalize_conflicts_after_clarification(
+        self,
+        artifact: Dict,
+        round_discussions: List[Dict],
+        baseline_conflicts: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """針對 requirement_clarification 討論後，最終由 Analyst 判斷是否更新原衝突結果。"""
+        current_conflicts = artifact.get("conflicts", [])
+        if not current_conflicts:
+            return {
+                "conflicts": [],
+                "handled_conflict_ids": [],
+                "changed_conflict_ids": [],
+            }
+
+        clarification_topics = [
+            d for d in (round_discussions or [])
+            if (d.get("topic", {}).get("category") == "requirement_clarification")
+        ]
+        if not clarification_topics:
+            return {
+                "conflicts": list(current_conflicts),
+                "handled_conflict_ids": [],
+                "changed_conflict_ids": [],
+            }
+
+        context = {
+            "requirements": artifact.get("requirements", []),
+            "feedback": artifact.get("feedback") or {},
+            "system_models": artifact.get("system_models") or {},
+            "baseline_conflicts": baseline_conflicts or current_conflicts,
+            "current_conflicts": current_conflicts,
+            "clarification_discussions": clarification_topics,
+        }
+        task = """你是 Analyst。請根據 requirement_clarification 的討論結果，對每筆涉及的 conflict 做最終判定：是否更改原本衝突分析結果。
+輸出「僅一個」JSON 物件，格式：
+{
+  "updates": [
+    {
+      "conflict_id": "CF-01 或 NF-01",
+      "change_conflict_result": true 或 false,
+      "new_label": "Conflict 或 Neutral",
+      "reason": "繁體中文，說明為何改或不改"
+    }
+  ]
+}
+規則：
+- 只針對 requirement_clarification 討論涉及到的 conflict 輸出 updates。
+- change_conflict_result=true 才套用 new_label；false 則維持原 label。
+- 僅輸出 JSON，不要其他文字。"""
+
+        try:
+            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            data = self.parse_topic_response_json(raw)
+        except Exception as e:
+            self.logger.warning("Analyst 會後最終衝突判定失敗: %s", e)
+            return {
+                "conflicts": list(current_conflicts),
+                "handled_conflict_ids": [],
+                "changed_conflict_ids": [],
+            }
+
+        updates = data.get("updates", [])
+        if not isinstance(updates, list):
+            return {
+                "conflicts": list(current_conflicts),
+                "handled_conflict_ids": [],
+                "changed_conflict_ids": [],
+            }
+
+        out_conflicts = [dict(c) for c in current_conflicts]
+        by_id = {c.get("id"): c for c in out_conflicts if c.get("id")}
+        handled_conflict_ids = []
+        changed_conflict_ids = []
+
+        for upd in updates:
+            if not isinstance(upd, dict):
+                continue
+            cid = (upd.get("conflict_id") or "").strip()
+            if not cid or cid not in by_id:
+                continue
+            handled_conflict_ids.append(cid)
+            target = by_id[cid]
+            change_result = self._as_bool(upd.get("change_conflict_result"))
+            reason = (upd.get("reason") or "").strip()
+            if reason:
+                target["analyst_final_reason"] = reason
+            if not change_result:
+                target["needs_deeper_discussion"] = False
+                continue
+            new_label = (upd.get("new_label") or "").strip()
+            if new_label in ("Conflict", "Neutral") and target.get("label") != new_label:
+                target["label"] = new_label
+                changed_conflict_ids.append(cid)
+            target["needs_deeper_discussion"] = False
+
+        return {
+            "conflicts": out_conflicts,
+            "handled_conflict_ids": list(dict.fromkeys(handled_conflict_ids)),
+            "changed_conflict_ids": changed_conflict_ids,
+        }
 
     def generate_scope(self, rough_idea: str, stakeholders: List[Dict]) -> Dict:
         """依 requirements-analyst skill 產出專案範圍（description 為專案概述、依 rough_idea；in_scope / out_of_scope 依利害關係人需求）。"""
@@ -201,7 +352,6 @@ class AnalystAgent(BaseAgent):
         task = """依 requirements-analyst skill 產出專案範圍，規則如下：
 - **in_scope** 與 **out_of_scope**：僅根據 Context 的 stakeholders（利害關係人與其需求）產出，列出範圍內項目與排除項目。
 - **description**：根據 Context 的 rough_idea 撰寫專案概述（一句話或簡短段落，說明專案目的與邊界）。
-- description、in_scope、out_of_scope 的項目與說明文字請使用繁體中文。
 輸出「僅一個」JSON 物件，鍵名 "scope"，值為 { "description": "專案概述（須源自 rough_idea）", "in_scope": ["項目"], "out_of_scope": ["排除項目"] }。
 勿輸出 Markdown，只輸出該 JSON。"""
         try:
@@ -229,7 +379,7 @@ class AnalystAgent(BaseAgent):
 **重要**：請將該利害關係人提到的**每項**功能或非功能需求都拆成**獨立條目**，勿合併或遺漏；同一段敘述若含多個可驗收要點，應拆成多筆。寧可多拆、勿少列。
 輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為陣列。每筆須含：text、type（FR 或 NFR）、priority（must / should / could）。NFR 須含可量化指標。source_stakeholders 請填 ["{sh_label}"]（此人的識別）。
 本輪僅分析此一人，id 由系統後續統一指派，此處可不填或填暫時編號。
-requirements 陣列中的 text 及所有描述性內容請使用繁體中文。type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
+type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
             try:
                 raw = self.invoke_skill("requirements-analyst", task, context=context)
                 data = self.parse_topic_response_json(raw)
@@ -302,8 +452,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             version_note = f" 本稿版本: draft_v{draft_version}。"
         if round_num is not None:
             version_note += f" 對應輪次: Round {round_num}。"
+        dec_tbl = analyst_draft_decision_table_note(self.output_language)
         task = f"""依 requirements-analyst skill 的 **Output Format**，僅根據 Context 產出完整需求草稿 Markdown。{version_note}
-- 草稿全文使用繁體中文，只輸出 Markdown，勿包程式碼區塊。
+- 只輸出 Markdown，勿包程式碼區塊。
 - **勿產出**文件頂層 H1 標題（不要 # Feature Name）。草稿直接從 Frontmatter 或「概觀」章節開始。
 - Frontmatter 僅含 status, stakeholders（勿含 version、feature、created、updated）。stakeholders 用 Context.stakeholder_names。
 - 概觀只寫 Context.scope.description。
@@ -311,8 +462,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 - Scope 章節寫 Context.scope.in_scope 與 Context.scope.out_of_scope。
 - **ID 規則**：功能性需求用 **FR-1、FR-2、FR-3** … 依序；非功能性需求用 **NFR-1、NFR-2、NFR-3** … 依序。
 - **非功能性需求**：與功能性需求採用**相同的扁平表格格式**（ID | Priority | Requirement | Stakeholder | Acceptance Criteria），**不要**分子類別（不要按 Security/Performance 等拆分子章節），所有 NFR 列在同一張表中。
-- Conflict 需求表格三欄：Issue | Requirements Affected（受影響需求）| Decision（決策）。Requirements Affected 欄位請寫詳細：列出受影響的需求 ID，並對每個 ID 附一句簡短摘要（該需求內容要點）；Decision 欄位標題與內容可使用繁體中文（如「待決」「已決：…」）。不要 Resolution Options。草稿結束於「Conflict 需求」。
-- 功能性與非功能性需求的 **Requirement 欄位**：每格維持簡短（一句話或至多兩句），勿將整段決策或實作細節貼入表格；若原始需求過長，請改寫為精簡摘要。"""
+- {dec_tbl}
+- 功能性與非功能性需求的 **Requirement 欄位**：每格維持簡短（一句話或至多兩句），勿將整段決策或實作細節貼入表格；若原始需求過長，請改寫為精簡摘要。
+- 若 Context.open_questions 有項目，請在草稿中另立章節 **## 開放問題**（或 **## Open questions**），條列尚未結案者（status 非 answered 或明顯待處理），每則簡述問題要點並盡量保留可追溯 id（如來源 agent、相關需求 id）；若無待處理開放問題則可省略此章節或註明「無」。"""
         try:
             raw = self.invoke_skill("requirements-analyst", task, context=context)
         except Exception as e:
@@ -322,7 +474,8 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 
         models = artifact.get("system_models", {}).get("models", [])
         if models:
-            md += "\n\n---\n\n## 系統模型\n"
+            sys_hdr = "## System models\n" if self.output_language == OUTPUT_LANG_EN else "## 系統模型\n"
+            md += f"\n\n---\n\n{sys_hdr}"
             for m in models:
                 name = m.get("name", "未命名模型")
                 plantuml = (m.get("plantuml") or "").strip()
@@ -350,7 +503,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 3. **可新增**：若本輪討論產出 scope 內的新需求，可追加至陣列末尾；勿新增超出 scope.out_of_scope 的需求。
 4. **勿遺漏**：輸出的 requirements 陣列必須涵蓋所有既有需求（相同 id 至少保留一筆），再視需要追加新項。
 
-輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為更新後的需求陣列。每筆須含 id、text、type（FR/NFR/constraint）、priority、source_stakeholders。已解決的 Conflict 對應需求須與決策方向一致。每筆 text 維持簡短，勿將整段決策貼入。requirements 陣列中的 text 及描述請使用繁體中文。id、type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
+輸出「僅一個」JSON 物件，鍵名為 "requirements"，值為更新後的需求陣列。每筆須含 id、text、type（FR/NFR/constraint）、priority、source_stakeholders。已解決的 Conflict 對應需求須與決策方向一致。每筆 text 維持簡短，勿將整段決策貼入。id、type、priority 維持英文。勿輸出 Markdown，只輸出該 JSON。"""
         try:
             raw = self.invoke_skill("requirements-analyst", task, context=context)
             data = self.parse_topic_response_json(raw)
@@ -411,7 +564,6 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         task = """依本 skill 與 Context.report_template（conflict_report_template.json）的結構，僅根據 Context 產出「需求 Conflict 分析報告」。
 - Context.conflicts 為**所有 Conflict**（含已解決與未解決）。每筆有 label：**Conflict** = 未解決，**Neutral** = 已解決。報告須**全部列出**，並在每筆標示「是否已解決」（依 label）。label 維持英文。
 - 其餘章節與欄位（metadata、conflict_matrix、recommendations、unresolved/resolved 總數等）依 report_template 撰寫；unresolved 為 label=Conflict 的數量，resolved 為 label=Neutral 的數量。
-- 報告內所有章節標題、描述、建議、說明等文字請使用**繁體中文**。
 - **輸出為 Markdown**，勿輸出 JSON 或程式碼區塊。只輸出 Markdown。"""
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
@@ -433,10 +585,10 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         if "conflict-analyzer" not in self.skill_names:
             return None
         context = {"topic": topic, "artifact_snapshot": artifact_snapshot or {}}
-        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點 Conflict 分析要點（可含類型、涉及需求 id、建議方向），供會議發言參考。請使用繁體中文。只輸出簡短條列文字，勿 JSON。"""
+        task = """針對 Context 中的議題與專案狀態，簡要列出 1～3 點 Conflict 分析要點（可含類型、涉及需求 id、建議方向），供會議發言參考。只輸出簡短條列文字，勿 JSON。"""
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
-            return (raw or "").strip()[:1500]
+            return (raw or "").strip()
         except Exception as e:
             self.logger.debug("議程中觸發 conflict-analyzer 失敗: %s", e)
             return None
@@ -453,11 +605,15 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         conflict_ids = [
             s
             for s in source_ids
-            if isinstance(s, str) and (s.startswith("CF-") or s.startswith("CF-D"))
+            if isinstance(s, str)
+            and (s.startswith("CF-") or s.startswith("CF-D") or s.startswith("NF-"))
         ]
         conflicts = artifact.get("conflicts", [])
         if conflict_ids:
             relevant = [c for c in conflicts if c.get("id") in conflict_ids]
+        elif topic.get("category") == "requirement_clarification":
+            # 釐清議題可能針對 Neutral（NF-*）誤判修正；無 source_ids 時才需全體候選。
+            relevant = list(conflicts)
         else:
             relevant = [c for c in conflicts if c.get("label") == "Conflict"]
         if not relevant:
@@ -468,11 +624,10 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             "requirements": artifact.get("requirements", []),
             "stakeholders": artifact.get("stakeholders", []),
         }
-        task = """針對 Context 中的議題與對應 Conflict，依 conflict-analyzer skill 的 resolution 結構，僅產出「解決方案選項」。
+        task = """針對 Context 中的議題與對應判定項（可含 Conflict 與 Neutral），依 conflict-analyzer skill 的 resolution 結構，僅產出「解決方案選項」。
 輸出「僅一個」JSON 物件，須含：
 - resolution_options：陣列，每筆含 option（如 "A"/"B"）、strategy、description、pros（陣列）、cons（陣列）、recommendation（boolean）
 - recommended_resolution：字串，建議採用的解決方案摘要
-- strategy、description、pros、cons、recommended_resolution 等所有文字內容請使用繁體中文
 勿輸出 Markdown 或其它文字，只輸出該 JSON。"""
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
@@ -491,8 +646,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             if o.get("pros") or o.get("cons"):
                 parts = []
                 if o.get("pros"):
+                    pl = "Pros:" if self.output_language == OUTPUT_LANG_EN else "優點："
                     parts.append(
-                        "優點："
+                        pl
                         + (
                             ", ".join(o["pros"])
                             if isinstance(o["pros"], list)
@@ -500,8 +656,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                         )
                     )
                 if o.get("cons"):
+                    cl = "Cons:" if self.output_language == OUTPUT_LANG_EN else "缺點："
                     parts.append(
-                        "缺點："
+                        cl
                         + (
                             ", ".join(o["cons"])
                             if isinstance(o["cons"], list)
@@ -520,11 +677,17 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             )
         compromise = None
         if recommended:
+            if self.output_language == OUTPUT_LANG_EN:
+                c_title = "Recommended (Analyst)"
+                c_rat = "Resolution recommended by conflict analysis"
+            else:
+                c_title = "建議方案（Analyst）"
+                c_rat = "依 conflict-analyzer 建議採用的解決方案"
             compromise = {
                 "id": 4,
-                "title": "建議方案（Analyst）",
+                "title": c_title,
                 "description": recommended,
-                "rationale": "依 conflict-analyzer 建議採用的解決方案",
+                "rationale": c_rat,
             }
         if not best_options and not compromise:
             return None
@@ -561,9 +724,10 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 {tool_hint}
 
 # 思考與發言流程
-1. 先思考：(1) 此議題與既有需求的一致性與缺口 (2) 不可讓步的要點（須有需求依據）(3) 可接受調整或折衷的要點 (4) 目前資訊中「已確認事實 / 待驗證假設 / 主要風險」
-2. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先結論、再依據、再建議」順序，針對議題提出你的分析與可執行建議
-3. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"expert"、"modeler"）
+1. 先思考：(1) 此議題與既有需求的一致性與缺口 (2) 依需求證據你必須堅守的分析結論或驗收底線 (3) 在證據允許範圍內可接受的調整或折衷 (4) 目前資訊中「已確認事實 / 待驗證假設 / 主要風險」
+2. 上述 (2)(3) 只用來**內部**整理立場；撰寫 statement 時請勿以「我可讓步的點是…」「不可讓步的點是…」或類似小標／口頭套語作答，應把堅持與彈性**自然融入**結論、依據與建議中。
+3. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先結論、再依據、再建議」順序，針對議題提出你的分析與可執行建議
+4. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"expert"、"modeler"）
 
 # 表達方式（僅能以文字呈現）
 - 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。**若有使用表格、流程或圖示，請用 ``` … ``` 程式碼區塊包住，與一般敘述分開，方便閱讀。**
@@ -607,7 +771,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         i = 0
 
         while i < effective_max:
-            state = self._build_review_state(
+            state = self.build_review_state(
                 artifact, recent_discussions, actions_taken,
                 scan_results, i, effective_max,
             )
@@ -626,7 +790,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                 break
 
             params = decision.get("params") or {}
-            observation = self._execute_review_action(
+            observation = self.execute_review_action(
                 action, params, artifact, pending_issues, recent_discussions,
             )
             if action == "scan_discussions" and observation.get("result"):
@@ -655,7 +819,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 
 # 可用動作
 - scan_discussions：掃描近期討論內容，提取關鍵變更與潛在 Conflict。無參數。
-- detect_conflicts：對當前需求執行 Conflict 偵測（含信心度評估）。無參數。
+- detect_conflicts：對當前需求執行 Conflict 偵測。無參數。
 - update_requirements：根據近期討論與決策更新需求清單。無參數。
 - flag_issue：標記一個需要主持人關注的問題。params: {{ "description": "問題描述" }}
 - done：分析完成，交還控制權。無參數。
@@ -671,9 +835,9 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
 - 若有近期討論且尚未掃描，先 scan_discussions
 - 若掃描後發現潛在新 Conflict，呼叫 detect_conflicts
 - 若有已解決 Conflict 或決策影響需求，呼叫 update_requirements
-- 若低信心 Conflict 涉及的模糊需求無法自行釐清（需利害關係人確認），flag_issue 標記供會議討論
+- 若有無法自行釐清的模糊需求（需利害關係人確認），以 flag_issue 標記供會議討論
 - 無需進一步分析時呼叫 done
-- reasoning 請使用繁體中文
+- {short_reasoning_line(self.output_language)}
 
 輸出 JSON:
 {{
@@ -702,22 +866,21 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             out["max_iterations"] = response["max_iterations"]
         return out
 
-    def _build_review_state(
+    def build_review_state(
         self, artifact, recent_discussions, actions_taken,
         scan_results, iteration, max_iterations,
     ):
         reqs = artifact.get("requirements", [])
         summary_reqs = [
             {"id": r.get("id"), "type": r.get("type"),
-             "text": (r.get("text") or "")[:120]}
+             "text": (r.get("text") or "")}
             for r in reqs
         ]
         conflicts = [
             {
-                "id": c.get("id"), "label": c.get("label"),
-                "confidence": c.get("confidence"),
-                "ambiguous_requirements": c.get("ambiguous_requirements"),
-                "description": (c.get("description") or "")[:120],
+                "id": c.get("id"),
+                "label": c.get("label"),
+                "description": (c.get("description") or ""),
             }
             for c in artifact.get("conflicts", [])
         ]
@@ -729,7 +892,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                 "topic_id": topic.get("id"),
                 "title": topic.get("title"),
                 "resolution": resolution.get("resolution"),
-                "summary": (resolution.get("summary") or "")[:200],
+                "summary": (resolution.get("summary") or ""),
             })
         state = {
             "requirements_count": len(reqs),
@@ -743,14 +906,14 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
         }
         if scan_results:
             state["scan_highlights"] = {
-                "key_changes": scan_results.get("key_changes", [])[:5],
+                "key_changes": scan_results.get("key_changes", []),
                 "potential_conflicts": scan_results.get(
                     "potential_conflicts", []
-                )[:5],
+                ),
             }
         return state
 
-    def _execute_review_action(
+    def execute_review_action(
         self, action, params, artifact, pending_issues, recent_discussions,
     ):
         obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
@@ -763,11 +926,11 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
             for disc in recent_discussions:
                 topic = disc.get("topic", {})
                 contribs = []
-                for c in disc.get("contributions", [])[:6]:
+                for c in disc.get("contributions", []):
                     resp = c.get("response", {})
                     contribs.append({
                         "agent": c.get("agent"),
-                        "statement": (resp.get("statement") or "")[:300],
+                        "statement": (resp.get("statement") or ""),
                     })
                 resolution = disc.get("resolution", {})
                 truncated.append({
@@ -779,7 +942,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                     "contributions": contribs,
                     "resolution": {
                         "resolution": resolution.get("resolution"),
-                        "summary": (resolution.get("summary") or "")[:300],
+                        "summary": (resolution.get("summary") or ""),
                     },
                 })
             disc_text = json.dumps(truncated, ensure_ascii=False, indent=2)
@@ -794,7 +957,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
     "potential_conflicts": ["可能的新 Conflict（含涉及的需求 id）"],
     "requirement_updates_needed": ["需要更新的需求 id 及原因"]
 }}
-文字請使用繁體中文。只輸出 JSON。"""
+只輸出 JSON。"""
             messages = self.build_direct_messages(task)
             try:
                 result = self.model.chat_json(messages)
@@ -825,30 +988,14 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                     c for c in artifact["conflicts"]
                     if c.get("label") == "Neutral"
                 ]
-                low_conf = [
-                    c for c in new_conflicts
-                    if isinstance(c.get("confidence"), (int, float))
-                    and c["confidence"] < self.low_confidence_threshold
-                ]
-                low_conf_neutrals = [
-                    c for c in new_neutrals
-                    if isinstance(c.get("confidence"), (int, float))
-                    and c["confidence"] < self.low_confidence_threshold
-                ]
                 summary = (
                     f"Conflict 偵測: {len(new_conflicts)} Conflict, "
                     f"{len(new_neutrals)} Neutral（前: {old_count} Conflict）"
                 )
-                if low_conf:
-                    summary += f"，{len(low_conf)} 低信心 Conflict"
-                if low_conf_neutrals:
-                    summary += f"，{len(low_conf_neutrals)} 低信心 Neutral"
                 obs["summary"] = summary
                 obs["result"] = {
                     "total_conflicts": len(new_conflicts),
                     "total_neutrals": len(new_neutrals),
-                    "low_confidence_conflicts": len(low_conf),
-                    "low_confidence_neutrals": len(low_conf_neutrals),
                 }
             except Exception as e:
                 obs["error"] = str(e)
@@ -881,7 +1028,7 @@ requirements 陣列中的 text 及所有描述性內容請使用繁體中文。t
                 "description": desc,
                 "source": "analyst",
             })
-            obs["summary"] = f"已標記問題: {desc[:80]}"
+            obs["summary"] = f"已標記問題: {desc}"
             return obs
 
         obs["error"] = f"未知動作: {action}"

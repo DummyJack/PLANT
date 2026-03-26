@@ -11,7 +11,7 @@ from openai import OpenAI
 from utils import CostTracker
 
 
-def _anthropic_split_messages(
+def anthropic_split_messages(
     messages: List[Dict],
 ) -> Tuple[Optional[str], List[Dict[str, str]]]:
     """將 OpenAI 風格 messages 轉成 Anthropic Messages API 格式。"""
@@ -34,7 +34,7 @@ def _anthropic_split_messages(
     return system, out
 
 
-def _gemini_split_messages(
+def gemini_split_messages(
     messages: List[Dict],
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """將 OpenAI 風格 messages 轉成 Gemini contents 格式。"""
@@ -248,7 +248,7 @@ class AnthropicModel(BaseLLM):
             raise ValueError("ANTHROPIC_API_KEY not found in environment")
         self.client = anthropic.Anthropic(api_key=api_key)
 
-    def _effective_max_tokens(
+    def effective_max_tokens(
         self,
         temperature: Optional[float],
         max_tokens: Optional[int],
@@ -267,8 +267,8 @@ class AnthropicModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
     ) -> str:
-        system, msgs = _anthropic_split_messages(messages)
-        max_out = self._effective_max_tokens(
+        system, msgs = anthropic_split_messages(messages)
+        max_out = self.effective_max_tokens(
             temperature, max_tokens, max_output_tokens
         )
         kw = self.build_kwargs(temperature, max_tokens, max_output_tokens)
@@ -349,7 +349,7 @@ class GeminiModel(BaseLLM):
             raise ValueError("GOOGLE_API_KEY not found in environment")
         self._client = genai.Client(api_key=api_key)
 
-    def _gemini_response_text(self, response: Any) -> str:
+    def gemini_response_text(self, response: Any) -> str:
         """取得 Gemini 文字；部分情況下 .text 會拋錯（例如安全阻擋）。"""
         try:
             t = getattr(response, "text", None)
@@ -368,7 +368,7 @@ class GeminiModel(BaseLLM):
             return "".join(parts)
         return ""
 
-    def _contents_dicts_to_genai(
+    def contents_dicts_to_genai(
         self, contents: List[Dict[str, Any]]
     ) -> List[Any]:
         from google.genai import types
@@ -383,7 +383,7 @@ class GeminiModel(BaseLLM):
             out.append(types.Content(role=role, parts=parts))
         return out
 
-    def _make_generate_config(
+    def make_generate_config(
         self,
         system_instruction: Optional[str],
         temperature: Optional[float],
@@ -408,7 +408,7 @@ class GeminiModel(BaseLLM):
             return None
         return types.GenerateContentConfig(**cfg_kw)
 
-    def _generate(
+    def generate(
         self,
         system_instruction: Optional[str],
         contents: List[Dict[str, Any]],
@@ -417,14 +417,14 @@ class GeminiModel(BaseLLM):
         max_output_tokens: Optional[int],
         response_mime_type: Optional[str],
     ) -> Any:
-        gen_cfg = self._make_generate_config(
+        gen_cfg = self.make_generate_config(
             system_instruction,
             temperature,
             max_tokens,
             max_output_tokens,
             response_mime_type,
         )
-        gen_contents = self._contents_dicts_to_genai(contents)
+        gen_contents = self.contents_dicts_to_genai(contents)
         call_kw: Dict[str, Any] = {
             "model": self.model_name,
             "contents": gen_contents,
@@ -433,7 +433,7 @@ class GeminiModel(BaseLLM):
             call_kw["config"] = gen_cfg
         return self._client.models.generate_content(**call_kw)
 
-    def _add_usage_from_response(self, response: Any) -> None:
+    def add_usage_from_response(self, response: Any) -> None:
         um = getattr(response, "usage_metadata", None)
         if not um:
             return
@@ -450,7 +450,7 @@ class GeminiModel(BaseLLM):
             }
         )
 
-    def _openai_tool_schemas_to_gemini_tools(
+    def openai_tool_schemas_to_gemini_tools(
         self, openai_style_schemas: List[Dict[str, Any]]
     ) -> List[Any]:
         """將 BaseAgent.get_tool_schemas() 的 OpenAI function 格式轉成 google.genai Tool。"""
@@ -477,7 +477,7 @@ class GeminiModel(BaseLLM):
             return []
         return [types.Tool(function_declarations=decls)]
 
-    def _make_generate_config_with_tools(
+    def make_generate_config_with_tools(
         self,
         system_instruction: Optional[str],
         temperature: Optional[float],
@@ -508,17 +508,17 @@ class GeminiModel(BaseLLM):
             cfg_kw["max_output_tokens"] = int(mt)
         return types.GenerateContentConfig(**cfg_kw)
 
-    def _model_content_function_calls(
+    def model_content_function_calls(
         self, response: Any
     ) -> Tuple[Optional[Any], List[Any], str]:
         """從 generate_content 回傳解析 model 的 Content、其中的 FunctionCall 列表、純文字。"""
         cands = getattr(response, "candidates", None) or []
         if not cands:
-            return None, [], self._gemini_response_text(response)
+            return None, [], self.gemini_response_text(response)
         c0 = cands[0]
         content = getattr(c0, "content", None)
         if not content:
-            return None, [], self._gemini_response_text(response)
+            return None, [], self.gemini_response_text(response)
         texts: List[str] = []
         calls: List[Any] = []
         for p in getattr(content, "parts", []) or []:
@@ -547,7 +547,7 @@ class GeminiModel(BaseLLM):
         from google.genai import types
 
         log = logging.getLogger("Plant.GeminiModel")
-        gemini_tools = self._openai_tool_schemas_to_gemini_tools(
+        gemini_tools = self.openai_tool_schemas_to_gemini_tools(
             openai_style_tool_schemas
         )
         if not gemini_tools:
@@ -558,13 +558,13 @@ class GeminiModel(BaseLLM):
                 max_output_tokens=max_output_tokens,
             )
 
-        system_instruction, contents_dicts = _gemini_split_messages(messages)
-        contents_genai = self._contents_dicts_to_genai(contents_dicts)
+        system_instruction, contents_dicts = gemini_split_messages(messages)
+        contents_genai = self.contents_dicts_to_genai(contents_dicts)
 
         self.costTracker.start()
         try:
             for _ in range(max_rounds):
-                cfg = self._make_generate_config_with_tools(
+                cfg = self.make_generate_config_with_tools(
                     system_instruction,
                     temperature,
                     max_tokens,
@@ -576,9 +576,9 @@ class GeminiModel(BaseLLM):
                     contents=contents_genai,
                     config=cfg,
                 )
-                self._add_usage_from_response(response)
+                self.add_usage_from_response(response)
 
-                model_content, fn_calls, text_out = self._model_content_function_calls(
+                model_content, fn_calls, text_out = self.model_content_function_calls(
                     response
                 )
                 if not fn_calls:
@@ -663,7 +663,7 @@ class GeminiModel(BaseLLM):
                         types.Content(role="user", parts=resp_parts)
                     )
 
-            final_cfg = self._make_generate_config(
+            final_cfg = self.make_generate_config(
                 system_instruction,
                 temperature,
                 max_tokens,
@@ -675,8 +675,8 @@ class GeminiModel(BaseLLM):
                 contents=contents_genai,
                 config=final_cfg,
             )
-            self._add_usage_from_response(final_resp)
-            return self._gemini_response_text(final_resp) or ""
+            self.add_usage_from_response(final_resp)
+            return self.gemini_response_text(final_resp) or ""
         finally:
             self.costTracker.stop()
 
@@ -687,10 +687,10 @@ class GeminiModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
     ) -> str:
-        system_instruction, contents = _gemini_split_messages(messages)
+        system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
         try:
-            response = self._generate(
+            response = self.generate(
                 system_instruction,
                 contents,
                 temperature,
@@ -698,8 +698,8 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type=None,
             )
-            self._add_usage_from_response(response)
-            text = self._gemini_response_text(response)
+            self.add_usage_from_response(response)
+            text = self.gemini_response_text(response)
             if text:
                 return text
             raise ValueError("Gemini 無回應內容（可能被安全過濾或無候選）")
@@ -719,11 +719,11 @@ class GeminiModel(BaseLLM):
         )
         if not has_json_mention:
             messages.append({"role": "user", "content": "請只輸出合法 JSON。"})
-        system_instruction, contents = _gemini_split_messages(messages)
+        system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
         text = ""
         try:
-            response = self._generate(
+            response = self.generate(
                 system_instruction,
                 contents,
                 temperature,
@@ -731,8 +731,8 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type="application/json",
             )
-            self._add_usage_from_response(response)
-            text = self._gemini_response_text(response).strip()
+            self.add_usage_from_response(response)
+            text = self.gemini_response_text(response).strip()
             return json.loads(text)
         except json.JSONDecodeError:
             import re

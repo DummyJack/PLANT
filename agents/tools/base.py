@@ -55,7 +55,10 @@ class ToolRegistry:
         built: List[Any] = []
 
         if "web_search" in allowed and self.enable_tools.get("web_search", False):
-            built.append(WebSearchTool())
+            ws_stop = self.config.get("web_search_stop")
+            built.append(
+                WebSearchTool(stop_config=ws_stop if isinstance(ws_stop, dict) else None)
+            )
 
         if "file_parser" in allowed and (
             self.enable_tools.get("file_parser", self.enable_tools.get("read_external_file", True))
@@ -63,7 +66,17 @@ class ToolRegistry:
             doc_dir = Path("doc")
             doc_dir.mkdir(parents=True, exist_ok=True)
             if has_supported_doc_files(doc_dir):
-                built.append(FileParserTool(base_dir=doc_dir))
+                fp_cfg = self.config.get("file_parser_rag") or {}
+                built.append(
+                    FileParserTool(
+                        base_dir=doc_dir,
+                        chunk_max_chars=int(fp_cfg.get("chunk_max_chars", 1200)),
+                        chunk_overlap=int(fp_cfg.get("chunk_overlap", 150)),
+                        read_chunks_max_chars=int(
+                            fp_cfg.get("read_chunks_max_chars", 48000)
+                        ),
+                    )
+                )
 
         if "plantuml_validate" in allowed and self.enable_tools.get("plantuml_validate", True):
             opts = self.config.get("plantuml_validate") or {}

@@ -11,13 +11,6 @@ class BaseAgent:
     name: str = ""
     system_prompt: str = ""
     tool_call_max_rounds: int = 3
-    low_confidence_threshold: float = 0.7
-
-    # 全域輸出慣例：僅格式/語系，不定義角色。子類可覆寫 get_global_conventions_suffix() 回傳 "" 以停用。
-    GLOBAL_CONVENTIONS = (
-        "對人可見的描述、說明、標題、statement、question 等請使用繁體中文；"
-        "id、type、category、label 等結構化欄位與程式/圖表關鍵字維持英文。"
-    )
 
     def __init__(
         self,
@@ -32,6 +25,8 @@ class BaseAgent:
         self.skill_names: List[str] = list(skill_names or [])
         self.policy = None
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
+        # 由 Flow 依 rough_idea 偵測後設定；預設繁中
+        self.output_language: str = "zh-TW"
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
         """從工具迴圈後的最終文字中解析 statement / open_questions JSON"""
@@ -64,8 +59,6 @@ class BaseAgent:
                             fallback = fallback[len(prefix) :].strip()
                     if fallback.endswith("```"):
                         fallback = fallback[:-3].strip()
-                    if len(fallback) > 2000:
-                        fallback = fallback[:2000] + "…"
                     parsed["statement"] = fallback
                 return parsed
             return {"statement": raw, "open_questions": []}
@@ -73,9 +66,18 @@ class BaseAgent:
 
     def get_global_conventions_suffix(self) -> str:
         """回傳附加在 system 後的全域輸出慣例（語系與格式）。不影響 agent 角色。子類可覆寫回傳 '' 以停用。"""
-        if not self.GLOBAL_CONVENTIONS:
+        from utils import global_conventions_text
+
+        text = global_conventions_text(self.output_language)
+        if not text:
             return ""
-        return f"\n\n# 全域輸出慣例\n{self.GLOBAL_CONVENTIONS}"
+        return f"\n\n# 全域輸出慣例\n{text}"
+
+    def lang_directive(self) -> str:
+        """內嵌於 task 字串的語系說明（與全域慣例一致）。"""
+        from utils import directive_embed
+
+        return directive_embed(self.output_language)
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
@@ -150,37 +152,72 @@ class BaseAgent:
         topic: Dict,
         previous_responses: Optional[List[Dict]] = None,
         artifact_snapshot: Optional[Dict] = None,
+        mediator_compromise: Optional[Dict] = None,
     ) -> Dict[str, str]:
-        """議題討論完成後的最終投票。僅回傳 vote 與簡短理由。"""
+        """議題討論完成後的最終投票。僅回傳 vote 與簡短理由。
+
+        若傳入 mediator_compromise 且含有效方案內容，表決對象為「是否同意採納該主持人方案」，
+        而非評判其他與會者發言。
+        """
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
+        mc = mediator_compromise or {}
+        mc_title = (mc.get("title") or "").strip()
+        mc_desc = (mc.get("description") or "").strip()
+        mc_rat = (mc.get("rationale") or "").strip()
+        has_mediator_package = bool(mc_desc or mc_title)
+
         prev_text = ""
-        if previous_responses:
+        if not has_mediator_package and previous_responses:
             parts = [
                 f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
                 for r in previous_responses
             ]
             prev_text = "\n# 本議題討論摘要（依發言順序）\n" + "\n\n".join(parts)
 
+        proposal_text = ""
+        if has_mediator_package:
+            proposal_text = (
+                "\n# 主持人提出的折衷方案（**本題唯一表決對象**）\n"
+                f"**標題**: {mc_title or '（無標題）'}\n\n"
+                f"**內容**:\n{mc_desc}\n\n"
+                f"**說明**: {mc_rat}\n\n"
+                "**重要**: 請僅針對上述主持人方案表決是否願意採納為本議題決議基礎；"
+                "勿改為比較或評判其他與會者先前發言孰是孰非。\n"
+            )
+
         snapshot_text = ""
         if artifact_snapshot:
             snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
 
-        user_prompt = f"""你正在進行本議題的「最終投票」。
+        if has_mediator_package:
+            task_block = """# 任務
+- 你正在對「主持人折衷方案」表決是否同意採納（非對整場發言做總評）
+- 只需給出 vote 與簡短 rationale（1-2 句）
 
-{topic_text}
-{prev_text}
-{snapshot_text}
-
-# 任務
-- 根據你在本議題中的專業立場，進行最終表決
+# 投票規則
+- vote 只能是 "agreed" 或 "unresolved"
+- agreed：你**同意**以主持人方案作為本議題決議基礎
+- unresolved：你**無法接受**該方案（或認為仍有違反你專業底線／關鍵資訊不足），需再修訂
+"""
+        else:
+            task_block = """# 任務
+- 主持人方案未能產生，請根據本議題討論摘要與你的專業立場表決
 - 只需給出 vote 與簡短 rationale（1-2 句）
 
 # 投票規則
 - vote 只能是 "agreed" 或 "unresolved"
 - agreed：你認為本議題可形成決策
 - unresolved：你認為仍有重要衝突或關鍵不確定，暫不應定案
+"""
 
+        user_prompt = f"""你正在進行本議題的「最終投票」。
+
+{topic_text}
+{proposal_text}{prev_text}
+{snapshot_text}
+
+{task_block}
 # 約束
 - 不要重寫長篇發言
 - 不要新增 open_questions
@@ -232,7 +269,14 @@ class BaseAgent:
         user_parts = []
         if not skill.get("content_system"):
             user_parts.append(f"# Skill: {skill.get('name', skill_name)}\n\n")
-        user_parts.extend([user_content, "\n\n# Task\n\n", task])
+        user_parts.extend(
+            [
+                f"# 輸出語系（必須遵守）\n{self.lang_directive()}\n\n",
+                user_content,
+                "\n\n# Task\n\n",
+                task,
+            ]
+        )
         if skill.get("template"):
             user_parts.append("\n\n# 範本（必須依此結構）\n\n")
             user_parts.append(skill["template"])
@@ -265,7 +309,10 @@ class BaseAgent:
         system_content = self.system_prompt + self.get_global_conventions_suffix()
         messages.append({"role": "system", "content": system_content})
 
-        task_parts = [task]
+        task_parts = [
+            f"# 輸出語系（必須遵守）\n{self.lang_directive()}\n",
+            task,
+        ]
         if context:
             task_parts.append(f"\n上下文資料:\n{json.dumps(context, ensure_ascii=False, indent=2)}")
         messages.append({"role": "user", "content": "\n".join(task_parts)})
@@ -335,6 +382,15 @@ class BaseAgent:
         """Gemini（google-genai）手動 function calling，見 GeminiModel.gemini_chat_with_tools。"""
         return callable(getattr(self.model, "gemini_chat_with_tools", None))
 
+    def reset_tool_sessions(self) -> None:
+        for t in (self.tools or {}).values():
+            reset = getattr(t, "reset_session", None)
+            if callable(reset):
+                try:
+                    reset()
+                except Exception as e:
+                    self.logger.debug("tool reset_session: %s", e)
+
     def chat_with_tools(
         self,
         messages: List[Dict],
@@ -344,6 +400,7 @@ class BaseAgent:
     ) -> str:
         """帶 tool-call 迴圈的 chat：模型可多次呼叫工具，最終回傳文字結果。若 client 不支援 tool calling 則改為普通 chat。
         active_skill：若為 skill 情境（如 domain-research），會額外套用 policy.can_skill_use_tool。"""
+        self.reset_tool_sessions()
         if not self.tools:
             return self.model.chat(messages)
         if self.supports_gemini_tool_calling():

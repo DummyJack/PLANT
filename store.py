@@ -37,7 +37,7 @@ class Store:
 
     # 專案管理
 
-    def _load_one_project(self, project_path: Path) -> Optional[Dict[str, Any]]:
+    def load_one_project(self, project_path: Path) -> Optional[Dict[str, Any]]:
         if not project_path.is_dir():
             return None
         artifact_file = project_path / "artifact" / "artifact.json"
@@ -69,7 +69,7 @@ class Store:
         max_workers = min(len(paths), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_path = {
-                executor.submit(self._load_one_project, p): p for p in paths
+                executor.submit(self.load_one_project, p): p for p in paths
             }
             for future in as_completed(future_to_path):
                 try:
@@ -163,7 +163,7 @@ class Store:
 
     # PlantUML
 
-    def _write_one_plantuml(self, model: Dict) -> Optional[str]:
+    def write_one_plantuml(self, model: Dict) -> Optional[str]:
         plantuml_code = model.get("plantuml", "")
         if not plantuml_code:
             return None
@@ -183,7 +183,7 @@ class Store:
             return
         max_workers = min(len(models), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._write_one_plantuml, m) for m in models]
+            futures = [executor.submit(self.write_one_plantuml, m) for m in models]
             for future in as_completed(futures):
                 try:
                     name = future.result()

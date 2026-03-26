@@ -1,8 +1,8 @@
 {
+  "output_language": "zh-TW",
   "rounds": 1,
   "agenda_items": 5,
   "max_stakeholders": 5,
-  "low_confidence_threshold": 0.7,
   "tool_call_max_rounds": 3,
   "max_iterations": {
     "expert_phase0": 3,

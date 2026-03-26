@@ -10,6 +10,7 @@ log/
 
 # 專案資料夾（包含 artifact、output）
 projects/
+doc/
 
 # 實驗結果
 results/

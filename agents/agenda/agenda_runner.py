@@ -40,10 +40,10 @@ class AgendaRunner:
         self.topic_idx = 0
         self.pending_review_issues: List[Dict] = []
 
-    def _topic_open_questions(self, topic_id: str) -> List[Dict]:
+    def topic_open_questions(self, topic_id: str) -> List[Dict]:
         return [q for q in self.all_open_questions if q.get("topic_id") == topic_id]
 
-    def _update_design_rationale_for_topic(
+    def update_design_rationale_for_topic(
         self,
         topic: Dict[str, Any],
         contributions: List[Dict],
@@ -52,7 +52,7 @@ class AgendaRunner:
         """每個議題存檔後即時更新 design_rationale.md。"""
         try:
             topic_id = topic.get("id", "")
-            topic_oq = self._topic_open_questions(topic_id)
+            topic_oq = self.topic_open_questions(topic_id)
             topic_context = self.mediator.build_design_rationale_entry_context(
                 topic=topic,
                 contributions=contributions,
@@ -230,11 +230,16 @@ class AgendaRunner:
             contributions = st.get("contributions") or []
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  綜合決議: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
-            final_votes = self.mediator.collect_final_votes(
+            vote_bundle = self.mediator.collect_final_votes(
                 topic, contributions, self.registry, artifact=self.artifact
             )
+            final_votes = vote_bundle.get("votes") or {}
+            mc = vote_bundle.get("mediator_compromise") or {}
             resolution = self.mediator.synthesize_and_resolve(
-                topic, contributions, final_votes=final_votes
+                topic,
+                contributions,
+                final_votes=final_votes,
+                mediator_compromise=mc,
             )
             self.topic_status[topic_id]["resolution"] = resolution
             votes = resolution.get("votes", {})
@@ -290,11 +295,16 @@ class AgendaRunner:
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  存檔議題: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             if not resolution:
-                final_votes = self.mediator.collect_final_votes(
+                vote_bundle = self.mediator.collect_final_votes(
                     topic, contributions, self.registry, artifact=self.artifact
                 )
+                final_votes = vote_bundle.get("votes") or {}
+                mc = vote_bundle.get("mediator_compromise") or {}
                 resolution = self.mediator.synthesize_and_resolve(
-                    topic, contributions, final_votes=final_votes
+                    topic,
+                    contributions,
+                    final_votes=final_votes,
+                    mediator_compromise=mc,
                 )
                 self.topic_status[topic_id]["resolution"] = resolution
             self.topic_idx += 1
@@ -324,7 +334,7 @@ class AgendaRunner:
                     "resolution": resolution,
                 }
             )
-            self._update_design_rationale_for_topic(topic, contributions, resolution)
+            self.update_design_rationale_for_topic(topic, contributions, resolution)
             self.topic_status[topic_id]["saved"] = True
             obs["result"] = {"topic_id": topic_id, "filename": meeting_filename}
             return obs
