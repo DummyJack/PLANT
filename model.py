@@ -1,8 +1,7 @@
 import json
 import logging
 import os
-
-import ollama
+import inspect
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -58,7 +57,7 @@ def gemini_split_messages(
 
 
 class BaseLLM(ABC):
-    """統一 LLM 介面，支援 OpenAI / Ollama / Anthropic Claude / Google Gemini"""
+    """統一 LLM 介面，支援 OpenAI / Anthropic Claude / Google Gemini"""
 
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
@@ -93,18 +92,47 @@ class BaseLLM(ABC):
     @abstractmethod
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None,
-             max_output_tokens: Optional[int] = None) -> str: ...
+             max_output_tokens: Optional[int] = None,
+             action: Optional[str] = None) -> str: ...
 
     @abstractmethod
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None,
-                  max_output_tokens: Optional[int] = None) -> Dict: ...
+                  max_output_tokens: Optional[int] = None,
+                  action: Optional[str] = None) -> Dict: ...
 
-    def addUsage(self, usage: Optional[Dict[str, Any]]):
-        self.costTracker.addUsage(usage)
+    def _infer_usage_action(self) -> str:
+        """嘗試從呼叫堆疊推斷這次 API 呼叫在做什麼。"""
+        stack = inspect.stack(context=0)
+        try:
+            for frame_info in stack[2:]:
+                filename = frame_info.filename.replace("\\", "/")
+                if filename.endswith("/model.py") or filename.endswith("/utils.py"):
+                    continue
+                caller_self = frame_info.frame.f_locals.get("self")
+                class_name = (
+                    caller_self.__class__.__name__
+                    if caller_self is not None
+                    else None
+                )
+                module_name = os.path.splitext(os.path.basename(filename))[0]
+                func_name = frame_info.function
+                if class_name:
+                    return f"{module_name}.{class_name}.{func_name}"
+                return f"{module_name}.{func_name}"
+        finally:
+            del stack
+        return "unknown"
+
+    def addUsage(self, usage: Optional[Dict[str, Any]], action: Optional[str] = None):
+        usage_action = action or self._infer_usage_action()
+        self.costTracker.addUsage(usage, metadata={"action": usage_action})
 
     def getCostSummary(self) -> Optional[Dict[str, Any]]:
         return self.costTracker.summary()
+
+    def getUsageCallRecords(self) -> List[Dict[str, Any]]:
+        return self.costTracker.get_call_records()
 
     def resetCostSummary(self):
         self.costTracker.reset()
@@ -120,7 +148,8 @@ class OpenAIModel(BaseLLM):
 
     def chat(self, messages: List[Dict], temperature: Optional[float] = None,
              max_tokens: Optional[int] = None,
-             max_output_tokens: Optional[int] = None) -> str:
+             max_output_tokens: Optional[int] = None,
+             action: Optional[str] = None) -> str:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
         self.costTracker.start()
         try:
@@ -134,7 +163,8 @@ class OpenAIModel(BaseLLM):
                         "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                         "completion_tokens": getattr(usage, "completion_tokens", 0),
                         "total_tokens": getattr(usage, "total_tokens", 0),
-                    }
+                    },
+                    action=action,
                 )
             return response.choices[0].message.content
         finally:
@@ -142,7 +172,8 @@ class OpenAIModel(BaseLLM):
 
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None,
-                  max_output_tokens: Optional[int] = None) -> Dict:
+                  max_output_tokens: Optional[int] = None,
+                  action: Optional[str] = None) -> Dict:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
 
         # OpenAI response_format: json_object 要求 messages 中須包含 "json" 字樣
@@ -164,72 +195,12 @@ class OpenAIModel(BaseLLM):
                         "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                         "completion_tokens": getattr(usage, "completion_tokens", 0),
                         "total_tokens": getattr(usage, "total_tokens", 0),
-                    }
+                    },
+                    action=action,
                 )
             return json.loads(response.choices[0].message.content)
         finally:
             self.costTracker.stop()
-
-
-class OllamaModel(BaseLLM):
-    def __init__(self, model_name: str, base_url: str = "http://localhost:11434", **kwargs):
-        super().__init__(model_name, **kwargs)
-        self.client = ollama.Client(host=base_url)
-
-    def build_ollama_options(
-        self,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        max_output_tokens: Optional[int] = None,
-    ) -> Dict:
-        options = {}
-        if temperature is not None:
-            options["temperature"] = temperature
-        elif self.default_temperature is not None:
-            options["temperature"] = self.default_temperature
-        effective_max_tokens = (
-            max_output_tokens if max_output_tokens is not None else max_tokens
-        )
-        if effective_max_tokens is not None:
-            options["num_predict"] = effective_max_tokens
-        elif self.default_max_tokens is not None:
-            options["num_predict"] = self.default_max_tokens
-        return options
-
-    def chat(self, messages: List[Dict], temperature: Optional[float] = None,
-             max_tokens: Optional[int] = None,
-             max_output_tokens: Optional[int] = None) -> str:
-        options = self.build_ollama_options(
-            temperature, max_tokens, max_output_tokens
-        )
-        self.costTracker.start()
-        try:
-            response = self.client.chat(
-                model=self.model_name, messages=messages,
-                options=options if options else None
-            )
-            self.addUsage(
-                {
-                    "input_tokens": response.get("prompt_eval_count", 0),
-                    "output_tokens": response.get("eval_count", 0),
-                }
-            )
-            return response["message"]["content"]
-        finally:
-            self.costTracker.stop()
-
-    def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
-                  max_tokens: Optional[int] = None,
-                  max_output_tokens: Optional[int] = None) -> Dict:
-        content = self.chat(messages, temperature, max_tokens, max_output_tokens)
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            import re
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1))
-            raise ValueError(f"無法從回應中解析 JSON: {content}")
 
 
 class AnthropicModel(BaseLLM):
@@ -266,6 +237,7 @@ class AnthropicModel(BaseLLM):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        action: Optional[str] = None,
     ) -> str:
         system, msgs = anthropic_split_messages(messages)
         max_out = self.effective_max_tokens(
@@ -294,7 +266,8 @@ class AnthropicModel(BaseLLM):
                         "completion_tokens": getattr(usage, "output_tokens", 0),
                         "total_tokens": getattr(usage, "input_tokens", 0)
                         + getattr(usage, "output_tokens", 0),
-                    }
+                    },
+                    action=action,
                 )
             parts: List[str] = []
             for b in response.content or []:
@@ -311,6 +284,7 @@ class AnthropicModel(BaseLLM):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        action: Optional[str] = None,
     ) -> Dict:
         messages = list(messages)
         has_json_mention = any(
@@ -318,7 +292,13 @@ class AnthropicModel(BaseLLM):
         )
         if not has_json_mention:
             messages.append({"role": "user", "content": "請只輸出合法 JSON，不要其他文字。"})
-        text = self.chat(messages, temperature, max_tokens, max_output_tokens)
+        text = self.chat(
+            messages,
+            temperature,
+            max_tokens,
+            max_output_tokens,
+            action=action,
+        )
         text = text.strip()
         try:
             return json.loads(text)
@@ -433,7 +413,7 @@ class GeminiModel(BaseLLM):
             call_kw["config"] = gen_cfg
         return self._client.models.generate_content(**call_kw)
 
-    def add_usage_from_response(self, response: Any) -> None:
+    def add_usage_from_response(self, response: Any, action: Optional[str] = None) -> None:
         um = getattr(response, "usage_metadata", None)
         if not um:
             return
@@ -447,7 +427,8 @@ class GeminiModel(BaseLLM):
                 "prompt_tokens": prompt,
                 "completion_tokens": cand,
                 "total_tokens": total,
-            }
+            },
+            action=action,
         )
 
     def openai_tool_schemas_to_gemini_tools(
@@ -539,6 +520,7 @@ class GeminiModel(BaseLLM):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        action: Optional[str] = None,
     ) -> str:
         """
         Gemini 手動 function calling 迴圈（與 OpenAI chat.completions tools 對齊）。
@@ -556,6 +538,7 @@ class GeminiModel(BaseLLM):
                 temperature=temperature,
                 max_tokens=max_tokens,
                 max_output_tokens=max_output_tokens,
+                action=action,
             )
 
         system_instruction, contents_dicts = gemini_split_messages(messages)
@@ -576,7 +559,7 @@ class GeminiModel(BaseLLM):
                     contents=contents_genai,
                     config=cfg,
                 )
-                self.add_usage_from_response(response)
+                self.add_usage_from_response(response, action=action)
 
                 model_content, fn_calls, text_out = self.model_content_function_calls(
                     response
@@ -675,7 +658,7 @@ class GeminiModel(BaseLLM):
                 contents=contents_genai,
                 config=final_cfg,
             )
-            self.add_usage_from_response(final_resp)
+            self.add_usage_from_response(final_resp, action=action)
             return self.gemini_response_text(final_resp) or ""
         finally:
             self.costTracker.stop()
@@ -686,6 +669,7 @@ class GeminiModel(BaseLLM):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        action: Optional[str] = None,
     ) -> str:
         system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
@@ -698,7 +682,7 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type=None,
             )
-            self.add_usage_from_response(response)
+            self.add_usage_from_response(response, action=action)
             text = self.gemini_response_text(response)
             if text:
                 return text
@@ -712,6 +696,7 @@ class GeminiModel(BaseLLM):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
+        action: Optional[str] = None,
     ) -> Dict:
         messages = list(messages)
         has_json_mention = any(
@@ -731,7 +716,7 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type="application/json",
             )
-            self.add_usage_from_response(response)
+            self.add_usage_from_response(response, action=action)
             text = self.gemini_response_text(response).strip()
             return json.loads(text)
         except json.JSONDecodeError:
@@ -750,17 +735,15 @@ class GeminiModel(BaseLLM):
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:
     _aliases = {
         "claude": "anthropic",
-        "google": "gemini",
     }
     key = _aliases.get(provider.lower(), provider.lower())
     providers = {
         "openai": OpenAIModel,
-        "ollama": OllamaModel,
         "anthropic": AnthropicModel,
         "gemini": GeminiModel,
     }
     if key not in providers:
         raise ValueError(
-            f"不支援的 provider: {provider}，支援: {list(providers.keys())} 及別名 claude, google"
+            f"不支援的 provider: {provider}，支援: {list(providers.keys())} 及別名 claude"
         )
     return providers[key](model_name, **kwargs)

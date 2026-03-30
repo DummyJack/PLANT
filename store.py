@@ -13,12 +13,10 @@ class Store:
         self.base_dir = Path(base_dir)
         self.project_id = project_id
 
-        self.config_dir = self.base_dir / "config"
         self.projects_dir = self.base_dir / "projects"
         self.log_dir = self.base_dir / "log"
 
         if not project_id:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
             self.projects_dir.mkdir(parents=True, exist_ok=True)
             self.log_dir.mkdir(parents=True, exist_ok=True)
             return
@@ -28,7 +26,6 @@ class Store:
         self.output_dir = self.project_dir / "output"
 
         for dir_path in [
-            self.config_dir,
             self.artifact_dir,
             self.output_dir,
             self.log_dir,

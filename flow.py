@@ -24,6 +24,7 @@ class Flow:
         self.config = config
         self.store = store
         self.logger = logger
+        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
         self.agent_models = {
             "user": self.build_agent_model("user"),
@@ -217,6 +218,7 @@ class Flow:
             q["answered_round"] = round_num
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
+        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         rounds = self.config.get("rounds", 1)
         now = datetime.now(timezone.utc).isoformat()
         artifact = {
@@ -265,6 +267,7 @@ class Flow:
         return artifact
 
     def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
+        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         artifact = existing_artifact
         artifact.setdefault(
             "scope", {"in_scope": [], "out_of_scope": [], "description": ""}
@@ -652,7 +655,6 @@ class Flow:
             total_cost = sum(v.get("estimated_cost(USD)", 0.0) for v in cost_by_agent.values())
             cost_summary = {
                 "project_id": self.store.project_id,
-                "generated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "agents": cost_by_agent,
                 "totals": {
                     "input_tokens": total_input,
@@ -666,3 +668,36 @@ class Flow:
             self.logger.info("✓ 已儲存 cost_summary.json")
         else:
             self.logger.info("模型無定價資訊，略過輸出 cost_summary.json")
+
+        agents_context: Dict[str, Any] = {}
+        total_in = total_out = total_all = 0
+        api_calls = 0
+        for agent_name, model in self.agent_models.items():
+            records = (
+                model.getUsageCallRecords()
+                if hasattr(model, "getUsageCallRecords")
+                else []
+            )
+            agents_context[agent_name] = {
+                "model": getattr(model, "model_name", ""),
+                "calls": records,
+            }
+            for r in records:
+                total_in += int(r.get("input_tokens", 0) or 0)
+                total_out += int(r.get("output_tokens", 0) or 0)
+                total_all += int(r.get("total_tokens", 0) or 0)
+                api_calls += 1
+
+        agent_usage = {
+            "project_id": self.store.project_id,
+            "generated_at": self.flow_started_at,
+            "agents": agents_context,
+            "totals": {
+                "input_tokens": total_in,
+                "output_tokens": total_out,
+                "total_tokens": total_all,
+                "api_calls": api_calls,
+            },
+        }
+        self.store.save_json(agent_usage, self.store.project_dir / "agent_usage.json")
+        self.logger.info("✓ 已儲存 agent_usage.json")

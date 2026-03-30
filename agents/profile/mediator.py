@@ -70,6 +70,70 @@ class MediatorAgent(BaseAgent):
         active_ids = [t["id"] for t in active]
         return active, active_ids
 
+    def merge_open_question_items(
+        self,
+        items: List[Dict[str, Any]],
+        artifact: Dict[str, Any],
+        registered: List[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        將多個 open_question 議程合併為單一議題，避免逐題拆散討論。
+        需求：只要有 open_question，就由相關 agent 在同一題集中回覆。
+        """
+        open_items = [it for it in items if (it.get("category") or "").strip() == "open_question"]
+        if not open_items:
+            return items
+
+        related_agents = set()
+        for it in open_items:
+            for a in (it.get("participants", []) or []):
+                if a in registered:
+                    related_agents.add(a)
+            for a in (it.get("speaking_order", []) or []):
+                if a in registered:
+                    related_agents.add(a)
+
+        for q in artifact.get("open_questions", []):
+            if q.get("status") == "answered":
+                continue
+            to_agent = (q.get("to") or q.get("to_agent") or "").strip()
+            if to_agent in registered:
+                related_agents.add(to_agent)
+
+        participants = [a for a in registered if a in related_agents]
+        if not participants:
+            participants = list(registered)
+
+        source_ids: List[str] = []
+        seen_ids = set()
+        for it in open_items:
+            for sid in (it.get("source_ids", []) or []):
+                if not sid or sid in seen_ids:
+                    continue
+                seen_ids.add(sid)
+                source_ids.append(sid)
+
+        merged_item = {
+            "title": "開放問題集中回覆",
+            "description": f"整合 {len(open_items)} 個 open_question 議題，請相關 agent 集中回答。",
+            "category": "open_question",
+            "participants": participants,
+            "discussion_mode": "simultaneous",
+            "speaking_order": participants,
+            "source_ids": source_ids,
+        }
+
+        merged: List[Dict[str, Any]] = []
+        inserted = False
+        for it in items:
+            if (it.get("category") or "").strip() == "open_question":
+                if not inserted:
+                    merged.append(merged_item)
+                    inserted = True
+                continue
+            merged.append(it)
+        return merged
+
     def generate_agenda(
         self,
         artifact: Dict[str, Any],
@@ -127,7 +191,8 @@ class MediatorAgent(BaseAgent):
 - **conflict_resolution**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
 - **requirement_clarification**：當草稿（或摘要）中**開放問題**涉及需求模糊、須釐清含義時，可開此類；優先排最前。
 - **open_question**：當草稿（或摘要）中有待處理開放問題時，可開此類或與 requirement_clarification 合併，依內容判斷。
-- **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；例如合規建議、討論中有人提議新功能等。
+- **open_question**：若同輪有多個 open_question，執行層會自動合併為單一「集中回覆」議題，讓相關 agent 一次回答；因此可先正常產生 open_question，無需刻意拆得很細。
+- **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；此外，若有跡象顯示既有需求需要修正（例如描述不準確、優先順序變動、邊界條件改變），也可用此類議題讓 User 檢視並調整既有需求。
 - **tradeoff**：當需求摘要中有多個 NFR（NFR-1、NFR-2…）或 Conflict 涉及效能、可用性、成本等非功能需求之間的競合取捨時，**應考慮開此類**。
 - 其餘依專案狀態與優先順序判斷，無強制對應。
 
@@ -176,6 +241,11 @@ class MediatorAgent(BaseAgent):
             else:
                 normal_items.append(item)
         ordered_items = (prioritized_items + normal_items)[:limit]
+        ordered_items = self.merge_open_question_items(
+            ordered_items,
+            artifact,
+            registered,
+        )
 
         agenda_items = []
         for idx, item in enumerate(ordered_items, 1):

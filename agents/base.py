@@ -62,7 +62,33 @@ class BaseAgent:
                     parsed["statement"] = fallback
                 return parsed
             return {"statement": raw, "open_questions": []}
-        return self.model.chat_json(messages, **kwargs)
+        action = kwargs.pop("action", f"{self.name}.topic.response")
+        return self.model.chat_json(messages, action=action, **kwargs)
+
+    def usage_action(self, suffix: str) -> str:
+        return f"{self.name}.{suffix}"
+
+    def format_previous_responses(
+        self,
+        previous_responses: Optional[List[Dict[str, Any]]],
+        *,
+        title: str = "前面的發言",
+    ) -> str:
+        """將前文發言整理成可讀文字；若有 speaking_as 會一併標示。"""
+        if not previous_responses:
+            return ""
+        parts: List[str] = []
+        for r in previous_responses:
+            agent_name = r.get("agent", "?")
+            resp = r.get("response", {}) if isinstance(r.get("response"), dict) else {}
+            statement = resp.get("statement", "")
+            speaking_as = resp.get("speaking_as", [])
+            if isinstance(speaking_as, str):
+                speaking_as = [speaking_as]
+            speaking_as = [s for s in speaking_as if isinstance(s, str) and s.strip()]
+            role_hint = f"（代表：{'、'.join(speaking_as)}）" if speaking_as else ""
+            parts.append(f"【{agent_name}{role_hint}】\n{statement}")
+        return f"\n# {title}\n" + "\n\n".join(parts)
 
     def get_global_conventions_suffix(self) -> str:
         """回傳附加在 system 後的全域輸出慣例（語系與格式）。不影響 agent 角色。子類可覆寫回傳 '' 以停用。"""
@@ -94,11 +120,9 @@ class BaseAgent:
         """回應議題討論，子類別應覆寫以提供角色特化回應。若有 tools 可先使用再輸出 JSON。"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
-        prev_text = ""
-        if previous_responses:
-            parts = [f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                     for r in previous_responses]
-            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
+        prev_text = self.format_previous_responses(
+            previous_responses, title="前面的發言"
+        )
 
         snapshot_text = ""
         if artifact_snapshot:
@@ -139,7 +163,10 @@ class BaseAgent:
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(
+            messages,
+            action=self.usage_action("topic.response"),
+        )
 
         return {
             "agent": self.name,
@@ -168,12 +195,10 @@ class BaseAgent:
         has_mediator_package = bool(mc_desc or mc_title)
 
         prev_text = ""
-        if not has_mediator_package and previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n# 本議題討論摘要（依發言順序）\n" + "\n\n".join(parts)
+        if not has_mediator_package:
+            prev_text = self.format_previous_responses(
+                previous_responses, title="本議題討論摘要（依發言順序）"
+            )
 
         proposal_text = ""
         if has_mediator_package:
@@ -230,7 +255,10 @@ class BaseAgent:
 }}"""
 
         messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
+        response = self.chat_for_topic_response(
+            messages,
+            action=self.usage_action("topic.vote"),
+        )
         v = (response.get("vote") or "").strip().lower()
         vote = "agreed" if v == "agreed" else "unresolved"
         rationale = (
@@ -302,7 +330,10 @@ class BaseAgent:
                 max_rounds=self.tool_call_max_rounds,
                 active_skill=skill_name,
             )
-        return self.model.chat(messages)
+        return self.model.chat(
+            messages,
+            action=self.usage_action(f"skill.{skill_name}"),
+        )
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []
@@ -402,7 +433,10 @@ class BaseAgent:
         active_skill：若為 skill 情境（如 domain-research），會額外套用 policy.can_skill_use_tool。"""
         self.reset_tool_sessions()
         if not self.tools:
-            return self.model.chat(messages)
+            return self.model.chat(
+                messages,
+                action=self.usage_action("chat.with_tools"),
+            )
         if self.supports_gemini_tool_calling():
             return self.model.gemini_chat_with_tools(
                 messages,
@@ -411,10 +445,16 @@ class BaseAgent:
                     name, args, active_skill=active_skill
                 ),
                 max_rounds=max_rounds,
+                action=self.usage_action(
+                    f"tool_loop.{active_skill}" if active_skill else "tool_loop.general"
+                ),
             )
         if not self.supports_tool_calling():
             self.logger.warning("目前 model client 不支援 tool calling，改為普通 chat（工具不會被呼叫）")
-            return self.model.chat(messages)
+            return self.model.chat(
+                messages,
+                action=self.usage_action("chat.no_tool_support"),
+            )
 
         tool_schemas = self.get_tool_schemas()
 
@@ -428,7 +468,10 @@ class BaseAgent:
                 )
             except (AttributeError, TypeError) as e:
                 self.logger.warning(f"tool calling 呼叫失敗，改為普通 chat: {e}")
-                return self.model.chat(messages)
+                return self.model.chat(
+                    messages,
+                    action=self.usage_action("chat.tool_calling_fallback"),
+                )
             msg = response.choices[0].message
 
             if not getattr(msg, "tool_calls", None):
@@ -491,4 +534,7 @@ class BaseAgent:
             )
             return last.choices[0].message.content or ""
         except (AttributeError, TypeError):
-            return self.model.chat(messages)
+            return self.model.chat(
+                messages,
+                action=self.usage_action("chat.final_fallback"),
+            )

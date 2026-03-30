@@ -108,6 +108,7 @@ class UserAgent(BaseAgent):
 
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_category = (topic.get("category") or "").strip()
 
         speaking_as_list = []
         if self.stakeholders:
@@ -163,13 +164,9 @@ class UserAgent(BaseAgent):
             names_list = []
             roles_text = ""
 
-        prev_text = ""
-        if previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
+        prev_text = self.format_previous_responses(
+            previous_responses, title="前面的發言"
+        )
 
         snapshot_text = ""
         if artifact_snapshot:
@@ -183,16 +180,31 @@ class UserAgent(BaseAgent):
                 '"statement": "完整發言內容", '
                 '"open_questions": [...]'
             )
-            flow_hint = "1. 先決定本輪以誰發言（speaking_as） 2. 再撰寫 statement；投票在討論結束後另行進行"
+            if topic_category == "open_question":
+                flow_hint = (
+                    "1. 先決定本輪以哪些利害關係人發言（open_question 建議優先涵蓋多方利害關係人）"
+                    " 2. 再撰寫 statement；投票在討論結束後另行進行"
+                )
+            else:
+                flow_hint = "1. 先決定本輪以誰發言（speaking_as） 2. 再撰寫 statement；投票在討論結束後另行進行"
         else:
             json_hint = '"statement": "針對此議題的完整發言內容", "open_questions": [...]'
             flow_hint = "撰寫一段完整的發言（statement），以第一人稱表達立場與需求；投票在討論結束後另行進行"
+
+        category_hint = ""
+        if topic_category == "new_requirement":
+            category_hint = (
+                "\n# 本議題特別說明（new_requirement）\n"
+                "此題不只可提出新需求，也請檢視你先前提出的需求是否需要調整（如修正文句、補上限制條件、調整優先順序或刪除不再需要的內容）。\n"
+                "若要調整，請在 statement 中清楚指出「原需求需調整」與「調整後方向」。"
+            )
 
         user_prompt = f"""{roles_text}
 
 {topic_text}
 {prev_text}
 {snapshot_text}
+{category_hint}
 
 # 思考與發言流程
 {flow_hint}

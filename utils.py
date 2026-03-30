@@ -277,6 +277,7 @@ class CostTracker:
 
         self.startedAt = None
         self.lock = threading.Lock()
+        self.call_records: List[Dict[str, Any]] = []
 
     def start(self):
         with self.lock:
@@ -290,7 +291,11 @@ class CostTracker:
             self.startedAt = None
             return self.elapsed_seconds
 
-    def addUsage(self, usage: Optional[Dict[str, Any]]):
+    def addUsage(
+        self,
+        usage: Optional[Dict[str, Any]],
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         支援多種欄位命名：
         - prompt_tokens / completion_tokens
@@ -307,6 +312,16 @@ class CostTracker:
         total_count = int(usage.get("total_tokens", input_count + output_count) or 0)
 
         with self.lock:
+            record = {
+                "input_tokens": input_count,
+                "output_tokens": output_count,
+                "total_tokens": total_count,
+                # 以本機時間記錄 API 回應當下被記帳的時間（格式與 agent_usage.json 的 generated_at 相同）
+                "recorded_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            }
+            if metadata:
+                record.update(metadata)
+            self.call_records.append(record)
             self.input_tokens += input_count
             self.output_tokens += output_count
             self.total_tokens += total_count
@@ -320,6 +335,11 @@ class CostTracker:
             self.elapsed_seconds = 0.0
             self.estimated_cost_usd = 0.0
             self.startedAt = None
+            self.call_records.clear()
+
+    def get_call_records(self) -> List[Dict[str, Any]]:
+        with self.lock:
+            return list(self.call_records)
 
     def summary(self) -> Optional[Dict[str, Any]]:
         pricing = self.resolvePricing(self.model_name)

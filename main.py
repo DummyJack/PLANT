@@ -55,16 +55,12 @@ def main():
 
     api_key_env = {
         "openai": "OPENAI_API_KEY",
-        "ollama": None,
         "anthropic": "ANTHROPIC_API_KEY",
         "claude": "ANTHROPIC_API_KEY",
         "gemini": "GOOGLE_API_KEY",
-        "google": "GOOGLE_API_KEY",
     }
 
     for used_provider in providers_to_check:
-        if used_provider == "ollama":
-            continue
         required_key = api_key_env.get(used_provider)
         if not required_key:
             print(f"錯誤：不支援的 provider: {used_provider}")

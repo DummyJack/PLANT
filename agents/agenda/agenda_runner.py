@@ -295,6 +295,9 @@ class AgendaRunner:
             cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             self.logger.info(f"  存檔議題: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
             if not resolution:
+                self.logger.info(
+                    "    尚未執行 resolve_topic，save_topic 時自動補做綜合決議與投票"
+                )
                 vote_bundle = self.mediator.collect_final_votes(
                     topic, contributions, self.registry, artifact=self.artifact
                 )
@@ -433,6 +436,18 @@ class AgendaRunner:
             return obs
 
         if action == "finish_round":
+            if self.topics:
+                unsaved_ids = [
+                    t.get("id", "")
+                    for t in self.topics
+                    if not self.topic_status.get(t.get("id", ""), {}).get("saved", False)
+                ]
+                if unsaved_ids:
+                    obs["error"] = (
+                        "尚有未存檔議題，請先完成 save_topic 後再 finish_round: "
+                        + ", ".join(i for i in unsaved_ids if i)
+                    )
+                    return obs
             obs["result"] = "round_complete"
             return obs
 
