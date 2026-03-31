@@ -45,28 +45,40 @@ class Flow:
         documentor_tools = self.tool_registry.build_tools_for_agent("documentor")
 
         self.user_agent = UserAgent(
-            self.agent_models["user"], registry=self.registry
+            self.agent_models["user"],
+            registry=self.registry,
+            project_config=self.config,
         )
         self.analyst_agent = AnalystAgent(
-            self.agent_models["analyst"], tools=analyst_tools, registry=self.registry
+            self.agent_models["analyst"],
+            tools=analyst_tools,
+            registry=self.registry,
+            project_config=self.config,
         )
         self.expert_agent = ExpertAgent(
             self.agent_models["expert"],
             tools=expert_tools,
             registry=self.registry,
             doc_dir="doc",
+            project_config=self.config,
         )
         self.mediator_agent = MediatorAgent(
-            self.agent_models["mediator"], registry=self.registry
+            self.agent_models["mediator"],
+            registry=self.registry,
+            project_config=self.config,
         )
         self.modeler_agent = ModelerAgent(
-            self.agent_models["modeler"], tools=modeler_tools, registry=self.registry
+            self.agent_models["modeler"],
+            tools=modeler_tools,
+            registry=self.registry,
+            project_config=self.config,
         )
         self.documentor_agent = DocumentorAgent(
             self.agent_models["documentor"],
             self.store,
             tools=documentor_tools,
             registry=self.registry,
+            project_config=self.config,
         )
 
         # policy 強制：固定 analyst/expert/modeler/documentor 的 skill/tool 指派

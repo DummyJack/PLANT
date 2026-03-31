@@ -56,12 +56,16 @@ class ToolRegistry:
 
         if "web_search" in allowed and self.enable_tools.get("web_search", False):
             ws_stop = self.config.get("web_search_stop")
-            built.append(
-                WebSearchTool(stop_config=ws_stop if isinstance(ws_stop, dict) else None)
-            )
+            ws_kw: Dict[str, Any] = {
+                "stop_config": ws_stop if isinstance(ws_stop, dict) else None,
+            }
+            cap = self.config.get("max_web_search_results")
+            if cap is not None:
+                ws_kw["max_results_cap"] = int(cap)
+            built.append(WebSearchTool(**ws_kw))
 
         if "file_parser" in allowed and (
-            self.enable_tools.get("file_parser", self.enable_tools.get("read_external_file", True))
+            self.enable_tools.get("file_parser", True)
         ):
             doc_dir = Path("doc")
             doc_dir.mkdir(parents=True, exist_ok=True)

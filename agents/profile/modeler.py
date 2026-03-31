@@ -64,12 +64,19 @@ class ModelerAgent(BaseAgent):
 
     system_prompt = MODELER_ROLE_PROMPT
 
-    def __init__(self, model, tools: Optional[list] = None, registry=None):
+    def __init__(
+        self,
+        model,
+        tools: Optional[list] = None,
+        registry=None,
+        project_config=None,
+    ):
         super().__init__(
             model,
             tools=tools or [],
             registry=registry,
             skill_names=["plantuml-ascii"],
+            project_config=project_config,
         )
         from agents.skills.base import get_skill
 
@@ -98,11 +105,12 @@ class ModelerAgent(BaseAgent):
     # ===== 子 OODA 循環（UML 產出／更新） =====
 
     def run_review_loop(self, artifact, recent_discussions=None, *, max_iterations):
-        """Modeler 子 OODA：評估影響 → 更新圖表 → 驗證修正。max_iterations 為此次上限（caller 傳入，通常為 5）；第一輪可選填 max_iterations（1–5）由 Modeler 自訂此次實際輪數。"""
+        """Modeler 子 OODA：輪數上限 min(caller, self_review_round_cap)；第一輪可縮短。"""
         observation = None
         actions_taken = []
         pending_issues = []
-        effective_max = min(max_iterations, 5)
+        loop_cap = self.self_review_round_cap()
+        effective_max = min(max_iterations, loop_cap)
         i = 0
 
         while i < effective_max:
@@ -112,9 +120,13 @@ class ModelerAgent(BaseAgent):
             decision = self.decide_next_review_action(state, observation)
             if i == 0:
                 n = decision.get("max_iterations")
-                if n is not None and isinstance(n, int) and 1 <= n <= 5:
+                if n is not None and isinstance(n, int) and 1 <= n <= effective_max:
                     effective_max = n
-                    self.logger.info(f"  Modeler 自訂此次複審輪數: {effective_max}（1–5）")
+                    self.logger.info(
+                        "  Modeler 自訂此次複審輪數: %s（上限 %s）",
+                        effective_max,
+                        loop_cap,
+                    )
             action = decision.get("action", "done")
             self.logger.info(
                 f"  Modeler review [{i + 1}/{effective_max}]: {action}"
@@ -145,6 +157,7 @@ class ModelerAgent(BaseAgent):
     def decide_next_review_action(self, state, last_observation=None):
         state_text = json.dumps(state, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
+        sr_current = int(state.get("max_iterations") or 1)
 
         user_prompt = f"""# 任務
 你是系統建模專家，正在對當前專案的 UML 模型進行自主更新與驗證。根據「當前狀態」與「上一步結果」，決定下一步行動。
@@ -163,7 +176,7 @@ class ModelerAgent(BaseAgent):
 {obs_text}
 
 # 決策指引
-- 若為第一輪（當前狀態中 iteration 為 1），可選填 max_iterations（1–5）表示此次複審你打算跑幾輪；不填則用目前上限（最多 5）。
+- 若為第一輪（當前狀態中 iteration 為 1），可選填 max_iterations（1–{sr_current}）表示此次複審你打算跑幾輪；不填則用目前上限 {sr_current}。
 - 先 assess_impact 判斷哪些模型需更新
 - 對每個需更新的圖表：update_diagram → validate_diagram → (若失敗) fix_diagram → validate_diagram
 - 所有需更新的圖表處理完後呼叫 done
@@ -174,7 +187,7 @@ class ModelerAgent(BaseAgent):
     "action": "動作名稱",
     "params": {{}},
     "reasoning": "一句說明",
-    "max_iterations": "選填，僅第一輪有效；填數字 1–5 表示此次複審自訂輪數"
+    "max_iterations": "選填，僅第一輪有效；填數字 1–{sr_current} 表示此次複審自訂輪數"
 }}"""
 
         messages = self.build_direct_messages(user_prompt)

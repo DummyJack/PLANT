@@ -7,6 +7,11 @@ from agents.profile.mediator import (
 )
 
 
+def self_review_round_cap_from_config(config: Dict[str, Any]) -> int:
+    mi = config.get("max_iterations") or {}
+    return max(1, int(mi.get("self_review_round_cap", 5)))
+
+
 class AgendaRunner:
     """執行議程相關動作，維護本輪 topics、topic_status、round_discussions、all_open_questions。"""
 
@@ -345,12 +350,17 @@ class AgendaRunner:
                 obs["error"] = "Expert agent 不可用"
                 return obs
             ri = self.config.get("max_iterations") or {}
+            cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
-            max_iter = (
-                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
-                else ri.get("expert_review", 5)
+            if n is not None and isinstance(n, int) and 1 <= n <= cap:
+                max_iter = n
+            else:
+                max_iter = min(int(ri.get("expert_review", cap)), cap)
+            self.logger.info(
+                "  Expert 自主研究循環（caller 上限 %s 輪，自訂範圍 1–%s）",
+                max_iter,
+                cap,
             )
-            self.logger.info("  Expert 自主研究循環（上限 %s 輪，實際由 Expert 自訂 1–5）", max_iter)
             result = expert.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,
@@ -376,12 +386,17 @@ class AgendaRunner:
                 obs["error"] = "Analyst agent 不可用"
                 return obs
             ri = self.config.get("max_iterations") or {}
+            cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
-            max_iter = (
-                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
-                else ri.get("analyst_review", 5)
+            if n is not None and isinstance(n, int) and 1 <= n <= cap:
+                max_iter = n
+            else:
+                max_iter = min(int(ri.get("analyst_review", cap)), cap)
+            self.logger.info(
+                "  Analyst 自主分析循環（caller 上限 %s 輪，自訂範圍 1–%s）",
+                max_iter,
+                cap,
             )
-            self.logger.info("  Analyst 自主分析循環（上限 %s 輪，實際由 Analyst 自訂 1–5）", max_iter)
             result = analyst.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,
@@ -407,12 +422,17 @@ class AgendaRunner:
                 obs["error"] = "Modeler agent 不可用"
                 return obs
             ri = self.config.get("max_iterations") or {}
+            cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
-            max_iter = (
-                n if (n is not None and isinstance(n, int) and 1 <= n <= 5)
-                else ri.get("modeler_review", 5)
+            if n is not None and isinstance(n, int) and 1 <= n <= cap:
+                max_iter = n
+            else:
+                max_iter = min(int(ri.get("modeler_review", cap)), cap)
+            self.logger.info(
+                "  Modeler 自主更新循環（caller 上限 %s 輪，自訂範圍 1–%s）",
+                max_iter,
+                cap,
             )
-            self.logger.info("  Modeler 自主更新循環（上限 %s 輪，實際由 Modeler 自訂 1–5）", max_iter)
             result = modeler.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,

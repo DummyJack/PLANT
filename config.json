@@ -4,17 +4,18 @@
   "agenda_items": 5,
   "max_stakeholders": 5,
   "tool_call_max_rounds": 3,
+  "max_web_search_results": 3,
   "max_iterations": {
     "expert_phase0": 3,
     "modeler_phase0": 3,
     "expert_review": 3,
     "analyst_review": 3,
-    "modeler_review": 3
+    "modeler_review": 3,
+    "self_review_round_cap": 5
   },
   "enable_tools": {
     "web_search": true,
     "file_parser": true,
-    "read_external_file": true,
     "plantuml_validate": true
   },
   "enable_human_escalation": true,
@@ -45,7 +46,7 @@
       "temperature": 1
     },
     "analyst": {
-      "provider": "gemini",
+      "provider": "openai",
       "model": "gpt-4.1",
       "temperature": 0
     },
@@ -60,7 +61,7 @@
       "temperature": 0
     },
     "modeler": {
-      "provider": "openai",
+      "provider": "gemini",
       "model": "gemini-3.1-flash-lite-preview",
       "temperature": 0
     },

@@ -1,3 +1,4 @@
+import copy
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -63,10 +64,19 @@ class WebSearchTool(BaseTool):
         api_key: Optional[str] = None,
         max_results: int = 3,
         *,
+        max_results_cap: int = 20,
         stop_config: Optional[Dict[str, Any]] = None,
     ):
         self.api_key = api_key
-        self.max_results = max_results
+        cap = max(1, int(max_results_cap))
+        self.max_results_cap = cap
+        self.max_results = max(1, min(int(max_results), cap))
+        self.parameters = copy.deepcopy(type(self).parameters)
+        self.parameters["max_results"][
+            "description"
+        ] = (
+            f"選填。此次搜尋要回傳的結果筆數（1–{cap}），不填則用預設 {self.max_results}。"
+        )
         self._client = None
         cfg = stop_config or {}
         self._thr_redundant_query = float(cfg.get("redundant_query_jaccard", 0.58))
@@ -224,7 +234,8 @@ class WebSearchTool(BaseTool):
             )
 
         n = kwargs.get("max_results")
-        if n is not None and isinstance(n, int) and 1 <= n <= 20:
+        cap = self.max_results_cap
+        if n is not None and isinstance(n, int) and 1 <= n <= cap:
             max_results = n
         else:
             max_results = self.max_results

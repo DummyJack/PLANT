@@ -16,12 +16,20 @@ class DocumentorAgent(BaseAgent):
 4. 內容一致 — SRS 中的需求描述必須與需求規格一致，不遺漏既有需求，也不新增草稿沒有的項目。
 5. 忠實記錄 — 只整理已有資料，禁止添加資料中不存在的需求或決策。"""
 
-    def __init__(self, model, store, tools: Optional[list] = None, registry=None):
+    def __init__(
+        self,
+        model,
+        store,
+        tools: Optional[list] = None,
+        registry=None,
+        project_config=None,
+    ):
         super().__init__(
             model,
             tools=tools,
             registry=registry,
             skill_names=["srs-generation"],
+            project_config=project_config,
         )
         self.store = store
 

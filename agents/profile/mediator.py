@@ -56,8 +56,16 @@ class MediatorAgent(BaseAgent):
     enabled_agenda_type_ids: Optional[List[str]] = None
     enable_human_escalation: bool = True
 
-    def __init__(self, model, tools: Optional[list] = None, registry=None):
-        super().__init__(model, tools=tools, registry=registry)
+    def __init__(
+        self,
+        model,
+        tools: Optional[list] = None,
+        registry=None,
+        project_config=None,
+    ):
+        super().__init__(
+            model, tools=tools, registry=registry, project_config=project_config
+        )
 
     def get_active_agenda_types(self):
         """回傳啟用的議程類型（tuple of dicts）和 id 列表。"""
@@ -374,6 +382,8 @@ class MediatorAgent(BaseAgent):
             )
             escalate_hint = "；若未共識可選 escalate_to_human 再 save_topic"
 
+        sr_cap = self.self_review_round_cap()
+
         user_prompt = f"""# 任務
 你是需求調解主持人，正在主持本輪議程。請根據「當前狀態」與「上一動執行結果」，決定下一步要執行的動作。
 
@@ -383,9 +393,9 @@ class MediatorAgent(BaseAgent):
 - start_discussion：對某議題開始討論。params: {{ "topic_id": "T-01" }}（須為 state.topics 中存在的 id）
 - resolve_topic：綜合某議題討論結果。params: {{ "topic_id": "T-01" }}（須已 start_discussion）
 {escalate_action}- save_topic：儲存某議題的討論與決議。params: {{ "topic_id": "T-01" }}（須已 resolve 或 escalate）
-- expert_review：讓領域專家進行自主研究與合規分析。params 選填：{{ "max_iterations": 1–5（此次複審最多幾輪） }}。適合在討論涉及法規/標準/安全後觸發。
-- analyst_review：讓需求分析師進行自主分析（掃描討論、偵測 Conflict、更新需求）。params 選填：{{ "max_iterations": 1–5 }}。
-- modeler_review：讓系統建模師進行自主模型更新與驗證。params 選填：{{ "max_iterations": 1–5 }}。
+- expert_review：讓領域專家進行自主研究與合規分析。params 選填：{{ "max_iterations": 1–{sr_cap}（此次複審最多幾輪，勿超過 max_iterations.self_review_round_cap） }}。適合在討論涉及法規/標準/安全後觸發。
+- analyst_review：讓需求分析師進行自主分析（掃描討論、偵測 Conflict、更新需求）。params 選填：{{ "max_iterations": 1–{sr_cap} }}。
+- modeler_review：讓系統建模師進行自主模型更新與驗證。params 選填：{{ "max_iterations": 1–{sr_cap} }}。
 - finish_round：結束本輪議程。無參數。僅在已處理完所有要討論的議題並 save 後才可呼叫。
 
 # 當前狀態

@@ -16,8 +16,16 @@ class UserAgent(BaseAgent):
 2. 立場忠實 — 只代表被指派的角色立場，不代替技術團隊下設計結論
 3. 情境導向 — 先講使用情境與痛點，再講需求與可接受底線"""
 
-    def __init__(self, model, tools: Optional[list] = None, registry=None):
-        super().__init__(model, tools=tools, registry=registry)
+    def __init__(
+        self,
+        model,
+        tools: Optional[list] = None,
+        registry=None,
+        project_config=None,
+    ):
+        super().__init__(
+            model, tools=tools, registry=registry, project_config=project_config
+        )
         self.stakeholders: List[Dict] = []
 
     def propose_stakeholders(self, rough_idea: str) -> List[str]:

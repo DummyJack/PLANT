@@ -18,15 +18,29 @@ class BaseAgent:
         tools: Optional[List[BaseTool]] = None,
         registry=None,
         skill_names: Optional[List[str]] = None,
+        project_config: Optional[Dict[str, Any]] = None,
     ):
         self.model = model
         self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
         self.registry = registry
         self.skill_names: List[str] = list(skill_names or [])
         self.policy = None
+        self.project_config: Dict[str, Any] = dict(project_config or {})
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
         # 由 Flow 依 rough_idea 偵測後設定；預設繁中
         self.output_language: str = "zh-TW"
+
+    def self_review_round_cap(self) -> int:
+        """自主複審 OODA：模型可自訂的 max_iterations 上限（與 max_iterations.self_review_round_cap 一致）。"""
+        mi = self.project_config.get("max_iterations") or {}
+        return max(1, int(mi.get("self_review_round_cap", 5)))
+
+    def max_web_search_results_cap(self) -> int:
+        """單次 web_search 結果筆數上限（工具實例優先，否則讀 max_web_search_results）。"""
+        ws = self.tools.get("web_search")
+        if ws is not None and hasattr(ws, "max_results_cap"):
+            return max(1, int(ws.max_results_cap))
+        return max(1, int(self.project_config.get("max_web_search_results", 20)))
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
         """解析工具迴圈輸出中的 JSON。"""

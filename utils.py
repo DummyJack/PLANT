@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 import threading
 
 from datetime import datetime
@@ -6,6 +8,39 @@ from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 from time import perf_counter
 from store import Store
+
+_SCI_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
+
+
+def json_dumps_no_scientific(
+    obj: Any,
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+) -> str:
+    """json.dumps 後將數字字面上的科學記號改為十進位（避免 1.98e-05）。"""
+    text = json.dumps(obj, indent=indent, ensure_ascii=ensure_ascii)
+
+    def repl(m: re.Match) -> str:
+        v = float(m.group(0))
+        if v == 0.0:
+            return "0"
+        s = format(v, ".15f").rstrip("0").rstrip(".")
+        return s if s else "0"
+
+    return _SCI_JSON_NUMBER.sub(repl, text)
+
+
+def json_dump_no_scientific(
+    obj: Any,
+    fp,
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+) -> None:
+    fp.write(
+        json_dumps_no_scientific(obj, indent=indent, ensure_ascii=ensure_ascii)
+    )
 
 
 class Logger:
@@ -362,6 +397,22 @@ class CostTracker:
             "run_time(s)": round(current_elapsed, 3),
             "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
         }
+
+    def export_summary_dict(self) -> Dict[str, Any]:
+        """匯出用：必回傳可序列化摘要（無定價表時 estimated_cost 可能為 0）。"""
+        with self.lock:
+            current_elapsed = self.elapsed_seconds
+            if self.startedAt is not None:
+                current_elapsed += perf_counter() - self.startedAt
+            return {
+                "model": self.model_name,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "total_tokens": self.total_tokens,
+                "run_time(s)": round(current_elapsed, 3),
+                "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
+                "has_pricing": self.resolvePricing(self.model_name) is not None,
+            }
 
     def resolvePricing(self, model_name: str) -> Optional[Dict[str, float]]:
         if model_name in self.pricing_per_1m_tokens:
