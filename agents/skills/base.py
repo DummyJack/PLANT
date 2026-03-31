@@ -1,7 +1,4 @@
-"""
-Skill 載入與註冊：agents/skills/<name>/ 下的 SKILL.md 與 references。
-提供 list_skills()、get_skill(name)，供 agent 依名稱 invoke 使用。
-"""
+"""Skill：讀取 agents/skills/<name>/SKILL.md 與 references。"""
 
 import re
 import json
@@ -9,12 +6,12 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from agents.skills.metadata_schema import validate_skill_metadata
 
-_SKILLS_ROOT = Path(__file__).resolve().parent
-_cache: Dict[str, Dict[str, Any]] = {}
+SKILLS_ROOT = Path(__file__).resolve().parent
+skill_cache: Dict[str, Dict[str, Any]] = {}
 
 
 def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
-    """從 SKILL.md 抽出 YAML frontmatter（---...---）與 body。回傳 (attrs, body)。"""
+    """解析 YAML frontmatter 與正文。"""
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
     if not match:
         return {}, content
@@ -31,26 +28,22 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
 
 
 def list_skills() -> List[str]:
-    """列出所有已註冊的 skill 名稱（agents/skills/ 下含 SKILL.md 的子資料夾名）。"""
+    """含 SKILL.md 的子目錄名稱列表。"""
     names = []
-    if not _SKILLS_ROOT.is_dir():
+    if not SKILLS_ROOT.is_dir():
         return names
-    for path in _SKILLS_ROOT.iterdir():
+    for path in SKILLS_ROOT.iterdir():
         if path.is_dir() and (path / "SKILL.md").exists():
             names.append(path.name)
     return sorted(names)
 
 
 def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
-    """
-    依名稱取得 skill：讀取 SKILL.md 與 references/，回傳統一介面。
-    回傳 dict：name, description, content（SKILL 全文）, template, checklist。
-    若 use_cache 為 True 則快取，同一 skill 只讀檔一次。
-    """
-    if use_cache and skill_name in _cache:
-        return _cache[skill_name]
+    """讀取 SKILL.md 等；use_cache 時快取。"""
+    if use_cache and skill_name in skill_cache:
+        return skill_cache[skill_name]
 
-    skill_dir = _SKILLS_ROOT / skill_name
+    skill_dir = SKILLS_ROOT / skill_name
     if not skill_dir.is_dir():
         raise FileNotFoundError(f"Skill 目錄不存在: {skill_dir}")
 
@@ -105,7 +98,7 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         "metadata_errors": metadata_errors,
     }
     if use_cache:
-        _cache[skill_name] = result
+        skill_cache[skill_name] = result
     return result
 
 

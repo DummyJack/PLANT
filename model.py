@@ -101,7 +101,7 @@ class BaseLLM(ABC):
                   max_output_tokens: Optional[int] = None,
                   action: Optional[str] = None) -> Dict: ...
 
-    def _infer_usage_action(self) -> str:
+    def infer_usage_action(self) -> str:
         """嘗試從呼叫堆疊推斷這次 API 呼叫在做什麼。"""
         stack = inspect.stack(context=0)
         try:
@@ -130,7 +130,7 @@ class BaseLLM(ABC):
         action: Optional[str] = None,
         run_time_s: Optional[float] = None,
     ):
-        usage_action = action or self._infer_usage_action()
+        usage_action = action or self.infer_usage_action()
         self.costTracker.addUsage(
             usage,
             metadata={"action": usage_action},

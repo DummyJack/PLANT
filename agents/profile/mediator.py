@@ -16,8 +16,8 @@ from utils import (
     mediator_unresolved_vote_task_line,
 )
 
-_AGENTS_DIR = Path(__file__).resolve().parent.parent
-with open(_AGENTS_DIR / "agenda" / "agenda_types.json", "r", encoding="utf-8") as f:
+AGENTS_DIR = Path(__file__).resolve().parent.parent
+with open(AGENTS_DIR / "agenda" / "agenda_types.json", "r", encoding="utf-8") as f:
     AGENDA_TYPES = tuple(json.load(f))
 AGENDA_TYPE_IDS = [t["id"] for t in AGENDA_TYPES]
 AGENDA_CATEGORY_LABEL = {t["id"]: t["label"] for t in AGENDA_TYPES}

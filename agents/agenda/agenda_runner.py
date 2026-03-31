@@ -1,6 +1,3 @@
-"""
-議程執行層：依 action 呼叫 Mediator / store / Collect，維護本輪狀態。
-"""
 from typing import Dict, List, Any, Optional
 
 from agents.profile.mediator import (

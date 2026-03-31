@@ -27,7 +27,7 @@ class Logger:
         self.logger = logging.getLogger("Plant")
 
     def info(self, msg, *args, **kwargs):
-        """與標準 logging 相同，支援 info("a %s", x) 或 info("單一字串")。"""
+        """同 logging.info，支援格式化參數。"""
         self.logger.info(msg, *args, **kwargs)
 
     def warning(self, msg, *args, **kwargs):
@@ -245,9 +245,7 @@ class ProjectManager:
 
 
 class CostTracker:
-    """
-    追蹤 LLM token 使用量、執行時間與估算成本。
-    """
+    """LLM token、耗時與估算成本。"""
 
     # 單位：USD / 1M tokens
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
@@ -292,7 +290,7 @@ class CostTracker:
             return self.elapsed_seconds
 
     def end_segment(self) -> float:
-        """結束目前計時區間，累加進 elapsed_seconds，回傳該區間秒數（供單次 API 的 run_time）。"""
+        """結束本段計時並回傳秒數。"""
         with self.lock:
             if self.startedAt is None:
                 return 0.0
@@ -307,14 +305,7 @@ class CostTracker:
         metadata: Optional[Dict[str, Any]] = None,
         run_time_s: Optional[float] = None,
     ):
-        """
-        支援多種欄位命名：
-        - prompt_tokens / completion_tokens
-        - input_tokens / output_tokens
-
-        total_tokens 一律為 input + output（不採用供應商可能更大的 total），
-        以便 agent_usage / cost_summary 彙總可核對 total = in + out。
-        """
+        """累加 token；total_tokens 固定為 input+output（可核對彙總）。"""
         if not usage:
             return
 
@@ -394,12 +385,6 @@ class CostTracker:
         input_cost = (input_tokens / 1_000_000) * input_price
         output_cost = (output_tokens / 1_000_000) * output_price
         return input_cost + output_cost
-
-
-# ---------------------------------------------------------------------------
-# 輸出語系（強制）：由 config.json 的 "output_language" 決定，不自動偵測。
-# 有效值："zh-TW"（預設）、"en"。中文模式下敘述用繁中，標籤／FR／NFR／欄位名等維持英文。
-# ---------------------------------------------------------------------------
 
 OUTPUT_LANG_ZH = "zh-TW"
 OUTPUT_LANG_EN = "en"

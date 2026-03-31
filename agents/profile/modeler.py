@@ -12,7 +12,7 @@ from utils import (
 )
 
 
-_MODELER_ROLE_PROMPT = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
+MODELER_ROLE_PROMPT = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
 
 核心原則：
 1. UML 語意對齊 — 建模語意需盡量對齊 UML 2.x；實作輸出以可被 PlantUML 驗證通過為最終約束。
@@ -62,7 +62,7 @@ class ModelerAgent(BaseAgent):
 
     name = "modeler"
 
-    system_prompt = _MODELER_ROLE_PROMPT
+    system_prompt = MODELER_ROLE_PROMPT
 
     def __init__(self, model, tools: Optional[list] = None, registry=None):
         super().__init__(

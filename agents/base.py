@@ -29,7 +29,7 @@ class BaseAgent:
         self.output_language: str = "zh-TW"
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
-        """從工具迴圈後的最終文字中解析 statement / open_questions JSON"""
+        """解析工具迴圈輸出中的 JSON。"""
         if not raw or not isinstance(raw, str):
             return {}
         try:
@@ -46,7 +46,7 @@ class BaseAgent:
     def chat_for_topic_response(
         self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
     ) -> Dict[str, Any]:
-        """討論回合：有 tools 時走 chat_with_tools 並解析 JSON，否則 chat_json（kwargs 傳給 model.chat_json）"""
+        """有 tools 則 chat_with_tools，否則 chat_json。"""
         if self.tools:
             raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
             if parse_json:
@@ -74,7 +74,7 @@ class BaseAgent:
         *,
         title: str = "前面的發言",
     ) -> str:
-        """將前文發言整理成可讀文字；若有 speaking_as 會一併標示。"""
+        """格式化前文發言（含 speaking_as）。"""
         if not previous_responses:
             return ""
         parts: List[str] = []
@@ -91,7 +91,7 @@ class BaseAgent:
         return f"\n# {title}\n" + "\n\n".join(parts)
 
     def get_global_conventions_suffix(self) -> str:
-        """回傳附加在 system 後的全域輸出慣例（語系與格式）。不影響 agent 角色。子類可覆寫回傳 '' 以停用。"""
+        """全域輸出慣例後綴；子類可覆寫為 ''。"""
         from utils import global_conventions_text
 
         text = global_conventions_text(self.output_language)
@@ -100,7 +100,7 @@ class BaseAgent:
         return f"\n\n# 全域輸出慣例\n{text}"
 
     def lang_directive(self) -> str:
-        """內嵌於 task 字串的語系說明（與全域慣例一致）。"""
+        """task 內語系指示。"""
         from utils import directive_embed
 
         return directive_embed(self.output_language)
@@ -108,7 +108,7 @@ class BaseAgent:
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
     ) -> Optional[str]:
-        """依議題類型與專案狀態，可選觸發 skill 並回傳參考文字，供發言時使用。預設不觸發。子類別可覆寫。"""
+        """可選 skill 參考；預設 None。子類覆寫。"""
         return None
 
     def respond_to_topic(
@@ -117,7 +117,7 @@ class BaseAgent:
         previous_responses: Optional[List[Dict]] = None,
         artifact_snapshot: Optional[Dict] = None,
     ) -> Dict:
-        """回應議題討論，子類別應覆寫以提供角色特化回應。若有 tools 可先使用再輸出 JSON。"""
+        """子類覆寫：議題回應。"""
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
 
         prev_text = self.format_previous_responses(

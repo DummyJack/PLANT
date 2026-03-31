@@ -129,7 +129,7 @@ class AnalystAgent(BaseAgent):
         return {**artifact, "conflicts": conflicts}
 
     @staticmethod
-    def _as_bool(value: Any) -> bool:
+    def as_bool(value: Any) -> bool:
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
@@ -207,8 +207,8 @@ class AnalystAgent(BaseAgent):
             if not cid or cid not in by_id:
                 continue
             target = by_id[cid]
-            needs_discuss = self._as_bool(item.get("needs_deeper_discussion"))
-            change_result = self._as_bool(item.get("change_conflict_result"))
+            needs_discuss = self.as_bool(item.get("needs_deeper_discussion"))
+            change_result = self.as_bool(item.get("change_conflict_result"))
             new_label = (item.get("new_label") or "").strip()
             if new_label not in ("Conflict", "Neutral"):
                 new_label = target.get("label")
@@ -327,7 +327,7 @@ class AnalystAgent(BaseAgent):
                 continue
             handled_conflict_ids.append(cid)
             target = by_id[cid]
-            change_result = self._as_bool(upd.get("change_conflict_result"))
+            change_result = self.as_bool(upd.get("change_conflict_result"))
             reason = (upd.get("reason") or "").strip()
             if reason:
                 target["analyst_final_reason"] = reason

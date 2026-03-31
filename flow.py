@@ -140,7 +140,7 @@ class Flow:
             kwargs["max_output_tokens"] = max_output_tokens
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
-    def _enqueue_requirement_clarification_questions(
+    def enqueue_requirement_clarification_questions(
         self, artifact: Dict[str, Any], requests: List[Dict[str, Any]]
     ) -> int:
         """把 Analyst 判定需要深入討論的項目加入 open_questions。"""
@@ -181,7 +181,7 @@ class Flow:
             added += 1
         return added
 
-    def _run_pre_discussion_conflict_reassessment(
+    def run_pre_discussion_conflict_reassessment(
         self, artifact: Dict[str, Any], stage: str
     ) -> Dict[str, Any]:
         """會前讓 Analyst 依 feedback + system model 複核衝突，並決定是否需 deeper discussion。"""
@@ -191,7 +191,7 @@ class Flow:
         reassessed_conflicts = result.get("conflicts")
         if isinstance(reassessed_conflicts, list) and reassessed_conflicts:
             artifact["conflicts"] = reassessed_conflicts
-        added = self._enqueue_requirement_clarification_questions(
+        added = self.enqueue_requirement_clarification_questions(
             artifact, result.get("clarification_requests", [])
         )
         changed = len(result.get("changed_conflict_ids", []))
@@ -202,7 +202,7 @@ class Flow:
         )
         return artifact
 
-    def _mark_clarification_questions_answered(
+    def mark_clarification_questions_answered(
         self, artifact: Dict[str, Any], conflict_ids: List[str], round_num: int
     ) -> None:
         if not conflict_ids:
@@ -382,7 +382,7 @@ class Flow:
         self.store.save_plantuml_files(model_data)
 
         self.logger.info("Analyst 依 feedback + system model 複核衝突與需求釐清需求")
-        artifact = self._run_pre_discussion_conflict_reassessment(
+        artifact = self.run_pre_discussion_conflict_reassessment(
             artifact, stage="phase0_pre_meeting"
         )
         self.store.save_artifact(artifact)
@@ -416,7 +416,7 @@ class Flow:
             self.logger.info(f"載入 draft_v{prev_version}.md 作為本輪基礎")
 
         self.logger.info("會前：Analyst 依 feedback + system model 判斷是否需進一步需求釐清")
-        artifact = self._run_pre_discussion_conflict_reassessment(
+        artifact = self.run_pre_discussion_conflict_reassessment(
             artifact, stage=f"round_{round_num}_pre_meeting"
         )
         self.store.save_artifact(artifact)
@@ -562,7 +562,7 @@ class Flow:
         handled_conflicts = final_conflict_result.get("handled_conflict_ids", [])
         changed_after_discussion = len(final_conflict_result.get("changed_conflict_ids", []))
         if handled_conflicts:
-            self._mark_clarification_questions_answered(
+            self.mark_clarification_questions_answered(
                 artifact, handled_conflicts, round_num
             )
         self.logger.info(

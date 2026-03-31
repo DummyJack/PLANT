@@ -1,19 +1,4 @@
-"""
-doc/ 檔案工具：Chunk → Retrieve（search_chunks）→ Read（read_chunks）→ Synthesize（由模型整合）。
-
-- read_full：沿用舊行為，單檔全文（可選 json_summary）。
-- search_chunks：依查詢在已索引 chunk 中檢索，回傳 chunk_id 與摘要。
-- read_chunks：依 chunk_id 讀回完整片段供模型綜合（Synthesize）。
-
-索引切塊策略：
-- .md：YAML front matter → 以 markdown-it-py（CommonMark）token 偵測標題斷點 → section；
-  套件不可用或解析失敗時改為啟發式（code fence 外 ATX/Setext）。
-  無標題則空白行段落合併；過長再字元窗口。
-- .txt：啟發式標題與段落（同上）；過長再字元窗口。
-- .json：可解析則依頂層 key 或陣列元素切塊（合併小片段）；失敗則字元窗口。
-- .pdf：依頁；單頁過長再字元窗口。
-- .docx / .doc：依段落合併至上限；過長再字元窗口。
-"""
+"""doc/ 檔案工具：search_chunks / read_chunks / read_full；依副檔名切塊（md、txt、json、pdf、doc）。"""
 from __future__ import annotations
 
 import json
@@ -23,8 +8,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 # 單一 JSON 物件頂層鍵 / 陣列元素數量上限，避免索引爆炸
-_JSON_MAX_KEYS = 3000
-_JSON_MAX_LIST_ITEMS = 5000
+JSON_MAX_KEYS = 3000
+JSON_MAX_LIST_ITEMS = 5000
 
 from .base import BaseTool
 
@@ -350,14 +335,14 @@ def json_top_level_pieces(obj: Any) -> List[str]:
     """每段為可獨立閱讀的 JSON 片段字串（pretty）。"""
     if isinstance(obj, dict):
         keys = list(obj.keys())
-        if len(keys) > _JSON_MAX_KEYS:
-            keys = keys[:_JSON_MAX_KEYS]
+        if len(keys) > JSON_MAX_KEYS:
+            keys = keys[:JSON_MAX_KEYS]
         out: List[str] = []
         for k in keys:
             out.append(json_dumps_safe({k: obj[k]}))
         return out
     if isinstance(obj, list):
-        items = obj[:_JSON_MAX_LIST_ITEMS]
+        items = obj[:JSON_MAX_LIST_ITEMS]
         return [json_dumps_safe(item) for item in items]
     return [json_dumps_safe(obj)]
 
