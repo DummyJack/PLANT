@@ -1,13 +1,4 @@
-"""
-執行 ReqElicitGym 評估腳本（執行全部測試樣本）
-
-本腳本：
-1. 從測試資料中載入所有任務（不再只取前 3 個）
-2. 建立 ReqElicitGym 環境
-3. 建構 interviewer（待評估的模型）
-4. 執行所有任務並自動記錄、評估
-5. 儲存評估結果與對話過程檔案（含變異數及依 application_type 分類的統計）
-"""
+"""ReqElicitGym 全樣本評估：環境、interviewer、結果寫入 RQ1/results。"""
 
 import os
 import json
@@ -21,8 +12,8 @@ from dotenv import load_dotenv
 # 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
 RQ1_DIR = Path(__file__).resolve().parent
 # 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
-_env_path = RQ1_DIR.parent.parent / ".env"
-load_dotenv(_env_path)
+env_path = RQ1_DIR.parent.parent / ".env"
+load_dotenv(env_path)
 BASELINE_DIR = RQ1_DIR / "Baseline"
 RESULTS_DIR = RQ1_DIR / "results"
 

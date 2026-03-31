@@ -8,7 +8,7 @@ from .utils import JUDGE_PROMPT_SYSTEM, JUDGE_PROMPT_USER
 from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 
 
-def _use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
+def use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
     """若 API 只接受 max_completion_tokens 則 True，只接受 max_tokens 則 False。
     預設 True（使用 max_completion_tokens）。要改用 max_tokens 時設環境變數 OPENAI_USE_MAX_COMPLETION_TOKENS=0，
     或於 model_config 傳 use_max_completion_tokens=False。"""
@@ -63,7 +63,7 @@ def model_call(
                 temperature=model_config["temperature"],
                 timeout=model_config["timeout"],
             )
-            if _use_max_completion_tokens(model_config):
+            if use_max_completion_tokens(model_config):
                 create_kw["max_completion_tokens"] = max_val
             else:
                 create_kw["max_tokens"] = max_val
@@ -154,7 +154,7 @@ def model_call_with_thinking(
                 timeout=model_config["timeout"],
                 extra_body={"enable_thinking": True},
             )
-            if _use_max_completion_tokens(model_config):
+            if use_max_completion_tokens(model_config):
                 create_kw["max_completion_tokens"] = max_val
             else:
                 create_kw["max_tokens"] = max_val

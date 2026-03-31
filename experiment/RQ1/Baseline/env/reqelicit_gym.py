@@ -44,7 +44,7 @@ class ReqElicitGym(gym.Env):
 
         # Load all tasks from data file（簡化：直接載入所有任務，依序執行）
         self.current_task_index = 0
-        self._load_tasks()
+        self.load_tasks()
         
         # Initialize global statistics for evaluation across all tasks
         self.global_stats = {
@@ -99,13 +99,13 @@ class ReqElicitGym(gym.Env):
         # Initialize state variables
         self.reset()
 
-    def _load_tasks(self):
+    def load_tasks(self):
         """Load all tasks from data file（簡化：直接載入所有任務）."""
         self.tasks = load_tasks(self.config.data_path)
         if self.config.verbose:
             print(f"Loaded {len(self.tasks)} tasks from {self.config.data_path}")
         
-    def _get_next_task(self):
+    def get_next_task(self):
         """Get the next task in sequence（依序回傳任務）."""
         if self.current_task_index >= len(self.tasks):
             # 若所有任務皆已執行完畢，拋出例外
@@ -141,7 +141,7 @@ class ReqElicitGym(gym.Env):
 
         # Get a new task（依序取得下一個任務）
         try:
-            self.current_task = self._get_next_task()
+            self.current_task = self.get_next_task()
         except StopIteration as e:
             # 所有任務已完成
             if self.config.verbose:
@@ -177,7 +177,7 @@ class ReqElicitGym(gym.Env):
             })
         
         # Initialize requirements tracking
-        self._initialize_requirements()  
+        self.initialize_requirements()  
 
         # Initialize step counter
         self.step_count = 0
@@ -208,7 +208,7 @@ class ReqElicitGym(gym.Env):
         self.current_task_token_cost = 0  # Initialize token cost for current task
         
         # Record initial state (step 0)
-        self._record_step_statistics()
+        self.record_step_statistics()
         
         # Build observation
         # v7 格式：使用 name, application_type, initial_requirements 等欄位
@@ -224,14 +224,14 @@ class ReqElicitGym(gym.Env):
             "episode_complete": self.episode_complete,
             "total_requirements": len(self.remaining_requirements) + len(self.elicited_requirements),
             "remaining_requirements": len(self.remaining_requirements),
-            "elicitation_ratio": self._calculate_elicitation_ratio(),
-            "conversation_history": self._build_conversation_history_str(),
+            "elicitation_ratio": self.calculate_elicitation_ratio(),
+            "conversation_history": self.build_conversation_history_str(),
         }
 
         # Build info dictionary
         info = {
             "task_id": self.current_task.get("id", ""),
-            "requirements_summary": self._get_remaining_requirements_summary(),
+            "requirements_summary": self.get_remaining_requirements_summary(),
             "action_history": self.action_history.copy(),
             "conversation_history": self.conversation_history.copy(),
             "elicited_requirements": self.elicited_requirements.copy(),
@@ -246,7 +246,7 @@ class ReqElicitGym(gym.Env):
 
         return observation, info
 
-    def _initialize_requirements(self):
+    def initialize_requirements(self):
         """Initialize requirements tracking from the current task（適配 v7 格式）."""
         self.remaining_requirements = []
 
@@ -276,14 +276,14 @@ class ReqElicitGym(gym.Env):
         if not self.remaining_requirements:
             self.remaining_requirements = []
 
-    def _calculate_elicitation_ratio(self) -> float:
+    def calculate_elicitation_ratio(self) -> float:
         """Calculate the ratio of elicited requirements."""
         total_requirements = len(self.remaining_requirements) + len(self.elicited_requirements)
         if total_requirements == 0:
             return 0.0
         return len(self.elicited_requirements) / total_requirements
 
-    def _get_remaining_requirements_summary(self) -> List[str]:
+    def get_remaining_requirements_summary(self) -> List[str]:
         """Get a summary of remaining requirements."""
         return [
             f"{req['id']}: {req.get('aspect', '')}-{req.get('requirement', '')[:50]}..."
@@ -380,7 +380,7 @@ class ReqElicitGym(gym.Env):
             self.current_task_action_stats[action_type]["effective"] += 1
         
         # Record step statistics (after updating counts)
-        self._record_step_statistics()
+        self.record_step_statistics()
         
         # Use judgement as action_info
         action_info = judgement.copy()
@@ -389,7 +389,7 @@ class ReqElicitGym(gym.Env):
 
         # Record conversation turn (turn number is step_count + 1 because step_count will be incremented after)
         # Calculate current elicitation_ratio after updating elicited requirements
-        current_elicitation_ratio = self._calculate_elicitation_ratio()
+        current_elicitation_ratio = self.calculate_elicitation_ratio()
         conversation_turn = {
             "turn": self.step_count + 1,
             "interviewer": action,
@@ -417,13 +417,13 @@ class ReqElicitGym(gym.Env):
             terminated = True
             truncated = False
             # Record task statistics when episode completes
-            self._record_task_statistics()
+            self.record_task_statistics()
         elif self.step_count >= self.config.max_steps:
             self.episode_complete = True
             terminated = False
             truncated = True
             # Record task statistics when episode is truncated
-            self._record_task_statistics()
+            self.record_task_statistics()
         else:
             terminated = False
             truncated = False
@@ -441,13 +441,13 @@ class ReqElicitGym(gym.Env):
             "episode_complete": int(self.episode_complete),
             "total_requirements": len(self.remaining_requirements) + len(self.elicited_requirements),
             "remaining_requirements": len(self.remaining_requirements),
-            "elicitation_ratio": self._calculate_elicitation_ratio(),
-            "conversation_history": self._build_conversation_history_str(),
+            "elicitation_ratio": self.calculate_elicitation_ratio(),
+            "conversation_history": self.build_conversation_history_str(),
         }
 
         info = {
             "task_id": self.current_task.get("id", ""),
-            "requirements_summary": self._get_remaining_requirements_summary(),
+            "requirements_summary": self.get_remaining_requirements_summary(),
             "action_history": self.action_history.copy(),
             "conversation_history": self.conversation_history.copy(),
             "elicited_requirements": self.elicited_requirements.copy(),
@@ -461,7 +461,7 @@ class ReqElicitGym(gym.Env):
         """Get the full conversation history."""
         return self.conversation_history.copy()
     
-    def _build_conversation_history_str(self) -> str:
+    def build_conversation_history_str(self) -> str:
         """Build conversation history as string."""
         history_str = ""
         for entry in self.conversation_history:
@@ -473,7 +473,7 @@ class ReqElicitGym(gym.Env):
                 history_str += f"User: {content}\n\n"
         return history_str.strip()
     
-    def _calculate_tkqr(self) -> float:
+    def calculate_tkqr(self) -> float:
         """
         Calculate Turn-discounted Key Question Rate (TKQR).
         
@@ -506,7 +506,7 @@ class ReqElicitGym(gym.Env):
         tkqr = dcg / idcg
         return tkqr
     
-    def _calculate_ora(self) -> float:
+    def calculate_ora(self) -> float:
         """
         Calculate Optimal Round Assessment (ORA).
         
@@ -535,7 +535,7 @@ class ReqElicitGym(gym.Env):
         
         return ora
     
-    def _record_step_statistics(self):
+    def record_step_statistics(self):
         """Record statistics for the current step in the conversation."""
         step_record = {
             "step": self.step_count,
@@ -546,7 +546,7 @@ class ReqElicitGym(gym.Env):
         
         self.current_task_step_records.append(step_record)
     
-    def _calculate_action_type_effectiveness(self) -> Dict[str, Dict[str, Any]]:
+    def calculate_action_type_effectiveness(self) -> Dict[str, Dict[str, Any]]:
         """
         Calculate effectiveness ratio for each action type.
         
@@ -565,7 +565,7 @@ class ReqElicitGym(gym.Env):
             }
         return action_effectiveness
     
-    def _calculate_aspect_type_elicitation_ratio(self) -> Dict[str, Dict[str, Any]]:
+    def calculate_aspect_type_elicitation_ratio(self) -> Dict[str, Dict[str, Any]]:
         """
         Calculate elicitation ratio for each aspect type (Interaction, Content, Style).
         
@@ -584,19 +584,19 @@ class ReqElicitGym(gym.Env):
             }
         return aspect_elicitation
     
-    def _record_task_statistics(self):
+    def record_task_statistics(self):
         """Record statistics for the current completed task."""
         task_id = self.current_task.get("id", f"task_{self.current_task_index - 1}")
         
         # Calculate TKQR and ORA
-        tkqr = self._calculate_tkqr()
-        ora = self._calculate_ora()
+        tkqr = self.calculate_tkqr()
+        ora = self.calculate_ora()
         
         # Calculate action type effectiveness
-        action_effectiveness = self._calculate_action_type_effectiveness()
+        action_effectiveness = self.calculate_action_type_effectiveness()
         
         # Calculate aspect type elicitation ratios
-        aspect_elicitation = self._calculate_aspect_type_elicitation_ratio()
+        aspect_elicitation = self.calculate_aspect_type_elicitation_ratio()
         
         task_stats = {
             "task_id": task_id,
@@ -656,7 +656,7 @@ class ReqElicitGym(gym.Env):
         return {
             "total_requirements": total_requirements,
             "elicited_requirements": total_elicited,
-            "elicitation_ratio": self._calculate_elicitation_ratio(),
+            "elicitation_ratio": self.calculate_elicitation_ratio(),
             "remaining_requirements": len(self.remaining_requirements),
         }
     
