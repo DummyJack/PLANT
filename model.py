@@ -124,9 +124,18 @@ class BaseLLM(ABC):
             del stack
         return "unknown"
 
-    def addUsage(self, usage: Optional[Dict[str, Any]], action: Optional[str] = None):
+    def addUsage(
+        self,
+        usage: Optional[Dict[str, Any]],
+        action: Optional[str] = None,
+        run_time_s: Optional[float] = None,
+    ):
         usage_action = action or self._infer_usage_action()
-        self.costTracker.addUsage(usage, metadata={"action": usage_action})
+        self.costTracker.addUsage(
+            usage,
+            metadata={"action": usage_action},
+            run_time_s=run_time_s,
+        )
 
     def getCostSummary(self) -> Optional[Dict[str, Any]]:
         return self.costTracker.summary()
@@ -152,23 +161,25 @@ class OpenAIModel(BaseLLM):
              action: Optional[str] = None) -> str:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
         self.costTracker.start()
+        response = None
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name, messages=messages, **kwargs
             )
-            usage = getattr(response, "usage", None)
-            if usage:
-                self.addUsage(
-                    {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
-                        "completion_tokens": getattr(usage, "completion_tokens", 0),
-                        "total_tokens": getattr(usage, "total_tokens", 0),
-                    },
-                    action=action,
-                )
-            return response.choices[0].message.content
         finally:
-            self.costTracker.stop()
+            run_s = self.costTracker.end_segment()
+        usage = getattr(response, "usage", None) if response is not None else None
+        if usage:
+            self.addUsage(
+                {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                    "total_tokens": getattr(usage, "total_tokens", 0),
+                },
+                action=action,
+                run_time_s=run_s,
+            )
+        return response.choices[0].message.content
 
     def chat_json(self, messages: List[Dict], temperature: Optional[float] = None,
                   max_tokens: Optional[int] = None,
@@ -183,24 +194,26 @@ class OpenAIModel(BaseLLM):
             messages.append({"role": "user", "content": "請以 JSON 格式回應。"})
 
         self.costTracker.start()
+        response = None
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name, messages=messages,
                 response_format={"type": "json_object"}, **kwargs,
             )
-            usage = getattr(response, "usage", None)
-            if usage:
-                self.addUsage(
-                    {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
-                        "completion_tokens": getattr(usage, "completion_tokens", 0),
-                        "total_tokens": getattr(usage, "total_tokens", 0),
-                    },
-                    action=action,
-                )
-            return json.loads(response.choices[0].message.content)
         finally:
-            self.costTracker.stop()
+            run_s = self.costTracker.end_segment()
+        usage = getattr(response, "usage", None) if response is not None else None
+        if usage:
+            self.addUsage(
+                {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                    "total_tokens": getattr(usage, "total_tokens", 0),
+                },
+                action=action,
+                run_time_s=run_s,
+            )
+        return json.loads(response.choices[0].message.content)
 
 
 class AnthropicModel(BaseLLM):
@@ -247,6 +260,7 @@ class AnthropicModel(BaseLLM):
         temp = kw.get("temperature")
 
         self.costTracker.start()
+        response = None
         try:
             create_kw: Dict[str, Any] = {
                 "model": self.model_name,
@@ -258,25 +272,26 @@ class AnthropicModel(BaseLLM):
             if temp is not None:
                 create_kw["temperature"] = temp
             response = self.client.messages.create(**create_kw)
-            usage = getattr(response, "usage", None)
-            if usage:
-                self.addUsage(
-                    {
-                        "prompt_tokens": getattr(usage, "input_tokens", 0),
-                        "completion_tokens": getattr(usage, "output_tokens", 0),
-                        "total_tokens": getattr(usage, "input_tokens", 0)
-                        + getattr(usage, "output_tokens", 0),
-                    },
-                    action=action,
-                )
-            parts: List[str] = []
-            for b in response.content or []:
-                t = getattr(b, "text", None)
-                if t:
-                    parts.append(t)
-            return "".join(parts)
         finally:
-            self.costTracker.stop()
+            run_s = self.costTracker.end_segment()
+        usage = getattr(response, "usage", None) if response is not None else None
+        if usage:
+            self.addUsage(
+                {
+                    "prompt_tokens": getattr(usage, "input_tokens", 0),
+                    "completion_tokens": getattr(usage, "output_tokens", 0),
+                    "total_tokens": getattr(usage, "input_tokens", 0)
+                    + getattr(usage, "output_tokens", 0),
+                },
+                action=action,
+                run_time_s=run_s,
+            )
+        parts: List[str] = []
+        for b in response.content or []:
+            t = getattr(b, "text", None)
+            if t:
+                parts.append(t)
+        return "".join(parts)
 
     def chat_json(
         self,
@@ -413,7 +428,12 @@ class GeminiModel(BaseLLM):
             call_kw["config"] = gen_cfg
         return self._client.models.generate_content(**call_kw)
 
-    def add_usage_from_response(self, response: Any, action: Optional[str] = None) -> None:
+    def add_usage_from_response(
+        self,
+        response: Any,
+        action: Optional[str] = None,
+        run_time_s: Optional[float] = None,
+    ) -> None:
         um = getattr(response, "usage_metadata", None)
         if not um:
             return
@@ -429,6 +449,7 @@ class GeminiModel(BaseLLM):
                 "total_tokens": total,
             },
             action=action,
+            run_time_s=run_time_s,
         )
 
     def openai_tool_schemas_to_gemini_tools(
@@ -544,124 +565,128 @@ class GeminiModel(BaseLLM):
         system_instruction, contents_dicts = gemini_split_messages(messages)
         contents_genai = self.contents_dicts_to_genai(contents_dicts)
 
-        self.costTracker.start()
-        try:
-            for _ in range(max_rounds):
-                cfg = self.make_generate_config_with_tools(
-                    system_instruction,
-                    temperature,
-                    max_tokens,
-                    max_output_tokens,
-                    gemini_tools,
-                )
+        for _ in range(max_rounds):
+            cfg = self.make_generate_config_with_tools(
+                system_instruction,
+                temperature,
+                max_tokens,
+                max_output_tokens,
+                gemini_tools,
+            )
+            self.costTracker.start()
+            try:
                 response = self._client.models.generate_content(
                     model=self.model_name,
                     contents=contents_genai,
                     config=cfg,
                 )
-                self.add_usage_from_response(response, action=action)
+            finally:
+                run_s = self.costTracker.end_segment()
+            self.add_usage_from_response(response, action=action, run_time_s=run_s)
 
-                model_content, fn_calls, text_out = self.model_content_function_calls(
-                    response
-                )
-                if not fn_calls:
-                    if (text_out or "").strip():
-                        return text_out
-                    return text_out or ""
-
-                if model_content is not None:
-                    contents_genai.append(model_content)
-
-                if len(fn_calls) == 1:
-                    fc = fn_calls[0]
-                    fname = getattr(fc, "name", None) or ""
-                    fargs = dict(getattr(fc, "args", None) or {})
-                    log.info(f"🔧 {fname}({fargs})")
-                    result = execute_tool_fn(fname, fargs)
-                    resp_kw: Dict[str, Any] = {
-                        "name": fname,
-                        "response": {"result": result},
-                    }
-                    fid = getattr(fc, "id", None)
-                    if fid:
-                        resp_kw["id"] = fid
-                    contents_genai.append(
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(
-                                    function_response=types.FunctionResponse(
-                                        **resp_kw
-                                    )
-                                )
-                            ],
-                        )
-                    )
-                else:
-
-                    def run_one(
-                        idx: int, fc_obj: Any
-                    ) -> Tuple[int, str, Optional[str], str]:
-                        fn = getattr(fc_obj, "name", None) or ""
-                        ag = dict(getattr(fc_obj, "args", None) or {})
-                        log.info(f"🔧 {fn}({ag})")
-                        try:
-                            out = execute_tool_fn(fn, ag)
-                        except Exception as e:
-                            out = f"工具執行失敗: {e}"
-                        return idx, fn, getattr(fc_obj, "id", None), out
-
-                    max_workers = min(len(fn_calls), 6)
-                    by_index: Dict[int, str] = {}
-                    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                        futs = [
-                            ex.submit(run_one, i, fc)
-                            for i, fc in enumerate(fn_calls)
-                        ]
-                        for fut in as_completed(futs):
-                            try:
-                                i, _fn, _fid, out = fut.result()
-                                by_index[i] = out
-                            except Exception as e:
-                                log.warning("並行工具 future 例外: %s", e)
-                    resp_parts: List[Any] = []
-                    for i, fc_obj in enumerate(fn_calls):
-                        fn = getattr(fc_obj, "name", None) or ""
-                        fid = getattr(fc_obj, "id", None)
-                        res_text = by_index.get(
-                            i, f"工具執行失敗: 無法對應結果（索引 {i}）"
-                        )
-                        rkw: Dict[str, Any] = {
-                            "name": fn,
-                            "response": {"result": res_text},
-                        }
-                        if fid:
-                            rkw["id"] = fid
-                        resp_parts.append(
-                            types.Part(
-                                function_response=types.FunctionResponse(**rkw)
-                            )
-                        )
-                    contents_genai.append(
-                        types.Content(role="user", parts=resp_parts)
-                    )
-
-            final_cfg = self.make_generate_config(
-                system_instruction,
-                temperature,
-                max_tokens,
-                max_output_tokens,
-                response_mime_type=None,
+            model_content, fn_calls, text_out = self.model_content_function_calls(
+                response
             )
+            if not fn_calls:
+                if (text_out or "").strip():
+                    return text_out
+                return text_out or ""
+
+            if model_content is not None:
+                contents_genai.append(model_content)
+
+            if len(fn_calls) == 1:
+                fc = fn_calls[0]
+                fname = getattr(fc, "name", None) or ""
+                fargs = dict(getattr(fc, "args", None) or {})
+                log.info(f"🔧 {fname}({fargs})")
+                result = execute_tool_fn(fname, fargs)
+                resp_kw: Dict[str, Any] = {
+                    "name": fname,
+                    "response": {"result": result},
+                }
+                fid = getattr(fc, "id", None)
+                if fid:
+                    resp_kw["id"] = fid
+                contents_genai.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                function_response=types.FunctionResponse(
+                                    **resp_kw
+                                )
+                            )
+                        ],
+                    )
+                )
+            else:
+
+                def run_one(
+                    idx: int, fc_obj: Any
+                ) -> Tuple[int, str, Optional[str], str]:
+                    fn = getattr(fc_obj, "name", None) or ""
+                    ag = dict(getattr(fc_obj, "args", None) or {})
+                    log.info(f"🔧 {fn}({ag})")
+                    try:
+                        out = execute_tool_fn(fn, ag)
+                    except Exception as e:
+                        out = f"工具執行失敗: {e}"
+                    return idx, fn, getattr(fc_obj, "id", None), out
+
+                max_workers = min(len(fn_calls), 6)
+                by_index: Dict[int, str] = {}
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futs = [
+                        ex.submit(run_one, i, fc)
+                        for i, fc in enumerate(fn_calls)
+                    ]
+                    for fut in as_completed(futs):
+                        try:
+                            i, _fn, _fid, out = fut.result()
+                            by_index[i] = out
+                        except Exception as e:
+                            log.warning("並行工具 future 例外: %s", e)
+                resp_parts: List[Any] = []
+                for i, fc_obj in enumerate(fn_calls):
+                    fn = getattr(fc_obj, "name", None) or ""
+                    fid = getattr(fc_obj, "id", None)
+                    res_text = by_index.get(
+                        i, f"工具執行失敗: 無法對應結果（索引 {i}）"
+                    )
+                    rkw: Dict[str, Any] = {
+                        "name": fn,
+                        "response": {"result": res_text},
+                    }
+                    if fid:
+                        rkw["id"] = fid
+                    resp_parts.append(
+                        types.Part(
+                            function_response=types.FunctionResponse(**rkw)
+                        )
+                    )
+                contents_genai.append(
+                    types.Content(role="user", parts=resp_parts)
+                )
+
+        final_cfg = self.make_generate_config(
+            system_instruction,
+            temperature,
+            max_tokens,
+            max_output_tokens,
+            response_mime_type=None,
+        )
+        self.costTracker.start()
+        try:
             final_resp = self._client.models.generate_content(
                 model=self.model_name,
                 contents=contents_genai,
                 config=final_cfg,
             )
-            self.add_usage_from_response(final_resp, action=action)
-            return self.gemini_response_text(final_resp) or ""
         finally:
-            self.costTracker.stop()
+            run_s = self.costTracker.end_segment()
+        self.add_usage_from_response(final_resp, action=action, run_time_s=run_s)
+        return self.gemini_response_text(final_resp) or ""
 
     def chat(
         self,
@@ -673,6 +698,7 @@ class GeminiModel(BaseLLM):
     ) -> str:
         system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
+        response = None
         try:
             response = self.generate(
                 system_instruction,
@@ -682,13 +708,13 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type=None,
             )
-            self.add_usage_from_response(response, action=action)
-            text = self.gemini_response_text(response)
-            if text:
-                return text
-            raise ValueError("Gemini 無回應內容（可能被安全過濾或無候選）")
         finally:
-            self.costTracker.stop()
+            run_s = self.costTracker.end_segment()
+        self.add_usage_from_response(response, action=action, run_time_s=run_s)
+        text = self.gemini_response_text(response)
+        if text:
+            return text
+        raise ValueError("Gemini 無回應內容（可能被安全過濾或無候選）")
 
     def chat_json(
         self,
@@ -707,6 +733,7 @@ class GeminiModel(BaseLLM):
         system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
         text = ""
+        response = None
         try:
             response = self.generate(
                 system_instruction,
@@ -716,8 +743,11 @@ class GeminiModel(BaseLLM):
                 max_output_tokens,
                 response_mime_type="application/json",
             )
-            self.add_usage_from_response(response, action=action)
-            text = self.gemini_response_text(response).strip()
+        finally:
+            run_s = self.costTracker.end_segment()
+        self.add_usage_from_response(response, action=action, run_time_s=run_s)
+        text = self.gemini_response_text(response).strip()
+        try:
             return json.loads(text)
         except json.JSONDecodeError:
             import re
@@ -728,8 +758,6 @@ class GeminiModel(BaseLLM):
             if json_match:
                 return json.loads(json_match.group(1))
             raise ValueError(f"無法從回應中解析 JSON: {text}")
-        finally:
-            self.costTracker.stop()
 
 
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:

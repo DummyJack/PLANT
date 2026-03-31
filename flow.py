@@ -24,7 +24,6 @@ class Flow:
         self.config = config
         self.store = store
         self.logger = logger
-        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
         self.agent_models = {
             "user": self.build_agent_model("user"),
@@ -218,7 +217,6 @@ class Flow:
             q["answered_round"] = round_num
 
     def run(self, rough_idea: str) -> Dict[str, Any]:
-        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         rounds = self.config.get("rounds", 1)
         now = datetime.now(timezone.utc).isoformat()
         artifact = {
@@ -267,7 +265,6 @@ class Flow:
         return artifact
 
     def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
-        self.flow_started_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         artifact = existing_artifact
         artifact.setdefault(
             "scope", {"in_scope": [], "out_of_scope": [], "description": ""}
@@ -690,7 +687,6 @@ class Flow:
 
         agent_usage = {
             "project_id": self.store.project_id,
-            "generated_at": self.flow_started_at,
             "agents": agents_context,
             "totals": {
                 "input_tokens": total_in,

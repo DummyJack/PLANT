@@ -291,16 +291,29 @@ class CostTracker:
             self.startedAt = None
             return self.elapsed_seconds
 
+    def end_segment(self) -> float:
+        """結束目前計時區間，累加進 elapsed_seconds，回傳該區間秒數（供單次 API 的 run_time）。"""
+        with self.lock:
+            if self.startedAt is None:
+                return 0.0
+            seg = perf_counter() - self.startedAt
+            self.elapsed_seconds += seg
+            self.startedAt = None
+            return seg
+
     def addUsage(
         self,
         usage: Optional[Dict[str, Any]],
         metadata: Optional[Dict[str, Any]] = None,
+        run_time_s: Optional[float] = None,
     ):
         """
         支援多種欄位命名：
         - prompt_tokens / completion_tokens
         - input_tokens / output_tokens
-        - total_tokens（若缺少會自動相加）
+
+        total_tokens 一律為 input + output（不採用供應商可能更大的 total），
+        以便 agent_usage / cost_summary 彙總可核對 total = in + out。
         """
         if not usage:
             return
@@ -309,15 +322,14 @@ class CostTracker:
         output_count = int(
             usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
         )
-        total_count = int(usage.get("total_tokens", input_count + output_count) or 0)
+        total_count = input_count + output_count
 
         with self.lock:
             record = {
                 "input_tokens": input_count,
                 "output_tokens": output_count,
                 "total_tokens": total_count,
-                # 以本機時間記錄 API 回應當下被記帳的時間（格式與 agent_usage.json 的 generated_at 相同）
-                "recorded_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+                "run_time(s)": round(float(run_time_s or 0.0), 3),
             }
             if metadata:
                 record.update(metadata)
