@@ -1,39 +1,45 @@
 {
-  "provider": "gemini",
-  "model": "gemini-3.1-flash-lite-preview",
-  "temperature": 0,
+  "output_language": "en",
   "rounds": 1,
-  "agenda_items": 3,
+  "agenda_items": 1,
   "max_stakeholders": 5,
-  "low_confidence_threshold": 0.7,
-  "tool_call_max_rounds": 3,
+  "tool_call_max_rounds": 1,
+  "max_web_search_results": 3,
   "max_iterations": {
-    "expert_phase0": 3,
-    "expert_review": 5,
-    "analyst_review": 5,
-    "modeler_review": 5,
-    "modeler_phase0": 3
+    "expert_phase0": 1,
+    "modeler_phase0": 1,
+    "expert_review": 1,
+    "analyst_review": 1,
+    "modeler_review": 1,
+    "self_review_round_cap": 5
   },
   "enable_tools": {
     "web_search": true,
-    "file_parser": true,
-    "read_external_file": true,
+    "file_parser": false,
     "plantuml_validate": true
   },
-  "enable_human_escalation": true,
+  "skip_phase0_draft": true,
+  "enable_human_escalation": false,
   "enable_agenda_types": {
-    "conflict_resolution": true,
+    "conflict_resolution": false,
     "requirement_clarification": true,
-    "open_question": true,
-    "new_requirement": true,
-    "tradeoff": true
+    "open_question": false,
+    "new_requirement": false,
+    "tradeoff": false
   },
   "enable_agents": {
-    "user": true,
+    "user": false,
     "analyst": true,
     "expert": true,
     "mediator": true,
     "modeler": true,
-    "documentor": true
+    "documentor": false
+  },
+  "agent_models": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "temperature": 0
+    }
   }
 }

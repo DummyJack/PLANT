@@ -1,23 +1,41 @@
 # 基準方法衝突辨識實驗結果
 
 import csv
-import json
-import random
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
-# 從 experiment 匯入
 RQ2_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(RQ2_DIR.parent))
+BASE_DIR = RQ2_DIR.parent.parent
+sys.path.insert(0, str(BASE_DIR))
 from baseline import BaselineModel
 from metric import Metric
+from utils import json_dump_no_scientific
 
-# 資料與結果路徑（cn_pairs.csv、config 在 RQ2 目錄下）
+# 資料與結果路徑
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
-CONFIG_PATH = RQ2_DIR / "config_RQ2.json"
+
+# Baseline 專用模型：openai 或 gemini
+BASELINE_PROVIDER = "openai"
+BASELINE_MODEL = "gpt-4o-mini"
+BASELINE_TEMPERATURE = 0
+
+
+def build_baseline_cost_payload(model: BaselineModel) -> dict:
+    agent = model.cost_tracker.export_summary_dict()
+    return {
+        "method": "Baseline",
+        "agents": {"baseline": agent},
+        "totals": {
+            "input_tokens": agent["input_tokens"],
+            "output_tokens": agent["output_tokens"],
+            "total_tokens": agent["total_tokens"],
+            "run_time(s)": agent["run_time(s)"],
+            "estimated_cost(USD)": agent["estimated_cost(USD)"],
+        },
+    }
 
 
 # 衝突測試
@@ -30,11 +48,7 @@ def run_conflict(model: BaselineModel, count: int = 0):
             data.append(row)
 
     if count > 0:
-        sample_mode = input("取樣方式 (1:前N筆, 2:隨機N筆) [1]: ").strip() or "1"
-        if sample_mode == "2":
-            data = random.sample(data, min(count, len(data)))
-        else:
-            data = data[:count]
+        data = data[:count]
 
     total = len(data)
     y_true = [row["Class"] for row in data]
@@ -120,28 +134,32 @@ def run_conflict(model: BaselineModel, count: int = 0):
         "metrics": metrics,
     }
 
-    # 儲存：結果與 records 分開
+    # 儲存：結果、records、成本
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%H%M%S")
     result_path = RESULTS_DIR / f"result_Baseline_{ts}.json"
     record_path = RESULTS_DIR / f"record_Baseline_{ts}.json"
+    cost_path = RESULTS_DIR / f"cost_Baseline_{ts}.json"
     with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+        json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
     with open(record_path, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+        json_dump_no_scientific(records, f, indent=2, ensure_ascii=False)
+    with open(cost_path, "w", encoding="utf-8") as f:
+        json_dump_no_scientific(
+            build_baseline_cost_payload(model), f, indent=2, ensure_ascii=False
+        )
     print(f"  已儲存: {result_path}")
     print(f"  已儲存: {record_path}")
+    print(f"  已儲存: {cost_path}")
 
     return result
 
 
 if __name__ == "__main__":
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
     model = BaselineModel(
-        provider=cfg.get("provider", "openai"),
-        model_name=cfg.get("model"),
-        temperature=float(cfg.get("temperature", 0)),
+        provider=BASELINE_PROVIDER,
+        model_name=BASELINE_MODEL,
+        temperature=float(BASELINE_TEMPERATURE),
     )
     print(f"Baseline provider={model.provider} model={model.model_name}")
 
