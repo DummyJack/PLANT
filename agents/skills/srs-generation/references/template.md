@@ -1,19 +1,34 @@
-# [系統名稱]軟體需求規格書
+# Software Requirements Specification: [Feature Name]
 
-> 主標題格式：**[系統名稱]軟體需求規格書**（例如「外送平台系統軟體需求規格書」）。系統名稱依專案從需求草稿或 Context 推得。勿使用 "Software Requirements Specification" 或 "SRS" 作為主標題。  
-> 正文章節從 **## 1. Introduction** 開始，依序 **## 2. Overall Description**、**## 3. …** 連續編號至附錄。
+## 1. Document Information
 
-## 1. Introduction
+| Field            | Value                          |
+|------------------|--------------------------------|
+| **Document ID**  | SRS-[FEATURE]-001              |
+| **Version**      | 0.1                            |
+| **Author**       | [Author name]                  |
+| **Reviewers**    | [Reviewer names]               |
+| **Date**         | [YYYY-MM-DD]                   |
+| **Status**       | Draft / In Review / Approved   |
+| **Related PRD**  | [Link to docs/{feature}/prd.md]  |
 
-### 1.1 Purpose
+## 2. Revision History
+
+| Version | Date       | Author        | Description of Changes      |
+|---------|------------|---------------|-----------------------------|
+| 0.1     | YYYY-MM-DD | [Author name] | Initial draft               |
+
+## 3. Introduction
+
+### 3.1 Purpose
 
 [Describe the purpose of this SRS document. Identify the software product to be produced by name. Explain what the software product will do and, if necessary, what it will not do. Describe the intended audience for this document -- developers, testers, project managers, and stakeholders who need to understand the detailed requirements.]
 
-### 1.2 Scope
+### 3.2 Scope
 
 [Describe the scope of the software product covered by this SRS. Include the product name, what the product will do, and the benefits, objectives, and goals of the product. Describe the application of the software, including relevant benefits, objectives, and goals. Be consistent with the scope defined in the upstream PRD if one exists.]
 
-### 1.3 Definitions, Acronyms, and Abbreviations
+### 3.3 Definitions, Acronyms, and Abbreviations
 
 | Term          | Definition                                                      |
 |---------------|-----------------------------------------------------------------|
@@ -25,7 +40,7 @@
 | CRUD          | Create, Read, Update, Delete                                    |
 | [Term]        | [Describe the meaning of this term in the project context]      |
 
-### 1.4 References
+### 3.4 References
 
 | Document                              | Version | Date       |
 |---------------------------------------|---------|------------|
@@ -34,13 +49,13 @@
 | [Regulatory or compliance standard]   | [x.x]   | YYYY-MM-DD |
 | [Other referenced document]           | [x.x]   | YYYY-MM-DD |
 
-### 1.5 Overview
+### 3.5 Overview
 
 [Describe the organization of the remainder of this SRS. Explain what each subsequent section contains so that readers can navigate the document efficiently.]
 
-## 2. Overall Description
+## 4. Overall Description
 
-### 2.1 Product Perspective
+### 4.1 Product Perspective
 
 [Describe how the software product fits into the larger system or product ecosystem. If this is a component of a larger system, describe the interfaces between this product and the larger system. Include a high-level context diagram if helpful.]
 
@@ -52,23 +67,27 @@ graph TD
     B --> E[Third-Party Service]
 ```
 
-### 2.2 Product Functions
+### 4.2 Product Functions
 
-[Provide a high-level summary of the major functions the software will perform. This should be a summary -- detailed functional requirements follow in Section 3. Organize by feature area or module.]
+[Provide a high-level summary of the major functions the software will perform. This should be a summary -- detailed functional requirements follow in Section 5. Organize by feature area or module.]
 
 - **[Module 1 Name]**: [Brief description of what this module does]
 - **[Module 2 Name]**: [Brief description of what this module does]
 - **[Module 3 Name]**: [Brief description of what this module does]
 
-### 2.3 User Characteristics
+### 4.3 User Characteristics
 
-| User Class              | Description                                           | Technical Proficiency |
-|-------------------------|-------------------------------------------------------|-----------------------|
-| [e.g., End User]       | [Describe who they are and what they do]              | Low / Medium / High   |
-| [e.g., Administrator]  | [Describe who they are and what they do]              | Medium / High         |
-| [e.g., API Consumer]   | [Describe who they are and what they do]              | High                  |
+> If the upstream PRD (§10.1) identifies AI Agent as an applicable consumer, include agent user classes in this table alongside human user classes. If no upstream PRD exists, explicitly consider whether AI agents are realistic consumers of this system.
 
-### 2.4 Constraints
+| User Class | Consumer Type | Description | Technical Proficiency | Interaction Pattern |
+|-----------|--------------|-------------|----------------------|-------------------|
+| [e.g., End User] | Human | [Describe who they are and what they do] | Low / Medium / High | [e.g., Web UI, mobile app] |
+| [e.g., Administrator] | Human | [Describe who they are and what they do] | Medium / High | [e.g., Admin dashboard, CLI] |
+| [e.g., API Consumer] | Human | [Describe who they are and what they do] | High | [e.g., REST API, SDK] |
+| [e.g., CI Pipeline Agent] | AI Agent | [Describe the agent's purpose, autonomy level, and operational context — e.g., "Autonomous agent that polls build status and triggers deployments; operates on 30s intervals with no human oversight per cycle"] | N/A | [e.g., REST API with service token, webhook listener, internal tool call] |
+| [e.g., Coding Assistant] | AI Agent | [Describe the agent — e.g., "Human-in-the-loop agent that retrieves code context and suggests changes; user approves each action"] | N/A | [e.g., REST API, streaming response required for real-time feedback] |
+
+### 4.4 Constraints
 
 [List any constraints that will affect the design and implementation of the software. These may include regulatory policies, hardware limitations, interfaces to other applications, parallel operation, audit functions, control functions, higher-order language requirements, signal handshake protocols, reliability requirements, criticality of the application, or safety and security considerations.]
 
@@ -76,7 +95,7 @@ graph TD
 - [Describe constraint 2]
 - [Describe constraint 3]
 
-### 2.5 Assumptions and Dependencies
+### 4.5 Assumptions and Dependencies
 
 [List any assumptions that, if changed, would affect the requirements in this SRS. Also list dependencies on external factors such as third-party services, hardware availability, or other project deliverables.]
 
@@ -88,9 +107,9 @@ graph TD
 - [Describe dependency 1]
 - [Describe dependency 2]
 
-## 3. Functional Requirements
+## 5. Functional Requirements
 
-### 3.1 [Module Name 1]
+### 5.1 [Module Name 1]
 
 #### FR-[MOD1]-001: [Requirement Title]
 
@@ -106,18 +125,20 @@ graph TD
 [The system shall ... Describe what the system must do in clear, unambiguous language. Use "shall" for mandatory behavior.]
 
 **Actors:**
-- [Primary actor, e.g., Authenticated User]
+- [Primary actor, e.g., Authenticated User — or AI Agent name from §4.3 if this requirement serves agent consumers]
 - [Secondary actor, e.g., Notification Service]
+
+> When the primary actor is an AI Agent, describe the flow in terms of API calls and programmatic actions (not UI interactions). Include machine-parseable error responses, idempotency expectations, and structured output requirements in the acceptance criteria.
 
 **Preconditions:**
 - [Condition that must be true before this requirement can be exercised]
 - [Another precondition]
 
 **Main Flow:**
-1. [The actor performs action X]
+1. [The actor performs action X — for agents: "The agent sends POST /api/v1/resource with JSON body {fields}"]
 2. [The system validates input Y]
 3. [The system processes the request and performs Z]
-4. [The system returns result W to the actor]
+4. [The system returns result W to the actor — for agents: "The system returns 201 with JSON body containing {resource_id, created_at}"]
 
 **Alternative Flows:**
 - **AF-1: [Alternative scenario name]**
@@ -127,7 +148,7 @@ graph TD
 
 - **AF-2: [Error scenario name]**
   1. [At step N of the main flow, if validation fails...]
-  2. [The system shall display error message E]
+  2. [The system shall return error response E — for agents: "return 422 with JSON {error_code, message, field, constraint} enabling programmatic retry decisions"]
   3. [The flow returns to step M]
 
 **Postconditions:**
@@ -178,7 +199,7 @@ graph TD
 
 ---
 
-### 3.2 [Module Name 2]
+### 5.2 [Module Name 2]
 
 #### FR-[MOD2]-001: [Requirement Title]
 
@@ -186,7 +207,7 @@ graph TD
 
 ---
 
-### 3.3 CRUD Matrix
+### 5.3 CRUD Matrix
 
 | Entity             | Create          | Read            | Update          | Delete          |
 |--------------------|-----------------|-----------------|-----------------|-----------------|
@@ -197,9 +218,9 @@ graph TD
 
 > Note: A dash (--) indicates that the operation is not applicable or is intentionally not supported for that entity. Ensure every cell is accounted for -- missing operations should be a deliberate decision, not an oversight.
 
-## 4. Non-Functional Requirements
+## 6. Non-Functional Requirements
 
-### 4.1 Performance Requirements
+### 6.1 Performance Requirements
 
 #### NFR-PERF-001: [Requirement Title]
 
@@ -231,7 +252,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.2 Security Requirements
+### 6.2 Security Requirements
 
 #### NFR-SEC-001: [Requirement Title]
 
@@ -263,7 +284,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.3 Reliability Requirements
+### 6.3 Reliability Requirements
 
 #### NFR-REL-001: [Requirement Title]
 
@@ -280,7 +301,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.4 Availability Requirements
+### 6.4 Availability Requirements
 
 #### NFR-AVL-001: [Requirement Title]
 
@@ -297,7 +318,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.5 Maintainability Requirements
+### 6.5 Maintainability Requirements
 
 #### NFR-MNT-001: [Requirement Title]
 
@@ -314,7 +335,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.6 Portability Requirements
+### 6.6 Portability Requirements
 
 #### NFR-PRT-001: [Requirement Title]
 
@@ -331,7 +352,7 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-### 4.7 Usability Requirements
+### 6.7 Usability Requirements
 
 #### NFR-USB-001: [Requirement Title]
 
@@ -348,9 +369,9 @@ graph TD
 **Description:**
 [The system shall ... ]
 
-## 5. Data Requirements
+## 7. Data Requirements
 
-### 5.1 Data Model
+### 7.1 Data Model
 
 [Describe the key data entities and their relationships. Use the Mermaid ER diagram below as a starting point and expand as needed.]
 
@@ -379,7 +400,7 @@ erDiagram
     }
 ```
 
-### 5.2 Data Dictionary
+### 7.2 Data Dictionary
 
 | Field              | Type         | Constraints                        | Description                                    |
 |--------------------|--------------|------------------------------------|------------------------------------------------|
@@ -392,9 +413,9 @@ erDiagram
 | [entity.field_7]  | TEXT         | NULLABLE                           | [Describe what this field represents]          |
 | [entity.field_8]  | ENUM         | NOT NULL, VALUES(...)              | [Describe what this field represents]          |
 
-## 6. External Interface Requirements
+## 8. External Interface Requirements
 
-### 6.1 User Interfaces
+### 8.1 User Interfaces
 
 [Describe the logical characteristics of each interface between the software product and its users. This may include screen layouts, page navigation flows, content constraints, and standards for fonts, icons, and button labels. Reference wireframes or mockups if available.]
 
@@ -402,13 +423,13 @@ erDiagram
 - [Describe UI requirement 2]
 - [Describe UI requirement 3]
 
-### 6.2 Hardware Interfaces
+### 8.2 Hardware Interfaces
 
 [Describe the logical and physical characteristics of each interface between the software product and hardware components. This includes supported device types, minimum hardware specifications, and peripheral device interactions.]
 
 - [Describe hardware interface requirement 1, or state "Not applicable" if none]
 
-### 6.3 Software Interfaces
+### 8.3 Software Interfaces
 
 [Describe the connections between this product and other software components (operating systems, databases, libraries, third-party APIs). For each interface, specify the name, version, source, and purpose.]
 
@@ -419,7 +440,7 @@ erDiagram
 | [e.g., Stripe API]    | External API | v2023-xx   | [Describe purpose]                         |
 | [e.g., Auth0]         | Auth Service | N/A        | [Describe purpose]                         |
 
-### 6.4 Communication Interfaces
+### 8.4 Communication Interfaces
 
 [Describe the requirements for any communications functions the product will use, including email, web browser protocols, network protocols, and data exchange formats.]
 
@@ -428,7 +449,7 @@ erDiagram
 - **Message Queue**: [e.g., RabbitMQ / Kafka for asynchronous processing]
 - [Describe additional communication interface requirements]
 
-## 7. Requirements Traceability Matrix
+## 9. Requirements Traceability Matrix
 
 | PRD ID          | PRD Description                     | SRS ID(s)                          | Coverage Status         |
 |-----------------|-------------------------------------|------------------------------------|-------------------------|
@@ -442,7 +463,7 @@ erDiagram
 > - "Partially Covered" items require a note explaining what aspects are not yet specified.
 > - "Not Covered" items must include a justification (e.g., deferred to a future release, out of scope).
 
-## 8. Appendix
+## 10. Appendix
 
 ### A. Supporting Diagrams
 

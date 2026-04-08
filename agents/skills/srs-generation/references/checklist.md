@@ -2,12 +2,6 @@
 
 Use this checklist to validate the Software Requirements Specification before finalizing. Every item must pass. If any item fails, revise the document and re-check.
 
-## 0. 禁止硬掰與缺料標待補（最高優先）
-
-- [ ] **禁止硬掰**：文件中未出現草稿或 Context 以外的需求、資料模型、介面規格或技術選型；無憑空新增的 ER 圖、API、資料庫欄位、通訊協定等。
-- [ ] **缺料就標待補**：若某章節（如 References、Open Questions、Data Requirements、External Interface、Change Request Log）在來源中無對應資料，該處已標註「待補」或「本文件無相關資料」，或已省略該表，未留未替換的佔位符（如 [Name]、YYYY-MM-DD、[Describe...]、[PRD document name and link]）。
-- [ ] **章節編號從 1 開始**：正文章節編號依序為 1. Introduction, 2. Overall Description, 3. …, 未從 3 開始。
-
 ## 1. Completeness Check
 
 - [ ] All IEEE 830 sections are present: Introduction, Overall Description, Functional Requirements, Non-Functional Requirements, Data Requirements, External Interface Requirements, Requirements Traceability Matrix, and Appendix
@@ -27,6 +21,10 @@ Use this checklist to validate the Software Requirements Specification before fi
 - [ ] Requirements describe WHAT the system must do, not HOW it should be implemented -- no implementation details, specific algorithms, or technology choices appear in requirement descriptions unless they are genuine constraints
 - [ ] Boundary conditions are specified for all requirements involving numeric ranges, string lengths, file sizes, date ranges, or collection sizes
 - [ ] Error scenarios and alternative flows are documented for each functional requirement, covering invalid input, timeout, unauthorized access, and system failure cases
+- [ ] §4.3 User Characteristics includes a Consumer Type column (Human / AI Agent) and an Interaction Pattern column for each user class
+- [ ] If upstream PRD marks AI Agent as applicable (§10.1): at least one functional requirement has an AI Agent as primary actor with programmatic flows (API calls, not UI steps)
+- [ ] Agent-facing error responses include structured, machine-parseable fields (error_code, message, field, constraint) — not just human-readable text
+- [ ] Agent-facing acceptance criteria include relevant machine-verifiable conditions (idempotency, deterministic response schema, timeout behavior) where applicable
 - [ ] Every non-functional requirement includes a specific, measurable metric with a quantitative target value, a defined measurement method, and a **Threshold Rationale** — the rationale must cite at least one concrete source (business SLA, production baseline, competitive benchmark, regulatory standard, or cost/complexity trade-off)
 
 ## 3. Consistency Check
@@ -46,4 +44,4 @@ Use this checklist to validate the Software Requirements Specification before fi
 - [ ] All tables are properly formatted with aligned columns, header rows, and separator rows -- no broken or misaligned table markup
 - [ ] Mermaid diagrams (entity-relationship, context, or other) use valid Mermaid syntax and render correctly without errors
 - [ ] The requirements traceability matrix includes all four columns (PRD ID, PRD Description, SRS ID(s), Coverage Status) and every row is populated
-- [ ] The document follows section numbering starting from 1 (1. Introduction, 2. Overall Description, …) with no missing or misnumbered sections
+- [ ] The document follows the section numbering from the template (Sections 1 through 10) with no missing or misnumbered sections

@@ -1,4 +1,5 @@
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from typing import Dict, Any, List, Optional
@@ -153,8 +154,19 @@ class Store:
 
     # Markdown
 
+    @staticmethod
+    def _is_meeting_markdown(filename: str) -> bool:
+        return bool(re.fullmatch(r"R\d+-M\d+\.md", filename or ""))
+
+    def _markdown_target_dir(self, filename: str) -> Path:
+        """指定輸出檔案放置目錄。"""
+        if filename == "conflict_report.md" or self._is_meeting_markdown(filename):
+            return self.artifact_dir
+        return self.output_dir
+
     def save_markdown(self, content: str, filename: str):
-        filepath = self.output_dir / filename
+        target_dir = self._markdown_target_dir(filename)
+        filepath = target_dir / filename
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -169,7 +181,7 @@ class Store:
             for c in model.get("name", "unnamed")
             if c.isalnum() or c in (" ", "-", "_")
         ).strip()
-        filepath = self.output_dir / f"{safe_name}.plantuml"
+        filepath = self.artifact_dir / f"{safe_name}.plantuml"
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(plantuml_code)
         return f"{safe_name}.plantuml"
@@ -178,6 +190,8 @@ class Store:
         models = [m for m in model_data.get("models", []) if m.get("plantuml")]
         if not models:
             return
+        for old in self.artifact_dir.glob("*.plantuml"):
+            old.unlink(missing_ok=True)
         max_workers = min(len(models), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self.write_one_plantuml, m) for m in models]

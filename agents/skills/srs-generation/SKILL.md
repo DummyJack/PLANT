@@ -9,15 +9,9 @@ description: >
   with unique IDs, acceptance criteria, use cases, a CRUD matrix, and a full traceability matrix
   linking back to the upstream PRD.
 instructions: >
-  Generate a complete software requirements specification following IEEE 830, ISO/IEC/IEEE 29148,
+  Generate a complete Software Requirements Specification following IEEE 830, ISO/IEC/IEEE 29148,
   and Amazon technical specification standards. Use the template at references/template.md and
-  validate against references/checklist.md before finalizing. Mandatory rules (in order): (1) 禁止硬掰
-  — only transcribe content from the draft and context; do not invent requirements, data models,
-  or placeholders. (2) 缺料就標待補 — where source material is missing, mark "待補" or omit the
-  section; do not leave unreplaced placeholders. (3) Document title must be "[系統名稱]軟體需求規格書"
-  (e.g. 外送平台系統軟體需求規格書); infer system name from draft/context; do NOT use "Software
-  Requirements Specification" or "SRS" as main title. (4) Section numbering starts at 1 and is
-  consecutive: ## 1. Introduction, ## 2. Overall Description, ## 3. …, through appendix.
+  validate against references/checklist.md before finalizing.
 ---
 
 # SRS Generation Skill
@@ -34,7 +28,11 @@ The SRS generation process follows a six-step workflow designed to produce a com
 
 ### Step 1: Scan Context
 
-Before writing a single requirement, the skill scans the current project to build context. It examines the project directory structure (top three levels), reads the project README if available, and surveys the `docs/` directory for existing documentation. This scanning phase establishes the technical landscape -- programming languages, frameworks, existing APIs, data stores -- so that requirements are grounded in the real project environment rather than written in a vacuum.
+Before writing a single requirement, scan the project to build context:
+
+@../shared/project-context.md
+
+Execute the Project Context Protocol (PC.1 through PC.3) to establish the technical landscape — programming languages, frameworks, project profile, existing APIs, data stores. This ensures requirements are grounded in the real project environment rather than written in a vacuum. The detected project profile (PC.3) determines which non-functional requirement categories are most relevant (e.g., database-backed projects need data integrity NFRs; CLI tools need usability NFRs).
 
 ### Step 2: Find the Upstream PRD
 
@@ -71,12 +69,12 @@ Each functional requirement is structured as a complete use case specification w
 
 - **Requirement ID and Title**: The unique identifier and a concise descriptive title.
 - **Description**: A clear statement of what the system shall do, written from the perspective of the system behavior rather than the implementation approach.
-- **Actors**: The user classes or external systems that participate in this requirement.
+- **Actors**: The user classes or external systems that participate in this requirement. Actors include both human users and AI agent consumers — if a requirement is exercised by an API client, automation tool, or other programmatic consumer, list that actor explicitly with its interaction pattern (REST API, async event, webhook, etc.).
 - **Preconditions**: The conditions that must be true before the requirement can be exercised.
 - **Main Flow**: A numbered sequence of steps describing the standard successful path through the use case.
 - **Alternative Flows**: Branches from the main flow covering variations, error conditions, and edge cases.
 - **Postconditions**: The observable state of the system after successful completion of the main flow.
-- **Acceptance Criteria**: Specific, testable conditions that must be met for the requirement to be considered satisfied. Each acceptance criterion should be verifiable through inspection, demonstration, test, or analysis.
+- **Acceptance Criteria**: Specific, testable conditions that must be met for the requirement to be considered satisfied. Each acceptance criterion should be verifiable through inspection, demonstration, test, or analysis. For agent-facing requirements, acceptance criteria must be machine-verifiable — expressed as exact input/output contracts (e.g., "Given POST /api/v1/users with body {name, email}, then response status is 201 and JSON body contains {id, email, created_at}") rather than human-subjective descriptions.
 - **Priority**: The importance level of the requirement (P0 = must-have, P1 = should-have, P2 = nice-to-have), consistent with the prioritization used in the upstream PRD.
 - **Source**: A reference back to the PRD item or stakeholder request that originated this requirement.
 
@@ -128,4 +126,4 @@ The SRS generation skill relies on two reference files:
 
 ## Output Convention
 
-The final SRS document is written to `docs/<feature-name>/srs.md` in the project root, where `<feature-name>` is a sanitized, lowercase, hyphen-separated slug derived from the user's input. The `docs/<feature-name>/` directory is created if it does not already exist. If a file with the same name already exists, confirm with the user before overwriting. This naming convention places all documents for a feature in a single `docs/<feature-name>/` directory (`prd.md`, `srs.md`, `tech-design.md`, `test-plan.md`) and enables automatic upstream document discovery by downstream skills.
+The final SRS document is written to `docs/<feature-name>/srs.md` in the project root, where `<feature-name>` is a sanitized, lowercase, hyphen-separated slug derived from the user's input. The `docs/<feature-name>/` directory is created if it does not already exist. If a file with the same name already exists, confirm with the user before overwriting. This naming convention places all documents for a feature in a single `docs/<feature-name>/` directory (`prd.md`, `srs.md`, `tech-design.md`, `test-cases.md`) and enables automatic upstream document discovery by downstream skills.

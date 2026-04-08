@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Optional, List
 
 from agents.base import BaseAgent
+from agents.skills.base import get_skill
 from utils import (
     modeler_models_array_name_line,
     modeler_name_field_language,
@@ -12,40 +13,12 @@ from utils import (
 )
 
 
-MODELER_ROLE_PROMPT = """你是一個專業的 UML 系統建模專家，負責將需求規格轉換為 UML 系統模型。
+MODELER_ROLE_PROMPT = """你是 UML 系統建模專家，負責把需求轉成可驗證、可追溯的 UML 模型。
 
-核心原則：
-1. UML 語意對齊 — 建模語意需盡量對齊 UML 2.x；實作輸出以可被 PlantUML 驗證通過為最終約束。
-2. PlantUML 語法正確 — 生成程式碼必須符合 PlantUML 語法並可通過驗證。
-3. 完整性 — 模型須涵蓋需求中的主要角色、用例與關鍵結構／流程（依圖型涵蓋對應元素）。
-4. 一致性 — 不同圖表之間的元素命名必須一致；同一概念不可多種稱呼。
-5. 最小變動 — 精煉時只修改受影響部分，保留未變動元素。
-6. 可辨識性 — 模型需完整、可讀，利於後續辨識設計／可測試性問題（問題標記由 Analyst 執行）。
-7. 關聯可見 — 圖上應清楚呈現元素間關係（如系統邊界、include/extend、關聯、依賴），避免僅羅列節點。
-8. 版面易讀 — 以「誰與哪些元素有關聯」可一眼辨識為優先：減少連線交叉，必要時調整佈局。
-9. 可讀性優先於單圖完整性 — 單圖過度擁擠時必須拆圖（依角色、子領域或流程階段拆分）。
-10. 建模邊界嚴謹 — Use Case 僅描述系統可提供的行為；不得把願景口號、法規條文或品質目標直接當成用例名稱。
-11. 需求可追溯 — 核心元素需可對應需求來源（需求 ID 或需求原文）；若無明確依據，需標註待確認，不可臆造。
-12. 元素與圖名語言 — PlantUML elements（actor/use case/class/message/lifeline/relation label）一律使用英文；圖表顯示名稱（`name` 欄位）須遵守每則使用者訊息開頭的「輸出語系」說明（與專案語言一致）。
-
-命名慣例：
-- Actor: PascalCase（如 SystemAdmin, EndUser）
-- Use Case: 英文動詞開頭（如 ManageUsers, ViewReport）
-- Class: PascalCase（如 UserAccount, OrderService）
-- Sequence message: 英文動詞片語（如 ValidateToken, CreateOrder）
-- 關係標籤: 英文且語意明確
-
-輸出契約：
-- 依任務指定格式輸出合法 JSON，不得夾帶 JSON 以外說明文字。
-- 若欄位包含 plantuml，內容必須是完整程式碼，且包含 @startuml 與 @enduml。
-- 資訊不足時須在輸出中明確標註待確認事項（例如 to_confirm），不可臆測補齊。
-
-產出前自我檢查：
-- [ ] PlantUML 語法可通過驗證。
-- [ ] Actor 與元素關聯一眼可辨識，交叉線條已盡量降低。
-- [ ] 命名一致且語意清楚，PlantUML elements 全為英文。
-- [ ] Use Case 名稱為行為，不是願景口號、法規句或品質目標。
-- [ ] 主要元素可追溯到需求來源；無法追溯者已標註待確認。"""
+規則：
+1. 精煉時只改受影響部分，保留未變動元素。
+2. 不直接改需求語意；發現不一致時只指出影響、缺口與待確認事項。
+3. 資訊不足時用 to_confirm 標示，不可臆造。"""
 
 
 MODELER_REVIEW_ACTIONS = [
@@ -54,6 +27,12 @@ MODELER_REVIEW_ACTIONS = [
     "validate_diagram",
     "fix_diagram",
     "done",
+]
+
+REQUIRED_MODEL_TYPES = [
+    "use_case_diagram",
+    "class_diagram",
+    "sequence_diagram",
 ]
 
 
@@ -75,34 +54,11 @@ class ModelerAgent(BaseAgent):
             model,
             tools=tools or [],
             registry=registry,
-            skill_names=["plantuml-ascii"],
+            skill_names=["plantuml-syntax"],
             project_config=project_config,
         )
-        from agents.skills.base import get_skill
 
-        skill = get_skill("plantuml-ascii")
-        # 僅附加 SKILL.md 中 <!-- system end --> 前的短文（Plant 對齊說明）。
-        # content_user 為長篇 ASCII 教學（逾數千 token），若每則 Modeler 請求都附上會暴增
-        # 成本；完整正文請用 invoke_skill("plantuml-ascii", ...) 或讀 SKILL.md。
-        cs = (skill.get("content_system") or "").strip()
-        self._plantuml_skill_user_block = cs
-
-    def build_direct_messages(
-        self, task: str, context: Optional[Dict] = None
-    ) -> List[Dict]:
-        messages = super().build_direct_messages(task, context)
-        block = (getattr(self, "_plantuml_skill_user_block", None) or "").strip()
-        if block and messages:
-            last = messages[-1]
-            if last.get("role") == "user" and isinstance(last.get("content"), str):
-                last["content"] = (
-                    last["content"]
-                    + "\n\n---\n\n# plantuml-ascii（skill 參考，請依任務取用之）\n\n"
-                    + block
-                )
-        return messages
-
-    # ===== 子 OODA 循環（UML 產出／更新） =====
+    # ===== Monitor =====
 
     def run_review_loop(self, artifact, recent_discussions=None, *, max_iterations):
         """Modeler 子 OODA：輪數上限 min(caller, self_review_round_cap)；第一輪可縮短。"""
@@ -113,6 +69,20 @@ class ModelerAgent(BaseAgent):
         effective_max = min(max_iterations, loop_cap)
         i = 0
 
+        # 單輪策略：在同一輪內完成完整建模流程，而非以保底補跑。
+        if effective_max == 1:
+            records = self._run_single_round_full_modeling(
+                artifact,
+                pending_issues,
+                last_observation=observation,
+            )
+            actions_taken.extend(records)
+            return {
+                "agent": self.name,
+                "actions_taken": actions_taken,
+                "pending_issues": pending_issues,
+            }
+
         while i < effective_max:
             state = self.build_review_state(
                 artifact, recent_discussions, actions_taken, i, effective_max,
@@ -122,16 +92,9 @@ class ModelerAgent(BaseAgent):
                 n = decision.get("max_iterations")
                 if n is not None and isinstance(n, int) and 1 <= n <= effective_max:
                     effective_max = n
-                    self.logger.info(
-                        "  Modeler 自訂此次複審輪數: %s（上限 %s）",
-                        effective_max,
-                        loop_cap,
-                    )
+                    self.logger.info("  Modeler review 輪數: %s/%s", effective_max, loop_cap)
             action = decision.get("action", "done")
-            self.logger.info(
-                f"  Modeler review [{i + 1}/{effective_max}]: {action}"
-                f" — {decision.get('reasoning', '')}"
-            )
+            self.logger.info(f"  Modeler review [{i + 1}/{effective_max}]: {action}")
             if action == "done" or action not in MODELER_REVIEW_ACTIONS:
                 break
 
@@ -153,61 +116,6 @@ class ModelerAgent(BaseAgent):
             "actions_taken": actions_taken,
             "pending_issues": pending_issues,
         }
-
-    def decide_next_review_action(self, state, last_observation=None):
-        state_text = json.dumps(state, ensure_ascii=False, indent=2)
-        obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
-        sr_current = int(state.get("max_iterations") or 1)
-
-        user_prompt = f"""# 任務
-你是系統建模專家，正在對當前專案的 UML 模型進行自主更新與驗證。根據「當前狀態」與「上一步結果」，決定下一步行動。
-
-# 可用動作
-- assess_impact：分析需求變更對現有模型的影響，判斷哪些圖表需要更新。無參數。
-- update_diagram：更新或新建特定類型的圖表。params: {{ "diagram_type": "use_case_diagram/class_diagram/sequence_diagram" }}
-- validate_diagram：驗證特定圖表的 PlantUML 語法。params: {{ "diagram_type": "..." }}
-- fix_diagram：修正驗證失敗的圖表（依上一步驗證錯誤修正）。params: {{ "diagram_type": "..." }}
-- done：更新完成，交還控制權。無參數。
-
-# 當前狀態
-{state_text}
-
-# 上一步結果
-{obs_text}
-
-# 決策指引
-- 若為第一輪（當前狀態中 iteration 為 1），可選填 max_iterations（1–{sr_current}）表示此次複審你打算跑幾輪；不填則用目前上限 {sr_current}。
-- 先 assess_impact 判斷哪些模型需更新
-- 對每個需更新的圖表：update_diagram → validate_diagram → (若失敗) fix_diagram → validate_diagram
-- 所有需更新的圖表處理完後呼叫 done
-- {short_reasoning_line(self.output_language)}
-
-輸出 JSON:
-{{
-    "action": "動作名稱",
-    "params": {{}},
-    "reasoning": "一句說明",
-    "max_iterations": "選填，僅第一輪有效；填數字 1–{sr_current} 表示此次複審自訂輪數"
-}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        try:
-            response = self.model.chat_json(messages)
-        except Exception as e:
-            self.logger.warning(f"Modeler review 決策失敗: {e}")
-            return {"action": "done", "params": {}, "reasoning": f"fallback: {e}"}
-
-        action = (response.get("action") or "").strip()
-        if action not in MODELER_REVIEW_ACTIONS:
-            action = "done"
-        out = {
-            "action": action,
-            "params": response.get("params") or {},
-            "reasoning": response.get("reasoning", ""),
-        }
-        if "max_iterations" in response:
-            out["max_iterations"] = response["max_iterations"]
-        return out
 
     def build_review_state(
         self, artifact, recent_discussions, actions_taken,
@@ -279,7 +187,7 @@ class ModelerAgent(BaseAgent):
 # 輸出要求
 - models_to_update：需更新的 diagram type 列表（如 use_case_diagram, class_diagram, sequence_diagram）
 - models_to_create：需新建的 diagram type 列表
-{modeler_review_field_language(self.output_language)}
+{modeler_review_field_language()}
 
 輸出 JSON:
 {{
@@ -381,7 +289,7 @@ class ModelerAgent(BaseAgent):
             result = self.execute_tool(
                 "plantuml_validate",
                 {"plantuml_code": code},
-                active_skill="plantuml-ascii",
+                active_skill="plantuml-syntax",
             )
             if "通過" in result:
                 obs["result"] = {"valid": True}
@@ -420,62 +328,255 @@ class ModelerAgent(BaseAgent):
         obs["error"] = f"未知動作: {action}"
         return obs
 
-    def update_single_diagram(
-        self, diagram_type, requirements, stakeholders=None,
-        existing_model=None,
-    ):
-        type_names = {
-            "use_case_diagram": "Use Case Diagram",
-            "class_diagram": "Class Diagram",
-            "sequence_diagram": "Sequence Diagram",
+    def _run_single_round_full_modeling(
+        self,
+        artifact: Dict[str, Any],
+        pending_issues: List[Dict[str, Any]],
+        *,
+        last_observation: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """單輪內執行 assess → update → validate/fix 的完整建模流程。"""
+        self.logger.info("  Modeler: assess → update → validate")
+        records: List[Dict[str, Any]] = []
+
+        assess_obs = self.execute_review_action(
+            "assess_impact",
+            {},
+            artifact,
+            pending_issues,
+            last_observation,
+        )
+        records.append(
+            {
+                "action": "assess_impact",
+                "params": {},
+                "result_summary": assess_obs.get("summary", ""),
+            }
+        )
+        last_obs = assess_obs
+
+        refreshed_report = (artifact.get("system_models") or {}).get("last_consistency_report") or {}
+        refreshed_targets = self._normalize_diagram_types(
+            (refreshed_report.get("models_to_update") or [])
+            + (refreshed_report.get("models_to_create") or [])
+        )
+        if refreshed_targets:
+            target_types = refreshed_targets
+
+        if not target_types:
+            target_types = list(REQUIRED_MODEL_TYPES)
+
+        for diagram_type in target_types:
+            update_params = {"diagram_type": diagram_type}
+            update_obs = self.execute_review_action(
+                "update_diagram",
+                update_params,
+                artifact,
+                pending_issues,
+                last_obs,
+            )
+            records.append(
+                {
+                    "action": "update_diagram",
+                    "params": update_params,
+                    "result_summary": update_obs.get("summary", ""),
+                }
+            )
+            last_obs = update_obs
+            if update_obs.get("error"):
+                continue
+
+            validate_obs = self.execute_review_action(
+                "validate_diagram",
+                update_params,
+                artifact,
+                pending_issues,
+                last_obs,
+            )
+            records.append(
+                {
+                    "action": "validate_diagram",
+                    "params": update_params,
+                    "result_summary": validate_obs.get("summary", ""),
+                }
+            )
+            last_obs = validate_obs
+
+            valid = (
+                isinstance(validate_obs.get("result"), dict)
+                and validate_obs["result"].get("valid") is True
+            )
+            if valid:
+                continue
+
+            fix_obs = self.execute_review_action(
+                "fix_diagram",
+                update_params,
+                artifact,
+                pending_issues,
+                last_obs,
+            )
+            records.append(
+                {
+                    "action": "fix_diagram",
+                    "params": update_params,
+                    "result_summary": fix_obs.get("summary", ""),
+                }
+            )
+            last_obs = fix_obs
+
+            revalidate_obs = self.execute_review_action(
+                "validate_diagram",
+                update_params,
+                artifact,
+                pending_issues,
+                last_obs,
+            )
+            records.append(
+                {
+                    "action": "validate_diagram",
+                    "params": update_params,
+                    "result_summary": revalidate_obs.get("summary", ""),
+                }
+            )
+            last_obs = revalidate_obs
+
+        return records
+
+    def _normalize_diagram_types(self, items: List[Any]) -> List[str]:
+        allowed = set(REQUIRED_MODEL_TYPES)
+        out: List[str] = []
+        for item in items or []:
+            t = str(item or "").strip()
+            if t and t in allowed and t not in out:
+                out.append(t)
+        return out
+
+    # ===== Plan =====
+
+    def decide_next_review_action(self, state, last_observation=None):
+        state_text = json.dumps(state, ensure_ascii=False, indent=2)
+        obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
+        sr_current = int(state.get("max_iterations") or 1)
+
+        user_prompt = f"""# 任務
+你是系統建模專家。根據當前狀態與上一步結果，選下一個動作。
+
+# 動作
+- assess_impact：先判斷哪些圖表受影響
+- update_diagram：{{"diagram_type":"use_case_diagram/class_diagram/sequence_diagram"}}
+- validate_diagram：{{"diagram_type":"..."}}
+- fix_diagram：{{"diagram_type":"..."}}
+- done：結束
+
+# 當前狀態
+{state_text}
+
+# 上一步結果
+{obs_text}
+
+# 規則
+- 第一輪可選填 max_iterations=1-{sr_current}；不填就沿用 {sr_current}
+- 先 assess_impact，再決定是否更新模型
+- 需要 artifact 細節時先用 artifact_query
+- 每個需更新的圖表都走：update_diagram → validate_diagram →（若失敗）fix_diagram → validate_diagram
+- 所有受影響圖表處理完後選 done
+- {short_reasoning_line()}
+
+# 輸出 JSON
+{{
+  "action": "動作名稱",
+  "params": {{}},
+  "reasoning": "一句說明",
+  "max_iterations": "選填；僅第一輪有效，數字 1-{sr_current}"
+}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        try:
+            if "artifact_query" in self.tools:
+                raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
+                response = self.parse_topic_response_json(raw)
+            else:
+                response = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning(f"Modeler review 決策失敗: {e}")
+            return {"action": "done", "params": {}, "reasoning": f"fallback: {e}"}
+
+        action = (response.get("action") or "").strip()
+        if action not in MODELER_REVIEW_ACTIONS:
+            action = "done"
+        out = {
+            "action": action,
+            "params": response.get("params") or {},
+            "reasoning": response.get("reasoning", ""),
         }
-        type_name = type_names.get(diagram_type, diagram_type)
-        req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
-        diagram_layout_hint = ""
-        if diagram_type == "use_case_diagram":
-            diagram_layout_hint = """
-用例圖版面要求：產出時以「actor 與 use case 的關聯一目了然」為準。請善用 PlantUML 的版面控制（例如 left to right direction、或將 actor 分置系統邊界左右兩側），使連線少交叉、誰對應哪些用例清楚可辨；若單圖用例過多導致連線雜亂，可精簡為核心用例或依角色拆成多張圖。"""
-        elif diagram_type == "class_diagram":
-            diagram_layout_hint = """
-類別圖建模要求：優先呈現可讀的核心結構與關係，不要把所有名詞都畫成類別。請先確保主要類別之間的繼承、關聯、聚合/組合、依賴關係清楚可辨，再補必要屬性與方法；每個類別僅保留關鍵欄位/操作，避免圖面過度擁擠。若領域過大，請依子域拆圖或僅呈現本次需求受影響的核心類別。"""
-        elif diagram_type == "sequence_diagram":
-            diagram_layout_hint = """
-時序圖建模要求：一張圖聚焦一個主要情境流程，僅保留關鍵 lifeline 與關鍵訊息，避免放入過多非必要元件。需清楚表達主流程與關鍵分支/例外（可用 alt/opt），並讓訊息方向與前後順序易於追蹤；訊息名稱請使用具體動詞，避免抽象字眼。"""
+        if "max_iterations" in response:
+            out["max_iterations"] = response["max_iterations"]
+        return out
 
-        if existing_model and existing_model.get("plantuml"):
-            task = f"""根據更新後的需求，精煉以下 {type_name}。只修改受影響的部分，保留未變動的元素。
+    # ===== Plan: topic proposal =====
 
-當前 PlantUML:
-{existing_model['plantuml']}
+    def propose_topics(
+        self,
+        artifact: Dict[str, Any],
+        *,
+        round_num: int,
+        max_items: int = 2,
+    ) -> List[Dict[str, Any]]:
+        proposals: List[Dict[str, Any]] = []
+        models = ((artifact.get("system_models") or {}).get("models") or [])
+        required_types = {"use_case_diagram", "class_diagram", "sequence_diagram"}
+        existing_types = {m.get("type") for m in models if m.get("type")}
+        missing = sorted(list(required_types - existing_types))
+        if missing:
+            proposals.append(
+                {
+                    "title": "模型覆蓋補齊討論",
+                    "description": f"尚缺圖型：{', '.join(missing)}，需確認是否補齊與優先順序。",
+                    "category": "open_question",
+                    "participants": ["modeler", "analyst", "user"],
+                    "discussion_mode": "sequential",
+                    "speaking_order": ["modeler", "analyst", "user"],
+                    "source_ids": [],
+                    "priority_hint": "medium",
+                    "impact_level": "medium",
+                    "why_now": "模型覆蓋不足會影響後續設計一致性。",
+                    "requires_multi_party": False,
+                    "blocks_decision": False,
+                    "routing_preference": "direct_clarification",
+                    "proposed_by": "modeler",
+                    "round": round_num,
+                }
+            )
 
-需求:
-{req_text}
-{diagram_layout_hint}
+        for m in models:
+            to_confirm = m.get("to_confirm") or []
+            if not to_confirm:
+                continue
+            mtype = (m.get("type") or "").strip()
+            proposals.append(
+                {
+                    "title": f"{mtype or '模型'} 待確認事項討論",
+                    "description": "；".join([str(x).strip() for x in to_confirm if str(x).strip()]),
+                    "category": "open_question",
+                    "participants": ["modeler", "analyst", "user", "expert"],
+                    "discussion_mode": "sequential",
+                    "speaking_order": ["modeler", "analyst", "user", "expert"],
+                    "source_ids": [mtype] if mtype else [],
+                    "priority_hint": "medium",
+                    "impact_level": "medium",
+                    "why_now": "模型存在待確認項，可能影響需求解讀與可實作性。",
+                    "requires_multi_party": False,
+                    "blocks_decision": False,
+                    "routing_preference": "direct_clarification",
+                    "proposed_by": "modeler",
+                    "round": round_num,
+                }
+            )
 
-- {modeler_name_field_language(self.output_language)}
-- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
-- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
-輸出 JSON:
-{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
-        else:
-            sh_text = json.dumps(stakeholders or [], ensure_ascii=False, indent=2)
-            task = f"""根據以下需求產生 {type_name}。
+        return proposals[: max(1, max_items)]
 
-需求:
-{req_text}
-
-利害關係人:
-{sh_text}
-{diagram_layout_hint}
-
-- {modeler_name_field_language(self.output_language)}
-- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
-- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
-輸出 JSON:
-{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
-
-        messages = self.build_direct_messages(task)
-        return self.model.chat_json(messages)
+    # ===== Action: modeling =====
 
     def generate_system_model(
         self,
@@ -520,14 +621,13 @@ class ModelerAgent(BaseAgent):
 # 更新後的需求
 {requirements_text}
 
-# 分析步驟
-1. 比較新需求與當前模型，識別差異
-2. 只修改受影響的部分，保留未變動的元素
-3. **由你自行決定**要保留、新增或移除哪些圖表（type 限 use_case_diagram / class_diagram / sequence_diagram），以符合更新後需求為準
-（設計/可測試性 Conflict 由 Analyst 在產出模型後統一辨識）
-- {modeler_models_array_name_line(self.output_language)}
-- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
-- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
+# 規則
+- 比較新需求與當前模型，識別差異。
+- 只修改受影響的部分，保留未變動元素。
+- 可自行決定保留、新增或移除哪些圖表（type 限 use_case_diagram / class_diagram / sequence_diagram）。
+- {modeler_models_array_name_line()}
+- {modeler_name_field_language()}
+- 資訊不足時請在 to_confirm 列出待確認事項。
 
 # 輸出格式
 {{
@@ -535,19 +635,132 @@ class ModelerAgent(BaseAgent):
 }}"""
 
         try:
-            messages = self.build_direct_messages(task)
+            skill = get_skill("plantuml-syntax")
+            messages = self._build_skill_messages(skill, "plantuml-syntax", task)
             result = self.model.chat_json(messages)
             model_data = self.ensure_model_format(result)
             return self.validate_models(model_data)
         except Exception as e:
-            self.logger.warning(f"模型精煉失敗，保留原有模型。錯誤: {e}")
+            self.logger.warning(f"模型精煉失敗: {e}")
             return {"models": prev_models or []}
+
+    def update_single_diagram(
+        self, diagram_type, requirements, stakeholders=None,
+        existing_model=None,
+    ):
+        type_names = {
+            "use_case_diagram": "Use Case Diagram",
+            "class_diagram": "Class Diagram",
+            "sequence_diagram": "Sequence Diagram",
+        }
+        type_name = type_names.get(diagram_type, diagram_type)
+        req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+        diagram_layout_hint = ""
+        if diagram_type == "use_case_diagram":
+            diagram_layout_hint = """
+用例圖版面要求：產出時以「actor 與 use case 的關聯一目了然」為準。請善用 PlantUML 的版面控制（例如 left to right direction、或將 actor 分置系統邊界左右兩側），使連線少交叉、誰對應哪些用例清楚可辨；若單圖用例過多導致連線雜亂，可精簡為核心用例或依角色拆成多張圖。"""
+        elif diagram_type == "class_diagram":
+            diagram_layout_hint = """
+類別圖建模要求：優先呈現可讀的核心結構與關係，不要把所有名詞都畫成類別。請先確保主要類別之間的繼承、關聯、聚合/組合、依賴關係清楚可辨，再補必要屬性與方法；每個類別僅保留關鍵欄位/操作，避免圖面過度擁擠。若領域過大，請依子域拆圖或僅呈現本次需求受影響的核心類別。"""
+        elif diagram_type == "sequence_diagram":
+            diagram_layout_hint = """
+時序圖建模要求：一張圖聚焦一個主要情境流程，僅保留關鍵 lifeline 與關鍵訊息，避免放入過多非必要元件。需清楚表達主流程與關鍵分支/例外（可用 alt/opt），並讓訊息方向與前後順序易於追蹤；訊息名稱請使用具體動詞，避免抽象字眼。"""
+
+        if existing_model and existing_model.get("plantuml"):
+            task = f"""根據更新後的需求，精煉以下 {type_name}。只修改受影響的部分，保留未變動的元素。
+
+當前 PlantUML:
+{existing_model['plantuml']}
+
+需求:
+{req_text}
+{diagram_layout_hint}
+
+- {modeler_name_field_language()}
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
+- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
+輸出 JSON:
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
+        else:
+            sh_text = json.dumps(stakeholders or [], ensure_ascii=False, indent=2)
+            task = f"""根據以下需求產生 {type_name}。
+
+需求:
+{req_text}
+
+利害關係人:
+{sh_text}
+{diagram_layout_hint}
+
+- {modeler_name_field_language()}
+- PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
+- 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
+輸出 JSON:
+{{"name": "圖表名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"]}}"""
+
+        skill = get_skill("plantuml-syntax")
+        messages = self._build_skill_messages(skill, "plantuml-syntax", task)
+        return self.model.chat_json(messages)
 
     def ensure_model_format(self, result) -> Dict[str, Any]:
         if not isinstance(result, dict):
             return {"models": []}
         result.setdefault("models", [])
         return result
+
+    # ===== Action: meeting response =====
+
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+
+        prev_text = ""
+        if previous_responses:
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
+            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
+
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+
+        user_prompt = f"""{topic_text}
+{prev_text}
+{snapshot_text}
+{tool_hint}
+
+# 任務
+請以系統建模專家身分發言，聚焦模型影響、元素邊界與更新建議。
+
+# 規則
+- statement 需包含：結論、影響分析、風險/邊界、建議下一步。
+- 需明確指出受影響的模型元素、圖型或責任邊界，不要只講抽象原則。
+- 若資訊不足，說明需補哪些介面、事件流程或資料邊界，不可臆測。
+- 可提到 Use Case / Class / Sequence 的具體影響。
+- 若需要他人補資訊，再在 open_questions 提具體問題。
+- 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。
+
+# 輸出 JSON
+{{{{
+    "statement": "針對此議題的完整發言內容",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
+}}}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        response = self.chat_for_topic_response(messages)
+
+        return {
+            "agent": self.name,
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
+        }
+
+    # ===== Tool helpers =====
 
     def validate_models(self, model_data: Dict[str, Any]) -> Dict[str, Any]:
         """用 plantuml_validate 工具驗證每個模型的 PlantUML 語法，有錯則自動修正"""
@@ -569,7 +782,7 @@ class ModelerAgent(BaseAgent):
             result = self.execute_tool(
                 "plantuml_validate",
                 {"plantuml_code": code},
-                active_skill="plantuml-ascii",
+                active_skill="plantuml-syntax",
             )
             return (idx, m, result)
 
@@ -594,9 +807,7 @@ class ModelerAgent(BaseAgent):
                 continue
             if "通過" in result:
                 continue
-            self.logger.warning(
-                f"  模型 {m.get('name', '')} 語法有誤，嘗試修正: {result}"
-            )
+            self.logger.warning(f"  {m.get('name', '')} 語法修正中")
             fixed = self.fix_plantuml(m, result)
             if fixed:
                 m["plantuml"] = fixed
@@ -627,7 +838,8 @@ class ModelerAgent(BaseAgent):
 }}}}"""
 
         try:
-            messages = self.build_direct_messages(user_prompt)
+            skill = get_skill("plantuml-syntax")
+            messages = self._build_skill_messages(skill, "plantuml-syntax", user_prompt)
             response = self.model.chat_json(messages)
             fixed = response.get("plantuml", "")
             if "@startuml" in fixed and "@enduml" in fixed:
@@ -635,62 +847,3 @@ class ModelerAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"  修正失敗: {e}")
         return None
-
-    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
-        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
-
-        prev_text = ""
-        if previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
-
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
-
-        tool_hint = ""
-        if self.tools:
-            tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
-
-        user_prompt = f"""{topic_text}
-{prev_text}
-{snapshot_text}
-{tool_hint}
-
-# 思考與發言流程
-1. 先思考：(1) 此議題對系統架構與模型的影響 (2) 你在架構/建模上必須堅守的底線 (3) 在不破壞核心邊界下可接受的調整或折衷 (4) 對既有 UML 與需求追溯的影響
-2. 上述 (2)(3) 只用來**內部**整理立場；撰寫 statement 時請勿以「我可讓步的點是…」「不可讓步的點是…」或類似小標／口頭套語作答，應把堅持與彈性**自然融入**架構結論、影響分析與調整建議中。
-3. 再根據思考結果，撰寫一段完整的發言（statement），建議採「先架構結論、再影響分析、再調整建議」順序，聚焦於系統架構、建模、元件邊界的觀點
-4. 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"）
-
-# 表達方式（僅能以文字呈現）
-- 發言時可善用**文字形式**的圖、表格、流程、草圖輔助說明，例如：Markdown 表格（| 項目 | 說明 |）、編號步驟流程（1. … 2. …）、箭頭式流程（A → B → C）、簡要結構縮排或文字草圖；無法產出真實圖片，僅能以文字表達。**若有使用表格、流程或圖示，請用 ``` … ``` 程式碼區塊包住，與一般敘述分開，方便閱讀。**
-
-# 發言風格
-- 以真實需求工程會議中的系統架構/建模專家口吻：先指出關鍵架構判斷，再說明影響範圍與可驗證的調整方案
-- 清楚描述改動對 Use Case / Class / Sequence 的影響，並說明是否會破壞一致性或可測試性
-- 可說「若需求這樣定，Use Case 圖需要…」「這點會影響到 Class 的職責邊界…」
-
-# 約束
-- statement 須聚焦系統架構與建模觀點，評估需求變更對 UML 模型的影響
-- 避免只講抽象原則，需明確指出「哪個模型元素」會變動與原因
-- 若資訊不足，需說明需補充的介面、事件流程或資料邊界，不可臆測
-- 投票將在討論結束後另行進行，發言時只需專注架構與建模觀點
-
-輸出 JSON:
-{{{{
-    "statement": "針對此議題的完整發言內容",
-    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
-
-        return {
-            "agent": self.name,
-            "statement": response.get("statement", ""),
-            "open_questions": response.get("open_questions", []),
-        }

@@ -2,26 +2,21 @@
   {
     "id": "conflict_resolution",
     "label": "衝突協調",
-    "description": "利害關係人之間的衝突，需協調立場、投票或人類裁決以達成共識"
-  },
-  {
-    "id": "requirement_clarification",
-    "label": "需求釐清",
-    "description": "需求描述模糊或含義待釐清時，需先釐清再後續判定或協調 Conflict"
+    "description": "需要跨角色協調、投票或人工裁決，且無法透過直接釐清或保守更新解決的需求衝突"
   },
   {
     "id": "open_question",
-    "label": "開放問題討論",
-    "description": "待回答的開放問題需釐清"
+    "label": "待決開放問題",
+    "description": "需要正式多人討論才能回答，且答案會影響後續需求、衝突判定、決策或範圍收斂的開放問題"
   },
   {
     "id": "new_requirement",
     "label": "提出新需求",
-    "description": "User/Expert 提出新功能、新限制"
+    "description": "新增能力、限制或必要條件，且納入與否會影響現有需求、範圍或後續決策"
   },
   {
     "id": "tradeoff",
     "label": "需求取捨",
-    "description": "NFR 間可能互相競爭(效能、可用性、成本等)需協商"
+    "description": "兩項以上目標、限制或偏好無法同時完全滿足，需明確取捨或界定可接受折衷"
   }
 ]

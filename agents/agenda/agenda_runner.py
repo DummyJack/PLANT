@@ -8,8 +8,13 @@ from agents.profile.mediator import (
 
 
 def self_review_round_cap_from_config(config: Dict[str, Any]) -> int:
-    mi = config.get("max_iterations") or {}
-    return max(1, int(mi.get("self_review_round_cap", 5)))
+    mi = config.get("max_iterations")
+    if isinstance(mi, dict):
+        return max(1, int(mi.get("self_review_round_cap", 5)))
+    try:
+        return max(1, int(mi))
+    except (TypeError, ValueError):
+        return 5
 
 
 class AgendaRunner:
@@ -20,6 +25,7 @@ class AgendaRunner:
         mediator_agent: MediatorAgent,
         registry,
         artifact: Dict[str, Any],
+        proposal_pool: Optional[List[Dict[str, Any]]],
         round_num: int,
         config: Dict[str, Any],
         store,
@@ -34,6 +40,7 @@ class AgendaRunner:
         self.store = store
         self.collect = collect_module
         self.logger = logger
+        self.proposal_pool = list(proposal_pool or [])
 
         self.topics: List[Dict] = []
         self.topic_status: Dict[str, Dict] = {}
@@ -93,7 +100,9 @@ class AgendaRunner:
                 max_items=max_items,
                 skip_source_ids=skip if skip else None,
                 draft_markdown=draft_md,
+                proposal_pool=self.proposal_pool,
             )
+            self.proposal_pool = list(self.artifact.get("proposal_backlog", []) or [])
             self.topic_status = {
                 t["id"]: {
                     "discussed": False,
@@ -145,7 +154,9 @@ class AgendaRunner:
                 max_items=max_items,
                 skip_source_ids=skip if skip else None,
                 draft_markdown=draft_md,
+                proposal_pool=self.proposal_pool,
             )
+            self.proposal_pool = list(self.artifact.get("proposal_backlog", []) or [])
             if not new_items:
                 obs["result"] = {"expanded": 0, "message": "無新增議題"}
                 return obs
@@ -191,7 +202,6 @@ class AgendaRunner:
                     f"請使用 save_topic 儲存後繼續下一個議題。"
                 )
                 return obs
-            cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
             mode = topic.get("discussion_mode", "sequential")
             if mode == "simultaneous":
                 contributions = self.mediator.moderate_simultaneous(
@@ -230,30 +240,48 @@ class AgendaRunner:
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
             contributions = st.get("contributions") or []
-            cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
-            self.logger.info(f"  綜合決議: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
-            vote_bundle = self.mediator.collect_final_votes(
-                topic, contributions, self.registry, artifact=self.artifact
-            )
-            final_votes = vote_bundle.get("votes") or {}
-            mc = vote_bundle.get("mediator_compromise") or {}
-            resolution = self.mediator.synthesize_and_resolve(
-                topic,
-                contributions,
-                final_votes=final_votes,
-                mediator_compromise=mc,
-            )
+            self.logger.info(f"  決議: [{topic_id}] {topic.get('title', '')}")
+
+            convergence = self.mediator.assess_discussion_convergence(topic, contributions)
+            if convergence.get("converged"):
+                self.logger.info(f"    收斂：{convergence.get('reason', '')}")
+                resolution = self.mediator.build_converged_resolution(
+                    topic, contributions, convergence,
+                )
+            else:
+                self.logger.info(f"    未收斂：{convergence.get('reason', '')}，提出折衷方案")
+                mc = self.mediator.propose_compromise_for_vote(topic, contributions)
+                votes = self.mediator.collect_compromise_votes(
+                    topic, contributions, mc, self.registry, artifact=self.artifact,
+                )
+                proposer = self._find_topic_proposer(topic)
+                resolution = self.mediator.synthesize_and_resolve(
+                    topic, contributions,
+                    final_votes=votes,
+                    mediator_compromise=mc,
+                    proposer_agent=proposer,
+                )
+
             self.topic_status[topic_id]["resolution"] = resolution
-            votes = resolution.get("votes", {})
-            votes_summary = resolution.get("votes_summary", "")
-            if votes:
-                votes_str = ", ".join(f"{a}: {v}" for a, v in votes.items())
-                self.logger.info(f"    多數決投票: {votes_str} → {resolution.get('resolution', '')} ({votes_summary})")
+            rv = resolution.get("votes", {})
+            if rv:
+                votes_str = ", ".join(f"{a}: {v}" for a, v in rv.items())
+                self.logger.info(f"    投票: {votes_str} → {resolution.get('resolution', '')}")
+            else:
+                self.logger.info(f"    結果: {resolution.get('resolution', '')}")
+            needs_human = bool(resolution.get("needs_human"))
             obs["result"] = {
                 "topic_id": topic_id,
                 "resolution": resolution.get("resolution"),
+                "resolution_status": resolution.get("resolution_status", resolution.get("resolution")),
                 "summary": resolution.get("summary", ""),
+                "decision_summary": resolution.get("decision_summary", resolution.get("summary", "")),
+                "agreed_points_count": len(resolution.get("agreed_points", []) or []),
+                "unresolved_points_count": len(resolution.get("unresolved_points", []) or []),
+                "needs_human": needs_human,
             }
+            if needs_human:
+                self.topic_status[topic_id]["resolution"] = None
             return obs
 
         if action == "escalate_to_human":
@@ -267,21 +295,36 @@ class AgendaRunner:
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
             contributions = st_esc.get("contributions") or []
-            cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
-            self.logger.info(f"  人類裁決: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
+            self.logger.info(f"  人類裁決: [{topic_id}] {topic.get('title', '')}")
             options = None
-            if topic.get("category") in ("conflict_resolution", "requirement_clarification") and self.registry:
+            if topic.get("category") in ("conflict_resolution",) and self.registry:
                 analyst = self.registry.get("analyst")
                 if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
                     options = analyst.get_resolution_options_for_topic(topic, self.artifact)
             if not options:
                 options = self.mediator.prepare_human_options(topic, contributions)
             resolution = self.collect.human_decision_on_topic(topic, options)
-            self.topic_status[topic_id]["resolution"] = resolution
+            decision_text = str(resolution.get("decision", ""))
+            wrapped = self.mediator.build_topic_result(
+                resolution_status="human_decision",
+                summary=decision_text or "本議題已升級由人類裁決。",
+                decision=decision_text,
+                votes={},
+                votes_summary="human_decision",
+                mediator_compromise={},
+                agreed_points=[decision_text] if decision_text else [],
+                unresolved_points=[],
+                new_open_questions=[],
+                affected_conflict_ids=[],
+                requirement_change_candidates=[],
+                needs_human=True,
+            )
+            wrapped["human_decision_raw"] = resolution
+            self.topic_status[topic_id]["resolution"] = wrapped
             obs["result"] = {
                 "topic_id": topic_id,
                 "resolution": "human_decision",
-                "summary": str(resolution.get("decision", "")),
+                "summary": decision_text,
             }
             return obs
 
@@ -294,24 +337,10 @@ class AgendaRunner:
                 return obs
             contributions = st.get("contributions") or []
             resolution = st.get("resolution")
-            cat_label = AGENDA_CATEGORY_LABEL.get(topic.get("category", ""), topic.get("category", ""))
-            self.logger.info(f"  存檔議題: [{topic_id}] {topic.get('title', '')} [{cat_label}]")
+            self.logger.info(f"  存檔: [{topic_id}] {topic.get('title', '')}")
             if not resolution:
-                self.logger.info(
-                    "    尚未執行 resolve_topic，save_topic 時自動補做綜合決議與投票"
-                )
-                vote_bundle = self.mediator.collect_final_votes(
-                    topic, contributions, self.registry, artifact=self.artifact
-                )
-                final_votes = vote_bundle.get("votes") or {}
-                mc = vote_bundle.get("mediator_compromise") or {}
-                resolution = self.mediator.synthesize_and_resolve(
-                    topic,
-                    contributions,
-                    final_votes=final_votes,
-                    mediator_compromise=mc,
-                )
-                self.topic_status[topic_id]["resolution"] = resolution
+                obs["error"] = f"請先對 {topic_id} 執行 resolve_topic 或 escalate_to_human，之後才能 save_topic"
+                return obs
             self.topic_idx += 1
             meeting_md = self.mediator.generate_meeting_markdown(
                 topic, contributions, resolution, round_num=self.round_num
@@ -319,6 +348,7 @@ class AgendaRunner:
             meeting_filename = f"R{self.round_num}-M{self.topic_idx:02d}.md"
             self.store.save_markdown(meeting_md, meeting_filename)
             topic_record = {
+                "schema_version": topic.get("schema_version", "agenda_topic.v1"),
                 "id": topic.get("id"),
                 "title": topic.get("title"),
                 "description": topic.get("description", ""),
@@ -327,6 +357,9 @@ class AgendaRunner:
                 "discussion_mode": topic.get("discussion_mode", "sequential"),
                 "speaking_order": topic.get("speaking_order", []),
                 "source_ids": topic.get("source_ids", []),
+                "source_proposal_ids": topic.get("source_proposal_ids", []),
+                "status": "saved",
+                "triage_action": topic.get("triage_action", "formal_meeting"),
             }
             self.round_discussions.append(
                 {
@@ -356,11 +389,7 @@ class AgendaRunner:
                 max_iter = n
             else:
                 max_iter = min(int(ri.get("expert_review", cap)), cap)
-            self.logger.info(
-                "  Expert 自主研究循環（caller 上限 %s 輪，自訂範圍 1–%s）",
-                max_iter,
-                cap,
-            )
+            self.logger.info("  Expert review（%s 輪）", max_iter)
             result = expert.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,
@@ -392,11 +421,7 @@ class AgendaRunner:
                 max_iter = n
             else:
                 max_iter = min(int(ri.get("analyst_review", cap)), cap)
-            self.logger.info(
-                "  Analyst 自主分析循環（caller 上限 %s 輪，自訂範圍 1–%s）",
-                max_iter,
-                cap,
-            )
+            self.logger.info("  Analyst review（%s 輪）", max_iter)
             result = analyst.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,
@@ -428,11 +453,7 @@ class AgendaRunner:
                 max_iter = n
             else:
                 max_iter = min(int(ri.get("modeler_review", cap)), cap)
-            self.logger.info(
-                "  Modeler 自主更新循環（caller 上限 %s 輪，自訂範圍 1–%s）",
-                max_iter,
-                cap,
-            )
+            self.logger.info("  Modeler review（%s 輪）", max_iter)
             result = modeler.run_review_loop(
                 self.artifact, self.round_discussions,
                 max_iterations=max_iter,
@@ -479,6 +500,20 @@ class AgendaRunner:
                 return t
         return None
 
+    def _find_topic_proposer(self, topic: Dict) -> Optional[str]:
+        """從 topic 的 source_proposal_ids 反查提案者。"""
+        proposal_ids = set(topic.get("source_proposal_ids") or [])
+        if not proposal_ids:
+            return None
+        for p in self.artifact.get("topic_proposals", []) or []:
+            if not isinstance(p, dict):
+                continue
+            if p.get("proposal_id") in proposal_ids:
+                proposer = (p.get("proposed_by") or "").strip()
+                if proposer:
+                    return proposer
+        return None
+
     def get_state_summary(self) -> Dict[str, Any]:
         status_list = []
         for tid, st in self.topic_status.items():
@@ -498,20 +533,43 @@ class AgendaRunner:
             and all(self.topic_status.get(t["id"], {}).get("saved", False) for t in self.topics)
         )
         can_expand_agenda = topics_count < agenda_limit and all_saved
+        clarification_queue = [
+            row for row in (self.artifact.get("clarification_queue", []) or [])
+            if isinstance(row, dict)
+        ]
+        human_decision_queue = [
+            row for row in (self.artifact.get("human_decision_queue", []) or [])
+            if isinstance(row, dict)
+        ]
+        direct_apply_queue = [
+            row for row in (self.artifact.get("direct_apply_queue", []) or [])
+            if isinstance(row, dict)
+        ]
         return {
             "round_num": self.round_num,
             "agenda_limit": agenda_limit,
             "topics_count": topics_count,
             "all_current_topics_saved": all_saved,
             "can_expand_agenda": can_expand_agenda,
+            "queue_status": {
+                "clarification_queue_count": len(clarification_queue),
+                "human_decision_queue_count": len(human_decision_queue),
+                "direct_apply_queue_count": len(direct_apply_queue),
+                "has_pending_queue_items": bool(
+                    clarification_queue or human_decision_queue or direct_apply_queue
+                ),
+            },
             "topics": [
                 {
+                    "schema_version": t.get("schema_version", "agenda_topic.v1"),
                     "id": t["id"],
                     "title": t["title"],
                     "category": t.get("category", ""),
                     "category_label": AGENDA_CATEGORY_LABEL.get(
                         t.get("category", ""), t.get("category", "")
                     ),
+                    "source_proposal_ids": t.get("source_proposal_ids", []),
+                    "triage_action": t.get("triage_action", "formal_meeting"),
                 }
                 for t in self.topics
             ],

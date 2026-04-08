@@ -4,7 +4,7 @@ import re
 import threading
 
 from datetime import datetime
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 from time import perf_counter
 from store import Store
@@ -41,6 +41,104 @@ def json_dump_no_scientific(
     fp.write(
         json_dumps_no_scientific(obj, indent=indent, ensure_ascii=ensure_ascii)
     )
+
+
+def _to_pos_int(value: Any, default: int) -> int:
+    try:
+        n = int(value)
+        return n if n > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def read_max_iterations(
+    config: Dict[str, Any],
+    *,
+    default: int = 3,
+) -> int:
+    """讀取 max_iterations（僅支援單一整數設定）。"""
+    raw = config.get("max_iterations")
+    return _to_pos_int(raw, default)
+
+
+def directive_embed() -> str:
+    return "請使用繁體中文回覆。"
+
+
+def global_conventions_text() -> str:
+    return "請具體、精簡、可執行；避免空泛描述。引用網址時直接貼出完整 URL，不要使用 Markdown 超連結語法。"
+
+
+def short_reasoning_line() -> str:
+    return "reasoning 請使用一句繁體中文簡述。"
+
+
+def user_requirement_cards() -> str:
+    return "需求卡片請使用繁體中文。"
+
+
+def user_stakeholder_name_reason() -> str:
+    return "每位利害關係人需包含名稱與理由。"
+
+
+def analyst_draft_decision_table_note() -> str:
+    return "若有決策，請用精簡決策表呈現。"
+
+
+def expert_topic_bullets_task() -> str:
+    return "請提供 2～4 點重點，包含依據與風險。"
+
+
+def expert_fallback_viewpoint() -> str:
+    return "請以領域專家角度，簡短給出觀點與風險提醒。"
+
+
+def mediator_agenda_language_line() -> str:
+    return "title/description 請使用繁體中文。"
+
+
+def mediator_collect_line() -> str:
+    return "請清楚整理分歧與未解決事項。"
+
+
+def mediator_human_options_line() -> str:
+    return "請提供 2～4 個可選方案並附優缺點。"
+
+
+def mediator_prose_line() -> str:
+    return "請使用精簡敘述。"
+
+
+def mediator_reasoning_line() -> str:
+    return "reasoning 請使用一句繁體中文。"
+
+
+def mediator_summary_decision_line() -> str:
+    return "請簡述最終決議與理由。"
+
+
+def mediator_unresolved_vote_task_line() -> str:
+    return "若未解決，請明確說明是否升級為人類裁決。"
+
+
+def modeler_models_array_name_line() -> str:
+    return "陣列欄位名稱請使用 models。"
+
+
+def modeler_name_field_language() -> str:
+    return "name 欄位請使用繁體中文。"
+
+
+def modeler_review_field_language() -> str:
+    return "review 欄位說明請使用繁體中文。"
+
+
+def documentor_srs_body_lang() -> str:
+    return "內文請使用繁體中文。"
+
+
+def srs_title_instruction() -> str:
+    return "文件主標題必須為「[系統名稱]軟體需求規格書」。"
 
 
 class Logger:
@@ -437,212 +535,178 @@ class CostTracker:
         output_cost = (output_tokens / 1_000_000) * output_price
         return input_cost + output_cost
 
-OUTPUT_LANG_ZH = "zh-TW"
-OUTPUT_LANG_EN = "en"
-VALID_OUTPUT_LANGUAGES = (OUTPUT_LANG_ZH, OUTPUT_LANG_EN)
+VALID_DISCUSSION_MODES = {"sequential", "simultaneous"}
+VALID_PRIORITY_HINTS = {"high", "medium", "low"}
+VALID_ROUTING_ACTIONS = {
+    "direct_apply",
+    "direct_clarification",
+    "formal_meeting",
+    "human_decision",
+}
+VALID_IMPACT_LEVELS = {"high", "medium", "low"}
 
 
-def resolve_output_language(config: Optional[Dict[str, Any]]) -> str:
-    """從 config 讀取強制輸出語系；缺漏或無效時預設 zh-TW。"""
-    if not config:
-        return OUTPUT_LANG_ZH
-    raw = config.get("output_language")
-    if raw in VALID_OUTPUT_LANGUAGES:
-        return raw
-    return OUTPUT_LANG_ZH
+def normalize_topic_proposal(
+    item: Dict[str, Any],
+    *,
+    allowed_categories: Sequence[str],
+    default_participants: Sequence[str],
+    proposed_by: str,
+    round_num: int,
+    index: int,
+) -> Optional[Dict[str, Any]]:
+    """驗證並正規化 agent topic proposal（固定 schema）。"""
+    if not isinstance(item, dict):
+        return None
+
+    title = (item.get("title") or "").strip()
+    description = (item.get("description") or "").strip()
+    category = (item.get("category") or "").strip()
+    why_now = (item.get("why_now") or "").strip()
+    if not title or not description or not category or not why_now:
+        return None
+    if category not in set(allowed_categories):
+        return None
+
+    participants = [
+        str(p).strip()
+        for p in (item.get("participants") or [])
+        if str(p).strip()
+    ]
+    participants = list(dict.fromkeys(participants))
+    if not participants:
+        participants = list(default_participants)
+    if not participants:
+        return None
+
+    discussion_mode = (item.get("discussion_mode") or "sequential").strip()
+    if discussion_mode not in VALID_DISCUSSION_MODES:
+        discussion_mode = "sequential"
+
+    speaking_order = [
+        str(p).strip()
+        for p in (item.get("speaking_order") or participants)
+        if str(p).strip() in participants
+    ]
+    speaking_order = list(dict.fromkeys(speaking_order))
+    if set(speaking_order) != set(participants):
+        speaking_order = list(participants)
+
+    source_ids = [
+        str(s).strip() for s in (item.get("source_ids") or [])
+        if str(s).strip()
+    ]
+    source_ids = list(dict.fromkeys(source_ids))
+
+    priority_hint = (item.get("priority_hint") or "medium").strip().lower()
+    if priority_hint not in VALID_PRIORITY_HINTS:
+        priority_hint = "medium"
+    impact_level = (item.get("impact_level") or priority_hint or "medium").strip().lower()
+    if impact_level not in VALID_IMPACT_LEVELS:
+        impact_level = priority_hint
+
+    proposal_id = (item.get("proposal_id") or "").strip()
+    if not proposal_id:
+        proposal_id = f"P-R{round_num:02d}-{proposed_by}-{index:03d}"
+    routing_preference = (item.get("routing_preference") or "formal_meeting").strip()
+    if routing_preference not in VALID_ROUTING_ACTIONS:
+        routing_preference = "formal_meeting"
+
+    return {
+        "schema_version": "topic_proposal.v1",
+        "proposal_id": proposal_id,
+        "title": title,
+        "description": description,
+        "category": category,
+        "participants": participants,
+        "discussion_mode": discussion_mode,
+        "speaking_order": speaking_order,
+        "source_ids": source_ids,
+        "priority_hint": priority_hint,
+        "impact_level": impact_level,
+        "why_now": why_now,
+        "proposed_by": proposed_by,
+        "round": round_num,
+        "deferred_rounds": int(item.get("deferred_rounds") or 0),
+        "routing_preference": routing_preference,
+        "requires_multi_party": bool(item.get("requires_multi_party")),
+        "blocks_decision": bool(item.get("blocks_decision")),
+        "needs_human": bool(item.get("needs_human")),
+        "status": (item.get("status") or "proposed").strip() or "proposed",
+    }
 
 
-def global_conventions_text(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Use English for all human-visible descriptions, explanations, titles, statements, "
-            "questions, summaries, and narrative fields; keep id, type, category, label, and "
-            "other structural identifiers in English."
-        )
-    return (
-        "對人可見的描述、說明、標題、敘述、statement、question、摘要等請使用繁體中文。"
-        "下列維持英文（勿翻譯為中文）：id、type、category、label、JSON 鍵名、agent 識別名、"
-        "需求編號（FR-…、NFR-… 等）、Conflict / Neutral 等狀態標籤、conflict_type、"
-        "PlantUML 語法與圖上元素名、技術術語與結構化欄位名。"
-    )
+def normalize_agenda_topic(
+    item: Dict[str, Any],
+    *,
+    allowed_categories: Sequence[str],
+    registered_agents: Sequence[str],
+    index: int,
+) -> Optional[Dict[str, Any]]:
+    """驗證並正規化正式 agenda topic（固定 schema）。"""
+    if not isinstance(item, dict):
+        return None
+    title = (item.get("title") or "").strip()
+    description = (item.get("description") or "").strip()
+    category = (item.get("category") or "").strip()
+    if not title or not category:
+        return None
+    if category not in set(allowed_categories):
+        return None
 
+    participants = [
+        str(p).strip()
+        for p in (item.get("participants") or [])
+        if str(p).strip() in set(registered_agents)
+    ]
+    participants = list(dict.fromkeys(participants))
+    if not participants:
+        participants = list(registered_agents)
+    if not participants:
+        return None
 
-def directive_embed(lang: str) -> str:
-    base = global_conventions_text(lang)
-    override = (
-        "If any skill or task text below conflicts with this language rule, follow this rule."
-        if lang == OUTPUT_LANG_EN
-        else "若 skill 或下文與上述語系要求衝突，以上述語系為準。"
-    )
-    return f"{base} {override}"
+    discussion_mode = (item.get("discussion_mode") or "sequential").strip()
+    if discussion_mode not in VALID_DISCUSSION_MODES:
+        discussion_mode = "sequential"
 
+    speaking_order = [
+        str(p).strip()
+        for p in (item.get("speaking_order") or participants)
+        if str(p).strip() in participants
+    ]
+    speaking_order = list(dict.fromkeys(speaking_order))
+    if set(speaking_order) != set(participants):
+        speaking_order = list(participants)
 
-def mediator_agenda_language_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Write title and description in English; keep category, discussion_mode, "
-            "and participants as English identifiers."
-        )
-    return (
-        "title、description 請使用繁體中文；category、discussion_mode、participants 等 id 維持英文"
-    )
+    source_ids = [
+        str(s).strip()
+        for s in (item.get("source_ids") or [])
+        if str(s).strip()
+    ]
+    source_ids = list(dict.fromkeys(source_ids))
+    source_proposal_ids = [
+        str(s).strip()
+        for s in (item.get("source_proposal_ids") or [])
+        if str(s).strip()
+    ]
+    source_proposal_ids = list(dict.fromkeys(source_proposal_ids))
+    routing_action = (item.get("triage_action") or "formal_meeting").strip()
+    if routing_action not in VALID_ROUTING_ACTIONS:
+        routing_action = "formal_meeting"
 
+    topic_id = (item.get("id") or "").strip() or f"T-{index:02d}"
+    return {
+        "schema_version": "agenda_topic.v1",
+        "id": topic_id,
+        "title": title,
+        "description": description,
+        "category": category,
+        "participants": participants,
+        "discussion_mode": discussion_mode,
+        "speaking_order": speaking_order,
+        "source_ids": source_ids,
+        "source_proposal_ids": source_proposal_ids,
+        "status": (item.get("status") or "scheduled").strip() or "scheduled",
+        "triage_action": routing_action,
+    }
 
-def short_reasoning_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Write reasoning in English."
-    return "reasoning 請使用繁體中文"
-
-
-def mediator_reasoning_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Write reasoning in English, in a concise meeting-host tone: current consensus, "
-            "why this action, expected outcome."
-        )
-    return (
-        "reasoning 請使用繁體中文，並像真實會議主持人的口吻：簡短說明"
-        "「目前共識狀態、為何採此動作、預期產出」"
-    )
-
-
-def mediator_prose_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Write in English; ids and field names may stay in English."
-    return "用繁體中文撰寫；id 與欄位名稱可維持英文。"
-
-
-def mediator_summary_decision_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Write summary and decision in English."
-    return "summary、decision 請使用繁體中文"
-
-
-def mediator_unresolved_vote_task_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Topics below did not reach majority consensus. Summarize key discussion points in "
-            "`summary` only; leave `decision` empty. Use English."
-        )
-    return (
-        "以下議題經討論後以多數決判定為「未達成共識」。請簡要總結各方討論重點（summary 即可，decision 留空）。"
-        "summary 請使用繁體中文。"
-    )
-
-
-def mediator_human_options_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "3. Write title, description, rationale, and all narrative fields in English."
-    return "3. title、description、rationale 等所有輸出文字請使用繁體中文"
-
-
-def mediator_collect_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "In new_conflicts descriptions and new_decisions narrative text, use English. "
-            "Keep label and conflict_type in English."
-        )
-    return (
-        "new_conflicts 的 description、new_decisions 中與決策相關的描述文字請使用繁體中文。"
-        "label、conflict_type 維持英文。"
-    )
-
-
-def modeler_review_field_language(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "- impact_summary: impact summary (English)\n"
-            "- consistency_summary: overall consistency vs requirements (English)\n"
-            "- gaps: list of gaps, one sentence each (English); [] if none"
-        )
-    return (
-        "- impact_summary：影響摘要（繁體中文）\n"
-        "- consistency_summary：與需求一致性的整體說明（繁體中文），例如：一致、部分一致、有缺口、或簡述哪些部分對齊、哪些未對齊\n"
-        "- gaps：缺口或不一致項目列表，每項一句話描述（繁體中文）。例如：需求 FR-01 在模型中無對應、某圖與某圖命名不一致、某需求未被涵蓋。若無缺口則為空陣列 []"
-    )
-
-
-def modeler_name_field_language(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Use English for `name` (diagram display title)."
-    return "name 使用繁體中文。"
-
-
-def modeler_models_array_name_line(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Use English for each item's `name` (diagram display title) in `models`."
-    return "models 陣列中的 name（圖表顯示名稱）請使用繁體中文。"
-
-
-def analyst_draft_decision_table_note(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Conflict requirements table: Issue | Requirements Affected | Decision. "
-            "Requirements Affected: list each affected requirement ID with a one-line summary. "
-            "Write Decision column in English. No Resolution Options. End draft at "
-            '"Conflict requirements" / equivalent section heading.'
-        )
-    return (
-        "Conflict 需求表格三欄：Issue | Requirements Affected（受影響需求）| Decision（決策）。"
-        "Requirements Affected 欄位請寫詳細：列出受影響的需求 ID（FR-/NFR- 等，維持英文），並對每個 ID 附一句簡短摘要（該需求內容要點，繁中）；"
-        "Decision 欄位標題與內容可使用繁體中文（如「待決」「已決：…」）。不要 Resolution Options。草稿結束於「Conflict 需求」。"
-    )
-
-
-def expert_topic_bullets_task(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "List 1–3 regulatory/compliance/safety bullet points for the topic (scope, risks). "
-            "English only. No JSON."
-        )
-    return (
-        "針對 Context 中的議題與專案狀態，簡要列出 1～3 點法規/合規/安全相關要點（可含適用範圍與風險），供會議發言參考。"
-        "請使用繁體中文。只輸出簡短條列文字，勿 JSON。"
-    )
-
-
-def expert_fallback_viewpoint(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "As a domain expert, write 2–4 sentences with your professional view "
-            "(regulations, best practices, risks). Do not leave empty; output English prose only."
-        )
-    return (
-        "請以領域專家身份，用 2～4 句話簡要說明你對上述議題的專業看法（可含法規、最佳實務、技術建議或風險提醒）。"
-        "勿留空，直接輸出繁體中文內容。"
-    )
-
-
-def user_stakeholder_name_reason(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Use English for each stakeholder name and reason."
-    return "name、reason 請使用繁體中文"
-
-
-def user_requirement_cards(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return "Use English for name and each text item in the arrays."
-    return "name、text 陣列內容請使用繁體中文"
-
-
-def srs_title_instruction(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Document main title must be \"[<System Name>] Software Requirements Specification\"; "
-            "derive the system name from scope, rough_idea, or draft."
-        )
-    return (
-        "文件主標題必須為「[系統名稱]軟體需求規格書」，例如「外送平台系統軟體需求規格書」。"
-        "系統名稱請從 Context 的 scope、rough_idea 或 draft 內容推得。"
-        "勿使用 \"Software Requirements Specification\" 或 \"SRS\" 作為主標題。"
-    )
-
-
-def documentor_srs_body_lang(lang: str) -> str:
-    if lang == OUTPUT_LANG_EN:
-        return (
-            "Write the full SRS narrative in English; keep requirement IDs (FR-…, NFR-…) in English."
-        )
-    return (
-        "產出的 SRS 敘述全文請使用繁體中文；需求編號（FR-…、NFR-…）與章節中的英文標籤／欄位名維持英文。"
-    )

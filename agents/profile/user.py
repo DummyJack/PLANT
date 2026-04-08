@@ -11,10 +11,10 @@ class UserAgent(BaseAgent):
 
     system_prompt = """你負責模擬不同利害關係人的角色。
 
-核心原則：
-1. 角色扮演 — 以第一人稱代入每位利害關係人，用真實會議口吻表達
-2. 立場忠實 — 只代表被指派的角色立場，不代替技術團隊下設計結論
-3. 情境導向 — 先講使用情境與痛點，再講需求與可接受底線"""
+規則：
+1. 以第一人稱代入角色，用真實會議口吻表達。
+2. 只代表被指派角色的需求、顧慮與底線，不代替技術團隊或主持人下結論。
+3. 優先講情境、痛點、需求與可接受底線，不講技術解法。"""
 
     def __init__(
         self,
@@ -27,6 +27,8 @@ class UserAgent(BaseAgent):
             model, tools=tools, registry=registry, project_config=project_config
         )
         self.stakeholders: List[Dict] = []
+
+    # ===== Action: stakeholder simulation =====
 
     def propose_stakeholders(self, rough_idea: str) -> List[str]:
         user_prompt = f"""# 任務
@@ -42,7 +44,7 @@ class UserAgent(BaseAgent):
 - 避免角色重疊
 - name 只填名稱，不要用括號補充說明
 - reason 選擇理由用一句話即可
-- {user_stakeholder_name_reason(self.output_language)}
+- {user_stakeholder_name_reason()}
 
 # 輸出 JSON
 {{{{
@@ -81,7 +83,7 @@ class UserAgent(BaseAgent):
 # 約束
 - 每位利害關係人提出 3-5 條獨立需求（text 陣列）
 - 以該角色的日常經驗出發
-- {user_requirement_cards(self.output_language)}
+- {user_requirement_cards()}
 
 # 輸出 JSON
 {{{{
@@ -113,6 +115,77 @@ class UserAgent(BaseAgent):
             return stakeholders
         except Exception as e:
             raise RuntimeError(f"User 生成失敗: {e}")
+
+    def propose_topics(
+        self,
+        artifact: Dict[str, Dict],
+        *,
+        round_num: int,
+        max_items: int = 2,
+    ) -> List[Dict]:
+        """僅提出使用者視角合理的議題：缺漏需求補充、或需由使用者回答的待確認問題。"""
+        proposals: List[Dict] = []
+
+        for sh in self.stakeholders or []:
+            name = (sh.get("name") or "").strip()
+            texts = sh.get("text") or []
+            if not name or not isinstance(texts, list):
+                continue
+            needs = [str(t).strip() for t in texts if str(t).strip()]
+            if not needs:
+                continue
+            desc = "；".join(needs[:2])
+            proposals.append(
+                {
+                    "title": f"{name} 的需求補充",
+                    "description": desc,
+                    "category": "new_requirement",
+                    "participants": ["user", "analyst", "expert", "modeler"],
+                    "discussion_mode": "sequential",
+                    "speaking_order": ["user", "analyst", "expert", "modeler"],
+                    "source_ids": [name],
+                    "priority_hint": "medium",
+                    "impact_level": "medium",
+                    "why_now": "使用者情境中的需求或限制尚未完全反映到當前需求中。",
+                    "requires_multi_party": True,
+                    "blocks_decision": False,
+                    "routing_preference": "formal_meeting",
+                    "proposed_by": "user",
+                    "round": round_num,
+                }
+            )
+
+        for oq in artifact.get("open_questions", []) or []:
+            if oq.get("status") == "answered":
+                continue
+            to_agent = str(oq.get("to") or "").strip().lower()
+            from_agent = str(oq.get("from_agent") or "").strip().lower()
+            q = str(oq.get("question") or "").strip()
+            if not q or (to_agent != "user" and from_agent != "user"):
+                continue
+            proposals.append(
+                {
+                    "title": "使用者觀點待確認問題",
+                    "description": q,
+                    "category": "open_question",
+                    "participants": ["user", "analyst"],
+                    "discussion_mode": "simultaneous",
+                    "speaking_order": ["user", "analyst"],
+                    "source_ids": [],
+                    "priority_hint": "medium",
+                    "impact_level": "medium",
+                    "why_now": "此問題需要使用者視角補充，否則可能影響需求收斂。",
+                    "requires_multi_party": False,
+                    "blocks_decision": False,
+                    "routing_preference": "direct_clarification",
+                    "proposed_by": "user",
+                    "round": round_num,
+                }
+            )
+
+        return proposals[: max(1, max_items)]
+
+    # ===== Action: meeting response =====
 
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
@@ -214,24 +287,19 @@ class UserAgent(BaseAgent):
 {snapshot_text}
 {category_hint}
 
-# 思考與發言流程
+# 任務
 {flow_hint}
-發言前請在內心區分：哪些是你必須堅持的核心需求／底線，哪些條件可以談；此區分僅供醞釀，**勿**在 statement 中以「我可讓步的點是…」「不可讓步的點是…」或類似框架分段作答，應以第一人稱自然說出情境、期待與底線。
-若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "analyst"、"expert"、"modeler"）
+請以利害關係人角度，用第一人稱說出情境、痛點、需求、顧慮與底線。
 
-# 發言風格
-- 以該利害關係人在需求會議中的真實口吻：第一人稱、口語化，不用制式條列背稿
-- 優先描述「我遇到的情境、我的痛點、我在意的風險、我可接受的底線」
-- 不要把自己講成分析師或架構師，避免使用過度技術化術語
-
-# 約束
-- 必須以你代表的利害關係人角色立場發言
-- statement 須以第一人稱、該角色的日常經驗為基礎撰寫完整發言
-- 禁止提出技術解決方案，只表達「需要什麼」
-- 若資訊不足，可直接說明不確定之處與希望釐清的問題
+# 規則
+- statement 應自然、口語、貼近日常經驗，不要像分析師或架構師。
+- 優先講你遇到的情境、在意的風險、可接受底線與希望系統做到的事。
+- 不要提出技術解決方案，只表達需要什麼與擔心什麼。
+- 若需要他人補資訊，再放進 open_questions。
+- 若資訊不足，可直接說明不確定之處。
 {f'- speaking_as 的名稱必須從以下選一個或數個：{names_list}' if need_speaking_as else ''}
 
-輸出 JSON:
+# 輸出 JSON
 {{{{
     {json_hint}
 }}}}"""

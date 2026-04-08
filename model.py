@@ -6,14 +6,17 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from abc import ABC, abstractmethod
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - optional dependency at import-time
+    OpenAI = None
 from utils import CostTracker
 
 
-def anthropic_split_messages(
+def claude_split_messages(
     messages: List[Dict],
 ) -> Tuple[Optional[str], List[Dict[str, str]]]:
-    """將 OpenAI 風格 messages 轉成 Anthropic Messages API 格式。"""
+    """將 OpenAI 風格 messages 轉成 Claude Messages API 格式。"""
     system_parts: List[str] = []
     out: List[Dict[str, str]] = []
     for m in messages:
@@ -57,7 +60,7 @@ def gemini_split_messages(
 
 
 class BaseLLM(ABC):
-    """統一 LLM 介面，支援 OpenAI / Anthropic Claude / Google Gemini"""
+    """統一 LLM 介面，支援 OpenAI / Claude / Google Gemini"""
 
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
@@ -150,6 +153,8 @@ class BaseLLM(ABC):
 class OpenAIModel(BaseLLM):
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
+        if OpenAI is None:
+            raise ImportError("openai package is required for OpenAIModel")
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment")
@@ -216,8 +221,8 @@ class OpenAIModel(BaseLLM):
         return json.loads(response.choices[0].message.content)
 
 
-class AnthropicModel(BaseLLM):
-    """Anthropic Claude（Messages API）。需安裝 anthropic 套件與 ANTHROPIC_API_KEY。"""
+class ClaudeModel(BaseLLM):
+    """Claude（Messages API）。需安裝 anthropic 套件與 ANTHROPIC_API_KEY。"""
 
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
@@ -252,7 +257,7 @@ class AnthropicModel(BaseLLM):
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
     ) -> str:
-        system, msgs = anthropic_split_messages(messages)
+        system, msgs = claude_split_messages(messages)
         max_out = self.effective_max_tokens(
             temperature, max_tokens, max_output_tokens
         )
@@ -329,7 +334,7 @@ class AnthropicModel(BaseLLM):
 
 
 class GeminiModel(BaseLLM):
-    """Google Gemini（google-genai / google.genai）。需安裝套件與 GOOGLE_API_KEY。"""
+    """Google Gemini（google-genai / google.genai）。需安裝套件與 GEMINI_API_KEY。"""
 
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
@@ -339,9 +344,9 @@ class GeminiModel(BaseLLM):
             raise ImportError(
                 "使用 Gemini 請先安裝：pip install google-genai"
             ) from e
-        api_key = os.getenv("GOOGLE_API_KEY")
+        api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY not found in environment")
+            raise ValueError("GEMINI_API_KEY not found in environment")
         self._client = genai.Client(api_key=api_key)
 
     def gemini_response_text(self, response: Any) -> str:
@@ -761,17 +766,14 @@ class GeminiModel(BaseLLM):
 
 
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:
-    _aliases = {
-        "claude": "anthropic",
-    }
-    key = _aliases.get(provider.lower(), provider.lower())
+    key = provider.lower()
     providers = {
         "openai": OpenAIModel,
-        "anthropic": AnthropicModel,
+        "claude": ClaudeModel,
         "gemini": GeminiModel,
     }
     if key not in providers:
         raise ValueError(
-            f"不支援的 provider: {provider}，支援: {list(providers.keys())} 及別名 claude"
+            f"不支援的 provider: {provider}，支援: {list(providers.keys())}"
         )
     return providers[key](model_name, **kwargs)

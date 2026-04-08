@@ -7,14 +7,12 @@ from utils import documentor_srs_body_lang, srs_title_instruction
 class DocumentorAgent(BaseAgent):
     name = "documentor"
 
-    system_prompt = """你是一個專業的軟體需求規格書撰寫專家，負責撰寫 SRS 文件。
+    system_prompt = """你是 SRS 撰寫專家，負責把既有需求草稿與 artifact 轉成正式文件。
 
-核心原則（依序遵守）：
-1. 禁止硬掰 — 只轉寫與整理「需求草稿與 artifact」中已有的內容；不得憑空新增需求、資料模型、介面規格、技術選型或範本佔位（如 [Name]、YYYY-MM-DD、[Describe...]）。若某章節在來源中無對應資料，該節直接標註「待補」或「本文件無相關資料」，勿填寫猜測或範例。
-2. 缺料就標待補 — 對資訊缺口、假設與待確認項目做明確標示；區分「已決議」與「討論中／待確認」。
-3. 結構一致 — SRS 章節結構須符合 spec 範本；主標題為「[系統名稱]軟體需求規格書」，正文章節從 1 開始依序編號（## 1. Introduction, ## 2. Overall Description, ## 3. …, 勿從 3 開始）。
-4. 內容一致 — SRS 中的需求描述必須與需求規格一致，不遺漏既有需求，也不新增草稿沒有的項目。
-5. 忠實記錄 — 只整理已有資料，禁止添加資料中不存在的需求或決策。"""
+規則：
+1. requirement_change_candidates、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
+2. 你只根據最新 draft 與 artifact 轉寫，不自行補決策。
+3. 文件結構需符合 SRS 範本，章節編號從 1 開始連續。"""
 
     def __init__(
         self,
@@ -45,24 +43,40 @@ class DocumentorAgent(BaseAgent):
         artifact = artifact or {}
         scope = artifact.get("scope", {})
         rough_idea = artifact.get("rough_idea", "")
+        decisions = artifact.get("decisions", [])
         context = {
             "draft_version": latest_version,
             "draft_markdown": draft_md,
-            "feedback": artifact.get("feedback", {}),
-            "scope": scope,
             "rough_idea": rough_idea,
+            "scope": scope,
+            "stakeholders": artifact.get("stakeholders", []),
+            "requirements": artifact.get("requirements", []),
+            "conflicts": artifact.get("conflicts", []),
+            "decisions": decisions,
+            "open_questions": artifact.get("open_questions", []),
+            "system_models": artifact.get("system_models", {}),
+            "feedback": artifact.get("feedback", {}),
         }
-        title_rule = srs_title_instruction(self.output_language)
-        body_lang = documentor_srs_body_lang(self.output_language)
-        task = f"""依 srs-generation skill、範本與檢查清單，僅根據 Context 的**最新需求草稿**（draft_markdown）與 **feedback**（如有）產出正式軟體需求規格書（Markdown）。
+        title_rule = srs_title_instruction()
+        body_lang = documentor_srs_body_lang()
+        task = f"""依 srs-generation skill、範本與檢查清單，根據 Context 的最新需求草稿與結構化資料產出正式 SRS（Markdown）。
 
-強制規則（依序遵守）：
-1. 禁止硬掰：只轉寫草稿與 Context 中已有的需求、範圍、約束與決策；不得憑空新增需求、資料模型、介面規格、技術選型或佔位符（如 [Name]、YYYY-MM-DD、[Describe...]）。若某章節在來源中無對應資料，該節直接標註「待補」或「本文件無相關資料」，勿填寫猜測或範例。
-2. 缺料就標待補：對無來源的 References、Open Questions、Change Request 等表單，若無實際資料則標「待補」或省略該表，勿留範本佔位。
-3. 標題格式：{title_rule}
-4. 章節編號從 1 開始連續編號：正文第一個一級章節為「## 1. Introduction」，接著「## 2. Overall Description」、「## 3. …」，依序連續編號至附錄。勿從 3 或 4 開始，勿跳號。
+嚴格來源規則（最重要）：
+- SRS 的所有功能性需求必須且僅可來自 Context.requirements 與 Context.draft_markdown；不得自行新增、推測或編造任何需求。
+- 非功能性需求的具體指標與目標值必須來自 Context.requirements（NFR 類）；若來源中無明確數值，該欄位標示「待補」，不得虛構數字。
+- Context.decisions 中的會議決議必須反映到對應需求的細節中。
+- Context.conflicts 中 label=Conflict 的衝突標為未解決；label=Neutral 的標為已解決。
+- 需求溯源矩陣（RTM）僅在有上游 PRD 時才產出；無 PRD 時省略該章節，不得虛構 PRD ID。
+- 參考資料表中的法規、文件只列 Context 中實際提及的來源；不得自行杜撰法規名稱或版本日期。
+- 無來源資料的章節、表格或欄位，請標示「待補」或直接省略，不要留範本空殼，更不得填入虛構內容。
 
-其他要求：以草稿為唯一輸入來源，忠實轉寫為符合 ISO/IEC/IEEE 29148；使用 FR-<MODULE>-<NNN>、NFR-<CATEGORY>-<NNN> 編號；產出須通過 skill 品質檢查清單。{body_lang} 只輸出 SRS Markdown，勿包程式碼區塊。"""
+其他規則：
+1. requirement_change_candidates、pending_review、未回答 open questions、未解 conflict 與未正式套用的變更，不得寫成已定案需求。
+2. 標題格式：{title_rule}
+3. 章節編號從 1 開始連續，不得跳號。
+4. Context.requirements 中的每一條都必須出現在 SRS 中，不得遺漏。
+
+{body_lang} 只輸出 SRS Markdown，勿包程式碼區塊。"""
 
         srs_md_full = self.invoke_skill("srs-generation", task, context=context)
         srs_md_full = self.strip_code_fences(srs_md_full)

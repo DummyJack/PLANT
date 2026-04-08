@@ -2,10 +2,122 @@ import json
 import re
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Set
 from agents.tools.base import BaseTool
 
+
+# ---------------------------------------------------------------------------
+# Agent Registry
+# ---------------------------------------------------------------------------
+
+class AgentRegistry:
+    def __init__(self):
+        self._agents: Dict[str, Any] = {}
+
+    def register(self, name: str, agent):
+        self._agents[name] = agent
+
+    def get(self, agent_name: str):
+        return self._agents.get(agent_name)
+
+    def get_names(self) -> list:
+        return list(self._agents.keys())
+
+
+# ---------------------------------------------------------------------------
+# Skill / Tool Policy
+# ---------------------------------------------------------------------------
+
+DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
+    "analyst": ["requirements-analyst", "conflict-analyzer"],
+    "expert": ["domain-research"],
+    "modeler": ["plantuml-syntax"],
+    "documentor": ["srs-generation"],
+    "mediator": [],
+    "user": [],
+}
+
+DEFAULT_AGENT_TOOL_MAPPING: Dict[str, List[str]] = {
+    "analyst": ["artifact_query"],
+    "expert": ["web_search", "file_parser", "artifact_query"],
+    "modeler": ["plantuml_validate", "artifact_query"],
+    "documentor": ["artifact_query"],
+    "mediator": ["artifact_query"],
+    "user": [],
+}
+
+DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {
+    "domain-research": ["web_search", "file_parser"],
+    "requirements-analyst": ["artifact_query"],
+    "conflict-analyzer": [],
+    "srs-generation": ["artifact_query"],
+    "plantuml-syntax": ["plantuml_validate", "artifact_query"],
+}
+
+
+@dataclass
+class AgentSkillToolPolicy:
+    """集中式 policy：鎖定 agent/skill/tool 邊界並做執行期檢查。"""
+
+    agent_skill_mapping: Dict[str, List[str]] = field(
+        default_factory=lambda: dict(DEFAULT_AGENT_SKILL_MAPPING)
+    )
+    agent_tool_mapping: Dict[str, List[str]] = field(
+        default_factory=lambda: dict(DEFAULT_AGENT_TOOL_MAPPING)
+    )
+    skill_tool_allowlist: Dict[str, List[str]] = field(
+        default_factory=lambda: dict(DEFAULT_SKILL_TOOL_ALLOWLIST)
+    )
+
+    def allowed_skills_for_agent(self, agent_name: str) -> List[str]:
+        return list(self.agent_skill_mapping.get(agent_name, []))
+
+    def allowed_tools_for_agent(self, agent_name: str) -> List[str]:
+        return list(self.agent_tool_mapping.get(agent_name, []))
+
+    def can_agent_use_skill(self, agent_name: str, skill_name: str) -> bool:
+        return skill_name in set(self.agent_skill_mapping.get(agent_name, []))
+
+    def can_agent_use_tool(self, agent_name: str, tool_name: str) -> bool:
+        return tool_name in set(self.agent_tool_mapping.get(agent_name, []))
+
+    def can_skill_use_tool(self, skill_name: str, tool_name: str) -> bool:
+        if skill_name not in self.skill_tool_allowlist:
+            return True
+        return tool_name in set(self.skill_tool_allowlist.get(skill_name, []))
+
+    def validate_agent_assignment(self, agent_name: str, skills: List[str], tools: List[str]) -> None:
+        allowed_skills: Set[str] = set(self.allowed_skills_for_agent(agent_name))
+        allowed_tools: Set[str] = set(self.allowed_tools_for_agent(agent_name))
+
+        invalid_skills = [s for s in skills if s not in allowed_skills]
+        invalid_tools = [t for t in tools if t not in allowed_tools]
+        if invalid_skills or invalid_tools:
+            raise ValueError(
+                f"Policy violation for agent '{agent_name}': "
+                f"invalid_skills={invalid_skills}, invalid_tools={invalid_tools}, "
+                f"allowed_skills={sorted(allowed_skills)}, allowed_tools={sorted(allowed_tools)}"
+            )
+
+    def validate_mapping_integrity(self) -> None:
+        mapped_skills: Set[str] = set()
+        for skill_list in self.agent_skill_mapping.values():
+            mapped_skills.update(skill_list)
+        missing_allowlist = sorted(
+            s for s in mapped_skills if s not in self.skill_tool_allowlist
+        )
+        if missing_allowlist:
+            raise ValueError(
+                "Policy integrity violation: missing skill_tool_allowlist entries for "
+                f"{missing_allowlist}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Base Agent
+# ---------------------------------------------------------------------------
 
 class BaseAgent:
     name: str = ""
@@ -27,13 +139,16 @@ class BaseAgent:
         self.policy = None
         self.project_config: Dict[str, Any] = dict(project_config or {})
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
-        # 由 Flow 依 rough_idea 偵測後設定；預設繁中
-        self.output_language: str = "zh-TW"
 
     def self_review_round_cap(self) -> int:
         """自主複審 OODA：模型可自訂的 max_iterations 上限（與 max_iterations.self_review_round_cap 一致）。"""
-        mi = self.project_config.get("max_iterations") or {}
-        return max(1, int(mi.get("self_review_round_cap", 5)))
+        mi = self.project_config.get("max_iterations")
+        if isinstance(mi, dict):
+            return max(1, int(mi.get("self_review_round_cap", 5)))
+        try:
+            return max(1, int(mi))
+        except (TypeError, ValueError):
+            return 5
 
     def max_web_search_results_cap(self) -> int:
         """單次 web_search 結果筆數上限（工具實例優先，否則讀 max_web_search_results）。"""
@@ -56,6 +171,33 @@ class BaseAgent:
                 except json.JSONDecodeError:
                     pass
         return {}
+
+    # ------------------------------------------------------------------
+    # Meeting helpers
+    # ------------------------------------------------------------------
+
+    def _build_snapshot_text(self, artifact_snapshot: Optional[Dict[str, Any]]) -> str:
+        if not artifact_snapshot:
+            return ""
+        return (
+            "\n# 當前專案狀態（供參考）\n"
+            f"{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+        )
+
+    def _build_tool_hint_for_meeting(self) -> str:
+        if not self.tools:
+            return ""
+        return (
+            "\n# 工具使用\n"
+            "- 若需要查證、搜尋或驗證，可先使用可用工具。\n"
+            "- 使用完工具後，**必須**根據結果與你的判斷輸出下列 JSON，勿僅回傳工具結果。"
+        )
+
+    def _build_topic_text(self, topic: Dict[str, Any]) -> str:
+        return (
+            f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n"
+            f"描述: {topic.get('description', '')}"
+        )
 
     def chat_for_topic_response(
         self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
@@ -108,7 +250,7 @@ class BaseAgent:
         """全域輸出慣例後綴；子類可覆寫為 ''。"""
         from utils import global_conventions_text
 
-        text = global_conventions_text(self.output_language)
+        text = global_conventions_text()
         if not text:
             return ""
         return f"\n\n# 全域輸出慣例\n{text}"
@@ -117,7 +259,7 @@ class BaseAgent:
         """task 內語系指示。"""
         from utils import directive_embed
 
-        return directive_embed(self.output_language)
+        return directive_embed()
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
@@ -132,19 +274,14 @@ class BaseAgent:
         artifact_snapshot: Optional[Dict] = None,
     ) -> Dict:
         """子類覆寫：議題回應。"""
-        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_text = self._build_topic_text(topic)
 
         prev_text = self.format_previous_responses(
             previous_responses, title="前面的發言"
         )
 
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
-
-        tool_hint = ""
-        if self.tools:
-            tool_hint = "\n# 工具使用\n- 若需要查證、搜尋或驗證，可先使用可用工具。\n- 使用完工具後，**必須**根據結果與你的判斷輸出下列 JSON，勿僅回傳工具結果。"
+        snapshot_text = self._build_snapshot_text(artifact_snapshot)
+        tool_hint = self._build_tool_hint_for_meeting()
 
         user_prompt = f"""你正在參與一場需求討論會議。請針對以下議題，從你的專業角色角度提供意見。
 
@@ -200,7 +337,7 @@ class BaseAgent:
         若傳入 mediator_compromise 且含有效方案內容，表決對象為「是否同意採納該主持人方案」，
         而非評判其他與會者發言。
         """
-        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_text = self._build_topic_text(topic)
 
         mc = mediator_compromise or {}
         mc_title = (mc.get("title") or "").strip()
@@ -225,9 +362,7 @@ class BaseAgent:
                 "勿改為比較或評判其他與會者先前發言孰是孰非。\n"
             )
 
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+        snapshot_text = self._build_snapshot_text(artifact_snapshot)
 
         if has_mediator_package:
             task_block = """# 任務
@@ -283,6 +418,85 @@ class BaseAgent:
         )
         return {"agent": self.name, "vote": vote, "rationale": rationale}
 
+    # ------------------------------------------------------------------
+    # Skill execution helpers
+    # ------------------------------------------------------------------
+
+    def _validate_skill_usage(self, skill_name: str) -> None:
+        if skill_name not in self.skill_names:
+            raise ValueError(
+                f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
+            )
+        if self.policy and not self.policy.can_agent_use_skill(self.name, skill_name):
+            raise ValueError(f"Policy 禁止 Agent '{self.name}' 使用 skill '{skill_name}'")
+
+    def _build_skill_messages(
+        self,
+        skill: Dict[str, Any],
+        skill_name: str,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, str]]:
+        system_parts = [self.system_prompt]
+        user_content = skill.get("content_user") or skill["content"]
+        user_parts = [f"# Skill: {skill.get('name', skill_name)}\n\n"]
+        if skill.get("content_system"):
+            user_parts.extend(
+                [
+                    "# Skill Guidance\n\n",
+                    skill["content_system"],
+                    "\n\n",
+                ]
+            )
+        user_parts.extend(
+            [
+                f"# 輸出語系（必須遵守）\n{self.lang_directive()}\n\n",
+                user_content,
+                "\n\n# Task\n\n",
+                task,
+            ]
+        )
+        if skill.get("project_adapter"):
+            user_parts.extend(
+                ["\n\n# Project Adapter（專案覆蓋規則）\n\n", skill["project_adapter"]]
+            )
+        if skill.get("template"):
+            user_parts.extend(["\n\n# 範本（必須依此結構）\n\n", skill["template"]])
+        if skill.get("checklist"):
+            user_parts.extend(
+                ["\n\n# 品質檢查清單（產出前須自檢通過）\n\n", skill["checklist"]]
+            )
+        for ref_name, ref_content in (skill.get("reference_files") or {}).items():
+            user_parts.extend([f"\n\n# {ref_name}\n\n", ref_content])
+        if context is not None:
+            user_parts.append(
+                f"\n\n# Context\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+            )
+
+        suffix = self.get_global_conventions_suffix()
+        if suffix:
+            system_parts.append(suffix)
+        return [
+            {"role": "system", "content": "".join(system_parts)},
+            {"role": "user", "content": "\n".join(user_parts)},
+        ]
+
+    def _run_skill_messages(
+        self,
+        skill_name: str,
+        messages: List[Dict[str, str]],
+    ) -> str:
+        if self.tools:
+            return self.chat_with_tools(
+                messages,
+                max_rounds=self.tool_call_max_rounds,
+                active_skill=skill_name,
+            )
+        return self.model.chat(
+            messages,
+            action=self.usage_action(f"skill.{skill_name}"),
+        )
+
     def invoke_skill(
         self,
         skill_name: str,
@@ -294,60 +508,12 @@ class BaseAgent:
         組 system + user message 後呼叫 model，回傳模型輸出的字串。
         若此 agent 未賦予該 skill（skill_name 不在 self.skill_names），則拋錯。
         """
-        if skill_name not in self.skill_names:
-            raise ValueError(
-                f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
-            )
-        if self.policy and not self.policy.can_agent_use_skill(self.name, skill_name):
-            raise ValueError(f"Policy 禁止 Agent '{self.name}' 使用 skill '{skill_name}'")
+        self._validate_skill_usage(skill_name)
         from agents.skills.base import get_skill
 
         skill = get_skill(skill_name)
-        system_parts = [self.system_prompt]
-        if skill.get("content_system"):
-            system_parts.append(f"\n\n# Skill: {skill.get('name', skill_name)}\n\n")
-            system_parts.append(skill["content_system"])
-        user_content = skill.get("content_user") or skill["content"]
-        user_parts = []
-        if not skill.get("content_system"):
-            user_parts.append(f"# Skill: {skill.get('name', skill_name)}\n\n")
-        user_parts.extend(
-            [
-                f"# 輸出語系（必須遵守）\n{self.lang_directive()}\n\n",
-                user_content,
-                "\n\n# Task\n\n",
-                task,
-            ]
-        )
-        if skill.get("template"):
-            user_parts.append("\n\n# 範本（必須依此結構）\n\n")
-            user_parts.append(skill["template"])
-        if skill.get("checklist"):
-            user_parts.append("\n\n# 品質檢查清單（產出前須自檢通過）\n\n")
-            user_parts.append(skill["checklist"])
-        for ref_name, ref_content in (skill.get("reference_files") or {}).items():
-            user_parts.append(f"\n\n# {ref_name}\n\n")
-            user_parts.append(ref_content)
-        if context is not None:
-            user_parts.append(f"\n\n# Context\n{json.dumps(context, ensure_ascii=False, indent=2)}")
-
-        suffix = self.get_global_conventions_suffix()
-        if suffix:
-            system_parts.append(suffix)
-        messages = [
-            {"role": "system", "content": "".join(system_parts)},
-            {"role": "user", "content": "\n".join(user_parts)},
-        ]
-        if self.tools:
-            return self.chat_with_tools(
-                messages,
-                max_rounds=self.tool_call_max_rounds,
-                active_skill=skill_name,
-            )
-        return self.model.chat(
-            messages,
-            action=self.usage_action(f"skill.{skill_name}"),
-        )
+        messages = self._build_skill_messages(skill, skill_name, task, context=context)
+        return self._run_skill_messages(skill_name, messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []
@@ -395,10 +561,15 @@ class BaseAgent:
             properties = {}
             required = []
             for pname, pinfo in tool.parameters.items():
-                properties[pname] = {
+                ptype = pinfo.get("type", "string")
+                prop = {
                     "type": pinfo.get("type", "string"),
                     "description": pinfo.get("description", ""),
                 }
+                # OpenAI function schema: array 必須提供 items。
+                if ptype == "array":
+                    prop["items"] = pinfo.get("items", {"type": "string"})
+                properties[pname] = prop
                 if pinfo.get("required", False):
                     required.append(pname)
             schemas.append({
@@ -436,6 +607,173 @@ class BaseAgent:
                 except Exception as e:
                     self.logger.debug("tool reset_session: %s", e)
 
+    # ------------------------------------------------------------------
+    # Tool execution helpers
+    # ------------------------------------------------------------------
+
+    def _tool_loop_action(self, active_skill: Optional[str] = None) -> str:
+        return self.usage_action(
+            f"tool_loop.{active_skill}" if active_skill else "tool_loop.general"
+        )
+
+    def _parse_tool_arguments(self, raw_arguments: str) -> Dict[str, Any]:
+        try:
+            return json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return {}
+
+    def _run_single_tool_call(
+        self,
+        tool_call: Any,
+        *,
+        active_skill: Optional[str] = None,
+    ) -> tuple[str, str]:
+        fname = tool_call.function.name
+        fargs = self._parse_tool_arguments(tool_call.function.arguments)
+        self.logger.info("🔧 %s(%s)", fname, fargs)
+        result = self.execute_tool(fname, fargs, active_skill=active_skill)
+        return tool_call.id, result
+
+    def _append_openai_tool_results(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_calls_list: List[Any],
+        *,
+        active_skill: Optional[str] = None,
+    ) -> None:
+        if len(tool_calls_list) == 1:
+            tool_call_id, result = self._run_single_tool_call(
+                tool_calls_list[0], active_skill=active_skill
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": result,
+                }
+            )
+            return
+
+        max_workers = min(len(tool_calls_list), 6)
+        results_by_id: Dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_tc = {
+                executor.submit(
+                    self._run_single_tool_call, tc, active_skill=active_skill
+                ): tc
+                for tc in tool_calls_list
+            }
+            for future in as_completed(future_to_tc):
+                tc = future_to_tc[future]
+                try:
+                    tool_call_id, result = future.result()
+                    results_by_id[tool_call_id] = result
+                except Exception as e:
+                    results_by_id[tc.id] = f"工具執行失敗: {e}"
+        for tc in tool_calls_list:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": results_by_id.get(tc.id, ""),
+                }
+            )
+
+    def _chat_with_gemini_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        max_rounds: int,
+        *,
+        active_skill: Optional[str] = None,
+    ) -> str:
+        return self.model.gemini_chat_with_tools(
+            messages,
+            openai_style_tool_schemas=self.get_tool_schemas(),
+            execute_tool_fn=lambda name, args: self.execute_tool(
+                name, args, active_skill=active_skill
+            ),
+            max_rounds=max_rounds,
+            action=self._tool_loop_action(active_skill),
+        )
+
+    def _chat_with_openai_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        max_rounds: int,
+        *,
+        active_skill: Optional[str] = None,
+    ) -> str:
+        tool_schemas = self.get_tool_schemas()
+        action = self._tool_loop_action(active_skill)
+        tracker = self.model.costTracker
+        for _ in range(max_rounds):
+            tracker.start()
+            response = None
+            try:
+                response = self.model.client.chat.completions.create(
+                    model=self.model.model_name,
+                    messages=messages,
+                    tools=tool_schemas,
+                    tool_choice="auto",
+                )
+            except (AttributeError, TypeError) as e:
+                tracker.end_segment()
+                self.logger.warning("tool calling 呼叫失敗，改為普通 chat: %s", e)
+                return self.model.chat(
+                    messages,
+                    action=self.usage_action("chat.tool_calling_fallback"),
+                )
+            finally:
+                run_s = tracker.end_segment()
+            raw_usage = getattr(response, "usage", None)
+            if raw_usage:
+                self.model.addUsage(
+                    {
+                        "prompt_tokens": getattr(raw_usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(raw_usage, "completion_tokens", 0),
+                        "total_tokens": getattr(raw_usage, "total_tokens", 0),
+                    },
+                    action=action,
+                    run_time_s=run_s,
+                )
+            msg = response.choices[0].message
+            if not getattr(msg, "tool_calls", None):
+                return msg.content or ""
+            messages.append(msg.model_dump())
+            self._append_openai_tool_results(
+                messages,
+                list(msg.tool_calls),
+                active_skill=active_skill,
+            )
+
+        tracker.start()
+        last = None
+        try:
+            last = self.model.client.chat.completions.create(
+                model=self.model.model_name,
+                messages=messages,
+            )
+        except (AttributeError, TypeError):
+            tracker.end_segment()
+            return self.model.chat(
+                messages,
+                action=self.usage_action("chat.final_fallback"),
+            )
+        finally:
+            run_s = tracker.end_segment()
+        raw_usage = getattr(last, "usage", None)
+        if raw_usage:
+            self.model.addUsage(
+                {
+                    "prompt_tokens": getattr(raw_usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(raw_usage, "completion_tokens", 0),
+                    "total_tokens": getattr(raw_usage, "total_tokens", 0),
+                },
+                action=action,
+                run_time_s=run_s,
+            )
+        return last.choices[0].message.content or ""
+
     def chat_with_tools(
         self,
         messages: List[Dict],
@@ -452,16 +790,10 @@ class BaseAgent:
                 action=self.usage_action("chat.with_tools"),
             )
         if self.supports_gemini_tool_calling():
-            return self.model.gemini_chat_with_tools(
+            return self._chat_with_gemini_tools(
                 messages,
-                openai_style_tool_schemas=self.get_tool_schemas(),
-                execute_tool_fn=lambda name, args: self.execute_tool(
-                    name, args, active_skill=active_skill
-                ),
-                max_rounds=max_rounds,
-                action=self.usage_action(
-                    f"tool_loop.{active_skill}" if active_skill else "tool_loop.general"
-                ),
+                max_rounds,
+                active_skill=active_skill,
             )
         if not self.supports_tool_calling():
             self.logger.warning("目前 model client 不支援 tool calling，改為普通 chat（工具不會被呼叫）")
@@ -469,86 +801,8 @@ class BaseAgent:
                 messages,
                 action=self.usage_action("chat.no_tool_support"),
             )
-
-        tool_schemas = self.get_tool_schemas()
-
-        for _ in range(max_rounds):
-            try:
-                response = self.model.client.chat.completions.create(
-                    model=self.model.model_name,
-                    messages=messages,
-                    tools=tool_schemas,
-                    tool_choice="auto",
-                )
-            except (AttributeError, TypeError) as e:
-                self.logger.warning(f"tool calling 呼叫失敗，改為普通 chat: {e}")
-                return self.model.chat(
-                    messages,
-                    action=self.usage_action("chat.tool_calling_fallback"),
-                )
-            msg = response.choices[0].message
-
-            if not getattr(msg, "tool_calls", None):
-                return msg.content or ""
-
-            messages.append(msg.model_dump())
-
-            tool_calls_list = list(msg.tool_calls)
-            if len(tool_calls_list) == 1:
-                tc = tool_calls_list[0]
-                fname = tc.function.name
-                try:
-                    fargs = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    fargs = {}
-                self.logger.info(f"🔧 {fname}({fargs})")
-                result = self.execute_tool(
-                    fname, fargs, active_skill=active_skill
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result,
-                })
-            else:
-                def run_one(tc):
-                    fname = tc.function.name
-                    try:
-                        fargs = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        fargs = {}
-                    self.logger.info(f"🔧 {fname}({fargs})")
-                    result = self.execute_tool(
-                        fname, fargs, active_skill=active_skill
-                    )
-                    return (tc.id, result)
-
-                max_workers = min(len(tool_calls_list), 6)
-                results_by_id = {}
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_tc = {executor.submit(run_one, tc): tc for tc in tool_calls_list}
-                    for future in as_completed(future_to_tc):
-                        tc = future_to_tc[future]
-                        try:
-                            tool_call_id, result = future.result()
-                            results_by_id[tool_call_id] = result
-                        except Exception as e:
-                            results_by_id[tc.id] = f"工具執行失敗: {e}"
-                for tc in tool_calls_list:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": results_by_id.get(tc.id, ""),
-                    })
-
-        try:
-            last = self.model.client.chat.completions.create(
-                model=self.model.model_name,
-                messages=messages,
-            )
-            return last.choices[0].message.content or ""
-        except (AttributeError, TypeError):
-            return self.model.chat(
-                messages,
-                action=self.usage_action("chat.final_fallback"),
-            )
+        return self._chat_with_openai_tools(
+            messages,
+            max_rounds,
+            active_skill=active_skill,
+        )

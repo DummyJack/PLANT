@@ -3,6 +3,7 @@ from .base import BaseTool, ToolRegistry
 from .web_search import WebSearchTool
 from .plantuml_validator import PlantUMLValidatorTool
 from .file_parser import FileParserTool
+from .artifact_query import ArtifactQueryTool
 
 __all__ = [
     'BaseTool',
@@ -10,4 +11,5 @@ __all__ = [
     'WebSearchTool',
     'PlantUMLValidatorTool',
     'FileParserTool',
+    'ArtifactQueryTool',
 ]

@@ -1,388 +1,188 @@
+| name | description |
+|------|-------------|
+| requirements-analyst | Gathers, refines, and documents requirements from Discovery outputs |
+
+# Requirements Analyst
+
+## Requirement ID Convention
+
+Use feature-scoped, gap-friendly IDs with PRIORITY DECOUPLED:
+
+- Functional: `{feature-slug}-FR-{010|020|030...}`
+- Security: `{feature-slug}-NFR-SEC-{010|020|030...}`
+- Performance: `{feature-slug}-NFR-PERF-{010|020|030...}`
+- Accessibility: `{feature-slug}-NFR-ACC-{010|020|030...}`
+
+**Key Rule**: Priority (P0/P1/P2) goes in the table column, NOT in the ID. This ensures IDs remain stable if priority changes.
+
+Leave gaps (010, 020, 030) to allow inserts without renumbering.
+
+## Prioritization Guidelines
+
+- **P0 (Must Have)**: Feature doesn't work without this. Launch blocker.
+- **P1 (Should Have)**: Important for good UX/functionality. Strong desire.
+- **P2 (Nice to Have)**: Enhances but not critical. Can defer.
+
+## Stopping Criteria
+
+Stop exploring and start documenting when:
+
+1. All stakeholders have defined objectives
+2. Core functionality is clear
+3. Success criteria are measurable
+4. Major constraints are identified
+5. Scope boundaries are defined
+6. Potential conflicts are surfaced
+
+If unclear on any of these, ASK before proceeding.
+
+## Quality Standards
+
+- Requirements should be specific, not vague
+- Acceptance criteria should be testable
+- Success metrics should be measurable
+- Dependencies should be actionable
+- Scope should be clear (in AND out)
+- Conflicts should be surfaced, not hidden
+
+## Output Format
+
+Generate a requirements document using this template:
+
+````md
+# Requirements: [Feature Name]
+
 ---
-name: requirement-analyzer
-description: Analyzes and documents requirements for any software project, technology-agnostic approach to requirement engineering
+id: YYYY-MM-DD-{feature-slug}
+feature: {feature-slug}
+phase: definition
+document: requirements
+version: 1
+status: draft
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+domains: [domain1, domain2]
+stakeholders: [stakeholder1, stakeholder2]
+author: claude
+reviewed_by: []
 ---
 
-# Generic Requirement Analyzer
+## Overview
 
-A technology-agnostic skill for analyzing, categorizing, and documenting software requirements for any type of project.
+**Feature Summary:**
+[One paragraph summarizing what we're building and why]
 
-## Core Responsibilities
+**Related Discovery:**
+- Brief: [link to brief-final.md]
+- Intake: [link to intake-final.md]
 
-### 1. Requirement Decomposition
-
-Break down requirements into universal categories:
-
-```yaml
-Requirement Categories:
-  Functional:
-    - What the system must do
-    - User interactions
-    - Business logic
-    - Data processing
-
-  Non-Functional:
-    - Performance targets
-    - Security requirements
-    - Usability standards
-    - Reliability metrics
-
-  Constraints:
-    - Technical limitations
-    - Business rules
-    - Regulatory compliance
-    - Resource boundaries
-```
-
-### 2. Requirement Analysis Framework
-
-**Universal User Story Format:**
-```yaml
-User Story:
-  as_a: [user role/persona]
-  i_want: [feature/capability]
-  so_that: [business value/benefit]
-
-Acceptance Criteria:
-  given: [initial context/state]
-  when: [action/trigger]
-  then: [expected outcome/result]
-```
-
-**Requirement Specification Template:**
-```yaml
-Requirement:
-  id: REQ-[number]
-  title: [brief description]
-  type: functional|non-functional|constraint
-  priority: must|should|could|wont
-  description: [detailed description]
-  rationale: [why this is needed]
-  source: [stakeholder/document]
-  acceptance_criteria:
-    - [measurable criterion 1]
-    - [measurable criterion 2]
-  dependencies:
-    - [related requirement ids]
-  risks:
-    - [potential risks]
-  assumptions:
-    - [underlying assumptions]
-```
-
-### 3. Priority Frameworks
-
-**MoSCoW Method:**
-```yaml
-Must Have:
-  - Critical for launch
-  - System fails without it
-  - Legal/regulatory requirement
-
-Should Have:
-  - Important but not vital
-  - Workaround exists
-  - High value for users
-
-Could Have:
-  - Desirable but not necessary
-  - Nice to have
-  - Can be postponed
-
-Won't Have (this time):
-  - Out of scope
-  - Future consideration
-  - Explicitly excluded
-```
-
-**Kano Model:**
-```yaml
-Basic Needs:
-  - Expected by users
-  - Causes dissatisfaction if missing
-
-Performance Needs:
-  - More is better
-  - Linear satisfaction
-
-Excitement Needs:
-  - Delighters
-  - Unexpected features
-  - Competitive advantage
-```
-
-### 4. Requirement Quality Criteria
-
-**SMART Requirements:**
-```yaml
-Specific:
-  - Clear and unambiguous
-  - Well-defined scope
-
-Measurable:
-  - Quantifiable success criteria
-  - Testable conditions
-
-Achievable:
-  - Technically feasible
-  - Resource realistic
-
-Relevant:
-  - Aligns with business goals
-  - Provides value
-
-Time-bound:
-  - Has deadline/milestone
-  - Time constraints defined
-```
-
-**Completeness Checklist:**
-```yaml
-Requirement Completeness:
-  - [ ] Clear description
-  - [ ] Defined acceptance criteria
-  - [ ] Identified stakeholder
-  - [ ] Priority assigned
-  - [ ] Dependencies mapped
-  - [ ] Risks assessed
-  - [ ] Assumptions documented
-  - [ ] Traceability established
-```
-
-### 5. Stakeholder Analysis
-
-**Stakeholder Mapping:**
-```yaml
-Stakeholder Analysis:
-  identification:
-    - End users
-    - Business owners
-    - Technical team
-    - Regulatory bodies
-    - External partners
-
-  influence_interest_matrix:
-    high_influence_high_interest:
-      - Key players
-      - Manage closely
-
-    high_influence_low_interest:
-      - Keep satisfied
-      - Regular updates
-
-    low_influence_high_interest:
-      - Keep informed
-      - Regular communication
-
-    low_influence_low_interest:
-      - Monitor
-      - Minimal effort
-```
-
-### 6. Requirement Validation
-
-**Validation Techniques:**
-```yaml
-Review Methods:
-  walkthrough:
-    - Informal review
-    - Author-led
-    - Educational focus
-
-  inspection:
-    - Formal review
-    - Defined roles
-    - Defect detection
-
-  prototype_validation:
-    - Visual representation
-    - User feedback
-    - Early validation
-```
-
-**Validation Criteria:**
-```yaml
-Quality Attributes:
-  correctness:
-    - Accurately represents need
-    - Factually correct
-
-  consistency:
-    - No conflicts
-    - Uniform terminology
-
-  completeness:
-    - All aspects covered
-    - No gaps
-
-  feasibility:
-    - Technically possible
-    - Resource available
-
-  testability:
-    - Verifiable criteria
-    - Measurable outcomes
-```
-
-## Analysis Process
-
-### Step 1: Requirement Gathering
-```yaml
-Sources:
-  - Stakeholder interviews
-  - Existing documentation
-  - Market research
-  - Competitive analysis
-  - User feedback
-  - Regulatory requirements
-```
-
-### Step 2: Categorization
-```yaml
-Classification:
-  1. Parse raw requirements
-  2. Identify requirement type
-  3. Assign categories
-  4. Group related items
-  5. Identify patterns
-```
-
-### Step 3: Analysis
-```yaml
-Analysis Activities:
-  1. Ambiguity resolution
-  2. Conflict identification
-  3. Gap analysis
-  4. Dependency mapping
-  5. Risk assessment
-```
-
-### Step 4: Documentation
-```yaml
-Documentation Outputs:
-  - Requirement specification
-  - Traceability matrix
-  - Stakeholder matrix
-  - Risk register
-  - Assumption log
-```
-
-## Output Formats
-
-### Requirement Specification Document
-```markdown
-# Requirement Specification
-
-## Executive Summary
-[High-level overview of requirements]
+---
 
 ## Functional Requirements
-### FR-001: [Title]
-- **Description**: [Detail]
-- **Priority**: Must Have
-- **Acceptance Criteria**:
-  1. [Criterion 1]
-  2. [Criterion 2]
+
+| ID | Priority | Requirement | Stakeholder | Acceptance Criteria |
+|----|----------|-------------|-------------|---------------------|
+| {slug}-FR-010 | P0 | [Requirement] | [Who needs this] | [How to verify] |
+| {slug}-FR-020 | P0 | [Requirement] | [Who needs this] | [How to verify] |
+| {slug}-FR-030 | P1 | [Requirement] | [Who needs this] | [How to verify] |
+| {slug}-FR-040 | P2 | [Requirement] | [Who needs this] | [How to verify] |
+
+**Priority Legend:**
+- **P0 (Must Have)**: Feature doesn't work without this. Launch blocker.
+- **P1 (Should Have)**: Important for good UX/functionality. Strong desire.
+- **P2 (Nice to Have)**: Enhances but not critical. Can defer.
+
+---
 
 ## Non-Functional Requirements
-### NFR-001: [Title]
-- **Category**: Performance
-- **Metric**: Response time < 2 seconds
-- **Validation**: Load testing
+
+### Security
+
+| ID | Priority | Requirement | Rationale |
+|----|----------|-------------|-----------|
+| {slug}-NFR-SEC-010 | P0 | [Requirement] | [Why needed] |
+
+### Performance
+
+| ID | Priority | Requirement | Metric | Target |
+|----|----------|-------------|--------|--------|
+| {slug}-NFR-PERF-010 | P1 | [Requirement] | [What to measure] | [Threshold] |
+
+### Accessibility
+
+| ID | Priority | Requirement | Standard |
+|----|----------|-------------|----------|
+| {slug}-NFR-ACC-010 | P0 | [Requirement] | [WCAG level, etc.] |
+
+---
+
+## Success Criteria
+
+How do we know this feature is successful?
+
+| Criterion | Metric | Target | Measurement Method |
+|-----------|--------|--------|-------------------|
+| [Outcome] | [What to measure] | [Goal] | [How measured] |
+
+---
 
 ## Constraints
-### CON-001: [Title]
-- **Type**: Technical
-- **Description**: [Limitation details]
-- **Impact**: [How it affects design]
+
+**Technical Constraints:**
+- [Constraint 1]
+- [Constraint 2]
+
+**Business Constraints:**
+- [Constraint 1]
+
+**Timeline Constraints:**
+- [If any deadlines or dependencies]
+
+---
 
 ## Dependencies
-[Requirement dependency diagram]
 
-## Risks and Assumptions
-### Risks
-- [Risk 1]: [Mitigation strategy]
+| Dependency | Type | Status | Impact |
+|------------|------|--------|--------|
+| [What we depend on] | System/External/Team | Ready/Pending | [If not ready] |
 
-### Assumptions
-- [Assumption 1]: [Validation plan]
-```
+---
 
-### Traceability Matrix
-```yaml
-Traceability:
-  REQ-001:
-    source: "User Interview #3"
-    design_element: "Component A"
-    test_case: "TC-001, TC-002"
-    implementation: "Module X"
+## Out of Scope
 
-  REQ-002:
-    source: "Regulatory Doc Section 4.2"
-    design_element: "Security Layer"
-    test_case: "TC-010"
-    implementation: "Auth Module"
-```
+Explicitly NOT included in this feature:
 
-## Integration Points
+- [Item 1] - [Why excluded]
+- [Item 2] - [Why excluded]
 
-### With Project Configuration
-```yaml
-# Project-specific configuration
-requirement_config:
-  project_type: "web_application|mobile_app|api|system"
+---
 
-  priority_framework: "moscow|kano|numerical"
+## Potential Conflicts & Ambiguities
 
-  requirement_categories:
-    - functional
-    - non-functional
-    - business
-    - technical
+Issues identified that need resolution:
 
-  validation_requirements:
-    review_type: "formal|informal"
-    approval_levels: 2
+| Issue | Requirements Affected | Resolution Options | Decision |
+|-------|----------------------|-------------------|----------|
+| [Conflict/Ambiguity] | [IDs] | [Options] | [TBD/Resolved] |
 
-  compliance_standards:
-    - "ISO 27001"
-    - "GDPR"
-```
+---
 
-### With Technology-Specific Skills
-```yaml
-# Technology-specific extensions
-tech_specific:
-  framework: "[Framework name]"
+## Open Questions
 
-  requirement_patterns:
-    - "[Framework-specific pattern]"
+| Question | Needs Answer From | Impact if Unanswered |
+|----------|-------------------|---------------------|
+| [Question] | [Who can answer] | [What's blocked] |
 
-  validation_rules:
-    - "[Technology-specific rule]"
-```
+---
 
-## Best Practices
+## Approval
 
-1. **Stakeholder Engagement**: Involve all stakeholders early
-2. **Clear Communication**: Use unambiguous language
-3. **Measurable Criteria**: Define quantifiable success metrics
-4. **Iterative Refinement**: Requirements evolve, plan for changes
-5. **Traceability**: Maintain links from requirements to implementation
-6. **Risk-Based Focus**: Prioritize based on risk and value
-7. **Documentation**: Keep requirements current and accessible
+- [ ] Functional requirements approved
+- [ ] Non-functional requirements approved
+- [ ] Success criteria approved
+- [ ] Constraints acknowledged
+- [ ] Dependencies mapped
+- [ ] Scope boundaries agreed
+- [ ] Conflicts/ambiguities resolved
 
-## Universal Application
-
-This skill can be applied to:
-- Web applications
-- Mobile applications
-- Desktop software
-- Embedded systems
-- APIs and services
-- Cloud platforms
-- IoT solutions
-- Enterprise systems
-- Machine learning projects
-- Any software development project
-
-The skill adapts to project needs through configuration rather than modification, ensuring reusability across different technology stacks and domains.
+**Ready to proceed to Experience Design?** [ ] Yes [ ] No - needs revision

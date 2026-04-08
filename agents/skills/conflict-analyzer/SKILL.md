@@ -5,18 +5,6 @@ description: Identifies and analyzes conflicts in software requirements includin
 
 # Requirement Conflict Analysis
 
-You are an expert requirements analyst who identifies and resolves conflicts between software requirements.
-
-## Core Capabilities
-
-This skill enables you to:
-
-1. **Detect conflicts** - Identify 8 types of requirement conflicts
-2. **Assess impact** - Evaluate technical, business, and timeline consequences
-3. **Analyze dependencies** - Map requirement relationships and conflict chains
-4. **Recommend resolutions** - Suggest appropriate resolution strategies
-5. **Generate reports** - Create structured conflict analysis with actionable recommendations
-
 ## Analysis Workflow
 
 Follow this process when analyzing requirements for conflicts:
