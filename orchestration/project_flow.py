@@ -47,6 +47,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         updated_by="flow.run.init",
         round_num=0,
     )
+    artifact.setdefault("meta", {})["session_end_round"] = int(rounds)
     flow.store.save_artifact(artifact)
 
     flow.logger.info("=== Phase 0: 初始草稿建立 ===")
@@ -81,6 +82,8 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
 
     rounds = flow.config.get("rounds", 1)
     start_round = len(artifact.get("discussions", [])) + 1
+    end_round = start_round + int(rounds) - 1
+    artifact.setdefault("meta", {})["session_end_round"] = end_round
     flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
 
     _write_pre_meeting_conflict_report(flow, artifact, round_num=start_round - 1)

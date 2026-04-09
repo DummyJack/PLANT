@@ -181,10 +181,13 @@ class Store:
             for c in model.get("name", "unnamed")
             if c.isalnum() or c in (" ", "-", "_")
         ).strip()
-        filepath = self.artifact_dir / f"{safe_name}.plantuml"
+        if not safe_name:
+            safe_name = "unnamed"
+        filename = f"{safe_name}.plantuml"
+        filepath = self.artifact_dir / filename
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(plantuml_code)
-        return f"{safe_name}.plantuml"
+        return filename
 
     def save_plantuml_files(self, model_data: Dict[str, Any]):
         models = [m for m in model_data.get("models", []) if m.get("plantuml")]

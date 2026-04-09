@@ -93,21 +93,6 @@
         "dependencies": []
       }
     ],
-    "conflict_matrix": {
-      "description": "Requirements that conflict with each other",
-      "conflicts": [
-        {
-          "req1": "REQ-001",
-          "req2": "REQ-005",
-          "conflict_id": "CONF-001"
-        },
-        {
-          "req1": "REQ-020",
-          "req2": "REQ-025",
-          "conflict_id": "CONF-002"
-        }
-      ]
-    },
     "summary_by_type": {
       "logical": 0,
       "technical": 0,

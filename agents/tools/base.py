@@ -81,6 +81,9 @@ class ToolRegistry:
                         read_chunks_max_chars=int(
                             fp_cfg.get("read_chunks_max_chars", 48000)
                         ),
+                        read_full_max_chars=int(
+                            fp_cfg.get("read_full_max_chars", 16000)
+                        ),
                     )
                 )
 
@@ -88,7 +91,6 @@ class ToolRegistry:
             opts = self.config.get("plantuml_validate") or {}
             built.append(
                 PlantUMLValidatorTool(
-                    jar_path=opts.get("jar_path", "plantuml.jar"),
                     use_online=opts.get("use_online", True),
                     server_url=opts.get("server_url", ""),
                 )

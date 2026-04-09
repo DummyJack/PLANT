@@ -395,13 +395,14 @@ class MediatorAgent(BaseAgent):
                 "category": (item.get("category") or "").strip(),
             })
         prompt = f"""你是需求會議主持人。以下議題由各 agent 提案產生，標題尚未定稿。
-請為每個議題撰寫一句具體、與專案內容掛鉤的標題（讓人一眼知道要討論什麼）。
+請為每個議題撰寫一句**簡短、易懂**的標題（讓人一眼知道要討論什麼）。
 
 議題清單:
 {json.dumps(entries, ensure_ascii=False, indent=2)}
 
 規則:
-- 標題須繁體中文、一句話，不要只寫類型名稱（如「衝突討論」「需求取捨」）。
+- 繁體中文、一句話；口語可讀，避免公文腔與長串頓號。
+- 長度約 **12～28 字**，最多不超過 36 字；不要只寫類型名稱（如「衝突討論」「需求取捨」）。
 - 若描述中有具體對象或 ID，標題應納入。
 - 僅輸出 JSON array，index 對應原清單。
 
@@ -423,6 +424,76 @@ class MediatorAgent(BaseAgent):
         except Exception as e:
             self.logger.warning("議題標題命名失敗: %s", e)
         return items
+
+    def name_topic_after_discussion(
+        self,
+        topic: Dict[str, Any],
+        contributions: List[Dict],
+        resolution: Dict[str, Any],
+        *,
+        proposer_agent: Optional[str] = None,
+    ) -> str:
+        """議題討論結束、存檔前：產出精簡、易懂的一句標題（繁體中文）。失敗或空字串時呼叫端應保留原標題。"""
+        prev = (topic.get("title") or "").strip()
+        desc = (topic.get("description") or "").strip()
+        cat = (topic.get("category") or "").strip()
+        summary = (resolution.get("summary") or "").strip()
+        decision = (resolution.get("decision") or "").strip()
+        rstatus = (
+            resolution.get("resolution_status")
+            or resolution.get("resolution")
+            or ""
+        )
+        rstatus = str(rstatus).strip()
+        contrib_lines: List[str] = []
+        for c in contributions[:12]:
+            if not isinstance(c, dict):
+                continue
+            ag = c.get("agent", "?")
+            resp = c.get("response") or {}
+            stmt = (resp.get("statement") or resp.get("content") or "").strip()
+            if stmt:
+                snippet = stmt[:200] + ("…" if len(stmt) > 200 else "")
+                contrib_lines.append(f"- [{ag}] {snippet}")
+        contrib_text = "\n".join(contrib_lines) if contrib_lines else "（無發言摘要）"
+        proposer_line = ""
+        if proposer_agent:
+            proposer_line = f"\n原始提案者（agent id）: {proposer_agent}"
+        prompt = f"""你是需求會議主持人。以下議題已討論完畢並將存檔，請**只根據下方資訊**撰寫**一句**繁體中文「會議記錄標題」。
+
+風格（最重要）：
+- **簡單易懂**：用口語可讀的短句，避免公文腔、長串頓號或從句堆砌。
+- **精簡**：全長 **約 12～28 字為佳**，最多不超過 36 字；能短則短。
+- 點出「主題＋重點結論或決策方向」即可，不要複述整段決議全文。
+
+議前標題（可參考，必要時濃縮改寫）: {prev or "（無）"}
+類型: {cat or "（無）"}
+說明: {desc or "（無）"}{proposer_line}
+
+討論後摘要: {summary or "（無）"}
+決議文字: {decision or "（無）"}
+收斂狀態: {rstatus or "（無）"}
+
+各方發言摘要:
+{contrib_text}
+
+規則:
+- 一句話、繁體中文；勿使用 Markdown、引號包裹整句、或條列式。
+- 勿虛構未出現的產品名詞或法規名稱。
+- 優先從「決議文字／摘要」濃縮，其次才參考發言摘要。
+
+只輸出一個 JSON 物件：{{"title": "最終標題"}}"""
+        try:
+            messages = self.build_direct_messages(prompt)
+            data = self.model.chat_json(messages)
+            if not isinstance(data, dict):
+                data = {}
+            out = (data.get("title") or "").strip()
+            if out:
+                return out
+        except Exception as e:
+            self.logger.warning("議題結束後標題命名失敗: %s", e)
+        return ""
 
     def build_agenda_context(
         self,
@@ -1617,6 +1688,8 @@ class MediatorAgent(BaseAgent):
         contributions: List[Dict],
         resolution: Dict,
         round_num: int = 0,
+        *,
+        proposed_by: Optional[str] = None,
     ) -> str:
         mode = topic.get("discussion_mode", "sequential")
         participants = (
@@ -1627,12 +1700,20 @@ class MediatorAgent(BaseAgent):
         category = topic.get("category", "")
         cat_label = AGENDA_CATEGORY_LABEL.get(category, category)
         description = topic.get("description", "")
+        proposer = (proposed_by if proposed_by is not None else topic.get("proposed_by"))
+        proposer = (proposer or "").strip() or None
 
         md = f"# {topic.get('title', '')}\n\n"
         md += f"- **Round**: {round_num}\n"
         md += f"- **Category**: {cat_label}\n"
         if description:
             md += f"- **Description**: {description}\n"
+        if proposer:
+            md += f"- **Proposed by**: {proposer}\n"
+        elif topic.get("source_proposal_ids"):
+            md += "- **Proposed by**: （無法自提案池追溯）\n"
+        else:
+            md += "- **Proposed by**: （本議題非來自 agent 提案池，無單一提案者）\n"
         summary = resolution.get("summary", "")
         decision = resolution.get("decision", "")
         resolution_status = resolution.get("resolution_status", resolution.get("resolution", ""))

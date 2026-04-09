@@ -494,7 +494,7 @@ class FileParserTool(BaseTool):
         "索引：.md 依 markdown-it-py 標題斷點（失敗則啟發式）、.txt 依啟發式標題／段落；"
         ".json 依頂層結構；.pdf 依頁；.docx 依段落；過長再細切。"
         "建議流程：action=search_chunks 用 query 檢索相關片段 → 再用 action=read_chunks 帶 chunk_ids 讀全文片段 → 最後由你綜合（Synthesize）。"
-        "若已知檔名且檔不大，可用 action=read_full（或省略 action）一次讀整檔。"
+        "只有已知檔名且檔案不大時，才建議用 action=read_full（或省略 action）一次讀整檔。"
     )
     parameters = {
         "action": {
@@ -536,6 +536,7 @@ class FileParserTool(BaseTool):
         chunk_max_chars: int = 1200,
         chunk_overlap: int = 150,
         read_chunks_max_chars: int = 48000,
+        read_full_max_chars: int = 16000,
     ):
         self.base_dir = Path(base_dir) if base_dir else Path("doc")
         cm = max(1, int(chunk_max_chars))
@@ -544,6 +545,7 @@ class FileParserTool(BaseTool):
         self.chunk_max_chars = cm
         self.chunk_overlap = co
         self.read_chunks_max_chars = max(1, int(read_chunks_max_chars))
+        self.read_full_max_chars = max(1, int(read_full_max_chars))
         self._file_sig: Dict[str, Tuple[float, int]] = {}
         self._chunks: List[Dict[str, Any]] = []
         self._chunk_by_id: Dict[str, Dict[str, Any]] = {}
@@ -694,6 +696,13 @@ class FileParserTool(BaseTool):
             return f"錯誤：無法讀取檔案：{e}"
 
         if output_format == "text":
+            if len(text) > self.read_full_max_chars:
+                return (
+                    "錯誤：read_full 僅適合短文件。"
+                    f"此檔案約 {len(text)} 字元，超過上限 {self.read_full_max_chars}。"
+                    "請先用 action=search_chunks，再用 action=read_chunks；"
+                    "若只需整體概覽，可改用 output_format=json_summary。"
+                )
             return text
         payload = {
             "file_path": str(path.relative_to(self.base_dir.resolve())),
@@ -802,4 +811,3 @@ class FileParserTool(BaseTool):
         if missing:
             body += f"\n（以下 id 不存在或索引已更新：{missing[:5]}）\n"
         return header + body
-

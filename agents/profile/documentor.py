@@ -1,4 +1,3 @@
-import re
 from typing import Dict, Any, Optional
 from agents.base import BaseAgent
 from utils import documentor_srs_body_lang, srs_title_instruction
@@ -12,7 +11,7 @@ class DocumentorAgent(BaseAgent):
 規則：
 1. requirement_change_candidates、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
 2. 你只根據最新 draft 與 artifact 轉寫，不自行補決策。
-3. 文件結構需符合 SRS 範本，章節編號從 1 開始連續。"""
+3. 文件結構需符合正式 SRS 範本，保留文件資訊、版本與修訂紀錄，章節編號從 1 開始連續。"""
 
     def __init__(
         self,
@@ -61,6 +60,15 @@ class DocumentorAgent(BaseAgent):
         body_lang = documentor_srs_body_lang()
         task = f"""依 srs-generation skill、範本與檢查清單，根據 Context 的最新需求草稿與結構化資料產出正式 SRS（Markdown）。
 
+正式文件要求：
+- 必須保留正式 SRS 的前置章節：Document Information 與 Revision History。
+- 章節結構至少完整涵蓋：Introduction、Overall Description、Functional Requirements、Non-Functional Requirements、Data Requirements、External Interface Requirements、Requirements Traceability Matrix、Appendix。
+- 若某正式章節在來源不足時無法完整展開，請保留章節並以「待補」標示缺口；不要省略正式主章節。
+- Functional Requirements 應寫成正式 requirement specification；每條 FR 應有 Description、Actors、Preconditions、Main Flow、Alternative Flows、Postconditions、Acceptance Criteria。
+- Acceptance Criteria 應為可驗證條件，優先使用 Given/When/Then 或明確 pass/fail 條件。
+- Non-Functional Requirements 應包含 Metric、Target、Measurement；若缺明確數值或門檻依據，標示「待補」，不得虛構。
+- 文件語氣使用正式規格語言；強制要求用 shall，建議用 should，可選用 may；避免模糊形容詞。
+
 嚴格來源規則（最重要）：
 - SRS 的所有功能性需求必須且僅可來自 Context.requirements 與 Context.draft_markdown；不得自行新增、推測或編造任何需求。
 - 非功能性需求的具體指標與目標值必須來自 Context.requirements（NFR 類）；若來源中無明確數值，該欄位標示「待補」，不得虛構數字。
@@ -83,24 +91,7 @@ class DocumentorAgent(BaseAgent):
         self.logger.info(
             f"  已依 srs-generation skill 由 draft_v{latest_version} 產生正式 SRS"
         )
-        return self.strip_document_info_and_revision_history(srs_md_full)
-
-    @staticmethod
-    def strip_document_info_and_revision_history(md: str) -> str:
-        """從 SRS Markdown 移除「Document Information」與「Revision History」區塊，供存成 srs.md 使用。"""
-        if not md or not isinstance(md, str):
-            return md
-        # 支援章節從 1 開始：從 Document Information 刪到 ## 1. Introduction 或 ## 3. Introduction 之前
-        for start_anchor in (r"\n## 1\. Introduction", r"\n## 3\. Introduction"):
-            pattern = r"\n## (?:1\. )?Document Information\s.*?(?=" + start_anchor + r")"
-            out = re.sub(pattern, "\n\n", md, flags=re.DOTALL)
-            if out != md:
-                return out.strip()
-            pattern_alt = r"\n## Document Information\s.*?(?=" + start_anchor + r")"
-            out = re.sub(pattern_alt, "\n\n", md, flags=re.DOTALL)
-            if out != md:
-                return out.strip()
-        return md
+        return srs_md_full.strip()
 
     @staticmethod
     def strip_code_fences(text: str) -> str:

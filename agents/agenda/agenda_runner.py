@@ -341,9 +341,23 @@ class AgendaRunner:
             if not resolution:
                 obs["error"] = f"請先對 {topic_id} 執行 resolve_topic 或 escalate_to_human，之後才能 save_topic"
                 return obs
+            proposer = self._find_topic_proposer(topic)
+            topic["proposed_by"] = proposer
+            final_title = self.mediator.name_topic_after_discussion(
+                topic,
+                contributions,
+                resolution,
+                proposer_agent=proposer,
+            )
+            if final_title:
+                topic["title"] = final_title
             self.topic_idx += 1
             meeting_md = self.mediator.generate_meeting_markdown(
-                topic, contributions, resolution, round_num=self.round_num
+                topic,
+                contributions,
+                resolution,
+                round_num=self.round_num,
+                proposed_by=proposer,
             )
             meeting_filename = f"R{self.round_num}-M{self.topic_idx:02d}.md"
             self.store.save_markdown(meeting_md, meeting_filename)
@@ -358,6 +372,7 @@ class AgendaRunner:
                 "speaking_order": topic.get("speaking_order", []),
                 "source_ids": topic.get("source_ids", []),
                 "source_proposal_ids": topic.get("source_proposal_ids", []),
+                "proposed_by": topic.get("proposed_by"),
                 "status": "saved",
                 "triage_action": topic.get("triage_action", "formal_meeting"),
             }

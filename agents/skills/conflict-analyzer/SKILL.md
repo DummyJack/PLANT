@@ -78,24 +78,7 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Component boundary violations
 - Example: "Web app only" vs "Upload from mobile app"
 
-### Step 3: Build Conflict Matrix
-
-Create a matrix showing which requirements conflict:
-
-```
-       REQ-001  REQ-002  REQ-003  REQ-004
-REQ-001   -       -      CONF-1     -
-REQ-002   -       -        -        -
-REQ-003 CONF-1    -        -      CONF-2
-REQ-004   -       -      CONF-2     -
-```
-
-This reveals:
-- Which requirements have most conflicts (hot spots)
-- Clusters of related conflicts
-- Dependencies that propagate conflicts
-
-### Step 4: Assess Conflict Severity
+### Step 3: Assess Conflict Severity
 
 For each conflict, determine severity:
 
@@ -127,7 +110,7 @@ For each conflict, determine severity:
 - Stylistic difference
 - Example: Different data formats for similar fields
 
-### Step 5: Analyze Dependencies
+### Step 4: Analyze Dependencies
 
 Map how conflicts affect dependent requirements:
 
@@ -144,7 +127,7 @@ Identify:
 - Cascading conflicts (one conflict causes others)
 - Critical path conflicts (on project critical path)
 
-### Step 6: Recommend Resolution Strategies
+### Step 5: Recommend Resolution Strategies
 
 Use `references/resolution_strategies.md` to propose solutions:
 
@@ -199,7 +182,7 @@ Option C: Compromise - Offline-First with Sync
 - Recommendation: Consider if offline critical but connectivity available most of time
 ```
 
-### Step 7: Create Conflict Report
+### Step 6: Create Conflict Report
 
 Structure findings for stakeholders:
 
@@ -272,9 +255,6 @@ Reschedule API redesign to May 1 (internal, less urgent).
 ## High Priority Conflicts
 [Continue for each conflict...]
 
-## Conflict Matrix
-[Visual representation of which requirements conflict]
-
 ## Dependency Graph
 [Show how conflicts block other requirements]
 
@@ -303,7 +283,6 @@ Reschedule API redesign to May 1 (internal, less urgent).
 
 **Markdown Report** (default) - Comprehensive analysis for stakeholders
 **JSON Structure** - Use `assets/conflict_report_template.json` for programmatic processing
-**Conflict Matrix** - Visual grid showing requirement conflicts
 **Dependency Graph** - Visual representation of requirement dependencies
 **Executive Summary** - High-level overview for leadership
 

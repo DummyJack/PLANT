@@ -243,11 +243,10 @@ class ExpertAgent(BaseAgent):
                     "description", ""
                 ),
             }
-            tool_part = "web_search 搜尋時可帶 user_question 以利停止條件"
+            tool_part = "工具使用順序：先 artifact_query 查專案內部狀態，再 file_parser 查 doc/ 內容，最後才用 web_search 補外部證據；web_search 搜尋時可帶 user_question 以利停止條件，且只用來補法規、標準、最佳實務或外部風險依據，不可覆蓋 artifact 內已知事實"
             if self.has_doc_reference_files():
                 tool_part += (
-                    "；file_parser 請優先 search_chunks 再 read_chunks 讀 doc/，"
-                    "必要時 read_full"
+                    "；file_parser 請優先 search_chunks 再 read_chunks 讀 doc/，必要時才 read_full"
                 )
             task = f"""針對以下問題進行領域研究：{query}
 
@@ -369,12 +368,16 @@ class ExpertAgent(BaseAgent):
 - 第一輪可選填 max_iterations=1-{sr_current}；不填就沿用 {sr_current}
 - 有法規、標準、安全、合規議題：優先 research_topic
 - 每次 research_topic 只聚焦一個具體問題
+- 工具使用順序：先 artifact_query 查專案內部狀態；若需讀本地文件再用 file_parser；只有內部狀態與 doc/ 都不足時，才用 web_search 補外部證據
+- 不可用 web_search 覆蓋 artifact 中已存在的 requirements、decisions、conflicts、open_questions 或 scope 事實
 - 需要先看 requirements/conflicts/decisions/open_questions 時，先用 artifact_query
 - artifact_query 例子：
   - {{"mode":"summarize","section":"requirements"}}
   - {{"mode":"get_section","section":"conflicts","compact":true}}
   - {{"mode":"related_context","item_id":"CF-01","compact":true}}
   - {{"mode":"find_items","section":"open_questions","filters":{{"status":"pending"}},"compact":true}}
+- 若有 file_parser：優先 search_chunks → read_chunks；只有已知單一短文件或真的需要全文時才 read_full
+- web_search 只用於補法規、標準、最佳實務、官方文件或外部風險來源；避免廣泛探索式搜尋
 - 有足夠材料才 update_findings
 - 有重大合規風險就 flag_compliance_risk
 - 無需再研究就選 done
@@ -506,8 +509,8 @@ class ExpertAgent(BaseAgent):
         doc_hint = ""
         if self.has_doc_reference_files():
             doc_hint = (
-                "若有 file_parser 工具：建議先 action=search_chunks 檢索 doc/，"
-                "再 action=read_chunks 讀回片段後綜合；若已知檔名且需全文可 action=read_full。"
+                "工具使用順序：先 artifact_query 查專案內部事實，再用 file_parser 讀 doc/，最後才用 web_search 補外部證據。"
+                "若有 file_parser 工具：建議先 action=search_chunks 檢索 doc/，再 action=read_chunks 讀回片段後綜合；只有已知檔名且確實需要全文時才 action=read_full。"
             )
         task = f"""依 domain-research skill 執行研究，根據 Context 產出研究結果。
 {doc_hint}
@@ -583,12 +586,13 @@ research_session 至少需含：
             fp_line = ""
             if self.has_doc_reference_files():
                 fp_line = (
-                    "- file_parser：建議 search_chunks → read_chunks 再綜合；"
-                    "或 read_full 讀單檔（text / json_summary）。\n"
+                    "- file_parser：先 search_chunks → read_chunks 再綜合；只有確實需要全文時才 read_full。\n"
                 )
             tool_hint = (
                 "\n# 工具使用\n"
+                "- 先用 artifact_query 查 requirements、conflicts、decisions、open_questions 等專案內部事實。\n"
                 f"{fp_line}"
+                "- web_search 只用來補外部法規、標準、最佳實務或官方文件，不可覆蓋 artifact 內已知事實。\n"
                 "- 最後**必須**輸出下列 JSON。"
             )
 

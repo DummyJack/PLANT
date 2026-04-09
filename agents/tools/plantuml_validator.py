@@ -1,10 +1,9 @@
 import logging
 import re
-import subprocess
 import urllib.error
 import urllib.request
 
-from typing import Any, Optional
+from typing import Any
 from .base import BaseTool
 
 logger = logging.getLogger("Plant.PlantUMLValidator")
@@ -24,9 +23,8 @@ class PlantUMLValidatorTool(BaseTool):
         }
     }
 
-    def __init__(self, jar_path: str = "plantuml.jar", use_online: bool = True, server_url: str = ""):
-        self.jar_path = jar_path
-        self.use_online = use_online  # 預設 True：使用線上驗證
+    def __init__(self, use_online: bool = True, server_url: str = ""):
+        self.use_online = use_online
         self.server_url = (server_url or DEFAULT_ONLINE_SERVER).rstrip("/")
 
     def execute(self, **kwargs) -> str:
@@ -37,37 +35,9 @@ class PlantUMLValidatorTool(BaseTool):
         if "@startuml" not in code or "@enduml" not in code:
             return "語法錯誤: 缺少 @startuml 或 @enduml 標記"
 
-        # 明確指定使用線上時，只走線上
         if self.use_online is True:
             return self.validate_online(code)
-
-        try:
-            result = subprocess.run(
-                ["java", "-jar", self.jar_path, "-syntax"],
-                input=code.encode("utf-8"),
-                capture_output=True,
-                timeout=30,
-            )
-            stdout = result.stdout.decode("utf-8", errors="replace").strip()
-            stderr = result.stderr.decode("utf-8", errors="replace").strip()
-
-            if result.returncode == 0 and "ERROR" not in stdout.upper():
-                return "驗證通過: PlantUML 語法正確"
-
-            errors = self.extract_errors(stdout, stderr)
-            return f"語法錯誤:\n{errors}" if errors else f"語法錯誤:\n{stdout}\n{stderr}"
-
-        except FileNotFoundError:
-            if self.use_online is False:
-                return self.fallback_validate(code)
-            return self.validate_online(code)
-        except subprocess.TimeoutExpired:
-            return "驗證逾時: PlantUML 驗證超過 30 秒"
-        except Exception as e:
-            logger.warning(f"PlantUML 驗證失敗，使用 fallback: {e}")
-            if self.use_online is False:
-                return self.fallback_validate(code)
-            return self.validate_online(code)
+        return self.fallback_validate(code)
 
     def encode_hex(self, code: str) -> str:
         """PlantUML 官方支援的 HEX 編碼：~h + UTF-8 的十六進位"""
@@ -93,15 +63,8 @@ class PlantUMLValidatorTool(BaseTool):
             logger.warning(f"線上驗證失敗: {e}")
             return self.fallback_validate(code)
 
-    def extract_errors(self, stdout: str, stderr: str) -> str:
-        lines = []
-        for line in (stdout + "\n" + stderr).splitlines():
-            if any(kw in line.upper() for kw in ["ERROR", "SYNTAX", "WARNING"]):
-                lines.append(line.strip())
-        return "\n".join(lines)
-
     def fallback_validate(self, code: str) -> str:
-        """無 Java/plantuml.jar 時的基本語法檢查"""
+        """線上驗證不可用時的基本語法檢查"""
         issues = []
         starts = code.count("@startuml")
         ends = code.count("@enduml")
@@ -131,6 +94,6 @@ class PlantUMLValidatorTool(BaseTool):
                 continue
 
         if issues:
-            return "基本檢查發現問題（無法進行完整語法驗證，需安裝 Java 與 plantuml.jar）:\n" + "\n".join(f"- {i}" for i in issues)
+            return "基本檢查發現問題（無法進行完整線上語法驗證）:\n" + "\n".join(f"- {i}" for i in issues)
 
-        return "基本檢查通過（無法進行完整語法驗證，需安裝 Java 與 plantuml.jar）"
+        return "基本檢查通過（無法進行完整線上語法驗證）"

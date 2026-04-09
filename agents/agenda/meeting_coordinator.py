@@ -11,6 +11,37 @@ class MeetingCoordinator:
     def __init__(self, flow):
         self.flow = flow
 
+    def _is_last_meeting_round(self, artifact: Dict[str, Any], round_num: int) -> bool:
+        """是否為本次執行排程中的最後一輪（優先 meta.session_end_round，見 project_flow）。"""
+        meta = artifact.get("meta") or {}
+        end = meta.get("session_end_round")
+        if end is not None:
+            try:
+                return int(round_num) == int(end)
+            except (TypeError, ValueError):
+                pass
+        try:
+            total = int(self.flow.config.get("rounds", 1) or 1)
+        except (TypeError, ValueError):
+            total = 1
+        return int(round_num) >= total
+
+    @staticmethod
+    def _partition_queue_skip_formal(
+        queue: List[Any],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """將佇列拆成可立即處理（非 formal_meeting）與應略過者。"""
+        non_formal: List[Dict[str, Any]] = []
+        formal: List[Dict[str, Any]] = []
+        for row in queue or []:
+            if not isinstance(row, dict):
+                continue
+            if (row.get("triage_action") or "").strip() == "formal_meeting":
+                formal.append(row)
+            else:
+                non_formal.append(row)
+        return non_formal, formal
+
     @staticmethod
     def _count_unanswered_open_questions(artifact: Dict[str, Any]) -> int:
         return sum(
@@ -85,17 +116,18 @@ class MeetingCoordinator:
                 recent_decisions_limit=self.flow.config.get("agenda_items", 5),
             )
             self.flow.store.save_markdown(conflict_md, "conflict_report.md")
-        next_version = self.flow.store.get_draft_version() + 1
+        # 草稿版本與會議輪次一致：第 n 輪一律為 draft_v{n}（會前與輪末同一版號，輪末覆寫）
+        draft_version = round_num
         draft_md = self.flow.analyst_agent.run_requirements_analyst(
             "create_draft",
             artifact=artifact,
-            draft_version=next_version,
+            draft_version=draft_version,
             round_num=round_num,
             recent_decisions_limit=self.flow.config.get("agenda_items", 5),
         )
-        self.flow.store.save_draft(draft_md, version=next_version)
+        self.flow.store.save_draft(draft_md, version=draft_version)
         self.flow.logger.info(
-            "會前審查更新：artifact + conflict_report + draft_v%s", next_version,
+            "會前審查更新：artifact + conflict_report + draft_v%s", draft_version,
         )
 
     def _recent_topic_discussions(
@@ -959,22 +991,69 @@ class MeetingCoordinator:
         runner: AgendaRunner,
         *,
         round_num: int,
+        drain_non_formal: bool = False,
     ) -> None:
-        self._execute_clarification_queue(artifact, runner, round_num=round_num)
-        self._execute_human_decision_queue(artifact, runner, round_num=round_num)
-        self._execute_direct_apply_queue(artifact, round_num=round_num)
-        artifact["clarification_queue"] = [
-            row for row in (artifact.get("clarification_queue", []) or [])
-            if isinstance(row, dict) and row.get("status") == "deferred"
-        ]
-        artifact["human_decision_queue"] = [
-            row for row in (artifact.get("human_decision_queue", []) or [])
-            if isinstance(row, dict) and row.get("status") == "deferred"
-        ]
-        artifact["direct_apply_queue"] = [
-            row for row in (artifact.get("direct_apply_queue", []) or [])
-            if isinstance(row, dict) and row.get("status") not in {"queued_change_candidate"}
-        ]
+        """執行 clarification / human_decision / direct_apply 佇列。
+
+        若 ``drain_non_formal`` 為 True（最後一輪）：略過 ``triage_action==formal_meeting`` 的列，
+        其餘重複執行至清空或連續無進度為止（不處理需正式會議的項目）。
+        """
+        keys = ("clarification_queue", "human_decision_queue", "direct_apply_queue")
+        held_formal: Dict[str, List[Dict[str, Any]]] = {k: [] for k in keys}
+        if drain_non_formal:
+            for k in keys:
+                q = artifact.get(k) or []
+                nf, fm = self._partition_queue_skip_formal(q)
+                artifact[k] = nf
+                held_formal[k] = fm
+            n_skip = sum(len(held_formal[k]) for k in keys)
+            if n_skip:
+                self.flow.logger.info(
+                    "最後一輪：略過 formal_meeting 佇列項目共 %s 筆（仍保留於 artifact）",
+                    n_skip,
+                )
+
+        max_passes = 50 if drain_non_formal else 1
+        prev_after = -1
+        for pass_idx in range(max_passes):
+            total_before = sum(len(artifact.get(k) or []) for k in keys)
+            if drain_non_formal and total_before == 0:
+                break
+
+            self._execute_clarification_queue(artifact, runner, round_num=round_num)
+            self._execute_human_decision_queue(artifact, runner, round_num=round_num)
+            self._execute_direct_apply_queue(artifact, round_num=round_num)
+            artifact["clarification_queue"] = [
+                row for row in (artifact.get("clarification_queue", []) or [])
+                if isinstance(row, dict) and row.get("status") == "deferred"
+            ]
+            artifact["human_decision_queue"] = [
+                row for row in (artifact.get("human_decision_queue", []) or [])
+                if isinstance(row, dict) and row.get("status") == "deferred"
+            ]
+            artifact["direct_apply_queue"] = [
+                row for row in (artifact.get("direct_apply_queue", []) or [])
+                if isinstance(row, dict) and row.get("status") not in {"queued_change_candidate"}
+            ]
+
+            total_after = sum(len(artifact.get(k) or []) for k in keys)
+            if not drain_non_formal:
+                break
+            if total_after == 0:
+                self.flow.logger.info(
+                    "最後一輪：非 formal 佇列已清空（第 %s 輪執行）", pass_idx + 1,
+                )
+                break
+            if pass_idx > 0 and total_after == prev_after:
+                self.flow.logger.warning(
+                    "最後一輪：佇列無進度，停止重試（剩餘 %s 筆）", total_after,
+                )
+                break
+            prev_after = total_after
+
+        if drain_non_formal:
+            for k in keys:
+                artifact[k] = held_formal[k] + (artifact.get(k) or [])
 
     @staticmethod
     def _triggered_roles_for_topic(
@@ -1030,7 +1109,13 @@ class MeetingCoordinator:
         obs = runner.run("generate_agenda", None)
         if obs.get("error"):
             self.flow.logger.warning(f"  議程生成失敗: {obs['error']}")
-        self._run_routed_queues(runner.artifact, runner, round_num=runner.round_num)
+        drain = self._is_last_meeting_round(runner.artifact, runner.round_num)
+        self._run_routed_queues(
+            runner.artifact,
+            runner,
+            round_num=runner.round_num,
+            drain_non_formal=drain,
+        )
         observation = None
         while True:
             state = runner.get_state_summary()
@@ -1077,6 +1162,14 @@ class MeetingCoordinator:
         *,
         round_num: int,
     ) -> Dict[str, Any]:
+        # 最後一輪結束前再排空一次非 formal 佇列，確保納入本輪 round_discussions / 決議與草稿
+        if self._is_last_meeting_round(artifact, round_num):
+            self._run_routed_queues(
+                artifact,
+                runner,
+                round_num=round_num,
+                drain_non_formal=True,
+            )
         round_discussions = runner.get_round_discussions()
         all_open_questions = runner.get_all_open_questions()
         agenda_snapshot = runner.get_agenda_snapshot()
@@ -1134,15 +1227,15 @@ class MeetingCoordinator:
                 max_iterations=read_max_iterations(self.flow.config, default=3),
             )
         artifact["system_models"] = model_data
-        next_version = self.flow.store.get_draft_version() + 1
+        draft_version = round_num
         draft_md = self.flow.analyst_agent.run_requirements_analyst(
             "create_draft",
             artifact=artifact,
-            draft_version=next_version,
+            draft_version=draft_version,
             round_num=round_num,
             recent_decisions_limit=self.flow.config.get("agenda_items", 5),
         )
-        self.flow.store.save_draft(draft_md, version=next_version)
+        self.flow.store.save_draft(draft_md, version=draft_version)
         self.flow._touch_artifact_meta(
             artifact,
             updated_by="flow.run_meeting_round",
