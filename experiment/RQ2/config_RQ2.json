@@ -1,18 +1,10 @@
 {
-  "output_language": "en",
   "rounds": 1,
   "agenda_items": 1,
   "max_stakeholders": 5,
   "tool_call_max_rounds": 1,
   "max_web_search_results": 3,
-  "max_iterations": {
-    "expert_phase0": 1,
-    "modeler_phase0": 1,
-    "expert_review": 1,
-    "analyst_review": 1,
-    "modeler_review": 1,
-    "self_review_round_cap": 5
-  },
+  "max_iterations": 1,
   "enable_tools": {
     "web_search": true,
     "file_parser": false,
@@ -21,8 +13,7 @@
   "skip_phase0_draft": true,
   "enable_human_escalation": false,
   "enable_agenda_types": {
-    "conflict_resolution": false,
-    "requirement_clarification": true,
+    "conflict_resolution": true,
     "open_question": false,
     "new_requirement": false,
     "tradeoff": false
