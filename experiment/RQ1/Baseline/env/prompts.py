@@ -7,6 +7,17 @@ from .utils import build_history_into_prompt, parse_output_as_json
 from .utils import JUDGE_PROMPT_SYSTEM, JUDGE_PROMPT_USER
 from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 
+# Google Gemini「OpenAI 相容」Chat Completions 端點（與官方文件一致）
+_GEMINI_OPENAI_HOST = "generativelanguage.googleapis.com"
+
+_gemini_thinking_notice_flag = [False]
+
+
+def openai_endpoint_is_gemini_compat(model_config: Dict[str, Any]) -> bool:
+    """是否為 Gemini 的 OpenAI 相容 API（依 base_url 判斷）。"""
+    u = (model_config.get("base_url") or "").lower()
+    return _GEMINI_OPENAI_HOST in u
+
 
 def use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
     """若 API 只接受 max_completion_tokens 則 True，只接受 max_tokens 則 False。
@@ -18,6 +29,24 @@ def use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
     if val in ("0", "false", "no"):
         return False
     return True
+
+
+def _apply_token_limit_to_create_kw(
+    create_kw: Dict[str, Any], model_config: Dict[str, Any], max_val: int
+) -> None:
+    """Gemini 相容端點使用 max_tokens；其餘依設定在 max_completion_tokens / max_tokens 擇一。"""
+    if openai_endpoint_is_gemini_compat(model_config):
+        create_kw["max_tokens"] = max_val
+        return
+    if use_max_completion_tokens(model_config):
+        create_kw["max_completion_tokens"] = max_val
+    else:
+        create_kw["max_tokens"] = max_val
+
+
+def _chat_message_text(message: Any) -> str:
+    c = getattr(message, "content", None) if message is not None else None
+    return (c or "").strip() if isinstance(c, str) else ""
 
 
 def model_call(
@@ -63,12 +92,9 @@ def model_call(
                 temperature=model_config["temperature"],
                 timeout=model_config["timeout"],
             )
-            if use_max_completion_tokens(model_config):
-                create_kw["max_completion_tokens"] = max_val
-            else:
-                create_kw["max_tokens"] = max_val
+            _apply_token_limit_to_create_kw(create_kw, model_config, max_val)
             response = client.chat.completions.create(**create_kw)
-            response_text = response.choices[0].message.content.strip()
+            response_text = _chat_message_text(response.choices[0].message)
             
             # Extract usage information
             usage_info = None
@@ -152,14 +178,18 @@ def model_call_with_thinking(
                 messages=messages,
                 temperature=model_config["temperature"],
                 timeout=model_config["timeout"],
-                extra_body={"enable_thinking": True},
             )
-            if use_max_completion_tokens(model_config):
-                create_kw["max_completion_tokens"] = max_val
+            if openai_endpoint_is_gemini_compat(model_config):
+                if not _gemini_thinking_notice_flag[0]:
+                    print(
+                        "[ReqElicitGym] Gemini OpenAI 相容端點不支援 enable_thinking，已改為一般 completions 呼叫。"
+                    )
+                    _gemini_thinking_notice_flag[0] = True
             else:
-                create_kw["max_tokens"] = max_val
+                create_kw["extra_body"] = {"enable_thinking": True}
+            _apply_token_limit_to_create_kw(create_kw, model_config, max_val)
             response = client.chat.completions.create(**create_kw)
-            response_text = response.choices[0].message.content.strip()
+            response_text = _chat_message_text(response.choices[0].message)
             
             # Extract usage information
             usage_info = None

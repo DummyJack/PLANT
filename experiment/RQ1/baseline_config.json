@@ -1,0 +1,18 @@
+{
+  "interviewer_model": "gpt-4.1",
+  "gym_model": "gpt-5.2",
+  "use_thinking": false,
+  "verbose": true,
+  "judge_temperature": 0.0,
+  "judge_max_tokens": 1024,
+  "judge_timeout": 30.0,
+  "user_temperature": 0.7,
+  "user_max_tokens": 1024,
+  "user_timeout": 30.0,
+  "user_answer_quality": "high",
+  "max_steps": 20,
+  "interviewer_temperature": 0.0,
+  "interviewer_timeout": 60.0,
+  "interviewer_max_tokens": 1024,
+  "interviewer_max_tokens_thinking": 8192
+}

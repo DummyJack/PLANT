@@ -1,5 +1,3 @@
-"""ReqElicitGym 全樣本評估：環境、interviewer、結果寫入 RQ1/results。"""
-
 import os
 import json
 import sys
@@ -14,8 +12,20 @@ RQ1_DIR = Path(__file__).resolve().parent
 # 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
 env_path = RQ1_DIR.parent.parent / ".env"
 load_dotenv(env_path)
-BASELINE_DIR = RQ1_DIR / "Baseline"
+DEFAULT_CONFIG_PATH = RQ1_DIR / "baseline_config.json"
+# 結果輸出目錄與檔名前綴（固定於程式，不經 baseline_config.json）
 RESULTS_DIR = RQ1_DIR / "results"
+RESULTS_FILE_PREFIX = "Baseline"
+# 預設資料檔、任務數與互動行為（固定於程式，不經 baseline_config.json）
+DEFAULT_DATA_FILE = "ReqElicitBench.json"
+# 未指定 --max-tasks 且下方為 None 時，是否在終端機詢問要跑幾題
+PROMPT_FOR_MAX_TASKS = True
+# 程式內預設最多任務數：None 表示不預先限定（仍可用 --max-tasks 或互動輸入）
+DEFAULT_MAX_TASKS = None
+# Gemini「OpenAI 相容」Chat Completions（官方文件）
+GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+# 未指定 --base-url 且未設 OPENAI_BASE_URL 時的預設 API base（固定於程式，不經 baseline_config.json）
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 # 將 RQ1 目錄加入 Python 路徑，以便匯入 Baseline 套件
 if str(RQ1_DIR) not in sys.path:
@@ -26,18 +36,48 @@ from Baseline.env import ReqElicitGym
 from Baseline.interviewer import Interviewer
 
 
+def _resolve_data_path(raw: str) -> str:
+    """相對路徑則相對於 RQ1 目錄解析。"""
+    p = Path(raw)
+    if p.is_absolute():
+        return str(p.resolve())
+    return str((RQ1_DIR / p).resolve())
+
+
+def load_baseline_file_config(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(f"找不到設定檔：{path}")
+    with path.open(encoding="utf-8") as f:
+        cfg = json.load(f)
+    if not isinstance(cfg, dict):
+        raise TypeError("baseline_config.json 頂層必須為物件")
+    return cfg
+
+
 def build_parser():
     """建構命令列參數解析器"""
     parser = argparse.ArgumentParser(description="執行 ReqElicitGym 評估腳本（執行全部測試樣本）")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"實驗設定 JSON 路徑（預設 {DEFAULT_CONFIG_PATH.name}）",
+    )
     parser.add_argument("--api-key", type=str, default=None, help="API Key，也可用 OPENAI_API_KEY 環境變數")
-    parser.add_argument("--base-url", type=str, default=None, help="API Base URL，也可用 OPENAI_BASE_URL 環境變數")
-    parser.add_argument("--interviewer-model", type=str, default=None, help="Interviewer 使用的 LLM 模型")
-    parser.add_argument("--gym-model", type=str, default="gpt-5.2", help="GYM（judge + user）使用的 LLM 模型，預設 gpt-5.2")
-    parser.add_argument("--use-thinking", action="store_true", help="是否開啟 thinking 模式（會呼叫帶 enable_thinking 的介面）")
-    parser.add_argument("--data-path", type=str, default=None, help="測試資料檔案路徑，預設 RQ1/ReqElicitBench.json")
-    parser.add_argument("--max-tasks", type=int, default=None, help="最多執行的需求案例數量（預設全部，例如 3 表示只跑前 3 筆）")
+    parser.add_argument(
+        "--gemini",
+        action="store_true",
+        help="使用 Gemini：讀取 GEMINI_API_KEY，base_url 預設為 Google OpenAI 相容端點（可用 GEMINI_BASE_URL 或 --base-url 覆寫）；請將模型設為 gemini-*",
+    )
+    parser.add_argument("--base-url", type=str, default=None, help="覆寫 OPENAI_BASE_URL 與程式預設 DEFAULT_BASE_URL")
+    parser.add_argument("--interviewer-model", type=str, default=None, help="覆寫設定檔中的 interviewer_model")
+    parser.add_argument("--gym-model", type=str, default=None, help="覆寫設定檔中的 gym_model（judge + user）")
+    parser.add_argument("--use-thinking", action="store_true", help="開啟 thinking 模式（覆寫設定檔為 true）")
+    parser.add_argument("--data-path", type=str, default=None, help="覆寫程式預設資料檔（可為絕對或相對 RQ1 之路徑）")
+    parser.add_argument("--max-tasks", type=int, default=None, help="只跑前 N 筆；覆寫程式預設 DEFAULT_MAX_TASKS")
     parser.add_argument("--run-id", type=str, default=None, help="結果檔名用 id，未傳則以執行時間（HHMMSS）自動產生")
-    parser.add_argument("--verbose", action="store_true", help="詳細輸出")
+    parser.add_argument("--verbose", action="store_true", help="強制詳細輸出（覆寫設定檔 verbose）")
+    parser.add_argument("--quiet", action="store_true", help="關閉詳細輸出（覆寫設定檔 verbose）")
     return parser
 
 
@@ -45,27 +85,41 @@ def main():
     """主函式：執行 ReqElicitGym-v8 評估（執行全部任務）"""
     args = build_parser().parse_args()
 
-    # ========= 預設設定區域 =========
-    default_data_path = str(RQ1_DIR / "ReqElicitBench.json")
-    DEFAULTS = {
-        "api_key": os.environ.get("OPENAI_API_KEY", ""),
-        "base_url": os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1",
-        "interviewer_model": "gpt-4o-mini",
-        "gym_model": "gpt-5.2",
-        "use_thinking": False,
-        "data_path": default_data_path,
-        "verbose": True,
-    }
+    cfg_path = Path(args.config).expanduser()
+    if not cfg_path.is_absolute():
+        cfg_path = (RQ1_DIR / cfg_path).resolve()
+    file_cfg = load_baseline_file_config(cfg_path)
+    print(f"設定檔：{cfg_path}")
 
-    # ========= 從命令列參數或環境變數取得設定 =========
-    api_key = args.api_key or DEFAULTS["api_key"]
-    base_url = args.base_url or DEFAULTS["base_url"]
-    interviewer_model = args.interviewer_model or DEFAULTS["interviewer_model"]
-    gym_model = args.gym_model or DEFAULTS["gym_model"]
-    use_thinking = args.use_thinking or DEFAULTS["use_thinking"]
-    data_path = args.data_path or DEFAULTS["data_path"]
+    def pick(key: str, default):
+        v = file_cfg.get(key, default)
+        return default if v is None else v
+
+    # api_key 不寫入 JSON，僅環境變數或命令列
+    api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
+    base_url = args.base_url or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
+    if args.gemini:
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        api_key = args.api_key or gemini_key
+        if not api_key:
+            print("錯誤：使用 --gemini 時請在 .env 設定 GEMINI_API_KEY，或傳入 --api-key")
+            sys.exit(1)
+        base_url = (
+            args.base_url
+            or os.environ.get("GEMINI_BASE_URL")
+            or GEMINI_OPENAI_COMPAT_BASE
+        )
+    interviewer_model = args.interviewer_model or pick("interviewer_model", "gpt-4o-mini")
+    gym_model = args.gym_model or pick("gym_model", "gpt-5.2")
+    use_thinking = bool(args.use_thinking or pick("use_thinking", False))
+    data_path = args.data_path or _resolve_data_path(DEFAULT_DATA_FILE)
+
     max_tasks = args.max_tasks
     if max_tasks is None:
+        max_tasks = DEFAULT_MAX_TASKS
+        if max_tasks is not None and (not isinstance(max_tasks, int) or max_tasks <= 0):
+            max_tasks = None
+    if max_tasks is None and PROMPT_FOR_MAX_TASKS:
         raw = input("請輸入要執行的任務數量（直接 Enter 為全部，或輸入數字如 3）：").strip()
         if raw:
             try:
@@ -74,8 +128,27 @@ def main():
                     max_tasks = None
             except ValueError:
                 max_tasks = None
+
     run_id = args.run_id or time.strftime("%H%M%S")
-    verbose = args.verbose or DEFAULTS["verbose"]
+    if args.quiet:
+        verbose = False
+    elif args.verbose:
+        verbose = True
+    else:
+        verbose = bool(pick("verbose", True))
+
+    judge_temperature = float(pick("judge_temperature", 0.0))
+    judge_max_tokens = int(pick("judge_max_tokens", 1024))
+    judge_timeout = float(pick("judge_timeout", 30.0))
+    user_temperature = float(pick("user_temperature", 0.7))
+    user_max_tokens = int(pick("user_max_tokens", 1024))
+    user_timeout = float(pick("user_timeout", 30.0))
+    user_answer_quality = str(pick("user_answer_quality", "high"))
+    max_steps = int(pick("max_steps", 20))
+    interviewer_temperature = float(pick("interviewer_temperature", 0.0))
+    interviewer_timeout = float(pick("interviewer_timeout", 60.0))
+    interviewer_max_tokens = int(pick("interviewer_max_tokens", 1024))
+    interviewer_max_tokens_thinking = int(pick("interviewer_max_tokens_thinking", 8192))
 
     # 統一使用同一套 API key 與 base URL
     # 如需對 judge/user 再細分 key，可繼續用 JUDGE_API_KEY / USER_API_KEY 覆寫
@@ -118,35 +191,29 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    # 結果輸出到 RQ1/results，檔名：result_Baseline_<run_id>.json / record_Baseline_<run_id>.json
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    evaluation_result_path = str(RESULTS_DIR / f"result_Baseline_{run_id}.json")
-    conversation_result_path = str(RESULTS_DIR / f"record_Baseline_{run_id}.json")
+    evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
+    conversation_result_path = str(RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json")
     llm = interviewer_model  # interviewer 使用的模型
 
     # 建立設定
     config = ReqElicitGymConfig(
-        data_path=data_path,  # 直接使用全量資料檔案
-        # Judge 設定（用於判斷 interviewer 的動作）
+        data_path=data_path,
         judge_api_key=judge_api_key,
         judge_base_url=judge_base_url,
         judge_model_name=gym_model,
-        judge_temperature=0.0,
-        judge_max_tokens=1024,
-        judge_timeout=30.0,
-        # 模擬使用者設定
+        judge_temperature=judge_temperature,
+        judge_max_tokens=judge_max_tokens,
+        judge_timeout=judge_timeout,
         user_api_key=user_api_key,
         user_base_url=user_base_url,
         user_model_name=gym_model,
-        user_temperature=0.7,
-        user_max_tokens=1024,
-        user_timeout=30.0,
-        # 使用者回答品質
-        user_answer_quality="high",  # 可為 "high", "medium", 或 "low"
-        # 環境設定
-        max_steps=20,
+        user_temperature=user_temperature,
+        user_max_tokens=user_max_tokens,
+        user_timeout=user_timeout,
+        user_answer_quality=user_answer_quality,
+        max_steps=max_steps,
         verbose=verbose,
-        # 設定結果檔案路徑
         evaluation_result_path=evaluation_result_path,
         conversation_result_path=conversation_result_path,
     )
@@ -165,17 +232,16 @@ def main():
     # 重置任務索引：__init__ 中 reset() 已消耗 task_0，需重置以便 run_all_tasks 從 task_0 開始
     env.current_task_index = 0
 
-    # 建構 interviewer（在外部建構，不依賴環境設定）
-    # 若開啟 thinking，需要較大的 max_tokens
-    interviewer_max_tokens = 8192 if use_thinking else 1024
+    interviewer_max_tokens = (
+        interviewer_max_tokens_thinking if use_thinking else interviewer_max_tokens
+    )
     interviewer = Interviewer(
         api_key=api_key,
         base_url=base_url,
-        model_name=llm,  # 使用上方設定的模型名稱
-        temperature=0.0,
+        model_name=llm,
+        temperature=interviewer_temperature,
         max_tokens=interviewer_max_tokens,
-        # timeout=30.0,
-        timeout=60.0,  # kimi2.5 的 timeout 為 60 秒
+        timeout=interviewer_timeout,
         use_thinking=use_thinking,
     )
     print(f"Interviewer 已建立：{interviewer}")
