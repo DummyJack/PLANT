@@ -1,9 +1,6 @@
-"""從 dataset/ReqElicitBench.json 依指定 name 順序抽出 10 筆至 ReqElicitBench_10.json。"""
-
 import json
 from pathlib import Path
 
-# 與 JSON 內 `name` 欄位完全一致；順序對應 RQ1 子集設計（儀表板／工具／教育／電商／娛樂／社群等）
 ORDERED_NAMES = [
     "Stock Report Generation System",
     "Online Mathematical Calculation System",

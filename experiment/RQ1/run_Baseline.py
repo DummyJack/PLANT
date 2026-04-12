@@ -3,21 +3,23 @@ import json
 import sys
 import argparse
 import time
+from time import perf_counter
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
+# 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench_10.json、套件 Baseline/ 同在 RQ1 下
 RQ1_DIR = Path(__file__).resolve().parent
+BASE_DIR = RQ1_DIR.parent.parent
 # 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
-env_path = RQ1_DIR.parent.parent / ".env"
+env_path = BASE_DIR / ".env"
 load_dotenv(env_path)
 DEFAULT_CONFIG_PATH = RQ1_DIR / "baseline_config.json"
 # 結果輸出目錄與檔名前綴（固定於程式，不經 baseline_config.json）
 RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 # 預設資料檔、任務數與互動行為（固定於程式，不經 baseline_config.json）
-DEFAULT_DATA_FILE = "ReqElicitBench.json"
+DEFAULT_DATA_FILE = "ReqElicitBench_10.json"
 # 未指定 --max-tasks 且下方為 None 時，是否在終端機詢問要跑幾題
 PROMPT_FOR_MAX_TASKS = True
 # 程式內預設最多任務數：None 表示不預先限定（仍可用 --max-tasks 或互動輸入）
@@ -30,10 +32,15 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # 將 RQ1 目錄加入 Python 路徑，以便匯入 Baseline 套件
 if str(RQ1_DIR) not in sys.path:
     sys.path.insert(0, str(RQ1_DIR))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from Baseline.config import ReqElicitGymConfig
 from Baseline.env import ReqElicitGym
+import Baseline.env.prompts as baseline_prompts
+import Baseline.interviewer as baseline_interviewer_module
 from Baseline.interviewer import Interviewer
+from utils import CostTracker, json_dump_no_scientific
 
 
 def _resolve_data_path(raw: str) -> str:
@@ -194,6 +201,7 @@ def main():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
     conversation_result_path = str(RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json")
+    cost_result_path = str(RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json")
     llm = interviewer_model  # interviewer 使用的模型
 
     # 建立設定
@@ -244,6 +252,59 @@ def main():
         timeout=interviewer_timeout,
         use_thinking=use_thinking,
     )
+    interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
+    user_cost_tracker = CostTracker(model_name=gym_model)
+    _orig_ask_question = interviewer.ask_question
+    _orig_prompt_model_call = baseline_prompts.model_call
+    _orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
+    _orig_interviewer_model_call = baseline_interviewer_module.model_call
+    _orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
+
+    def _tracked_ask_question(conversation_history, return_usage=False):
+        start = perf_counter()
+        out = _orig_ask_question(conversation_history, return_usage=return_usage)
+        elapsed = perf_counter() - start
+        if return_usage:
+            question, usage_info = out
+            interviewer_cost_tracker.addUsage(
+                usage_info or {},
+                metadata={"action": "baseline.interviewer.ask_question"},
+                run_time_s=elapsed,
+            )
+            return question, usage_info
+        return out
+
+    def _tracked_model_call(
+        system_prompt,
+        user_prompt,
+        model_config,
+        return_json=True,
+        return_usage=False,
+    ):
+        start = perf_counter()
+        response, usage_info = _orig_prompt_model_call(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model_config=model_config,
+            return_json=return_json,
+            return_usage=True,
+        )
+        elapsed = perf_counter() - start
+        if system_prompt == baseline_prompts.PASSIVE_RESPONSE_SYSTEM:
+            user_cost_tracker.addUsage(
+                usage_info or {},
+                metadata={"action": "baseline.user.generate_response"},
+                run_time_s=elapsed,
+            )
+        if return_usage:
+            return response, usage_info
+        return response
+
+    interviewer.ask_question = _tracked_ask_question
+    baseline_prompts.model_call = _tracked_model_call
+    baseline_interviewer_module.model_call = _tracked_model_call
+    baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
+    baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
     print(f"Interviewer 已建立：{interviewer}")
 
     # 執行所有任務（環境會自動記錄對話並計算評估指標）
@@ -251,6 +312,11 @@ def main():
     print("開始執行全量評估實驗...")
     print("=" * 60)
     results = env.run_all_tasks(interviewer)
+    interviewer.ask_question = _orig_ask_question
+    baseline_prompts.model_call = _orig_prompt_model_call
+    baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
+    baseline_interviewer_module.model_call = _orig_interviewer_model_call
+    baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
 
     # 儲存評估結果檔案（含變異數及依 application_type 分類的統計）
     # 若不傳 file_path 或傳入 None，會使用 config 中設定的路徑
@@ -270,6 +336,43 @@ def main():
         print(f"對話過程已儲存至：{config.conversation_result_path}")
     except Exception as e:
         print(f"儲存對話過程時發生錯誤：{e}")
+        import traceback
+
+        traceback.print_exc()
+
+    # 儲存成本摘要（interviewer token/cost）
+    try:
+        interviewer_summary = interviewer_cost_tracker.export_summary_dict()
+        user_summary = user_cost_tracker.export_summary_dict()
+        cost_payload = {
+            "agents": {
+                "interviewer": interviewer_summary,
+                "user": user_summary,
+            },
+            "totals": {
+                "input_tokens": int(interviewer_summary.get("input_tokens", 0) or 0)
+                + int(user_summary.get("input_tokens", 0) or 0),
+                "output_tokens": int(interviewer_summary.get("output_tokens", 0) or 0)
+                + int(user_summary.get("output_tokens", 0) or 0),
+                "total_tokens": int(interviewer_summary.get("total_tokens", 0) or 0)
+                + int(user_summary.get("total_tokens", 0) or 0),
+                "run_time(s)": round(
+                    float(interviewer_summary.get("run_time(s)", 0.0) or 0.0)
+                    + float(user_summary.get("run_time(s)", 0.0) or 0.0),
+                    3,
+                ),
+                "estimated_cost(USD)": round(
+                    float(interviewer_summary.get("estimated_cost(USD)", 0.0) or 0.0)
+                    + float(user_summary.get("estimated_cost(USD)", 0.0) or 0.0),
+                    8,
+                ),
+            },
+        }
+        with open(cost_result_path, "w", encoding="utf-8") as f:
+            json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
+        print(f"成本摘要已儲存至：{cost_result_path}")
+    except Exception as e:
+        print(f"儲存成本摘要時發生錯誤：{e}")
         import traceback
 
         traceback.print_exc()
