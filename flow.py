@@ -120,7 +120,7 @@ class Flow:
             self.mediator_agent.enabled_agenda_type_ids = [
                 k for k, v in eat.items() if v
             ]
-        self.meeting_coordinator = MeetingCoordinator(self)
+        self.meeting = MeetingCoordinator(self)
 
     def _validate_policy_assignments(self) -> None:
         self.policy.validate_mapping_integrity()
@@ -146,6 +146,7 @@ class Flow:
 
     def _ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """集中初始化 artifact 目前需要的最小欄位。"""
+        artifact.setdefault("elicitation_candidates", [])
         return artifact
 
     @staticmethod
@@ -171,7 +172,7 @@ class Flow:
         recent_discussions: Optional[List[Dict[str, Any]]],
         roles: List[str],
     ) -> None:
-        self.meeting_coordinator._run_enabled_reviews(
+        self.meeting._run_enabled_reviews(
             artifact,
             recent_discussions=recent_discussions,
             roles=roles,
@@ -183,7 +184,7 @@ class Flow:
         *,
         rounds: int = 1,
     ) -> List[Dict[str, Any]]:
-        return self.meeting_coordinator._recent_topic_discussions(
+        return self.meeting._recent_topic_discussions(
             artifact, rounds=rounds
         )
 
@@ -195,7 +196,7 @@ class Flow:
         round_num: int,
         index: int,
     ) -> Optional[Dict[str, Any]]:
-        return self.meeting_coordinator._normalize_topic_proposal(
+        return self.meeting._normalize_topic_proposal(
             item,
             proposed_by=proposed_by,
             round_num=round_num,
@@ -208,7 +209,7 @@ class Flow:
         *,
         round_num: int,
     ) -> List[Dict[str, Any]]:
-        return self.meeting_coordinator._collect_topic_proposals(
+        return self.meeting._collect_topic_proposals(
             artifact,
             round_num=round_num,
         )
@@ -252,14 +253,14 @@ class Flow:
         return orchestration_run_meeting_round(self, artifact, round_num)
 
     def _run_agenda_loop(self, runner: Any) -> None:
-        self.meeting_coordinator._run_agenda_loop(runner)
+        self.meeting._run_agenda_loop(runner)
 
     def _apply_mediator_updates(
         self,
         artifact: Dict[str, Any],
         updates: Dict[str, Any],
     ) -> Dict[str, Any]:
-        return self.meeting_coordinator._apply_mediator_updates(artifact, updates)
+        return self.meeting._apply_mediator_updates(artifact, updates)
 
     # Finalization
 

@@ -29,6 +29,29 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact["requirements"] = analysis["requirements"]
     flow.store.save_artifact(artifact)
 
+    if flow.config.get("enable_elicitation", True):
+        flow.logger.info("=== 隱性需求挖掘會議 ===")
+        artifact = flow.meeting.run_hidden_requirement_elicitation_meeting(
+            artifact, round_num=0,
+        )
+        if artifact.get("elicitation_candidates"):
+            from agents.profile.analyst import AnalystAgent
+            for cand in artifact["elicitation_candidates"]:
+                if not isinstance(cand, dict):
+                    continue
+                cand.setdefault("status", "draft")
+                if not any(
+                    isinstance(r, dict) and r.get("text") == cand.get("text")
+                    for r in artifact.get("requirements", [])
+                ):
+                    artifact["requirements"].append(cand)
+            flow.logger.info(
+                "✓ 挖掘完成，新增 %s 筆需求（共 %s 筆）",
+                len(artifact["elicitation_candidates"]),
+                len(artifact["requirements"]),
+            )
+            flow.store.save_artifact(artifact)
+
     flow.logger.info("Analyst: Conflict 辨識")
     artifact = flow.analyst_agent.run_conflict_detection(artifact)
     flow.store.save_artifact(artifact)

@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 from typing import Any, Dict
+from .validation_gate import run_validation_gate
 
 
 def run_meeting_round(flow, artifact: Dict[str, Any], round_num: int) -> Dict[str, Any]:
-    return flow.meeting_coordinator.run_meeting_round(artifact, round_num)
+    return flow.meeting.run_meeting_round(artifact, round_num)
 
 
 def _write_pre_meeting_conflict_report(flow, artifact: Dict[str, Any], round_num: int) -> None:
@@ -52,11 +53,27 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 
     flow.logger.info("=== Phase 0: 初始草稿建立 ===")
     artifact = flow.run_init_phase(artifact)
+    if flow.config.get("enable_validation_gate", True):
+        run_validation_gate(
+            flow,
+            artifact,
+            stage="post_init_phase",
+            round_num=0,
+        )
+        flow.store.save_artifact(artifact)
     _write_pre_meeting_conflict_report(flow, artifact, round_num=0)
 
     for round_num in range(1, rounds + 1):
         flow.logger.info(f"=== Round {round_num}/{rounds}: 開會 ===")
         artifact = flow.run_meeting_round(artifact, round_num)
+        if flow.config.get("enable_validation_gate", True):
+            run_validation_gate(
+                flow,
+                artifact,
+                stage="post_round",
+                round_num=round_num,
+            )
+            flow.store.save_artifact(artifact)
         flow.logger.info(f"Round {round_num} 完成\n")
 
     flow.logger.info("=== 規格化 ===")
@@ -91,6 +108,14 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     for round_num in range(start_round, start_round + rounds):
         flow.logger.info(f"=== Round {round_num}: 開會 ===")
         artifact = flow.run_meeting_round(artifact, round_num)
+        if flow.config.get("enable_validation_gate", True):
+            run_validation_gate(
+                flow,
+                artifact,
+                stage="post_round",
+                round_num=round_num,
+            )
+            flow.store.save_artifact(artifact)
         flow.logger.info(f"Round {round_num} 完成\n")
 
     flow.logger.info("=== 規格化 ===")
