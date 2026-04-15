@@ -478,6 +478,7 @@ def _extract_pre_meeting_details(
     artifact: Dict[str, Any], *, round_num: int = 0
 ) -> Dict[str, Any]:
     """同一 type 整批只做一次會前複核：回傳可寫入 record 的會議資訊（不含 summary / raw_log_entry）。"""
+    show_debug = bool((artifact.get("meta") or {}).get("show_rq2_debug", False))
     details: Dict[str, Any] = {
         "round": int(round_num),
         "changed_count": 0,
@@ -485,8 +486,9 @@ def _extract_pre_meeting_details(
         "participants": [],
         "conversation": [],
         "decisions": [],
-        "debug": {},
     }
+    if show_debug:
+        details["debug"] = {}
     log = artifact.get("conflict_recheck_log")
     if not isinstance(log, list) or not log:
         return details
@@ -515,7 +517,8 @@ def _extract_pre_meeting_details(
     details["changed_count"] = int(entry.get("changed_count", 0) or 0)
     details["discussion_mode"] = str(entry.get("discussion_mode") or "")
     details["participants"] = list(entry.get("participants") or [])
-    details["debug"] = dict(entry.get("debug") or {}) if isinstance(entry.get("debug"), dict) else {}
+    if show_debug:
+        details["debug"] = dict(entry.get("debug") or {}) if isinstance(entry.get("debug"), dict) else {}
     conv = entry.get("conversation")
     if not isinstance(conv, list):
         conv = list(entry.get("dialogue") or [])
@@ -693,6 +696,7 @@ def run_type_group_batch(
             "enable_all_conflict_check": False,
             "requirements_proposed_by": "user_agent",
             "requirement_owner_type": type_name,
+            "show_rq2_debug": bool(flow.config.get("show_rq2_debug", False)),
         },
     }
     sync_config_language(artifact)

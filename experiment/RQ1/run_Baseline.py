@@ -444,24 +444,24 @@ def main():
 
     if runs > 1:
         metric_keys = [
-            ("elicitation_ratio", "平均取得比例", "percent"),
-            ("tkqr", "平均 TKQR", "float4"),
-            ("ora", "平均 ORA", "float4"),
+            ("elicitation_ratio", "IRE", "平均取得比例", "percent"),
+            ("tkqr", "TKQR", "平均 TKQR", "float4"),
+            ("ora", "ORA", "平均 ORA", "float4"),
         ]
         print("\n跨多次執行統計（平均值 ± 標準差）：")
         summary_metrics = {}
         if run_metrics:
-            for key, label, fmt in metric_keys:
+            for src_key, out_key, label, fmt in metric_keys:
                 vals = []
                 for m in run_metrics:
-                    v = m.get(key, None)
+                    v = m.get(src_key, None)
                     if isinstance(v, (int, float)):
                         vals.append(float(v))
                 if not vals:
                     continue
                 mu = mean(vals)
                 sd = float(np.std(vals))
-                summary_metrics[key] = {
+                summary_metrics[out_key] = {
                     "mean": mu,
                     "std": sd,
                     "per_round_values": vals,

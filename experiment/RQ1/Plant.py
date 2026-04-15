@@ -1238,7 +1238,7 @@ def main() -> None:
         _print_final_summary(result, task_result_rows)
 
         run_results.append(result)
-        run_metrics.append(result.get("overall_metrics", {}) or {})
+        run_metrics.append(result.get("overall_evaluation", {}) or {})
         totals = cost_payload.get("totals", {}) if isinstance(cost_payload, dict) else {}
         run_costs_usd.append(float(totals.get("estimated_cost(USD)", 0.0) or 0.0))
         run_total_tokens.append(int(totals.get("total_tokens", 0) or 0))
@@ -1246,16 +1246,16 @@ def main() -> None:
 
     if runs > 1:
         metric_keys = [
-            ("average_elicitation_ratio", "平均取得比例", "percent", "elicitation_ratio"),
-            ("average_tkqr", "平均 TKQR", "float4", "tkqr"),
-            ("average_ora", "平均 ORA", "float4", "ora"),
+            ("average_elicitation_ratio", "IRE", "平均取得比例", "percent"),
+            ("average_tkqr", "TKQR", "平均 TKQR", "float4"),
+            ("average_ora", "ORA", "平均 ORA", "float4"),
         ]
         print("\n跨多次執行統計（平均值 ± 標準差）：")
         summary_metrics: Dict[str, Any] = {}
-        for key, label, fmt, out_key in metric_keys:
+        for src_key, out_key, label, fmt in metric_keys:
             vals = []
             for m in run_metrics:
-                v = m.get(key, None)
+                v = m.get(src_key, None)
                 if isinstance(v, (int, float)):
                     vals.append(float(v))
             if not vals:

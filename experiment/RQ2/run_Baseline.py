@@ -401,8 +401,19 @@ if __name__ == "__main__":
         for m in run_scalar_metrics:
             all_keys.update(m.keys())
         print("\n跨多次執行統計（平均值 ± 標準差）：")
+        # JSON 與終端輸出順序：先 overall（precision→recall→f1），再 conflict（同序）；其餘鍵依字母接於後。
+        preferred_order = [
+            "overall_precision",
+            "overall_recall",
+            "overall_f1",
+            "conflict_precision",
+            "conflict_recall",
+            "conflict_f1",
+        ]
+        ordered_keys = [k for k in preferred_order if k in all_keys]
+        ordered_keys.extend(sorted(k for k in all_keys if k not in set(ordered_keys)))
         summary_metrics: dict[str, Any] = {}
-        for key in sorted(all_keys):
+        for key in ordered_keys:
             vals = [float(m[key]) for m in run_scalar_metrics if key in m]
             if not vals:
                 continue
