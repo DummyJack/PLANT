@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-"""組合抽樣輸出 cn_100.csv。
-
-規則：
-1) pure_clean_pairs.csv 抽 20 筆（10 Conflict + 10 Neutral）
-2) open_coss_clean_pairs.csv 抽 10 筆（5 Conflict + 5 Neutral）
-3) world_vista_clean_pairs.csv 抽 30 筆（15 Conflict + 15 Neutral）
-4) cn_pairs.csv 依四個子系統各抽 10 筆（5 Conflict + 5 Neutral）
-   - Bird Feeder Control System
-   - Viewer Application
-   - Aviary System Software
-   - Communication Management Software
-
-輸出欄位：ID, types, Text1, Text2, Class
-"""
-
 from __future__ import annotations
 
 import csv
@@ -24,7 +8,8 @@ from pathlib import Path
 SEED = 20260412
 
 BASE_DIR = Path(__file__).resolve().parent
-OUT_PATH = BASE_DIR / "cn_100.csv"
+RQ2_DIR = BASE_DIR.parent
+OUT_PATH = RQ2_DIR / "cn_100.csv"
 
 PURE_PATH = BASE_DIR / "pure_clean_pairs.csv"
 OPEN_COSS_PATH = BASE_DIR / "open_coss_clean_pairs.csv"
@@ -67,33 +52,9 @@ def to_row(row: dict, typ: str) -> dict:
     }
 
 
-def classify_cn_subsystem(row: dict) -> str:
-    text = f"{row.get('Text1', '')} {row.get('Text2', '')}".lower()
-    if any(k in text for k in ("bird feeder", "pilot controller", "pilot station")):
-        return "UAV Control System"
-    if any(k in text for k in ("viewer", "remote viewer")):
-        return "UAV Monitoring and Visualization System"
-    if any(
-        k in text
-        for k in ("communication", "secure", "snooping", "eavesdropping", "network")
-    ):
-        return "UAV Communication Security System"
-    return "UAV Mission Management System"
-
-
-def pick_cn_subsystems(rows: list[dict], rng: random.Random) -> list[dict]:
-    target_types = [
-        "UAV Control System",
-        "UAV Monitoring and Visualization System",
-        "UAV Mission Management System",
-        "UAV Communication Security System",
-    ]
-    out: list[dict] = []
-    for typ in target_types:
-        subset = [r for r in rows if classify_cn_subsystem(r) == typ]
-        picked = balanced_pick(subset, n=10, rng=rng)
-        out.extend([to_row(r, typ) for r in picked])
-    return out
+def pick_uav_from_cn_pairs(rows: list[dict], rng: random.Random) -> list[dict]:
+    picked = balanced_pick(rows, n=40, rng=rng)
+    return [to_row(r, "UAV Control System") for r in picked]
 
 
 def write_rows(rows: list[dict], out_path: Path) -> None:
@@ -134,7 +95,7 @@ def main() -> None:
             for r in balanced_pick(world_rows, n=30, rng=rng)
         ]
     )
-    final_rows.extend(pick_cn_subsystems(cn_rows, rng=rng))
+    final_rows.extend(pick_uav_from_cn_pairs(cn_rows, rng=rng))
 
     if len(final_rows) != 100:
         raise RuntimeError(f"輸出筆數異常：{len(final_rows)}（預期 100）")

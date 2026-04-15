@@ -50,10 +50,11 @@ def next_result_index(prefix: str, results_dir: Path) -> int:
     return max_idx + 1
 
 # 建立衝突判斷的提示詞。
-def conflict_prompt(text1: str, text2: str) -> str:
+def conflict_prompt(text1: str, text2: str, req_type: Optional[str] = None) -> str:
+    type_line = f"情境: {req_type}\n\n" if req_type else ""
     return (
-        f"需求 A: {text1}\n\n需求 B: {text2}\n\n"
-        "判斷以上需求 A 和 B 是否有衝突，有衝突輸出 Conflict，沒有則輸出 Neutral，不用再額外生成任何內容。"
+        f"{type_line}需求 A: {text1}\n\n需求 B: {text2}\n\n"
+        "根據情境，判斷需求 A 和 B 是否有衝突，有衝突輸出 Conflict，沒有則輸出 Neutral，不用再額外生成任何內容。"
     )
 
 
@@ -94,7 +95,7 @@ class BaselineModel:
             if not api_key:
                 print("錯誤：未找到 OPENAI_API_KEY 環境變數")
                 sys.exit(1)
-            self.client: OpenAI | None = OpenAI(api_key=api_key)
+            self.client: Optional[OpenAI] = OpenAI(api_key=api_key)
             self._genai_client = None
             self._genai_types = None
             self._gemini_lock = None
@@ -127,9 +128,11 @@ class BaselineModel:
             )
             sys.exit(1)
 
-    def detect_conflict(self, text1: str, text2: str) -> str:
+    def detect_conflict(
+        self, text1: str, text2: str, req_type: Optional[str] = None
+    ) -> str:
         # 對外入口：依 provider 分派到對應推論實作。
-        user_prompt = conflict_prompt(text1, text2)
+        user_prompt = conflict_prompt(text1, text2, req_type=req_type)
 
         if self.provider == "openai":
             return self.detect_openai(user_prompt)
@@ -221,8 +224,15 @@ def load_cn_pairs(csv_path: Path, limit: int) -> list[dict]:
 # 單筆資料推論，回傳索引、預測與紀錄。
 def predict_row(model: BaselineModel, idx: int, row: dict) -> tuple[int, Optional[str], dict]:
     text1, text2 = row["Text1"], row["Text2"]
-    pred = model.detect_conflict(text1, text2)
-    rec = {"text1": text1, "text2": text2, "true": row["Class"], "pred": pred}
+    req_type = (row.get("types") or "").strip()
+    pred = model.detect_conflict(text1, text2, req_type=req_type)
+    rec = {
+        "type": req_type,
+        "text1": text1,
+        "text2": text2,
+        "true": row["Class"],
+        "pred": pred,
+    }
     return idx, pred, rec
 
 
@@ -304,7 +314,6 @@ def run_conflict(
 
     n_conflict = y_true.count("Conflict")
     n_neutral = y_true.count("Neutral")
-    print("  整體指標: macro（Conflict / Neutral 各類 binary 後平均）；conflict：binary（正類 Conflict）")
     overall = Metric.macro(y_true, y_pred, labels=["Conflict", "Neutral"])["macro"]
     conflict_metrics = Metric.binary(y_true, y_pred, positive_label="Conflict")
     metrics = {"overall": overall, "conflict": conflict_metrics}
@@ -349,7 +358,7 @@ if __name__ == "__main__":
             print("錯誤：任務數量不可為負數")
             sys.exit(1)
 
-    runs: int | None = None
+    runs: Optional[int] = None
     if PROMPT_FOR_RUNS:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
@@ -400,7 +409,7 @@ if __name__ == "__main__":
         all_keys: set[str] = set()
         for m in run_scalar_metrics:
             all_keys.update(m.keys())
-        print("\n跨多次執行統計（平均值 ± 標準差）：")
+        print("\n多次執行結果統計（平均值 ± 標準差）：")
         # JSON 與終端輸出順序：先 overall（precision→recall→f1），再 conflict（同序）；其餘鍵依字母接於後。
         preferred_order = [
             "overall_precision",
@@ -462,4 +471,4 @@ if __name__ == "__main__":
         summary_path = RESULTS_DIR / f"summary_{RESULTS_FILE_PREFIX}.json"
         with summary_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
-        print(f"跨 run 統計已儲存至：{summary_path}")
+        print(f"已儲存至：{summary_path}")

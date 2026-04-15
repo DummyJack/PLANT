@@ -1100,7 +1100,7 @@ if __name__ == "__main__":
         ]
         ordered_keys = [k for k in preferred_order if k in all_keys]
         ordered_keys.extend(sorted(k for k in all_keys if k not in set(ordered_keys)))
-        print("\n跨多次執行統計（平均值 ± 標準差）：")
+        print("\n多次執行結果統計（平均值 ± 標準差）：")
         summary_metrics: Dict[str, Any] = {}
         for key in ordered_keys:
             vals = [float(m[key]) for m in run_scalar_metrics if key in m]
@@ -1151,4 +1151,4 @@ if __name__ == "__main__":
         summary_path = RESULTS_DIR / "summary_Plant.json"
         with summary_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
-        print(f"跨 run 統計已儲存至：{summary_path}")
+        print(f"統計已儲存至：{summary_path}")

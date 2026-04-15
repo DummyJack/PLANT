@@ -448,7 +448,7 @@ def main():
             ("tkqr", "TKQR", "平均 TKQR", "float4"),
             ("ora", "ORA", "平均 ORA", "float4"),
         ]
-        print("\n跨多次執行統計（平均值 ± 標準差）：")
+        print("\n多次執行結果統計（平均值 ± 標準差）：")
         summary_metrics = {}
         if run_metrics:
             for src_key, out_key, label, fmt in metric_keys:
@@ -507,7 +507,7 @@ def main():
         summary_path = RESULTS_DIR / f"summary_{RESULTS_FILE_PREFIX}.json"
         with summary_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
-        print(f"跨 run 統計已儲存至：{summary_path}")
+        print(f"已儲存至：{summary_path}")
 
     return results
 
