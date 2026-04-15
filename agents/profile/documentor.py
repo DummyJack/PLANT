@@ -65,13 +65,17 @@ class DocumentorAgent(BaseAgent):
 - 章節結構至少完整涵蓋：Introduction、Overall Description、Functional Requirements、Non-Functional Requirements、Data Requirements、External Interface Requirements、Requirements Traceability Matrix、Appendix。
 - 若某正式章節在來源不足時無法完整展開，請保留章節並以「待補」標示缺口；不要省略正式主章節。
 - Functional Requirements 應寫成正式 requirement specification；每條 FR 應有 Description、Actors、Preconditions、Main Flow、Alternative Flows、Postconditions、Acceptance Criteria。
+- 每條 FR 額外必須標示 Verification Method（test/review/inspection）與 Acceptance Criteria（可驗證條件）。
 - Acceptance Criteria 應為可驗證條件，優先使用 Given/When/Then 或明確 pass/fail 條件。
 - Non-Functional Requirements 應包含 Metric、Target、Measurement；若缺明確數值或門檻依據，標示「待補」，不得虛構。
+- 每條 NFR 必須標示 Verification Method 與 Acceptance Criteria；若來源缺漏，填「待補」且不可杜撰。
 - 文件語氣使用正式規格語言；強制要求用 shall，建議用 should，可選用 may；避免模糊形容詞。
 
 嚴格來源規則（最重要）：
 - SRS 的所有功能性需求必須且僅可來自 Context.requirements 與 Context.draft_markdown；不得自行新增、推測或編造任何需求。
+- 若 Context.draft_markdown 與 Context.requirements 不一致，必須以 Context.requirements 為唯一權威來源；draft 中未出現在 Context.requirements 的需求不得納入正式 SRS。
 - 非功能性需求的具體指標與目標值必須來自 Context.requirements（NFR 類）；若來源中無明確數值，該欄位標示「待補」，不得虛構數字。
+- FR/NFR 的 verification_method 與 acceptance_criteria 需優先沿用 Context.requirements 對應欄位；缺漏時可標示「待補」但不得憑空創造已確認內容。
 - Context.decisions 中的會議決議必須反映到對應需求的細節中。
 - Context.conflicts 中 label=Conflict 的衝突標為未解決；label=Neutral 的標為已解決。
 - 需求溯源矩陣（RTM）僅在有上游 PRD 時才產出；無 PRD 時省略該章節，不得虛構 PRD ID。

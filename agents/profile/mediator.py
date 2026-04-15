@@ -111,6 +111,9 @@ class MediatorAgent(BaseAgent):
             else:
                 action = "formal_meeting"
                 reason = "new_requirement_affects_scope"
+        elif category == "conflict_discussion":
+            action = "formal_meeting"
+            reason = "conflict_discussion_requires_group_decision"
         elif category == "tradeoff":
             if requires_multi_party or blocks_decision or impact == "high":
                 action = "formal_meeting"
@@ -310,7 +313,7 @@ class MediatorAgent(BaseAgent):
 - 範例：標題可為「管理員權限與一般使用者隱私的 Conflict 如何取捨」而非「Conflict 討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
 
 # 議程類型與開題
-- **conflict_resolution**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
+- **conflict_discussion**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
 - **open_question**：當草稿（或摘要）中有待處理開放問題（含需求描述模糊、邊界待確認）時，可開此類。
 - **open_question**：若同輪有多個 open_question，執行層會自動合併為單一「集中回覆」議題，讓相關 agent 一次回答；因此可先正常產生 open_question，無需刻意拆得很細。
 - **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；此外，若有跡象顯示既有需求需要修正（例如描述不準確、優先順序變動、邊界條件改變），也可用此類議題讓 User 檢視並調整既有需求。
@@ -740,25 +743,274 @@ class MediatorAgent(BaseAgent):
 
     # ===== Plan: pre-meeting =====
 
+    def plan_elicitation_meeting(
+        self,
+        artifact: Dict[str, Any],
+        registry=None,
+    ) -> Dict[str, Any]:
+        """根據目前需求狀況，規劃隱性需求挖掘會議的參與者與討論模式（回合數由 flow.config elicitation_max_turns 決定）。"""
+        requirements = artifact.get("requirements", []) or []
+        req_count = len(requirements)
+
+        exclude = {"mediator", "documentor", "user"}
+        if registry:
+            interviewers = [n for n in registry.get_names() if n not in exclude]
+        else:
+            interviewers = ["analyst", "expert", "modeler"]
+        participants = interviewers + ["user"]
+
+        mode = "sequential"
+
+        plan = {
+            "participants": participants,
+            "interviewers": interviewers,
+            "speaking_order": interviewers + ["user"],
+            "discussion_mode": mode,
+            "stop_no_new_rounds": 2,
+        }
+        self.logger.info(
+            "Elicitation plan: mode=%s, req_count=%s",
+            mode, req_count,
+        )
+        return plan
+
+    def decide_elicitation_turn_strategy(
+        self,
+        *,
+        artifact: Dict[str, Any],
+        turn: int,
+        max_turns: int,
+        default_participants: List[str],
+        default_speaking_order: List[str],
+        default_mode: str,
+        previous_turn_summary: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+        """由 Mediator 逐輪決定挖掘會議安排（collectors + asker + user）。"""
+        prev = previous_turn_summary or {}
+        default_interviewers = [p for p in default_participants if p != "user"]
+        if "analyst" in default_interviewers:
+            default_asker = "analyst"
+        elif default_interviewers:
+            default_asker = default_interviewers[0]
+        else:
+            default_asker = "analyst"
+        preferred_collectors = ["expert", "modeler"]
+        default_collectors = [
+            p for p in preferred_collectors
+            if p in default_interviewers and p != default_asker
+        ]
+        if not default_collectors:
+            default_collectors = [p for p in default_interviewers if p != default_asker]
+        prompt = f"""# 任務
+你是隱性需求挖掘會議主持人。請為本輪決定哪些角色先蒐集提問資訊（collectors），以及哪個角色負責最後向 user 提出主問題（asker）。
+
+# 本輪資訊
+- turn: {turn}/{max_turns}
+- default_participants: {default_participants}
+- default_asker: {default_asker}
+- default_collectors: {default_collectors}
+
+# 上一輪摘要
+{json.dumps(prev, ensure_ascii=False, indent=2)}
+
+# 規則
+- participants 只能從 default_participants 選，且必須包含 user。
+- asker 必須是非 user 角色，且只能有一位。
+- collectors 只能是非 user 角色，可 0~2 位；不要包含 asker。
+- 預設由 analyst 擔任 asker（主 elicitor）。
+- 預設由 expert 與 modeler 擔任 collectors；若其一不可用，再從其他非 user 角色補上。
+- 僅輸出 JSON，不要附加說明。
+
+# 輸出 JSON
+{{
+  "participants": ["analyst","expert","modeler","user"],
+  "collectors": ["expert","modeler"],
+  "asker": "analyst"
+}}"""
+
+        messages = self.build_direct_messages(prompt)
+        try:
+            data = self.model.chat_json(messages)
+        except Exception as e:
+            self.logger.warning("逐輪策略決策失敗，改用預設：%s", e)
+            return {
+                "participants": list(default_participants),
+                "collectors": list(default_collectors),
+                "asker": default_asker,
+            }
+
+        allowed = [str(x).strip() for x in default_participants if str(x).strip()]
+        allowed_set = set(allowed)
+
+        participants_raw = data.get("participants") or []
+        participants = [
+            str(x).strip()
+            for x in participants_raw
+            if isinstance(x, str) and str(x).strip() in allowed_set
+        ]
+        if "user" not in participants and "user" in allowed_set:
+            participants.append("user")
+        if not participants:
+            participants = list(default_participants)
+
+        participants_set = set(participants)
+        interviewer_candidates = [p for p in participants if p != "user"]
+        asker = str(data.get("asker") or "").strip()
+        if asker not in interviewer_candidates:
+            asker = default_asker if default_asker in interviewer_candidates else (interviewer_candidates[0] if interviewer_candidates else "analyst")
+        if "analyst" in interviewer_candidates:
+            asker = "analyst"
+
+        collectors_raw = data.get("collectors") or []
+        collectors: List[str] = []
+        for x in collectors_raw:
+            if not isinstance(x, str):
+                continue
+            role = x.strip()
+            if role and role in interviewer_candidates and role != asker and role not in collectors:
+                collectors.append(role)
+            if len(collectors) >= 2:
+                break
+        if not collectors:
+            for role in preferred_collectors:
+                if role in interviewer_candidates and role != asker and role not in collectors:
+                    collectors.append(role)
+                if len(collectors) >= 2:
+                    break
+        if not collectors:
+            for role in interviewer_candidates:
+                if role != asker and role not in collectors:
+                    collectors.append(role)
+                if len(collectors) >= 2:
+                    break
+
+        speaking = collectors + [asker] + (["user"] if "user" in participants_set else [])
+
+        return {
+            "participants": participants,
+            "collectors": collectors,
+            "asker": asker,
+            "speaking_order": speaking,
+        }
+
     def plan_pre_meeting_conflict_review(
         self,
         conflict: Dict[str, Any],
         artifact: Optional[Dict[str, Any]] = None,
         registry=None,
     ) -> Dict[str, Any]:
-        participants = []
+        """由主持人模型動態決定會前複核的討論模式。
+
+        - 僅回傳 ``discussion_mode`` 與 ``participants``。
+        - **sequential**：發言順序完全由 ``participants`` 陣列順序表達，**不**另產生
+          ``speaking_order``（下游亦不得推導寫入 record）。
+        - **simultaneous**：多人並行發言，同樣不產生 ``speaking_order``。
+        """
+        participants_def: List[str] = []
         if registry:
-            participants = [
-                n for n in registry.get_names()
+            participants_def = [
+                n
+                for n in registry.get_names()
                 if n in {"analyst", "expert", "modeler", "user"}
             ]
-        if not participants:
-            participants = ["analyst", "expert", "modeler", "user"]
-        return {
-            "participants": participants,
-            "discussion_mode": "sequential",
-            "speaking_order": participants,
-        }
+        if not participants_def:
+            participants_def = ["user", "analyst", "expert", "modeler"]
+
+        allowed_set = set(participants_def)
+        n_candidates = 0
+        if isinstance(artifact, dict):
+            for c in artifact.get("conflicts") or []:
+                if not isinstance(c, dict):
+                    continue
+                if str(c.get("label") or "").strip() in {"Conflict", "Neutral"}:
+                    n_candidates += 1
+
+        prompt = f"""你是需求會議主持人，即將進行「會前衝突批次再審查」（同一輪內可能有多筆 Conflict/Neutral 需一併討論）。
+
+請決定本輪討論模式（只能二選一）：
+- sequential：參與者依你指定的 participants **陣列順序**逐一發言。此模式**不得**使用 speaking_order 欄位；順序**只能**用 participants 表達。
+- simultaneous：每位參與者各自獨立、同時提出看法（實作上並行蒐集發言），不強調逐一輪替。
+
+本輪待審項目數（Conflict + Neutral）：{max(1, n_candidates)}
+
+可用的參與者代號（必須從下列集合挑出，不可自創；可刪減但建議保留多方觀點）：
+{json.dumps(participants_def, ensure_ascii=False)}
+
+輸出**僅可**為一個 JSON 物件，欄位如下：
+{{
+  "discussion_mode": "sequential 或 simultaneous",
+  "participants": ["..."],
+  "rationale": "簡短繁中理由"
+}}
+
+規則：
+- participants 至少 2 人，且每個元素必須屬於上方集合；**陣列順序即為 sequential 時的發言順序**。
+- 若需逐步對質、修正他人論點，可優先 sequential；若只需快速蒐集獨立判斷可選 simultaneous。
+"""
+        data: Dict[str, Any] = {}
+        try:
+            messages = self.build_direct_messages(prompt)
+            raw = self.model.chat_json(messages)
+            if isinstance(raw, dict):
+                data = raw
+        except Exception as e:
+            self.logger.warning(
+                "plan_pre_meeting_conflict_review：LLM 失敗，採預設 sequential：%s",
+                e,
+            )
+
+        mode = str(data.get("discussion_mode") or "sequential").strip().lower()
+        if mode not in {"sequential", "simultaneous"}:
+            mode = "sequential"
+
+        participants: List[str] = []
+        raw_parts = data.get("participants")
+        if isinstance(raw_parts, list):
+            for n in raw_parts:
+                s = str(n).strip()
+                if s in allowed_set and s not in participants:
+                    participants.append(s)
+        if len(participants) < 2:
+            participants = list(participants_def)
+
+        return {"discussion_mode": mode, "participants": participants}
+
+    def summarize_pre_meeting_conflict_discussion(
+        self,
+        conflict_list: List[Dict[str, Any]],
+        discussion_rows: List[Dict[str, Any]],
+        extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """彙整會前衝突討論，輸出每筆衝突的新標籤建議。"""
+        prompt = f"""你是需求會議主持人。根據以下會前衝突審查的討論內容，判定每筆衝突的標籤是否需要調整。
+
+待審衝突清單:
+{json.dumps(conflict_list, ensure_ascii=False, indent=2)}
+
+各 agent 抽取出的 pair_reviews（若有）:
+{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}
+
+討論內容:
+{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}
+
+規則:
+- 優先依每位 agent 對各 [PAIR-xxx] 的 pair_reviews 做逐筆合併，不要只看整體評論。
+- 若 pair_reviews 與 prose 有衝突，以逐筆 pair_reviews 為主。
+- 對每筆衝突，若討論中多數意見認為標籤有誤，new_label 填入應調整的值（Conflict 或 Neutral）。
+- 若多數意見認為標籤正確或無明確共識，new_label 維持 current_label。
+- 僅輸出 JSON array。
+
+輸出:
+[
+  {{"id": "衝突 ID", "new_label": "Conflict 或 Neutral", "reason": "一句繁中理由"}}
+]"""
+        messages = self.build_direct_messages(prompt)
+        data = self.model.chat_json(messages)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and isinstance(data.get("decisions"), list):
+            return data["decisions"]
+        return []
 
     # ===== Action: discussion moderation =====
 
@@ -766,7 +1018,10 @@ class MediatorAgent(BaseAgent):
         self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> tuple:
         """逐一發言；輪到某人前先讓他即時回答指向他的問題，再發言（可依問答調整立場）。回傳 (contributions, oq_records)。"""
-        contributions = []
+        contributions = [
+            c for c in (topic.get("seed_previous_responses") or [])
+            if isinstance(c, dict)
+        ]
         oq_records = []
         speaking_order = topic.get("speaking_order") or topic.get("participants") or []
         if not speaking_order:
@@ -800,6 +1055,8 @@ class MediatorAgent(BaseAgent):
                         ),
                     }
                 )
+                if str(topic.get("asker_agent") or "").strip() == agent_name:
+                    resp = response if isinstance(response, dict) else {"content": str(response)}
             except Exception as e:
                 self.logger.warning(f"  {agent_name} 發言失敗: {e}")
                 contributions.append(
@@ -1245,6 +1502,11 @@ class MediatorAgent(BaseAgent):
             if isinstance(sid, str)
             and (sid.startswith("CF-") or sid.startswith("CF-D") or sid.startswith("NF-"))
         ]
+        affected_requirement_ids = [
+            sid for sid in (topic.get("source_ids") or [])
+            if isinstance(sid, str)
+            and sid.startswith(("REQ-", "FR-", "NFR-", "R-"))
+        ]
         return self.build_topic_result(
             resolution_status="agreed",
             summary=summary,
@@ -1256,6 +1518,8 @@ class MediatorAgent(BaseAgent):
             unresolved_points=[],
             new_open_questions=[],
             affected_conflict_ids=affected_conflict_ids,
+            affected_requirement_ids=affected_requirement_ids,
+            needs_approval=bool(affected_requirement_ids),
             needs_human=False,
         )
 
@@ -1448,6 +1712,10 @@ class MediatorAgent(BaseAgent):
             "agreed_points_seed": consensus_points,
             "unresolved_points_seed": unresolved_points,
             "affected_conflict_ids": affected_conflict_ids,
+            "affected_requirement_ids_hint": [
+                sid for sid in (topic.get("source_ids") or [])
+                if isinstance(sid, str) and sid.startswith(("REQ-", "FR-", "NFR-", "R-"))
+            ],
             "needs_human": needs_human,
         }
 
@@ -1472,6 +1740,8 @@ class MediatorAgent(BaseAgent):
 - decision 必須與已接受的結論一致，不要改變決議方向。
 - agreed_points 列 1-3 點具體共識；unresolved_points 只留仍需追蹤事項，沒有就回空陣列。
 - agreed_points / unresolved_points 用簡短完整句。
+- affected_requirement_ids：列出本議題決議所影響的需求 ID（如 FR-01、NFR-02），從討論內容與已知決議框架的 affected_requirement_ids_hint 推導，不可為空。
+- requirement_change_candidates：若決議導致需求文字、優先順序或驗收條件等異動，請列出具體變更；每筆須含 requirement_id、change_type（update/add/remove）、field（text/priority/acceptance_criteria 等）、after（新值）、reason。無變更則空陣列。
 - {mediator_summary_decision_line()}
 
 # 輸出 JSON
@@ -1479,7 +1749,17 @@ class MediatorAgent(BaseAgent):
     "summary": "總結討論內容與結論",
     "decision": "具體決策內容",
     "agreed_points": ["共識要點1"],
-    "unresolved_points": []
+    "unresolved_points": [],
+    "affected_requirement_ids": ["FR-01"],
+    "requirement_change_candidates": [
+        {{{{
+            "requirement_id": "FR-01",
+            "change_type": "update",
+            "field": "text",
+            "after": "更新後的需求描述",
+            "reason": "因討論決議調整"
+        }}}}
+    ]
 }}}}"""
         else:
             user_prompt = f"""# 任務
@@ -1503,13 +1783,15 @@ class MediatorAgent(BaseAgent):
 - agreed_points 可列局部共識；沒有就回空陣列。
 - unresolved_points 列 1-3 點真正卡住決策的爭點、缺少資訊或待裁決邊界。
 - agreed_points / unresolved_points 用簡短完整句。
+- affected_requirement_ids：列出本議題涉及的需求 ID，從已知決議框架的 affected_requirement_ids_hint 推導，不可為空。
 
 # 輸出 JSON
 {{{{
     "summary": "總結討論內容與各方立場",
     "decision": "",
     "agreed_points": [],
-    "unresolved_points": ["未解決爭點"]
+    "unresolved_points": ["未解決爭點"],
+    "affected_requirement_ids": ["FR-01"]
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
@@ -1519,12 +1801,16 @@ class MediatorAgent(BaseAgent):
             decision = response.get("decision", "") if resolution == "agreed" else ""
             agreed_points = response.get("agreed_points", [])
             unresolved_points_from_llm = response.get("unresolved_points", [])
+            llm_affected_req_ids = response.get("affected_requirement_ids", [])
+            llm_change_candidates = response.get("requirement_change_candidates", [])
         except Exception as e:
             self.logger.warning(f"共識摘要 LLM 失敗: {e}")
             summary = "（多數決結果：%s；摘要產生失敗）" % resolution
             decision = ""
             agreed_points = consensus_points
             unresolved_points_from_llm = unresolved_points
+            llm_affected_req_ids = []
+            llm_change_candidates = []
 
         if not isinstance(agreed_points, list):
             agreed_points = consensus_points
@@ -1549,6 +1835,13 @@ class MediatorAgent(BaseAgent):
             unresolved_points_from_llm, unresolved_points
         )
 
+        if not llm_affected_req_ids:
+            llm_affected_req_ids = [
+                sid for sid in (topic.get("source_ids") or [])
+                if isinstance(sid, str) and sid.startswith(("REQ-", "FR-", "NFR-", "R-"))
+            ]
+        needs_approval = bool(llm_affected_req_ids) or bool(llm_change_candidates)
+
         return self.build_topic_result(
             resolution_status=resolution,
             summary=summary,
@@ -1564,7 +1857,9 @@ class MediatorAgent(BaseAgent):
             unresolved_points=unresolved_points_from_llm or unresolved_points,
             new_open_questions=[],
             affected_conflict_ids=affected_conflict_ids,
-            requirement_change_candidates=[],
+            affected_requirement_ids=llm_affected_req_ids,
+            requirement_change_candidates=llm_change_candidates if isinstance(llm_change_candidates, list) else [],
+            needs_approval=needs_approval,
             needs_human=needs_human,
         )
 
@@ -1731,10 +2026,24 @@ class MediatorAgent(BaseAgent):
             md += f"- **Votes**: {', '.join(votes_line)}\n"
         agreed_points = resolution.get("agreed_points", []) or []
         unresolved_points = resolution.get("unresolved_points", []) or []
+        affected_requirement_ids = resolution.get("affected_requirement_ids", []) or []
+        verification_impact = resolution.get("verification_impact", {}) or {}
         if agreed_points:
             md += f"- **Agreed points**: {'; '.join(agreed_points)}\n"
         if unresolved_points:
             md += f"- **Unresolved points**: {'; '.join(unresolved_points)}\n"
+        if affected_requirement_ids:
+            md += f"- **Affected requirements**: {', '.join(affected_requirement_ids)}\n"
+        if isinstance(verification_impact, dict):
+            level = str(verification_impact.get("level") or "").strip()
+            notes = str(verification_impact.get("notes") or "").strip()
+            if level or notes:
+                line = level or "none"
+                if notes:
+                    line = f"{line} — {notes}" if line else notes
+                md += f"- **Verification impact**: {line}\n"
+        if resolution.get("needs_approval"):
+            md += "- **Needs approval**: true\n"
         if resolution.get("needs_human"):
             md += "- **Needs human**: true\n"
         md += "\n"
@@ -1831,6 +2140,9 @@ class MediatorAgent(BaseAgent):
                 "unresolved_points": resolution.get("unresolved_points", []),
                 "new_open_questions": resolution.get("new_open_questions", []),
                 "affected_conflict_ids": resolution.get("affected_conflict_ids", []),
+                "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
+                "verification_impact": resolution.get("verification_impact", {}),
+                "needs_approval": resolution.get("needs_approval", False),
                 "requirement_change_candidates": resolution.get("requirement_change_candidates", []),
                 "needs_human": resolution.get("needs_human", False),
             },
@@ -1913,6 +2225,9 @@ class MediatorAgent(BaseAgent):
         unresolved_points: Optional[List[str]] = None,
         new_open_questions: Optional[List[Dict[str, Any]]] = None,
         affected_conflict_ids: Optional[List[str]] = None,
+        affected_requirement_ids: Optional[List[str]] = None,
+        verification_impact: Optional[Dict[str, Any]] = None,
+        needs_approval: bool = False,
         requirement_change_candidates: Optional[List[Dict[str, Any]]] = None,
         needs_human: bool = False,
     ) -> Dict[str, Any]:
@@ -1936,9 +2251,25 @@ class MediatorAgent(BaseAgent):
             cid.strip() for cid in (affected_conflict_ids or [])
             if isinstance(cid, str) and cid.strip()
         ]
+        affected_requirement_ids = [
+            rid.strip() for rid in (affected_requirement_ids or [])
+            if isinstance(rid, str) and rid.strip()
+        ]
+        verification_impact = verification_impact or {}
+        if not isinstance(verification_impact, dict):
+            verification_impact = {}
+        verification_impact = {
+            "level": str(verification_impact.get("level") or "none").strip() or "none",
+            "notes": str(verification_impact.get("notes") or "").strip(),
+        }
         requirement_change_candidates = [
             row for row in (requirement_change_candidates or []) if isinstance(row, dict)
         ]
+        dod_complete = bool(
+            decision
+            and (resolution_status not in {"agreed", "human_decision"}
+                 or affected_requirement_ids)
+        )
         return {
             "schema_version": "topic_result.v1",
             "resolution": resolution_status,
@@ -1953,8 +2284,12 @@ class MediatorAgent(BaseAgent):
             "unresolved_points": unresolved_points,
             "new_open_questions": new_open_questions,
             "affected_conflict_ids": affected_conflict_ids,
+            "affected_requirement_ids": affected_requirement_ids,
+            "verification_impact": verification_impact,
+            "needs_approval": bool(needs_approval),
             "requirement_change_candidates": requirement_change_candidates,
             "needs_human": bool(needs_human),
+            "dod_complete": dod_complete,
         }
 
     @staticmethod

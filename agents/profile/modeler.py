@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 from agents.base import BaseAgent
 from agents.skills.base import get_skill
 from utils import (
+    current_output_language,
     modeler_models_array_name_line,
     modeler_name_field_language,
     modeler_review_field_language,
@@ -712,6 +713,7 @@ class ModelerAgent(BaseAgent):
 
     def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_id = str(topic.get("id") or "")
 
         prev_text = ""
         if previous_responses:
@@ -725,25 +727,89 @@ class ModelerAgent(BaseAgent):
         if artifact_snapshot:
             snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
 
+        recent_ask_history_text = ""
+        recent_ask_history = topic.get("recent_ask_history") or []
+        if recent_ask_history:
+            recent_ask_history_text = (
+                "\n# 最近幾輪正式提問摘要\n"
+                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
+            )
+
         tool_hint = ""
         if self.tools:
             tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
 
-        user_prompt = f"""{topic_text}
-{prev_text}
-{snapshot_text}
-{tool_hint}
-
-# 任務
-請以系統建模專家身分發言，聚焦模型影響、元素邊界與更新建議。
-
-# 規則
-- statement 需包含：結論、影響分析、風險/邊界、建議下一步。
+        elicitation_hint = ""
+        task_block = "請以系統建模專家身分發言，聚焦模型影響、元素邊界與更新建議。"
+        rules_block = """- statement 需包含：結論、影響分析、風險/邊界、建議下一步。
 - 需明確指出受影響的模型元素、圖型或責任邊界，不要只講抽象原則。
 - 若資訊不足，說明需補哪些介面、事件流程或資料邊界，不可臆測。
 - 可提到 Use Case / Class / Sequence 的具體影響。
 - 若需要他人補資訊，再在 open_questions 提具體問題。
-- 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。
+- 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。"""
+        if (topic.get("category") or "").strip() == "conflict_discussion":
+            task_block = "請以系統建模專家身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
+            rules_block = """- statement 必須是單一合法 JSON object 字串，不可輸出自然語句、Markdown、程式碼區塊或 JSON 以外的前後文。
+- statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
+- overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；不可漏 pair。
+- 每筆 pair review 必須是 JSON object，且至少要有：id、independent_label、decision（keep/modify）、proposed_label（Conflict/Neutral）、confidence（high/medium/low）、reason。
+- 你的任務不是提出新需求，而是再審查目前的 Conflict/Neutral 標籤是否合理。
+- 只有在兩項需求在資料結構、狀態轉移、事件流程或責任邊界上無法同時成立時，才支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若只是流程未定、資料欄位未補齊、責任分工未明，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須指出模型層的互斥點；若支持 Neutral，必須說明為何兩項需求既不衝突、也不重複，且無直接語義關係。
+- 不要跳到技術實作細節。
+- 若需要他人補資訊，再在 open_questions 提具體問題。
+- 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
+        if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
+            elicitation_hint = """# ELICIT Collector（Modeler）
+- 你目前不是本輪正式提問者，而是資料/互動建模 collector。
+- 你的任務是替 asker 找出「現在最值得問 user 的一個資料、內容或互動缺口」。
+- 優先從：內容欄位、資料結構、輸出構成、搜尋結果資訊、狀態、事件、角色/物件邊界、畫面呈現方式 判斷。
+- 若核心資料內容仍不清楚，不要優先推 timeout、retry、resume、regeneration 等後段行為細節。
+- 若沒有高價值的新資料/內容問題，要明講。"""
+            task_block = "請以建模 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
+            rules_block = """- 不要直接對 user 正式發問。
+- statement 需包含四部分：建議追問的缺口、建議問題句、現在為何值得問、如何避免重複。
+- 建議問題句只能有 1 個主問題，且要能直接轉成資料內容或互動規則需求。
+- 不要一次提出多個主問題。
+- open_questions 請輸出空陣列。"""
+        elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
+            stop_phrase = (
+                "I have gathered enough information"
+                if current_output_language() == "en"
+                else "我已蒐集足夠資訊"
+            )
+            elicitation_hint = """# ELICIT Asker（Modeler）
+- 你是本輪唯一正式提問者。
+- 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
+- 優先從：內容欄位、資料結構、輸出構成、搜尋結果資訊、狀態、事件、互動邊界、畫面呈現方式 判斷。
+- 若核心資料內容仍不清楚，不要優先追問 timeout、retry、resume、regeneration 等後段行為細節。
+- 若內容大致清楚，但還不知道頁面或輸出要如何呈現、是否需要特定風格、版面或視覺區分，這仍是高價值問題。
+- 若 collectors 提出的方向太技術化，改寫成 user 能直接回答的一題。"""
+            task_block = (
+                "請以建模 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"
+                "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求挖掘，則 statement 請只輸出以下固定句"
+                f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
+            )
+            rules_block = f"""- 若你判斷目前資訊已足以支撐核心需求理解，且再往下追問的增益有限，可直接輸出停止句：{stop_phrase}
+- 若關鍵資料內容、輸出結構、狀態/事件、互動邊界、介面呈現方式仍未釐清，不可停止。
+- 若選擇提問，只能問 1 個主問題，不可合併多題。
+- 問題必須可回答、可抽取、可直接轉成資料內容或互動規則需求。
+- open_questions 請輸出空陣列。"""
+        user_prompt = f"""{topic_text}
+{prev_text}
+{snapshot_text}
+{recent_ask_history_text}
+{tool_hint}
+{elicitation_hint}
+
+# 任務
+{task_block}
+
+# 規則
+{rules_block}
 
 # 輸出 JSON
 {{{{
