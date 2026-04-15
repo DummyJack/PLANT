@@ -1,30 +1,10 @@
 {
-  "rounds": 1,
-  "agenda_items": 1,
-  "max_stakeholders": 5,
-  "tool_call_max_rounds": 1,
-  "max_web_search_results": 3,
-  "max_iterations": 1,
-  "enable_tools": {
-    "web_search": true,
-    "file_parser": false,
-    "plantuml_validate": true
-  },
-  "skip_phase0_draft": true,
   "enable_human_escalation": false,
-  "enable_agenda_types": {
-    "conflict_resolution": true,
-    "open_question": false,
-    "new_requirement": false,
-    "tradeoff": false
-  },
   "enable_agents": {
-    "user": false,
-    "analyst": true,
-    "expert": true,
-    "mediator": true,
-    "modeler": true,
     "documentor": false
+  },
+  "enable_tools": {
+    "plantuml_validate": false
   },
   "agent_models": {
     "default": {

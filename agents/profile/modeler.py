@@ -749,14 +749,15 @@ class ModelerAgent(BaseAgent):
 - 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。"""
         if (topic.get("category") or "").strip() == "conflict_discussion":
             task_block = "請以系統建模專家身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
-            rules_block = """- statement 必須是單一合法 JSON object 字串，不可輸出自然語句、Markdown、程式碼區塊或 JSON 以外的前後文。
+            rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
 - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
 - overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
-- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；不可漏 pair。
-- 每筆 pair review 必須是 JSON object，且至少要有：id、independent_label、decision（keep/modify）、proposed_label（Conflict/Neutral）、confidence（high/medium/low）、reason。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
 - 你的任務不是提出新需求，而是再審查目前的 Conflict/Neutral 標籤是否合理。
 - 只有在兩項需求在資料結構、狀態轉移、事件流程或責任邊界上無法同時成立時，才支持 Conflict。
 - 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
 - 若只是流程未定、資料欄位未補齊、責任分工未明，不能因看不出衝突就直接支持 Neutral。
 - 若支持 Conflict，必須指出模型層的互斥點；若支持 Neutral，必須說明為何兩項需求既不衝突、也不重複，且無直接語義關係。
 - 不要跳到技術實作細節。
@@ -764,16 +765,14 @@ class ModelerAgent(BaseAgent):
 - 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
         if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
             elicitation_hint = """# ELICIT Collector（Modeler）
-- 你目前不是本輪正式提問者，而是資料/互動建模 collector。
-- 你的任務是替 asker 找出「現在最值得問 user 的一個資料、內容或互動缺口」。
-- 優先從：內容欄位、資料結構、輸出構成、搜尋結果資訊、狀態、事件、角色/物件邊界、畫面呈現方式 判斷。
-- 若核心資料內容仍不清楚，不要優先推 timeout、retry、resume、regeneration 等後段行為細節。
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個資料、內容或互動缺口。
+- 優先補核心資料與互動理解；若核心內容仍不清楚，不要先追後段行為細節。
 - 若沒有高價值的新資料/內容問題，要明講。"""
             task_block = "請以建模 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
             rules_block = """- 不要直接對 user 正式發問。
-- statement 需包含四部分：建議追問的缺口、建議問題句、現在為何值得問、如何避免重複。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
 - 建議問題句只能有 1 個主問題，且要能直接轉成資料內容或互動規則需求。
-- 不要一次提出多個主問題。
 - open_questions 請輸出空陣列。"""
         elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
             stop_phrase = (
@@ -784,9 +783,8 @@ class ModelerAgent(BaseAgent):
             elicitation_hint = """# ELICIT Asker（Modeler）
 - 你是本輪唯一正式提問者。
 - 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
-- 優先從：內容欄位、資料結構、輸出構成、搜尋結果資訊、狀態、事件、互動邊界、畫面呈現方式 判斷。
+- 優先補資料內容、輸出結構、狀態/事件、互動邊界與呈現方式等核心缺口。
 - 若核心資料內容仍不清楚，不要優先追問 timeout、retry、resume、regeneration 等後段行為細節。
-- 若內容大致清楚，但還不知道頁面或輸出要如何呈現、是否需要特定風格、版面或視覺區分，這仍是高價值問題。
 - 若 collectors 提出的方向太技術化，改寫成 user 能直接回答的一題。"""
             task_block = (
                 "請以建模 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"

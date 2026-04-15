@@ -418,21 +418,10 @@ class AnalystAgent(BaseAgent):
         except Exception as e:
             if pairwise_mode:
                 self.logger.warning(f"pairwise 批次衝突分析失敗: {e}")
-                fallback = []
-                for i in range(n_pairs):
-                    fallback.append(
-                        {
-                            "id": f"PAIR-{i:03d}",
-                            "label": "Neutral",
-                            "pair_index": i,
-                            "description": "批次分析失敗，預設 Neutral。",
-                            "requirement_ids": [
-                                f"{pair_id_prefix}-P{i}-a",
-                                f"{pair_id_prefix}-P{i}-b",
-                            ],
-                        }
-                    )
-                return {**artifact, "conflicts": fallback}
+                return {
+                    **artifact,
+                    "conflicts": [],
+                }
             self.logger.warning(f"Conflict 分析失敗: {e}")
             return artifact
 
@@ -478,26 +467,17 @@ class AnalystAgent(BaseAgent):
             for i in range(n_pairs):
                 if i in by_pair:
                     conflicts.append(by_pair[i])
-                else:
-                    conflicts.append(
-                        {
-                            "id": f"PAIR-{i:03d}",
-                            "label": "Neutral",
-                            "pair_index": i,
-                            "description": "模型未回傳此對，預設 Neutral。",
-                            "requirement_ids": [
-                                f"{pair_id_prefix}-P{i}-a",
-                                f"{pair_id_prefix}-P{i}-b",
-                            ],
-                        }
-                    )
+            missing_pairs = [i for i in range(n_pairs) if i not in by_pair]
 
             nc = len([x for x in conflicts if x.get("label") == "Conflict"])
             nn = len([x for x in conflicts if x.get("label") == "Neutral"])
             self.logger.info(
-                f"pairwise 批次辨識 {n_pairs} 對（Conflict: {nc}，Neutral: {nn}）"
+                f"pairwise 批次辨識 {n_pairs} 對（Conflict: {nc}，Neutral: {nn}，Missing: {len(missing_pairs)}）"
             )
-            return {**artifact, "conflicts": conflicts}
+            return {
+                **artifact,
+                "conflicts": conflicts,
+            }
 
         conflicts = []
         design_count = 0
@@ -595,34 +575,58 @@ class AnalystAgent(BaseAgent):
         proposal_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Analyst 最終裁定會前衝突再審查結果。"""
+    ) -> tuple[List[Dict[str, Any]], str]:
+        """Analyst 根據 pair_reviews 與原始 requirement pair 做最終裁定。"""
         if not proposal_list:
-            return []
+            return [], ""
         prompt = (
-            "你是資深需求分析師（Analyst）。Mediator 已根據會議討論提出衝突標籤調整建議。\n"
-            "請你**獨立審查**每筆建議，做出最終裁定。\n\n"
+            "你是資深需求分析師（Analyst）。請根據 requirement pair 原文與各 agent 的逐筆 pair_reviews，"
+            "對每筆 Conflict/Neutral pair 做最終裁定。\n\n"
             f"# 待裁定項目\n{json.dumps(proposal_list, ensure_ascii=False, indent=2)}\n\n"
-            f"# 各 agent 抽取出的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
-            f"# 會議討論摘要\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
+            f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
+            f"# 補充會議內容（僅在 pair_reviews 不足時參考）\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 裁定規則\n"
-            "- 優先依各 agent 逐筆 pair_reviews 與 requirement_a / requirement_b 原文做裁定，不要只順著 Mediator 的 current_label/proposed_label。\n"
-            "- 若你同意 Mediator 的建議，採用 mediator_proposed_label\n"
-            "- 若你不同意，維持 current_label 並說明理由\n"
-            "- 你擁有最終決定權，不受 Mediator 建議拘束\n"
-            "- 判斷依據：需求間的邏輯矛盾、資源衝突、語義重疊\n\n"
+            "- 先看 requirement_a / requirement_b 原文，再看各 agent 的 pair_reviews。\n"
+            "- discussion_rows 只在 pair_reviews 證據不足時作補充參考。\n"
+            "- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。\n"
+            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirement_a / requirement_b 原文本身已足以明確推翻現標籤。\n"
+            "- 若證據不足、理由不一致或沒有明確共識，維持 current_label。\n"
+            "- Conflict 只在兩項需求無法同時成立，或一方成立會直接違反另一方時成立。\n"
+            "- Neutral 只在兩項需求既不衝突、也不重複，且沒有直接語義關係時成立。\n"
+            "- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。\n"
+            "- 若 supporting pair_reviews 主要以 subset、refinement、complementary step 或 same-flow relationship 支持 Neutral，必須重新檢查是否其實已存在直接語義關係；若存在，不可僅因不互斥就維持 Neutral。\n"
+            "- 你必須對 proposal_list 中的每一個 pair 都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
+            "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n"
+            "- 請直接做最終裁定，不要重述整場會議。\n\n"
             "# 輸出 JSON array\n"
             '[{"id": "衝突ID", "new_label": "Conflict 或 Neutral", '
-            '"analyst_agrees_with_mediator": true/false, '
             '"reason": "一句繁中裁定理由"}]'
         )
         messages = self.build_direct_messages(prompt)
-        data = self.model.chat_json(messages, action="conflict_recheck_signoff")
+        raw = (self.model.chat(messages, action="conflict_recheck_signoff") or "").strip()
+        text = raw
+        if text.startswith("```json"):
+            text = text[len("```json") :].strip()
+        elif text.startswith("```"):
+            text = text[len("```") :].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"(\[[\s\S]*\])", text)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    data = None
+            else:
+                data = None
         if isinstance(data, list):
-            return data
+            return data, raw
         if isinstance(data, dict) and isinstance(data.get("decisions"), list):
-            return data["decisions"]
-        return []
+            return data["decisions"], raw
+        return [], raw
 
     def extract_elicitation_candidates(
         self,
@@ -1246,32 +1250,31 @@ id、type、priority、verification_method 維持英文。"""
 - 可用純文字表格、流程或草圖輔助說明；若使用，請放在程式碼區塊。"""
         if topic.get("category") == "conflict_discussion":
             task_block = "請以需求分析師身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
-            rules_block = """- statement 必須是單一合法 JSON object 字串，不可輸出自然語句、Markdown、程式碼區塊或 JSON 以外的前後文。
+            rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
 - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
 - overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
-- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；不可漏 pair。
-- 每筆 pair review 必須是 JSON object，且至少要有：id、independent_label、decision（keep/modify）、proposed_label（Conflict/Neutral）、confidence（high/medium/low）、reason。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
 - 先只根據 requirement_a / requirement_b 原文獨立判斷，再與 current_label 比較；不要先順著 current_label 想理由。
 - 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
 - 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
 - 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
 - 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
-- 不要跳到實作方案或最終決策；投票與最終決議不在此步完成。
+- 不要跳到實作方案或最終決策。
 - 若需要他人補資訊，才在 open_questions 中提出具體問題。
 - open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
 - 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
         if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
             elicitation_hint = """# ELICIT Collector（Analyst）
-- 你目前不是本輪正式提問者，而是需求分析 collector。
-- 你的任務是替 asker 找出「現在最值得問 user 的一個需求缺口」。
-- 優先從：使用流程、輸入方式、輸出範圍、業務規則、驗收條件、使用者偏好、介面呈現偏好 判斷。
-- 若核心功能、內容範圍或偏好仍不清楚，不要優先推 exception handling、韌性或其他後段細節。
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個需求缺口。
+- 優先補核心需求理解；若核心功能、範圍、偏好仍不清楚，不要先追後段細節。
 - 若沒有比既有方向更高價值的新問題，要明講。"""
             task_block = "請以需求分析 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
             rules_block = """- 不要直接對 user 正式發問。
-- statement 需包含四部分：建議追問的需求缺口、建議問題句、現在為何值得問、如何避免重複。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
 - 建議問題句只能有 1 個主問題，且要能直接轉成 requirement。
-- 不要一次提出多個主問題。
 - open_questions 請輸出空陣列。"""
         elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
             stop_phrase = (
@@ -1282,9 +1285,8 @@ id、type、priority、verification_method 維持英文。"""
             elicitation_hint = """# ELICIT Asker（Analyst）
 - 你是本輪唯一正式提問者。
 - 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
-- 優先從：使用流程、輸入方式、輸出內容、範圍、驗收條件、使用者偏好、介面呈現偏好 判斷。
-- 若核心功能、內容範圍或偏好仍不清楚，不要優先追問 exception handling、韌性或其他後段細節。
-- 若功能流程已大致清楚，但畫面風格、配色、元件外觀、版面偏好、主題切換等仍空白，這仍是高價值問題。
+- 優先補流程、輸入/輸出、驗收條件、使用者偏好與呈現方式等核心缺口。
+- 若核心功能或偏好仍不清楚，不要優先追問 exception handling、韌性等後段細節。
 - 若 collectors 提出的方向太邊角，改寫成更核心的一題。"""
             task_block = (
                 "請以需求分析 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"

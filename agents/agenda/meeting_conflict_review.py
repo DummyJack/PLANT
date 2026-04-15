@@ -168,7 +168,7 @@ def _process_approval_queue(
             "id": row.get("topic_id"),
             "title": f"需求變更批准：{row.get('topic_id', '')}",
             "description": (
-                f"摘要: {row.get('summary', '')}\n"
+                f"說明: {row.get('summary', '')}\n"
                 f"決議: {row.get('decision', '')}\n"
                 f"影響需求: {row.get('affected_requirement_ids', [])}\n"
                 f"驗證影響: {row.get('verification_impact', {})}"
@@ -334,7 +334,7 @@ def apply_requirement_change_candidates(
     return artifact
 
 
-# ---------- 衝突再審查 LLM 呼叫 ----------
+# ---------- 衝突再審查逐筆裁定工具 ----------
 
 _PAIR_ID_RE = re.compile(r"\[(PAIR[^\]]+)\]|\"id\"\s*:\s*\"(PAIR[^\"]+)\"", re.IGNORECASE)
 _LABEL_RE = re.compile(r"\b(Conflict|Neutral)\b", re.IGNORECASE)
@@ -342,17 +342,69 @@ _DECISION_RE = re.compile(r"\b(keep|modify)\b", re.IGNORECASE)
 _CONF_RE = re.compile(r"\b(high|medium|low)\b", re.IGNORECASE)
 
 
+def _normalize_pair_review_record(
+    review: Dict[str, Any],
+    *,
+    pair_id_set: set[str],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(review, dict):
+        return None
+    pair_id = str(review.get("id") or "").strip()
+    if not pair_id or pair_id not in pair_id_set:
+        return None
+    independent_label = str(review.get("independent_label") or "").strip()
+    proposed_label = str(review.get("proposed_label") or "").strip()
+    decision = str(review.get("decision") or "").strip().lower()
+    confidence = str(review.get("confidence") or "").strip().lower()
+    reason = str(review.get("reason") or "").strip()
+    if independent_label not in {"Conflict", "Neutral"}:
+        independent_label = ""
+    if proposed_label not in {"Conflict", "Neutral"}:
+        proposed_label = ""
+    if decision not in {"keep", "modify"}:
+        decision = ""
+    if confidence not in {"high", "medium", "low"}:
+        confidence = ""
+    return {
+        "id": pair_id,
+        "independent_label": independent_label,
+        "decision": decision,
+        "proposed_label": proposed_label,
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
 def _extract_pair_reviews_from_statement(
     statement: str,
     *,
     known_pair_ids: List[str],
 ) -> List[Dict[str, Any]]:
+    """從 agent statement 提取逐筆 pair_reviews。
+
+    優先解析合法 JSON statement；若格式漂移，再退回行文字 fallback。
+    """
     text = str(statement or "").strip()
     if not text:
         return []
 
-    reviews: List[Dict[str, Any]] = []
     pair_id_set = {str(x).strip() for x in (known_pair_ids or []) if str(x).strip()}
+    reviews: List[Dict[str, Any]] = []
+
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+
+    if isinstance(parsed, dict):
+        raw_reviews = parsed.get("pair_reviews")
+        if isinstance(raw_reviews, list):
+            for raw_review in raw_reviews:
+                normalized = _normalize_pair_review_record(raw_review, pair_id_set=pair_id_set)
+                if normalized:
+                    reviews.append(normalized)
+    if reviews:
+        return reviews
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -373,14 +425,19 @@ def _extract_pair_reviews_from_statement(
 
         independent_label = labels[0] if labels else ""
         proposed_label = labels[-1] if labels else ""
-        reviews.append({
-            "id": pair_id,
-            "independent_label": independent_label,
-            "decision": (decision_match.group(1).lower() if decision_match else ""),
-            "proposed_label": proposed_label,
-            "confidence": (conf_match.group(1).lower() if conf_match else ""),
-            "reason": reason,
-        })
+        normalized = _normalize_pair_review_record(
+            {
+                "id": pair_id,
+                "independent_label": independent_label,
+                "decision": (decision_match.group(1).lower() if decision_match else ""),
+                "proposed_label": proposed_label,
+                "confidence": (conf_match.group(1).lower() if conf_match else ""),
+                "reason": reason,
+            },
+            pair_id_set=pair_id_set,
+        )
+        if normalized:
+            reviews.append(normalized)
 
     seen = set()
     deduped: List[Dict[str, Any]] = []
@@ -398,6 +455,7 @@ def _collect_discussion_rows_and_pair_reviews(
     *,
     known_pair_ids: List[str],
 ) -> tuple[list[dict], list[dict]]:
+    """整理會議發言與逐筆裁定資料。"""
     discussion_rows: List[Dict[str, Any]] = []
     extracted_pair_reviews: List[Dict[str, Any]] = []
     for c in contributions or []:
@@ -417,89 +475,206 @@ def _collect_discussion_rows_and_pair_reviews(
             extracted_pair_reviews.append({"agent": agent_name, **review})
     return discussion_rows, extracted_pair_reviews
 
-def _summarize_pre_meeting_discussion(
-    coordinator: Any,
-    contributions: List[Dict[str, Any]],
+
+def _build_fallback_keep_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
+    *,
+    reason: str,
 ) -> List[Dict[str, Any]]:
-    discussion_rows, extracted_pair_reviews = _collect_discussion_rows_and_pair_reviews(
-        contributions,
-        known_pair_ids=list(conflicts_by_id.keys()),
-    )
-
-    conflict_list = []
+    decisions: List[Dict[str, Any]] = []
     for cid, conflict in conflicts_by_id.items():
-        conflict_list.append({
-            "id": cid,
-            "current_label": str(conflict.get("label") or "").strip(),
-            "description": (conflict.get("description") or "").strip(),
-            "requirement_ids": [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()],
-            "requirement_a": dict((conflict.get("requirement_a") or {})),
-            "requirement_b": dict((conflict.get("requirement_b") or {})),
-        })
-
-    try:
-        return coordinator.flow.mediator_agent.summarize_pre_meeting_conflict_discussion(
-            conflict_list,
-            discussion_rows,
-            extracted_pair_reviews=extracted_pair_reviews,
+        current_label = str(conflict.get("label") or "").strip()
+        if current_label not in {"Conflict", "Neutral"}:
+            continue
+        decisions.append(
+            {
+                "id": cid,
+                "new_label": current_label,
+                "reason": reason,
+                "decided_by": "fallback",
+            }
         )
-    except Exception as e:
-        coordinator.flow.logger.warning("會前討論彙整失敗: %s", e)
-        return []
+    return decisions
+
+
+def _build_programmatic_merge_decisions(
+    conflicts_by_id: Dict[str, Dict[str, Any]],
+    extracted_pair_reviews: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    reviews_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for review in extracted_pair_reviews or []:
+        if not isinstance(review, dict):
+            continue
+        rid = str(review.get("id") or "").strip()
+        if not rid or rid not in conflicts_by_id:
+            continue
+        reviews_by_id.setdefault(rid, []).append(review)
+
+    auto_decisions: List[Dict[str, Any]] = []
+    signoff_targets: List[Dict[str, Any]] = []
+    debug: Dict[str, Any] = {
+        "auto_keep_count": 0,
+        "auto_modify_count": 0,
+        "signoff_target_count": 0,
+        "signoff_target_ids_preview": [],
+    }
+
+    for cid, conflict in conflicts_by_id.items():
+        current_label = str(conflict.get("label") or "").strip()
+        reviews = reviews_by_id.get(cid, [])
+        valid_labels = [
+            str(r.get("proposed_label") or "").strip()
+            for r in reviews
+            if str(r.get("proposed_label") or "").strip() in {"Conflict", "Neutral"}
+        ]
+        valid_decisions = [
+            str(r.get("decision") or "").strip().lower()
+            for r in reviews
+            if str(r.get("decision") or "").strip().lower() in {"keep", "modify"}
+        ]
+        reasons = [
+            str(r.get("reason") or "").strip()
+            for r in reviews
+            if str(r.get("reason") or "").strip()
+        ]
+        any_modify = "modify" in valid_decisions
+        unique_labels = sorted(set(valid_labels))
+        unresolved = (not reviews) or (not valid_labels) or any_modify or len(unique_labels) > 1
+
+        if unresolved:
+            signoff_targets.append(
+                {
+                    "id": cid,
+                    "current_label": current_label,
+                    "description": (conflict.get("description") or "").strip(),
+                    "requirement_ids": [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()],
+                    "requirement_a": dict((conflict.get("requirement_a") or {})),
+                    "requirement_b": dict((conflict.get("requirement_b") or {})),
+                }
+            )
+            continue
+
+        decided_label = unique_labels[0] if unique_labels else current_label
+        auto_decisions.append(
+            {
+                "id": cid,
+                "new_label": decided_label,
+                "reason": reasons[0] if reasons else "rule_based_merge_keep_current_label",
+                "decided_by": "rule_based_merge",
+            }
+        )
+        if decided_label == current_label:
+            debug["auto_keep_count"] += 1
+        else:
+            debug["auto_modify_count"] += 1
+
+    debug["signoff_target_count"] = len(signoff_targets)
+    debug["signoff_target_ids_preview"] = [row.get("id") for row in signoff_targets[:5]]
+    return auto_decisions, signoff_targets, debug
 
 
 def _analyst_signoff_conflict_recheck(
     coordinator: Any,
-    mediator_proposals: List[Dict[str, Any]],
     contributions: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
-    *,
-    round_num: int,
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """由 Analyst 根據 pair 原文與各 agent 逐筆裁定做最終判定。"""
     discussion_rows, extracted_pair_reviews = _collect_discussion_rows_and_pair_reviews(
         contributions,
         known_pair_ids=list(conflicts_by_id.keys()),
     )
+    debug_info: Dict[str, Any] = {
+        "contributions_count": len(contributions or []),
+        "discussion_rows_count": len(discussion_rows),
+        "extracted_pair_reviews_count": len(extracted_pair_reviews),
+        "extracted_pair_reviews_preview": extracted_pair_reviews[:3],
+    }
+    coordinator.flow.logger.info(
+        "RQ2 signoff debug: contributions=%s discussion_rows=%s extracted_pair_reviews=%s",
+        len(contributions or []),
+        len(discussion_rows),
+        len(extracted_pair_reviews),
+    )
+    if extracted_pair_reviews:
+        coordinator.flow.logger.info(
+            "RQ2 signoff debug: pair_reviews preview=%s",
+            json.dumps(extracted_pair_reviews[:3], ensure_ascii=False),
+        )
+    else:
+        coordinator.flow.logger.warning(
+            "RQ2 signoff debug: no extracted_pair_reviews were produced from meeting contributions"
+        )
 
-    proposal_list = []
-    for p in mediator_proposals:
-        if not isinstance(p, dict):
-            continue
-        cid = str(p.get("id") or "").strip()
-        conflict = conflicts_by_id.get(cid, {})
-        proposal_list.append({
-            "id": cid,
-            "current_label": str(conflict.get("label") or "").strip(),
-            "description": (conflict.get("description") or "").strip(),
-            "requirement_ids": [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()],
-            "requirement_a": dict((conflict.get("requirement_a") or {})),
-            "requirement_b": dict((conflict.get("requirement_b") or {})),
-            "mediator_proposed_label": str(p.get("new_label") or "").strip(),
-            "mediator_reason": str(p.get("reason") or "").strip(),
-        })
+    auto_decisions, proposal_list, merge_debug = _build_programmatic_merge_decisions(
+        conflicts_by_id,
+        extracted_pair_reviews,
+    )
+    debug_info.update(merge_debug)
+    debug_info["auto_decisions_preview"] = auto_decisions[:3]
 
     if not proposal_list:
-        return mediator_proposals
+        coordinator.flow.logger.info("RQ2 signoff debug: no disputed pairs, skip analyst signoff")
+        debug_info["proposal_list_count"] = 0
+        debug_info["proposal_pair_ids_preview"] = []
+        debug_info["signoff_status"] = "skipped_no_disputed_pairs"
+        debug_info["decisions_count"] = len(auto_decisions)
+        debug_info["decisions_preview"] = auto_decisions[:3]
+        return auto_decisions, debug_info
+    coordinator.flow.logger.info(
+        "RQ2 signoff debug: proposal_list=%s pair_ids=%s",
+        len(proposal_list),
+        [row.get("id") for row in proposal_list[:5]],
+    )
+    debug_info["proposal_list_count"] = len(proposal_list)
+    debug_info["proposal_pair_ids_preview"] = [row.get("id") for row in proposal_list[:5]]
 
     try:
-        results = coordinator.flow.analyst_agent.signoff_conflict_recheck(
+        results, raw_signoff_output = coordinator.flow.analyst_agent.signoff_conflict_recheck(
             proposal_list,
             discussion_rows,
             extracted_pair_reviews=extracted_pair_reviews,
         )
+        debug_info["raw_signoff_output"] = raw_signoff_output
         if not results:
-            coordinator.flow.logger.warning("Analyst 衝突裁定回傳格式異常，使用 Mediator 建議")
-            return mediator_proposals
+            coordinator.flow.logger.warning("Analyst 衝突裁定回傳格式異常，維持原標籤")
+            coordinator.flow.logger.warning(
+                "RQ2 signoff debug: analyst returned empty/invalid decisions"
+            )
+            debug_info["signoff_status"] = "empty_or_invalid_decisions"
+            fallback = auto_decisions + _build_fallback_keep_decisions(
+                {row["id"]: conflicts_by_id[row["id"]] for row in proposal_list if row.get("id") in conflicts_by_id},
+                reason="fallback_keep_current_label_due_to_empty_signoff",
+            )
+            debug_info["decisions_count"] = len(fallback)
+            debug_info["decisions_preview"] = fallback[:3]
+            debug_info["fallback_applied"] = True
+            return fallback, debug_info
 
         for r in results:
             if isinstance(r, dict):
                 r["decided_by"] = "analyst"
+        merged_results = auto_decisions + results
         coordinator.flow.logger.info("Analyst 衝突裁定完成：%s 筆", len(results))
-        return results if results else mediator_proposals
+        coordinator.flow.logger.info(
+            "RQ2 signoff debug: decisions preview=%s",
+            json.dumps(merged_results[:3], ensure_ascii=False),
+        )
+        debug_info["signoff_status"] = "ok"
+        debug_info["decisions_count"] = len(merged_results)
+        debug_info["decisions_preview"] = merged_results[:3]
+        return merged_results, debug_info
     except Exception as e:
-        coordinator.flow.logger.warning("Analyst 衝突裁定失敗，使用 Mediator 建議: %s", e)
-        return mediator_proposals
+        coordinator.flow.logger.warning("Analyst 衝突裁定失敗，維持原標籤: %s", e)
+        debug_info["signoff_status"] = "exception"
+        debug_info["exception"] = str(e)
+        fallback = auto_decisions + _build_fallback_keep_decisions(
+            {row["id"]: conflicts_by_id[row["id"]] for row in proposal_list if row.get("id") in conflicts_by_id},
+            reason="fallback_keep_current_label_due_to_signoff_exception",
+        )
+        debug_info["decisions_count"] = len(fallback)
+        debug_info["decisions_preview"] = fallback[:3]
+        debug_info["fallback_applied"] = True
+        return fallback, debug_info
 
 
 # ---------- 會前衝突再審查主流程 ----------
@@ -507,14 +682,14 @@ def _analyst_signoff_conflict_recheck(
 def run_pre_meeting_conflict_review_block(
     coordinator: Any, artifact: Dict[str, Any], round_num: int
 ) -> Dict[str, Any]:
-    """整批審查所有 Conflict 與 Neutral，透過單次討論決定是否調整標籤。"""
+    """針對本輪所有 Conflict/Neutral pairs 執行一次會前再審查與逐筆裁定。"""
     candidates = [
         c
         for c in (artifact.get("conflicts", []) or [])
         if isinstance(c, dict) and str(c.get("label") or "").strip() in {"Conflict", "Neutral"}
     ]
     if not candidates:
-        coordinator.flow.logger.info("會前審查：無需再審查")
+        coordinator.flow.logger.info("會前衝突再審查：無需處理項目")
         return artifact
 
     conflicts_by_id: Dict[str, Dict[str, Any]] = {
@@ -613,6 +788,28 @@ def run_pre_meeting_conflict_review_block(
                 oq_pool.append(
                     {**oq, "topic_id": topic["id"], "status": oq.get("status") or "pending", "round": round_num}
                 )
+    coordinator.flow.logger.info(
+        "RQ2 review debug: topic=%s mode=%s participants=%s contributions=%s open_questions=%s",
+        topic["id"],
+        discussion_mode,
+        participants,
+        len(contributions or []),
+        len(oq_records or []),
+    )
+    if contributions:
+        coordinator.flow.logger.info(
+            "RQ2 review debug: contribution_agents=%s",
+            [
+                str(c.get("agent") or "").strip()
+                for c in contributions
+                if isinstance(c, dict)
+            ],
+        )
+    contribution_agents = [
+        str(c.get("agent") or "").strip()
+        for c in contributions
+        if isinstance(c, dict)
+    ]
 
     conversation_rows: List[str] = []
     for c in contributions:
@@ -625,11 +822,9 @@ def run_pre_meeting_conflict_review_block(
             continue
         conversation_rows.append(f"{agent_name}: {statement}")
 
-    decisions = _summarize_pre_meeting_discussion(coordinator, contributions, conflicts_by_id)
-    if coordinator.flow.config.get("conflict_recheck_requires_analyst_signoff", True):
-        decisions = _analyst_signoff_conflict_recheck(
-            coordinator, decisions, contributions, conflicts_by_id, round_num=round_num
-        )
+    decisions, signoff_debug = _analyst_signoff_conflict_recheck(
+        coordinator, contributions, conflicts_by_id
+    )
 
     changed = 0
     for dec in decisions:
@@ -658,10 +853,16 @@ def run_pre_meeting_conflict_review_block(
             "topic_id": topic.get("id"),
             "discussion_mode": discussion_mode,
             "participants": participants,
+            "contribution_agents": contribution_agents,
             "candidates_count": len(decisions),
             "changed_count": changed,
             "conversation": conversation_rows,
             "decisions": decisions,
+            "debug": {
+                "contributions_count": len(contributions or []),
+                "open_questions_count": len(oq_records or []),
+                **signoff_debug,
+            },
         }
     )
 

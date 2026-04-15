@@ -939,8 +939,7 @@ class MediatorAgent(BaseAgent):
 輸出**僅可**為一個 JSON 物件，欄位如下：
 {{
   "discussion_mode": "sequential 或 simultaneous",
-  "participants": ["..."],
-  "rationale": "簡短繁中理由"
+  "participants": ["..."]
 }}
 
 規則：
@@ -974,43 +973,6 @@ class MediatorAgent(BaseAgent):
             participants = list(participants_def)
 
         return {"discussion_mode": mode, "participants": participants}
-
-    def summarize_pre_meeting_conflict_discussion(
-        self,
-        conflict_list: List[Dict[str, Any]],
-        discussion_rows: List[Dict[str, Any]],
-        extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """彙整會前衝突討論，輸出每筆衝突的新標籤建議。"""
-        prompt = f"""你是需求會議主持人。根據以下會前衝突審查的討論內容，判定每筆衝突的標籤是否需要調整。
-
-待審衝突清單:
-{json.dumps(conflict_list, ensure_ascii=False, indent=2)}
-
-各 agent 抽取出的 pair_reviews（若有）:
-{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}
-
-討論內容:
-{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}
-
-規則:
-- 優先依每位 agent 對各 [PAIR-xxx] 的 pair_reviews 做逐筆合併，不要只看整體評論。
-- 若 pair_reviews 與 prose 有衝突，以逐筆 pair_reviews 為主。
-- 對每筆衝突，若討論中多數意見認為標籤有誤，new_label 填入應調整的值（Conflict 或 Neutral）。
-- 若多數意見認為標籤正確或無明確共識，new_label 維持 current_label。
-- 僅輸出 JSON array。
-
-輸出:
-[
-  {{"id": "衝突 ID", "new_label": "Conflict 或 Neutral", "reason": "一句繁中理由"}}
-]"""
-        messages = self.build_direct_messages(prompt)
-        data = self.model.chat_json(messages)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and isinstance(data.get("decisions"), list):
-            return data["decisions"]
-        return []
 
     # ===== Action: discussion moderation =====
 

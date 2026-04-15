@@ -611,11 +611,13 @@ research_session 至少需含：
             category_hint = """# 本議題特別要求（conflict_discussion）
 - 你的任務是逐筆再審查目前這批 Conflict/Neutral pairs，而不是重新定義需求。
 - 你必須先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。
-- statement 必須是單一合法 JSON object 字串，不可輸出自然語句、Markdown、程式碼區塊或 JSON 以外的前後文。
+- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
 - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
-- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆必須是 JSON object，且至少要寫出：id、independent_label、decision（keep/modify）、proposed_label（Conflict/Neutral）、confidence（high/medium/low）、reason。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
 - 只有在外部規範、品質底線、權限或安全限制使兩項需求無法同時成立時，才支持 Conflict。
 - 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
 - 若只是一般 tradeoff、偏好差異、尚未補齊限制條件，或目前僅缺外部證據，不能因看不出衝突就直接支持 Neutral。
 - 請明確指出：是哪一條限制、法規、標準或品質邊界造成互斥；若支持 Neutral，請說明為何兩項需求既不衝突、也不重複，且無直接語義關係。"""
         elif category == "tradeoff":
@@ -652,16 +654,14 @@ research_session 至少需含：
 - 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。"""
         if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
             elicitation_hint = """# ELICIT Collector（Expert）
-- 你目前不是本輪正式提問者，而是領域/限制 collector。
-- 你的任務是替 asker 找出「現在最值得問 user 的一個限制或品質需求缺口」。
-- 優先從：速度、穩定性、權限限制、安全要求、可用性、資料可信度、外部約束、介面品質期待 判斷。
-- 若核心功能與內容範圍仍不清楚，不要優先推深層合規、稽核、保存、刪除等後段議題。
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個限制或品質需求缺口。
+- 優先補核心限制與品質要求；若核心功能與範圍仍不清楚，不要先追後段合規細節。
 - 若沒有高價值的新限制/品質問題，要明講。"""
             task_block = "請以領域 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
             rules_block = """- 不要直接對 user 正式發問。
-- statement 需包含四部分：建議追問的缺口、建議問題句、現在為何值得問、如何避免重複。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
 - 建議問題句只能有 1 個主問題，且要能直接轉成 quality requirement 或 constraint。
-- 不要一次提出多個主問題。
 - open_questions 請輸出空陣列。"""
         elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
             stop_phrase = (
@@ -672,9 +672,8 @@ research_session 至少需含：
             elicitation_hint = """# ELICIT Asker（Expert）
 - 你是本輪唯一正式提問者。
 - 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
-- 優先從：速度、穩定性、權限限制、安全要求、可用性、外部約束、介面品質偏好 判斷。
+- 優先補限制、品質要求、外部約束與介面品質偏好等核心缺口。
 - 若核心功能與內容範圍仍不清楚，不要優先追問深層合規、稽核、保存、刪除等後段議題。
-- 若功能已大致清楚，但介面是否需要特定風格、一致配色、清楚辨識、閱讀友善仍未知，這仍是可直接追問的品質需求。
 - 若 collectors 提出的方向過深或過硬，改寫成 user 能直接回答的一題。"""
             task_block = (
                 "請以領域 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"
