@@ -478,7 +478,7 @@ def _extract_pre_meeting_details(
     artifact: Dict[str, Any], *, round_num: int = 0
 ) -> Dict[str, Any]:
     """同一 type 整批只做一次會前複核：回傳可寫入 record 的會議資訊（不含 summary / raw_log_entry）。"""
-    show_debug = bool((artifact.get("meta") or {}).get("show_rq2_debug", False))
+    show_debug = bool((artifact.get("meta") or {}).get("rq2_debug", False))
     details: Dict[str, Any] = {
         "round": int(round_num),
         "changed_count": 0,
@@ -696,7 +696,7 @@ def run_type_group_batch(
             "enable_all_conflict_check": False,
             "requirements_proposed_by": "user_agent",
             "requirement_owner_type": type_name,
-            "show_rq2_debug": bool(flow.config.get("show_rq2_debug", False)),
+            "rq2_debug": bool(flow.config.get("rq2_debug", False)),
         },
     }
     sync_config_language(artifact)
@@ -1166,17 +1166,31 @@ if __name__ == "__main__":
         if summary_metrics:
             summary_payload["metrics"] = summary_metrics
         if run_costs_usd:
-            avg_cost_usd = mean(run_costs_usd)
-            cost_std_usd = float(np.std(run_costs_usd))
-            avg_token = mean(run_total_tokens)
-            avg_runtime_s = mean(run_total_runtime_s)
-            print(f"  平均成本(USD)：{avg_cost_usd:.8f} ± {cost_std_usd:.8f}")
-            print(f"  平均每輪 token：{avg_token:.1f}")
-            print(f"  平均每輪執行時間(s)：{avg_runtime_s:.3f}")
+            cost_mu = float(np.mean(run_costs_usd))
+            cost_sd = float(np.std(run_costs_usd))
+            token_mu = float(np.mean(run_total_tokens))
+            token_sd = float(np.std(run_total_tokens))
+            rt_mu = float(np.mean(run_total_runtime_s))
+            rt_sd = float(np.std(run_total_runtime_s))
+            print(f"  平均 token：{token_mu:.1f} ± {token_sd:.1f}")
+            print(f"  平均成本(USD)：{cost_mu:.8f} ± {cost_sd:.8f}")
+            print(f"  平均執行時間(s)：{rt_mu:.3f} ± {rt_sd:.3f}")
             summary_payload["cost"] = {
-                "average_cost(USD)": round(avg_cost_usd, 8),
-                "average_token": round(float(avg_token)),
-                "average_run_time(s)": round(float(avg_runtime_s), 3),
+                "average_token": {
+                    "mean": token_mu,
+                    "std": token_sd,
+                    "per_round_values": [int(x) for x in run_total_tokens],
+                },
+                "average_cost(USD)": {
+                    "mean": cost_mu,
+                    "std": cost_sd,
+                    "per_round_values": [float(x) for x in run_costs_usd],
+                },
+                "average_run_time(s)": {
+                    "mean": rt_mu,
+                    "std": rt_sd,
+                    "per_round_values": [float(x) for x in run_total_runtime_s],
+                },
             }
         else:
             print("  平均成本(USD)：N/A")

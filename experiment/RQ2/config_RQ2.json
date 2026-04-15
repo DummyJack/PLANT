@@ -1,5 +1,5 @@
 {
-  "show_rq2_debug": false,
+  "rq2_debug": false,
   "enable_human_escalation": false,
   "enable_agents": {
     "documentor": false

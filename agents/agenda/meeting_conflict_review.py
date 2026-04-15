@@ -847,7 +847,7 @@ def run_pre_meeting_conflict_review_block(
         }
 
     recheck_log = artifact.setdefault("conflict_recheck_log", [])
-    include_debug = bool(coordinator.flow.config.get("show_rq2_debug", False))
+    include_debug = bool(coordinator.flow.config.get("rq2_debug", False))
     recheck_log.append(
         {
             "round": round_num,
