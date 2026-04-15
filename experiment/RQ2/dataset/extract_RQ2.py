@@ -72,20 +72,20 @@ def classify_cn_subsystem(row: dict) -> str:
     if any(k in text for k in ("bird feeder", "pilot controller", "pilot station")):
         return "UAV Control System"
     if any(k in text for k in ("viewer", "remote viewer")):
-        return "UAV Viewing System"
+        return "UAV Monitoring and Visualization System"
     if any(
         k in text
         for k in ("communication", "secure", "snooping", "eavesdropping", "network")
     ):
         return "UAV Communication Security System"
-    return "UAV Core Management System"
+    return "UAV Mission Management System"
 
 
 def pick_cn_subsystems(rows: list[dict], rng: random.Random) -> list[dict]:
     target_types = [
         "UAV Control System",
-        "UAV Viewing System",
-        "UAV Core Management System",
+        "UAV Monitoring and Visualization System",
+        "UAV Mission Management System",
         "UAV Communication Security System",
     ]
     out: list[dict] = []
@@ -120,17 +120,17 @@ def main() -> None:
     cn_rows = read_rows(CN_PATH)
 
     final_rows.extend(
-        [to_row(r, "HVAC Control System") for r in balanced_pick(pure_rows, n=20, rng=rng)]
+        [to_row(r, "Thermodynamic Analysis System") for r in balanced_pick(pure_rows, n=20, rng=rng)]
     )
     final_rows.extend(
         [
-            to_row(r, "Software Assurance Evidence Management System")
+            to_row(r, "Safety-Critical Certification System")
             for r in balanced_pick(open_rows, n=10, rng=rng)
         ]
     )
     final_rows.extend(
         [
-            to_row(r, "Clinical Information System")
+            to_row(r, "Health Management System")
             for r in balanced_pick(world_rows, n=30, rng=rng)
         ]
     )

@@ -32,52 +32,6 @@ PROMPT_FOR_RUNS = True
 
 load_dotenv(BASE_DIR / ".env")
 
-# RQ2 假設：每個 type 的需求都由 user agent（利害關係人）提出。
-# 每組最多 5 位，名稱與關切採固定模板，讓 user 在會議時有可追蹤身份。
-TYPE_STAKEHOLDER_PRESETS: Dict[str, List[Dict[str, Any]]] = {
-    "HVAC Control System": [
-        {"name": "Facility Manager", "text": ["重視整體能耗與設備壽命", "需要可追蹤的告警與事件紀錄"]},
-        {"name": "Control Engineer", "text": ["在意控制邏輯一致性", "要求邊界條件與閾值定義明確"]},
-        {"name": "Maintenance Technician", "text": ["關心維修效率與誤報率", "需要快速定位異常來源"]},
-    ],
-    "Software Assurance Evidence Management System": [
-        {"name": "Assurance Engineer", "text": ["重視證據完整性與可追溯性", "需要清楚的證據關聯結構"]},
-        {"name": "Compliance Officer", "text": ["在意合規稽核可驗證性", "要求流程留痕與版本可查"]},
-        {"name": "Project Lead", "text": ["關心專案交付風險", "需要證據狀態可視化"]},
-    ],
-    "Clinical Information System": [
-        {"name": "Clinician", "text": ["重視臨床操作效率", "在意病患安全與資訊正確性"]},
-        {"name": "Nurse", "text": ["需要流程順暢與警示清楚", "重視交班與即時可用資訊"]},
-        {"name": "Health IT Admin", "text": ["關心系統穩定與權限治理", "需要稽核與操作可追蹤"]},
-    ],
-    "UAV Control System": [
-        {"name": "Pilot", "text": ["重視飛控可操作性與回應速度", "需要穩定指令控制"]},
-        {"name": "Mission Commander", "text": ["在意任務成功率", "重視返航與安全策略"]},
-        {"name": "Flight Safety Officer", "text": ["關心飛行邊界與風險控制", "要求異常處置明確"]},
-    ],
-    "UAV Viewing System": [
-        {"name": "Remote Viewer", "text": ["重視視訊品質與延遲", "需要穩定多端觀看"]},
-        {"name": "Pilot", "text": ["需要即時影像支援操控", "重視鏡頭控制一致性"]},
-        {"name": "Ops Analyst", "text": ["關心監看資訊可判讀性", "需要影像與事件對應"]},
-    ],
-    "UAV Core Management System": [
-        {"name": "Flight Systems Engineer", "text": ["重視飛行穩定與姿態控制", "關心核心控制參數一致性"]},
-        {"name": "Maintenance Lead", "text": ["在意續航、充電與維保可行性", "需要故障訊息可診斷"]},
-        {"name": "Mission Commander", "text": ["關心任務中可靠性", "要求自動返航策略可預期"]},
-    ],
-    "UAV Communication Security System": [
-        {"name": "Security Officer", "text": ["重視通訊加密與防竊聽", "關心授權與存取安全"]},
-        {"name": "Network Engineer", "text": ["在意連線穩定與延遲", "需要異常連線可偵測"]},
-        {"name": "Pilot", "text": ["關心斷線後行為是否安全", "要求控制鏈路可恢復"]},
-    ],
-}
-
-DEFAULT_TYPE_STAKEHOLDERS: List[Dict[str, Any]] = [
-    {"name": "Primary User", "text": ["重視任務完成效率", "在意需求描述是否可執行"]},
-    {"name": "Domain Expert", "text": ["關注領域規則與一致性", "在意衝突判定是否合理"]},
-    {"name": "System Owner", "text": ["重視風險與交付品質", "需要結果可追蹤"]},
-]
-
 
 class ExperimentLogger:
     """實驗用無輸出 logger（不寫 log 檔）。"""
@@ -223,25 +177,24 @@ def sync_config_language(artifact: Dict[str, Any]) -> None:
     meta["output_language"] = lang
 
 
-def build_type_stakeholders(type_name: str, max_stakeholders: int) -> List[Dict[str, Any]]:
-    """依資料 type 建立 user agent 的利害關係人身份，最多 5 位。"""
+def build_type_stakeholders(flow: Flow, type_name: str, max_stakeholders: int) -> List[Dict[str, Any]]:
+    """由 user agent 依 type 情境自行提出 stakeholder 名稱。"""
     cap = max(1, min(5, int(max_stakeholders or 5)))
-    preset = TYPE_STAKEHOLDER_PRESETS.get(type_name, DEFAULT_TYPE_STAKEHOLDERS)
-    out: List[Dict[str, Any]] = []
-    for row in preset[:cap]:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "").strip()
-        texts = row.get("text") or []
-        if not name:
-            continue
-        if not isinstance(texts, list):
-            texts = [str(texts)]
-        needs = [str(t).strip() for t in texts if str(t).strip()]
-        if not needs:
-            needs = ["關注需求可行性與一致性。"]
-        out.append({"name": name, "text": needs})
-    return out or [{"name": "Primary User", "text": ["關注需求可行性與一致性。"]}]
+    rough_idea = build_type_rough_idea(type_name)
+    proposed = flow.user_agent.propose_stakeholders(rough_idea)
+    stakeholders: List[Dict[str, Any]] = []
+    for item in proposed or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item).strip()
+        if name and name not in {s.get("name", "") for s in stakeholders}:
+            stakeholders.append({"name": name, "text": []})
+        if len(stakeholders) >= cap:
+            break
+    if not stakeholders:
+        raise RuntimeError(f"RQ2 user agent 未能為 type={type_name} 產生 stakeholder")
+    return stakeholders[:cap]
 
 
 def build_type_rough_idea(type_name: str) -> str:
@@ -652,7 +605,7 @@ def run_type_group_batch(
         return
     pair_id_prefix = "PAIR"
     max_stakeholders = int(flow.config.get("max_stakeholders", 5) or 5)
-    stakeholders = build_type_stakeholders(type_name, max_stakeholders)
+    stakeholders = build_type_stakeholders(flow, type_name, max_stakeholders)
     # 讓 user agent 在本 type 的整批流程中明確知道自己代表哪些人。
     flow.user_agent.stakeholders = stakeholders
 
