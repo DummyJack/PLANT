@@ -237,7 +237,8 @@ def judge_interviewer_action(
     model_config: Dict[str, Any],
     conversation_history: List[Dict[str, str]],
     remaining_requirements: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    return_usage: bool = False,
+) -> Any:
     """
     Judge the type of interviewer action and its relevance to URL.
     
@@ -267,6 +268,11 @@ def judge_interviewer_action(
         remaining_requirements=remaining_requirements_str if remaining_requirements_str else "No remaining requirements.",
         latest_utterance=action
     )
+    if return_usage:
+        response_json, usage_info = model_call(
+            system_prompt, user_prompt, model_config, return_usage=True
+        )
+        return response_json, usage_info
     response_json = model_call(system_prompt, user_prompt, model_config)
     return response_json
 
@@ -276,7 +282,8 @@ def generate_user_response(
     conversation_history: List[Dict[str, str]],
     simulator_model_config: Dict[str, Any],
     remaining_requirements: List[Dict[str, Any]],
-) -> str:
+    return_usage: bool = False,
+) -> Any:
     """
     Generate a simulated user response to the interviewer's action.
     
@@ -310,6 +317,14 @@ def generate_user_response(
         is_relevant=is_relevant,
         relevant_requirement=implied_requirement if implied_requirement else "null"
     )
+    if return_usage:
+        response_json, usage_info = model_call(
+            system_prompt,
+            user_prompt,
+            simulator_model_config,
+            return_usage=True,
+        )
+        return response_json.get("response", ""), usage_info
     response_json = model_call(system_prompt, user_prompt, simulator_model_config)
     return response_json.get("response", "")
 
@@ -322,7 +337,8 @@ def evaluate_action(
     conversation_history: List[Dict[str, str]],
     remaining_requirements: List[Dict[str, Any]],
     user_quality_level: str,
-) -> Tuple[str, List[str], float, Dict[str, Any]]:
+    return_usage: bool = False,
+) -> Any:
     """
     Evaluate interviewer action and generate user response.
     
@@ -339,24 +355,48 @@ def evaluate_action(
         Tuple of (user_response, elicited_requirements, reward, judgement)
     """
     #format: {action_type: str, is_relevant_to_implied_requirements: bool, relevant_implied_requirements_id: str, reasoning: str}
-    judgement = judge_interviewer_action(
-        action=action,
-        task=task,
-        model_config=judge_model_config,
-        conversation_history=conversation_history,
-        remaining_requirements=remaining_requirements,
-    )
+    judge_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    user_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if return_usage:
+        judgement, judge_usage = judge_interviewer_action(
+            action=action,
+            task=task,
+            model_config=judge_model_config,
+            conversation_history=conversation_history,
+            remaining_requirements=remaining_requirements,
+            return_usage=True,
+        )
+    else:
+        judgement = judge_interviewer_action(
+            action=action,
+            task=task,
+            model_config=judge_model_config,
+            conversation_history=conversation_history,
+            remaining_requirements=remaining_requirements,
+        )
 
     if judgement.get("action_type") == "finish":
+        if return_usage:
+            return "", [], 0.0, judgement, {"judge": judge_usage, "user": user_usage}
         return "", [], 0.0, judgement
 
-    simulated_user_response = generate_user_response(
-        action=action,
-        action_judgement=judgement,
-        conversation_history=conversation_history,
-        simulator_model_config=user_simulator_config,
-        remaining_requirements=remaining_requirements,
-    )
+    if return_usage:
+        simulated_user_response, user_usage = generate_user_response(
+            action=action,
+            action_judgement=judgement,
+            conversation_history=conversation_history,
+            simulator_model_config=user_simulator_config,
+            remaining_requirements=remaining_requirements,
+            return_usage=True,
+        )
+    else:
+        simulated_user_response = generate_user_response(
+            action=action,
+            action_judgement=judgement,
+            conversation_history=conversation_history,
+            simulator_model_config=user_simulator_config,
+            remaining_requirements=remaining_requirements,
+        )
     
     # Determine elicited requirements
     is_relevant = judgement.get("is_relevant_to_implied_requirements")
@@ -371,6 +411,11 @@ def evaluate_action(
     ## TODO: implement reward calculation
     reward = 0.0
 
+    if return_usage:
+        return simulated_user_response, elicited_requirements, reward, judgement, {
+            "judge": judge_usage,
+            "user": user_usage,
+        }
     return simulated_user_response, elicited_requirements, reward, judgement
 
 

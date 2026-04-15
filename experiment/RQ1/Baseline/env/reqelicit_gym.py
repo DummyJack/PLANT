@@ -15,6 +15,7 @@ import json
 from .prompts import evaluate_action
 from .task_data import load_tasks
 from ..config import ReqElicitGymConfig, get_default_config
+from metric import compute_ora, compute_overall_metrics, compute_tkqr
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -480,31 +481,7 @@ class ReqElicitGym(gym.Env):
         Returns:
             TKQR value in [0, 1]
         """
-        import math
-        
-        n = len(self.current_task_hit_sequence)  # Total number of dialogue turns
-        K = self.current_task_total_requirements  # Total number of implicit requirements
-        
-        if n == 0 or K == 0:
-            return 0.0
-        
-        # Calculate DCG_n = sum(i=1 to n) h_i / log_2(i+1)
-        dcg = 0.0
-        for i, h_i in enumerate(self.current_task_hit_sequence, start=1):
-            if h_i == 1:
-                dcg += 1.0 / math.log2(i + 1)
-        
-        # Calculate IDCG_n = sum(i=1 to min(n,K)) 1 / log_2(i+1)
-        idcg = 0.0
-        for i in range(1, min(n, K) + 1):
-            idcg += 1.0 / math.log2(i + 1)
-        
-        # Calculate TKQR = DCG_n / IDCG_n
-        if idcg == 0:
-            return 0.0
-        
-        tkqr = dcg / idcg
-        return tkqr
+        return compute_tkqr(self.current_task_hit_sequence, self.current_task_total_requirements)
     
     def calculate_ora(self) -> float:
         """
@@ -516,24 +493,7 @@ class ReqElicitGym(gym.Env):
         Returns:
             ORA value in (0, 1]
         """
-        import math
-        
-        n = self.step_count  # Number of rounds in which the interviewer asks questions
-        K = self.current_task_total_requirements + 1  # Optimal interaction round count (|Q| + 1)
-        
-        if K <= 0:
-            return 0.0
-        
-        # Calculate sigma: we want ORA=0.5 when |n-K|=0.5K
-        # This yields: sigma = 0.5K / sqrt(2*ln(2)) ≈ 0.425K
-        sigma = 0.425 * K
-        
-        # Calculate ORA using Gaussian-shaped penalty
-        # ORA(n, K, σ) = exp(-(n-K)²/(2σ²))
-        deviation_squared = (n - K) ** 2
-        ora = math.exp(-deviation_squared / (2 * sigma ** 2))
-        
-        return ora
+        return compute_ora(self.step_count, self.current_task_total_requirements)
     
     def record_step_statistics(self):
         """Record statistics for the current step in the conversation."""
@@ -679,167 +639,13 @@ class ReqElicitGym(gym.Env):
                 "elicitation_ratio": 0.0,
                 "tkqr": 0.0,
                 "ora": 0.0,
-                "variance_elicitation_ratio": 0.0,
-                "variance_tkqr": 0.0,
-                "variance_ora": 0.0,
-                "average_token_cost": 0.0,
-                "variance_token_cost": 0.0,
-                "elicitation_ratio_from_totals": 0.0,
                 "action_type_effectiveness": {},
                 "aspect_type_elicitation": {},
-                "application_type_statistics": {},
                 "total_tasks": 0,
-                "total_requirements_all_tasks": 0,
-                "total_elicited_all_tasks": 0,
                 "task_results": [],
             }
         
-        # Calculate average ratios across all tasks
-        total_tasks = len(self.global_stats["task_results"])
-        elicitation_ratios = [task["elicitation_ratio"] for task in self.global_stats["task_results"]]
-        tkqr_values = [task.get("tkqr", 0.0) for task in self.global_stats["task_results"]]
-        ora_values = [task.get("ora", 0.0) for task in self.global_stats["task_results"]]
-        token_costs = [task.get("token_cost", 0) for task in self.global_stats["task_results"]]
-        
-        # Calculate averages
-        avg_elicitation_ratio = sum(elicitation_ratios) / total_tasks if total_tasks > 0 else 0.0
-        avg_tkqr = sum(tkqr_values) / total_tasks if total_tasks > 0 else 0.0
-        avg_ora = sum(ora_values) / total_tasks if total_tasks > 0 else 0.0
-        avg_token_cost = sum(token_costs) / total_tasks if total_tasks > 0 else 0.0
-        
-        # Calculate variances
-        def calculate_variance(values, mean):
-            """Calculate variance of a list of values."""
-            if len(values) <= 1:
-                return 0.0
-            return sum((x - mean) ** 2 for x in values) / len(values)
-        
-        variance_elicitation_ratio = calculate_variance(elicitation_ratios, avg_elicitation_ratio)
-        variance_tkqr = calculate_variance(tkqr_values, avg_tkqr)
-        variance_ora = calculate_variance(ora_values, avg_ora)
-        variance_token_cost = calculate_variance(token_costs, avg_token_cost)
-        
-        # Aggregate action type effectiveness across all tasks
-        overall_action_stats = {}  # {action_type: {"total": sum, "effective": sum}}
-        for task in self.global_stats["task_results"]:
-            action_effectiveness = task.get("action_type_effectiveness", {})
-            for action_type, stats in action_effectiveness.items():
-                if action_type not in overall_action_stats:
-                    overall_action_stats[action_type] = {"total": 0, "effective": 0}
-                overall_action_stats[action_type]["total"] += stats["total"]
-                overall_action_stats[action_type]["effective"] += stats["effective"]
-        
-        # Calculate overall effectiveness ratios for each action type
-        overall_action_effectiveness = {}
-        for action_type, stats in overall_action_stats.items():
-            total = stats["total"]
-            effective = stats["effective"]
-            effectiveness_ratio = effective / total if total > 0 else 0.0
-            overall_action_effectiveness[action_type] = {
-                "total": total,
-                "effective": effective,
-                "effectiveness_ratio": effectiveness_ratio
-            }
-        
-        # Aggregate aspect type elicitation across all tasks
-        overall_aspect_stats = {}  # {aspect: {"total": sum, "elicited": sum}}
-        for task in self.global_stats["task_results"]:
-            aspect_elicitation = task.get("aspect_type_elicitation", {})
-            for aspect, stats in aspect_elicitation.items():
-                if aspect not in overall_aspect_stats:
-                    overall_aspect_stats[aspect] = {"total": 0, "elicited": 0}
-                overall_aspect_stats[aspect]["total"] += stats["total"]
-                overall_aspect_stats[aspect]["elicited"] += stats["elicited"]
-        
-        # Calculate overall elicitation ratios for each aspect type
-        overall_aspect_elicitation = {}
-        for aspect, stats in overall_aspect_stats.items():
-            total = stats["total"]
-            elicited = stats["elicited"]
-            elicitation_ratio = elicited / total if total > 0 else 0.0
-            overall_aspect_elicitation[aspect] = {
-                "total": total,
-                "elicited": elicited,
-                "elicitation_ratio": elicitation_ratio
-            }
-        
-        # Calculate total counts across all tasks
-        total_requirements_all = sum(task["total_requirements"] for task in self.global_stats["task_results"])
-        total_elicited_all = sum(task["total_elicited"] for task in self.global_stats["task_results"])
-        
-        # Calculate overall ratios based on totals
-        elicitation_ratio_from_totals = total_elicited_all / total_requirements_all if total_requirements_all > 0 else 0.0
-        
-        # Group tasks by application_type and calculate statistics
-        application_type_stats = {}  # {application_type: {tasks: [], metrics: {...}}}
-        for task in self.global_stats["task_results"]:
-            app_type = task.get("application_type", "Unknown")
-            if app_type not in application_type_stats:
-                application_type_stats[app_type] = {
-                    "tasks": [],
-                    "elicitation_ratios": [],
-                    "tkqr_values": [],
-                    "ora_values": [],
-                }
-            application_type_stats[app_type]["tasks"].append(task)
-            application_type_stats[app_type]["elicitation_ratios"].append(task.get("elicitation_ratio", 0.0))
-            application_type_stats[app_type]["tkqr_values"].append(task.get("tkqr", 0.0))
-            application_type_stats[app_type]["ora_values"].append(task.get("ora", 0.0))
-        
-        # Calculate statistics for each application type
-        application_type_results = {}
-        for app_type, stats in application_type_stats.items():
-            num_tasks = len(stats["tasks"])
-            if num_tasks == 0:
-                continue
-            
-            # Calculate averages
-            avg_er = sum(stats["elicitation_ratios"]) / num_tasks
-            avg_tkqr = sum(stats["tkqr_values"]) / num_tasks
-            avg_ora = sum(stats["ora_values"]) / num_tasks
-            
-            # Calculate variances
-            var_er = calculate_variance(stats["elicitation_ratios"], avg_er)
-            var_tkqr = calculate_variance(stats["tkqr_values"], avg_tkqr)
-            var_ora = calculate_variance(stats["ora_values"], avg_ora)
-            
-            application_type_results[app_type] = {
-                "num_tasks": num_tasks,
-                "average_elicitation_ratio": avg_er,
-                "variance_elicitation_ratio": var_er,
-                "average_tkqr": avg_tkqr,
-                "variance_tkqr": var_tkqr,
-                "average_ora": avg_ora,
-                "variance_ora": var_ora,
-            }
-        
-        return {
-            # Average ratios (average of per-task ratios)
-            "elicitation_ratio": avg_elicitation_ratio,
-            "tkqr": avg_tkqr,
-            "ora": avg_ora,
-            # Variances
-            "variance_elicitation_ratio": variance_elicitation_ratio,
-            "variance_tkqr": variance_tkqr,
-            "variance_ora": variance_ora,
-            # Token cost statistics
-            "average_token_cost": avg_token_cost,
-            "variance_token_cost": variance_token_cost,
-            # Overall ratio (based on total counts)
-            "elicitation_ratio_from_totals": elicitation_ratio_from_totals,
-            # Action type effectiveness (aggregated across all tasks)
-            "action_type_effectiveness": overall_action_effectiveness,
-            # Aspect type elicitation (aggregated across all tasks)
-            "aspect_type_elicitation": overall_aspect_elicitation,
-            # Statistics by application type
-            "application_type_statistics": application_type_results,
-            # Total counts
-            "total_tasks": total_tasks,
-            "total_requirements_all_tasks": total_requirements_all,
-            "total_elicited_all_tasks": total_elicited_all,
-            # Individual task results
-            "task_results": self.global_stats["task_results"],
-        }
+        return compute_overall_metrics(self.global_stats["task_results"])
 
     def get_step_records(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -1076,43 +882,10 @@ class ReqElicitGym(gym.Env):
                 raise ValueError("file_path must be provided or set config.evaluation_result_path")
             file_path = self.config.evaluation_result_path
         overall_metrics = self.evaluate_all_tasks()
-        total_tasks = overall_metrics.get("total_tasks", 0) if overall_metrics else 0
 
-        if not overall_metrics or total_tasks == 0:
-            # 即使 0 任務也寫入最小結果檔，方便確認執行過
-            interviewer_model = interviewer_model_name or self.interviewer_model_name or "unknown"
-            evaluation_data = {
-                "data_path": self.config.data_path,
-                "config": {
-                    "interviewer_model": interviewer_model,
-                    "judge_model": self.config.judge_model_name,
-                    "user_model": self.config.user_model_name,
-                    "user_answer_quality": self.config.user_answer_quality,
-                    "max_steps": self.config.max_steps,
-                },
-                "overall_evaluation": {
-                    "total_test_samples": 0,
-                    "total_hidden_requirements": 0,
-                    "total_elicited": 0,
-                    "average_elicitation_ratio": 0.0,
-                    "average_tkqr": 0.0,
-                    "average_ora": 0.0,
-                    "variance_elicitation_ratio": 0.0,
-                    "variance_tkqr": 0.0,
-                    "variance_ora": 0.0,
-                    "average_token_cost": 0.0,
-                    "variance_token_cost": 0.0,
-                    "elicitation_ratio_from_totals": 0.0,
-                    "action_type_effectiveness": {},
-                    "aspect_type_elicitation": {},
-                    "application_type_statistics": {},
-                },
-                "task_results": [],
-            }
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(evaluation_data, f, ensure_ascii=False, indent=2)
+        if not overall_metrics or overall_metrics.get("total_tasks", 0) == 0:
             if self.config.verbose:
-                print("警告：沒有完成任何任務，已寫入空評估結果檔")
+                print("警告：沒有評估結果可儲存")
             return
 
         interviewer_model = interviewer_model_name or self.interviewer_model_name or "unknown"
@@ -1135,7 +908,6 @@ class ReqElicitGym(gym.Env):
             })
         
         evaluation_data = {
-            "data_path": self.config.data_path,
             "config": {
                 "interviewer_model": interviewer_model,
                 "judge_model": self.config.judge_model_name,

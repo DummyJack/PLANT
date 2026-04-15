@@ -1,10 +1,13 @@
 import os
 import json
 import sys
-import argparse
-import time
+import re
 from time import perf_counter
 from pathlib import Path
+from statistics import mean
+
+import numpy as np
+from typing import List
 
 from dotenv import load_dotenv
 
@@ -20,9 +23,11 @@ RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 # 預設資料檔、任務數與互動行為（固定於程式，不經 baseline_config.json）
 DEFAULT_DATA_FILE = "ReqElicitBench_10.json"
-# 未指定 --max-tasks 且下方為 None 時，是否在終端機詢問要跑幾題
+# 未設定 max_tasks 且下方為 None 時，是否在終端機詢問要跑幾題
 PROMPT_FOR_MAX_TASKS = True
-# 程式內預設最多任務數：None 表示不預先限定（仍可用 --max-tasks 或互動輸入）
+# 未設定 runs 時，是否在終端機詢問要跑幾次
+PROMPT_FOR_RUNS = True
+# 程式內預設最多任務數：None 表示不預先限定（仍可用互動輸入）
 DEFAULT_MAX_TASKS = None
 # Gemini「OpenAI 相容」Chat Completions（官方文件）
 GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -40,7 +45,7 @@ from Baseline.env import ReqElicitGym
 import Baseline.env.prompts as baseline_prompts
 import Baseline.interviewer as baseline_interviewer_module
 from Baseline.interviewer import Interviewer
-from utils import CostTracker, json_dump_no_scientific
+from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 
 def _resolve_data_path(raw: str) -> str:
@@ -61,40 +66,24 @@ def load_baseline_file_config(path: Path) -> dict:
     return cfg
 
 
-def build_parser():
-    """建構命令列參數解析器"""
-    parser = argparse.ArgumentParser(description="執行 ReqElicitGym 評估腳本（執行全部測試樣本）")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=str(DEFAULT_CONFIG_PATH),
-        help=f"實驗設定 JSON 路徑（預設 {DEFAULT_CONFIG_PATH.name}）",
-    )
-    parser.add_argument("--api-key", type=str, default=None, help="API Key，也可用 OPENAI_API_KEY 環境變數")
-    parser.add_argument(
-        "--gemini",
-        action="store_true",
-        help="使用 Gemini：讀取 GEMINI_API_KEY，base_url 預設為 Google OpenAI 相容端點（可用 GEMINI_BASE_URL 或 --base-url 覆寫）；請將模型設為 gemini-*",
-    )
-    parser.add_argument("--base-url", type=str, default=None, help="覆寫 OPENAI_BASE_URL 與程式預設 DEFAULT_BASE_URL")
-    parser.add_argument("--interviewer-model", type=str, default=None, help="覆寫設定檔中的 interviewer_model")
-    parser.add_argument("--gym-model", type=str, default=None, help="覆寫設定檔中的 gym_model（judge + user）")
-    parser.add_argument("--use-thinking", action="store_true", help="開啟 thinking 模式（覆寫設定檔為 true）")
-    parser.add_argument("--data-path", type=str, default=None, help="覆寫程式預設資料檔（可為絕對或相對 RQ1 之路徑）")
-    parser.add_argument("--max-tasks", type=int, default=None, help="只跑前 N 筆；覆寫程式預設 DEFAULT_MAX_TASKS")
-    parser.add_argument("--run-id", type=str, default=None, help="結果檔名用 id，未傳則以執行時間（HHMMSS）自動產生")
-    parser.add_argument("--verbose", action="store_true", help="強制詳細輸出（覆寫設定檔 verbose）")
-    parser.add_argument("--quiet", action="store_true", help="關閉詳細輸出（覆寫設定檔 verbose）")
-    return parser
+def _next_result_index(prefix: str, results_dir: Path) -> int:
+    """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
+    pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
+    max_idx = 0
+    for p in results_dir.glob(f"*_{prefix}_*.json"):
+        m = pat.match(p.name)
+        if not m:
+            continue
+        try:
+            max_idx = max(max_idx, int(m.group(1)))
+        except ValueError:
+            continue
+    return max_idx + 1
 
 
 def main():
     """主函式：執行 ReqElicitGym-v8 評估（執行全部任務）"""
-    args = build_parser().parse_args()
-
-    cfg_path = Path(args.config).expanduser()
-    if not cfg_path.is_absolute():
-        cfg_path = (RQ1_DIR / cfg_path).resolve()
+    cfg_path = DEFAULT_CONFIG_PATH.resolve()
     file_cfg = load_baseline_file_config(cfg_path)
     print(f"設定檔：{cfg_path}")
 
@@ -102,32 +91,29 @@ def main():
         v = file_cfg.get(key, default)
         return default if v is None else v
 
-    # api_key 不寫入 JSON，僅環境變數或命令列
-    api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
-    base_url = args.base_url or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
-    if args.gemini:
+    # api_key 不寫入 JSON，僅環境變數；Gemini 請在 baseline_config.json 設 "use_gemini": true
+    use_gemini = bool(pick("use_gemini", False))
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
+    if use_gemini:
         gemini_key = os.environ.get("GEMINI_API_KEY", "")
-        api_key = args.api_key or gemini_key
+        api_key = gemini_key
         if not api_key:
-            print("錯誤：使用 --gemini 時請在 .env 設定 GEMINI_API_KEY，或傳入 --api-key")
+            print("錯誤：use_gemini 為 true 時請在 .env 設定 GEMINI_API_KEY")
             sys.exit(1)
-        base_url = (
-            args.base_url
-            or os.environ.get("GEMINI_BASE_URL")
-            or GEMINI_OPENAI_COMPAT_BASE
-        )
-    interviewer_model = args.interviewer_model or pick("interviewer_model", "gpt-4o-mini")
-    gym_model = args.gym_model or pick("gym_model", "gpt-5.2")
-    use_thinking = bool(args.use_thinking or pick("use_thinking", False))
-    data_path = args.data_path or _resolve_data_path(DEFAULT_DATA_FILE)
+        base_url = os.environ.get("GEMINI_BASE_URL") or GEMINI_OPENAI_COMPAT_BASE
+    interviewer_model = pick("interviewer_model", "gpt-4o-mini")
+    gym_model = pick("gym_model", "gpt-5.2")
+    use_thinking = bool(pick("use_thinking", False))
+    data_path = _resolve_data_path(DEFAULT_DATA_FILE)
 
-    max_tasks = args.max_tasks
+    max_tasks = None
     if max_tasks is None:
         max_tasks = DEFAULT_MAX_TASKS
         if max_tasks is not None and (not isinstance(max_tasks, int) or max_tasks <= 0):
             max_tasks = None
     if max_tasks is None and PROMPT_FOR_MAX_TASKS:
-        raw = input("請輸入要執行的任務數量（直接 Enter 為全部，或輸入數字如 3）：").strip()
+        raw = input("請輸入要執行的任務數量（Enter: 全做）：").strip()
         if raw:
             try:
                 max_tasks = int(raw)
@@ -136,13 +122,27 @@ def main():
             except ValueError:
                 max_tasks = None
 
-    run_id = args.run_id or time.strftime("%H%M%S")
-    if args.quiet:
-        verbose = False
-    elif args.verbose:
-        verbose = True
-    else:
-        verbose = bool(pick("verbose", True))
+    runs = None
+    if runs is None and PROMPT_FOR_RUNS:
+        raw_runs = input("請輸入要重複執行幾次：").strip()
+        if not raw_runs:
+            print("錯誤：請輸入重複執行次數（正整數）")
+            sys.exit(1)
+        try:
+            runs = int(raw_runs)
+        except ValueError:
+            print("錯誤：重複執行次數必須是整數")
+            sys.exit(1)
+    if runs is None:
+        if PROMPT_FOR_RUNS:
+            print("錯誤：請在互動模式下輸入重複執行次數（正整數）")
+            sys.exit(1)
+        runs = 1
+    runs = int(runs)
+    if runs <= 0:
+        print("錯誤：runs 必須為正整數")
+        sys.exit(1)
+    verbose = bool(pick("verbose", True))
 
     judge_temperature = float(pick("judge_temperature", 0.0))
     judge_max_tokens = int(pick("judge_max_tokens", 1024))
@@ -167,6 +167,18 @@ def main():
     if not api_key:
         print("錯誤：請在專案主目錄 .env 中設定 OPENAI_API_KEY，或設定環境變數 / 使用 --api-key 參數")
         sys.exit(1)
+
+    for label, mn in (
+        ("interviewer", interviewer_model),
+        ("gym (judge/user)", gym_model),
+    ):
+        if not model_has_token_pricing(mn):
+            print(
+                f"警告：沒有找到 token 的定價：{label} 模型「{mn}」。"
+                "請在專案 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
+                "或改用已定價的模型名稱。"
+            )
+            sys.exit(1)
 
     # 檢查資料檔案
     if not os.path.exists(data_path):
@@ -199,157 +211,160 @@ def main():
         sys.exit(1)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
-    conversation_result_path = str(RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json")
-    cost_result_path = str(RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json")
     llm = interviewer_model  # interviewer 使用的模型
+    run_results: List[dict] = []
+    run_metrics: List[dict] = []
+    run_costs_usd: List[float] = []
+    run_total_tokens: List[int] = []
+    run_total_runtime_s: List[float] = []
+    round_ids_used: List[str] = []
 
-    # 建立設定
-    config = ReqElicitGymConfig(
-        data_path=data_path,
-        judge_api_key=judge_api_key,
-        judge_base_url=judge_base_url,
-        judge_model_name=gym_model,
-        judge_temperature=judge_temperature,
-        judge_max_tokens=judge_max_tokens,
-        judge_timeout=judge_timeout,
-        user_api_key=user_api_key,
-        user_base_url=user_base_url,
-        user_model_name=gym_model,
-        user_temperature=user_temperature,
-        user_max_tokens=user_max_tokens,
-        user_timeout=user_timeout,
-        user_answer_quality=user_answer_quality,
-        max_steps=max_steps,
-        verbose=verbose,
-        evaluation_result_path=evaluation_result_path,
-        conversation_result_path=conversation_result_path,
-    )
+    for run_idx in range(runs):
+        run_id = str(_next_result_index(RESULTS_FILE_PREFIX, RESULTS_DIR))
+        round_ids_used.append(run_id)
 
-    # 建立環境
-    print("\n正在建立環境...")
-    try:
-        env = ReqElicitGym(config)
-    except Exception as e:
-        print(f"錯誤：建立環境失敗：{e}")
-        import traceback
+        evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
+        conversation_result_path = str(RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json")
+        cost_result_path = str(RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json")
 
-        traceback.print_exc()
-        sys.exit(1)
+        print(f"\n=== Run {run_idx + 1}/{runs}（run_id={run_id}）===")
 
-    # 重置任務索引：__init__ 中 reset() 已消耗 task_0，需重置以便 run_all_tasks 從 task_0 開始
-    env.current_task_index = 0
-
-    interviewer_max_tokens = (
-        interviewer_max_tokens_thinking if use_thinking else interviewer_max_tokens
-    )
-    interviewer = Interviewer(
-        api_key=api_key,
-        base_url=base_url,
-        model_name=llm,
-        temperature=interviewer_temperature,
-        max_tokens=interviewer_max_tokens,
-        timeout=interviewer_timeout,
-        use_thinking=use_thinking,
-    )
-    interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
-    user_cost_tracker = CostTracker(model_name=gym_model)
-    _orig_ask_question = interviewer.ask_question
-    _orig_prompt_model_call = baseline_prompts.model_call
-    _orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
-    _orig_interviewer_model_call = baseline_interviewer_module.model_call
-    _orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
-
-    def _tracked_ask_question(conversation_history, return_usage=False):
-        start = perf_counter()
-        out = _orig_ask_question(conversation_history, return_usage=return_usage)
-        elapsed = perf_counter() - start
-        if return_usage:
-            question, usage_info = out
-            interviewer_cost_tracker.addUsage(
-                usage_info or {},
-                metadata={"action": "baseline.interviewer.ask_question"},
-                run_time_s=elapsed,
-            )
-            return question, usage_info
-        return out
-
-    def _tracked_model_call(
-        system_prompt,
-        user_prompt,
-        model_config,
-        return_json=True,
-        return_usage=False,
-    ):
-        start = perf_counter()
-        response, usage_info = _orig_prompt_model_call(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            model_config=model_config,
-            return_json=return_json,
-            return_usage=True,
+        config = ReqElicitGymConfig(
+            data_path=data_path,
+            judge_api_key=judge_api_key,
+            judge_base_url=judge_base_url,
+            judge_model_name=gym_model,
+            judge_temperature=judge_temperature,
+            judge_max_tokens=judge_max_tokens,
+            judge_timeout=judge_timeout,
+            user_api_key=user_api_key,
+            user_base_url=user_base_url,
+            user_model_name=gym_model,
+            user_temperature=user_temperature,
+            user_max_tokens=user_max_tokens,
+            user_timeout=user_timeout,
+            user_answer_quality=user_answer_quality,
+            max_steps=max_steps,
+            verbose=verbose,
+            evaluation_result_path=evaluation_result_path,
+            conversation_result_path=conversation_result_path,
         )
-        elapsed = perf_counter() - start
-        if system_prompt == baseline_prompts.PASSIVE_RESPONSE_SYSTEM:
-            user_cost_tracker.addUsage(
-                usage_info or {},
-                metadata={"action": "baseline.user.generate_response"},
-                run_time_s=elapsed,
+
+        print("\n正在建立環境...")
+        try:
+            env = ReqElicitGym(config)
+        except Exception as e:
+            print(f"錯誤：建立環境失敗：{e}")
+            import traceback
+
+            traceback.print_exc()
+            sys.exit(1)
+
+        env.current_task_index = 0
+
+        interviewer_max_tokens = (
+            interviewer_max_tokens_thinking if use_thinking else interviewer_max_tokens
+        )
+        interviewer = Interviewer(
+            api_key=api_key,
+            base_url=base_url,
+            model_name=llm,
+            temperature=interviewer_temperature,
+            max_tokens=interviewer_max_tokens,
+            timeout=interviewer_timeout,
+            use_thinking=use_thinking,
+        )
+        interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
+        user_cost_tracker = CostTracker(model_name=gym_model)
+        _orig_ask_question = interviewer.ask_question
+        _orig_prompt_model_call = baseline_prompts.model_call
+        _orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
+        _orig_interviewer_model_call = baseline_interviewer_module.model_call
+        _orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
+
+        def _tracked_ask_question(conversation_history, return_usage=False):
+            start = perf_counter()
+            out = _orig_ask_question(conversation_history, return_usage=return_usage)
+            elapsed = perf_counter() - start
+            if return_usage:
+                question, usage_info = out
+                interviewer_cost_tracker.addUsage(
+                    usage_info or {},
+                    metadata={"action": "baseline.interviewer.ask_question"},
+                    run_time_s=elapsed,
+                )
+                return question, usage_info
+            return out
+
+        def _tracked_model_call(
+            system_prompt,
+            user_prompt,
+            model_config,
+            return_json=True,
+            return_usage=False,
+        ):
+            start = perf_counter()
+            response, usage_info = _orig_prompt_model_call(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model_config=model_config,
+                return_json=return_json,
+                return_usage=True,
             )
-        if return_usage:
-            return response, usage_info
-        return response
+            elapsed = perf_counter() - start
+            if system_prompt == baseline_prompts.PASSIVE_RESPONSE_SYSTEM:
+                user_cost_tracker.addUsage(
+                    usage_info or {},
+                    metadata={"action": "baseline.user.generate_response"},
+                    run_time_s=elapsed,
+                )
+            if return_usage:
+                return response, usage_info
+            return response
 
-    interviewer.ask_question = _tracked_ask_question
-    baseline_prompts.model_call = _tracked_model_call
-    baseline_interviewer_module.model_call = _tracked_model_call
-    baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
-    baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
-    print(f"Interviewer 已建立：{interviewer}")
+        interviewer.ask_question = _tracked_ask_question
+        baseline_prompts.model_call = _tracked_model_call
+        baseline_interviewer_module.model_call = _tracked_model_call
+        baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
+        baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
+        print(f"Interviewer 已建立：{interviewer}")
 
-    # 執行所有任務（環境會自動記錄對話並計算評估指標）
-    print("\n" + "=" * 60)
-    print("開始執行全量評估實驗...")
-    print("=" * 60)
-    results = env.run_all_tasks(interviewer)
-    interviewer.ask_question = _orig_ask_question
-    baseline_prompts.model_call = _orig_prompt_model_call
-    baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
-    baseline_interviewer_module.model_call = _orig_interviewer_model_call
-    baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
+        print("\n" + "=" * 60)
+        print("開始執行全量評估實驗...")
+        print("=" * 60)
+        results = env.run_all_tasks(interviewer)
+        interviewer.ask_question = _orig_ask_question
+        baseline_prompts.model_call = _orig_prompt_model_call
+        baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
+        baseline_interviewer_module.model_call = _orig_interviewer_model_call
+        baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
 
-    # 儲存評估結果檔案（含變異數及依 application_type 分類的統計）
-    # 若不傳 file_path 或傳入 None，會使用 config 中設定的路徑
-    try:
-        env.save_evaluation_results(file_path=None, interviewer_model_name=interviewer.model_name)
-        print(f"\n評估結果已儲存至：{config.evaluation_result_path}")
-    except Exception as e:
-        print(f"儲存評估結果時發生錯誤：{e}")
-        import traceback
+        try:
+            env.save_evaluation_results(file_path=None, interviewer_model_name=interviewer.model_name)
+            print(f"\n評估結果已儲存至：{config.evaluation_result_path}")
+        except Exception as e:
+            print(f"儲存評估結果時發生錯誤：{e}")
+            import traceback
+            traceback.print_exc()
 
-        traceback.print_exc()
+        try:
+            env.save_conversation_results(file_path=None)
+            print(f"對話過程已儲存至：{config.conversation_result_path}")
+        except Exception as e:
+            print(f"儲存對話過程時發生錯誤：{e}")
+            import traceback
+            traceback.print_exc()
 
-    # 儲存對話過程檔案（含每輪的 elicitation_ratio）
-    # 若不傳 file_path 或傳入 None，會使用 config 中設定的路徑
-    try:
-        env.save_conversation_results(file_path=None)
-        print(f"對話過程已儲存至：{config.conversation_result_path}")
-    except Exception as e:
-        print(f"儲存對話過程時發生錯誤：{e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # 儲存成本摘要（interviewer token/cost）
-    try:
-        interviewer_summary = interviewer_cost_tracker.export_summary_dict()
-        user_summary = user_cost_tracker.export_summary_dict()
-        cost_payload = {
-            "agents": {
+        run_total_cost_usd = 0.0
+        run_total_token = 0
+        run_total_runtime = 0.0
+        run_cost_ok = False
+        try:
+            interviewer_summary = interviewer_cost_tracker.export_summary_dict()
+            user_summary = user_cost_tracker.export_summary_dict()
+            cost_payload = {
                 "interviewer": interviewer_summary,
                 "user": user_summary,
-            },
-            "totals": {
                 "input_tokens": int(interviewer_summary.get("input_tokens", 0) or 0)
                 + int(user_summary.get("input_tokens", 0) or 0),
                 "output_tokens": int(interviewer_summary.get("output_tokens", 0) or 0)
@@ -366,18 +381,27 @@ def main():
                     + float(user_summary.get("estimated_cost(USD)", 0.0) or 0.0),
                     8,
                 ),
-            },
-        }
-        with open(cost_result_path, "w", encoding="utf-8") as f:
-            json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
-        print(f"成本摘要已儲存至：{cost_result_path}")
-    except Exception as e:
-        print(f"儲存成本摘要時發生錯誤：{e}")
-        import traceback
+            }
+            run_total_cost_usd = float(cost_payload.get("estimated_cost(USD)", 0.0) or 0.0)
+            run_total_token = int(cost_payload.get("total_tokens", 0) or 0)
+            run_total_runtime = float(cost_payload.get("run_time(s)", 0.0) or 0.0)
+            with open(cost_result_path, "w", encoding="utf-8") as f:
+                json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
+            run_cost_ok = True
+            print(f"成本摘要已儲存至：{cost_result_path}")
+        except Exception as e:
+            print(f"儲存成本摘要時發生錯誤：{e}")
+            import traceback
+            traceback.print_exc()
 
-        traceback.print_exc()
+        run_results.append(results)
+        run_metrics.append(results.get("overall_metrics", {}) or {})
+        if run_cost_ok:
+            run_costs_usd.append(run_total_cost_usd)
+            run_total_tokens.append(run_total_token)
+            run_total_runtime_s.append(run_total_runtime)
 
-    # 列印總結
+    results = run_results[-1] if run_results else {}
     print("\n" + "=" * 60)
     print("所有任務完成！")
     print("=" * 60)
@@ -387,7 +411,6 @@ def main():
         avg_turns = sum(r.get("total_turns", 0) for r in conversation_results) / len(conversation_results)
         print(f"平均對話輪數：{avg_turns:.1f}")
 
-    # 列印評估指標總結
     overall_metrics = results.get("overall_metrics", {})
     if overall_metrics:
         print(f"\n評估指標總結：")
@@ -405,7 +428,6 @@ def main():
         print(f"\n總體比例（基於總計數）：")
         print(f"  總取得比例：{overall_metrics.get('elicitation_ratio_from_totals', 0.0):.2%}")
 
-        # 列印依 application_type 分類的統計
         app_type_stats = overall_metrics.get("application_type_statistics", {})
         if app_type_stats:
             print(f"\n依應用類型統計：")
@@ -419,6 +441,59 @@ def main():
                     f"{stats['average_tkqr']:>10.4f} "
                     f"{stats['average_ora']:>10.4f}"
                 )
+
+    if runs > 1:
+        metric_keys = [
+            ("elicitation_ratio", "平均取得比例", "percent"),
+            ("tkqr", "平均 TKQR", "float4"),
+            ("ora", "平均 ORA", "float4"),
+        ]
+        print("\n跨多次執行統計（平均值 ± 標準差）：")
+        summary_metrics = {}
+        if run_metrics:
+            for key, label, fmt in metric_keys:
+                vals = []
+                for m in run_metrics:
+                    v = m.get(key, None)
+                    if isinstance(v, (int, float)):
+                        vals.append(float(v))
+                if not vals:
+                    continue
+                mu = mean(vals)
+                sd = float(np.std(vals))
+                summary_metrics[key] = {
+                    "mean": mu,
+                    "std": sd,
+                    "per_round_values": vals,
+                }
+                if fmt == "percent":
+                    print(f"  {label}：{mu:.2%} ± {sd:.2%}")
+                else:
+                    print(f"  {label}：{mu:.4f} ± {sd:.4f}")
+
+        summary_payload = {"rounds": runs}
+        if summary_metrics:
+            summary_payload["metrics"] = summary_metrics
+        if run_costs_usd:
+            avg_cost_usd = mean(run_costs_usd)
+            cost_std_usd = float(np.std(run_costs_usd))
+            avg_token = mean(run_total_tokens)
+            avg_runtime_s = mean(run_total_runtime_s)
+            print(f"  平均成本(USD)：{avg_cost_usd:.8f} ± {cost_std_usd:.8f}")
+            print(f"  平均每輪 token：{avg_token:.1f}")
+            print(f"  平均每輪執行時間(s)：{avg_runtime_s:.3f}")
+            summary_payload["cost"] = {
+                "average_cost(USD)": round(avg_cost_usd, 8),
+                "average_token": round(float(avg_token)),
+                "average_run_time(s)": round(float(avg_runtime_s), 3),
+            }
+        else:
+            print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")
+
+        summary_path = RESULTS_DIR / f"summary_{RESULTS_FILE_PREFIX}.json"
+        with summary_path.open("w", encoding="utf-8") as f:
+            json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
+        print(f"跨 run 統計已儲存至：{summary_path}")
 
     return results
 
