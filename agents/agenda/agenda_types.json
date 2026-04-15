@@ -1,7 +1,7 @@
 [
   {
-    "id": "conflict_resolution",
-    "label": "衝突協調",
+    "id": "conflict_discussion",
+    "label": "衝突討論",
     "description": "需要跨角色協調、投票或人工裁決，且無法透過直接釐清或保守更新解決的需求衝突"
   },
   {

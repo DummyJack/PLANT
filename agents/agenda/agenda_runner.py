@@ -262,6 +262,28 @@ class AgendaRunner:
                     proposer_agent=proposer,
                 )
 
+            # 補齊結構化會議輸出欄位（若上游未提供或為空）
+            source_ids = list(topic.get("source_ids", []) or [])
+            derived_req_ids = [
+                sid for sid in source_ids
+                if isinstance(sid, str)
+                and sid.startswith(("REQ-", "FR-", "NFR-", "R-"))
+            ]
+            cur_req_ids = resolution.get("affected_requirement_ids") or []
+            if not cur_req_ids:
+                resolution["affected_requirement_ids"] = derived_req_ids
+            if not isinstance(resolution.get("verification_impact"), dict):
+                resolution["verification_impact"] = {
+                    "level": "none",
+                    "notes": "",
+                }
+            has_changes = bool(resolution.get("requirement_change_candidates"))
+            has_affected = bool(resolution.get("affected_requirement_ids"))
+            resolution["needs_approval"] = has_affected or has_changes
+            for _rc in (resolution.get("requirement_change_candidates") or []):
+                if isinstance(_rc, dict):
+                    _rc.setdefault("source_topic_id", topic.get("id"))
+
             self.topic_status[topic_id]["resolution"] = resolution
             rv = resolution.get("votes", {})
             if rv:
@@ -297,7 +319,7 @@ class AgendaRunner:
             contributions = st_esc.get("contributions") or []
             self.logger.info(f"  人類裁決: [{topic_id}] {topic.get('title', '')}")
             options = None
-            if topic.get("category") in ("conflict_resolution",) and self.registry:
+            if topic.get("category") in ("conflict_discussion",) and self.registry:
                 analyst = self.registry.get("analyst")
                 if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
                     options = analyst.get_resolution_options_for_topic(topic, self.artifact)
