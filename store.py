@@ -160,9 +160,9 @@ class Store:
 
     def _markdown_target_dir(self, filename: str) -> Path:
         """指定輸出檔案放置目錄。"""
-        if filename == "conflict_report.md" or self._is_meeting_markdown(filename):
-            return self.artifact_dir
-        return self.output_dir
+        if filename in {"srs.md", "design_rationale.md"}:
+            return self.output_dir
+        return self.artifact_dir
 
     def save_markdown(self, content: str, filename: str):
         target_dir = self._markdown_target_dir(filename)

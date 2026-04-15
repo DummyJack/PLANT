@@ -5,6 +5,16 @@
   "tool_call_max_rounds": 1,
   "max_web_search_results": 5,
   "max_iterations": 1,
+  "enable_validation_gate": true,
+  "enforce_validation_gate_for_final_srs": true,
+  "enable_human_approval_queue": true,
+  "require_human_approval_for_changes": true,
+  "strict_formal_srs_mode": true,
+  "enable_elicitation": true,
+  "elicitation_max_turns": 10,
+  "conflict_recheck_requires_analyst_signoff": true,
+  "enable_all_conflict_check": true,
+  "min_approved_ratio_for_srs": 0.8,
   "enable_tools": {
     "web_search": true,
     "file_parser": true,
@@ -13,9 +23,9 @@
   },
   "enable_human_escalation": true,
   "enable_agenda_types": {
-    "conflict_resolution": true,
+    "conflict_discussion": true,
     "open_question": true,
-    "new_requirement": true,
+    "new_requirement": false,
     "tradeoff": true
   },
   "enable_agents": {

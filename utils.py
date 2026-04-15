@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import threading
+import os
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -61,19 +62,35 @@ def read_max_iterations(
     return _to_pos_int(raw, default)
 
 
+def current_output_language() -> str:
+    """讀取目前輸出語言模式（zh-Hant / en）。"""
+    val = str(os.environ.get("PLANT_OUTPUT_LANGUAGE", "zh-Hant")).strip().lower()
+    if val in {"en", "english"}:
+        return "en"
+    return "zh-Hant"
+
+
 def directive_embed() -> str:
+    if current_output_language() == "en":
+        return "Please respond in English."
     return "請使用繁體中文回覆。"
 
 
 def global_conventions_text() -> str:
+    if current_output_language() == "en":
+        return "Be specific, concise, and actionable; avoid vague wording. When citing URLs, paste full URLs directly instead of Markdown links."
     return "請具體、精簡、可執行；避免空泛描述。引用網址時直接貼出完整 URL，不要使用 Markdown 超連結語法。"
 
 
 def short_reasoning_line() -> str:
+    if current_output_language() == "en":
+        return "Use one short English sentence for reasoning."
     return "reasoning 請使用一句繁體中文簡述。"
 
 
 def user_requirement_cards() -> str:
+    if current_output_language() == "en":
+        return "Write requirement cards in English."
     return "需求卡片請使用繁體中文。"
 
 
@@ -94,6 +111,8 @@ def expert_fallback_viewpoint() -> str:
 
 
 def mediator_agenda_language_line() -> str:
+    if current_output_language() == "en":
+        return "Use English for title/description."
     return "title/description 請使用繁體中文。"
 
 
@@ -110,6 +129,8 @@ def mediator_prose_line() -> str:
 
 
 def mediator_reasoning_line() -> str:
+    if current_output_language() == "en":
+        return "reasoning should be one concise English sentence."
     return "reasoning 請使用一句繁體中文。"
 
 
@@ -126,14 +147,20 @@ def modeler_models_array_name_line() -> str:
 
 
 def modeler_name_field_language() -> str:
+    if current_output_language() == "en":
+        return "Use English in the name field."
     return "name 欄位請使用繁體中文。"
 
 
 def modeler_review_field_language() -> str:
+    if current_output_language() == "en":
+        return "Write review field descriptions in English."
     return "review 欄位說明請使用繁體中文。"
 
 
 def documentor_srs_body_lang() -> str:
+    if current_output_language() == "en":
+        return "Write the document body in English."
     return "內文請使用繁體中文。"
 
 
@@ -259,6 +286,8 @@ class Collect:
                 "resolution": "unresolved",
                 "summary": "人類選擇暫不裁決",
                 "decision": "暫緩處理",
+                "chosen_option_id": "",
+                "chosen_option_title": "",
             }
 
         try:
@@ -271,11 +300,15 @@ class Collect:
                         "resolution": "unresolved",
                         "summary": "人類未輸入裁決",
                         "decision": "暫緩處理",
+                        "chosen_option_id": 0,
+                        "chosen_option_title": "自行輸入裁決",
                     }
                 return {
                     "resolution": "agreed",
                     "summary": f"由人類裁決: {custom}",
                     "decision": custom,
+                    "chosen_option_id": 0,
+                    "chosen_option_title": "自行輸入裁決",
                 }
 
             chosen = None
@@ -292,6 +325,8 @@ class Collect:
                     "resolution": "agreed",
                     "summary": f"人類採納方案 {choice}（{source}）: {title}",
                     "decision": desc,
+                    "chosen_option_id": choice,
+                    "chosen_option_title": title,
                 }
             else:
                 print("無效的選項，暫緩處理")
@@ -299,6 +334,8 @@ class Collect:
                     "resolution": "unresolved",
                     "summary": "無效輸入",
                     "decision": "暫緩處理",
+                    "chosen_option_id": "",
+                    "chosen_option_title": "",
                 }
         except ValueError:
             print("無效的輸入，暫緩處理")
@@ -306,6 +343,8 @@ class Collect:
                 "resolution": "unresolved",
                 "summary": "無效輸入",
                 "decision": "暫緩處理",
+                "chosen_option_id": "",
+                "chosen_option_title": "",
             }
 
 
@@ -384,6 +423,7 @@ class CostTracker:
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
         # 官方定價（Text tokens, Standard）
         "gpt-5.4": {"input": 2.50, "output": 15.00},
+        "gpt-5.2": {"input": 1.75, "output": 14.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         "gemini-3.1-flash-lite-preview": {"input": 0.25, "output": 1.50},
@@ -477,39 +517,49 @@ class CostTracker:
         with self.lock:
             return list(self.call_records)
 
+    def _resolved_total_run_time_seconds(self) -> float:
+        """總耗時：segment 計時與各次 addUsage(..., run_time_s=...) 加總取較大者。
+
+        RQ1 run_Baseline 等僅包裝 addUsage 傳入 wall time、未呼叫 start/end_segment 時，
+        仍可由 call_records 還原；一般 model 路徑則 end_segment 已寫入 elapsed，與
+        record 加總理論一致，取 max 可避免漏計亦不會雙倍（兩者不應同時大於對方）。
+        """
+        with self.lock:
+            from_segments = float(self.elapsed_seconds)
+            if self.startedAt is not None:
+                from_segments += perf_counter() - self.startedAt
+            from_records = sum(
+                float(r.get("run_time(s)", 0.0) or 0.0) for r in self.call_records
+            )
+            return max(from_segments, from_records)
+
     def summary(self) -> Optional[Dict[str, Any]]:
         pricing = self.resolvePricing(self.model_name)
         if pricing is None:
             return None
 
+        total_rt = self._resolved_total_run_time_seconds()
         with self.lock:
-            current_elapsed = self.elapsed_seconds
-            if self.startedAt is not None:
-                current_elapsed += perf_counter() - self.startedAt
-
-        return {
-            "model": self.model_name,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "total_tokens": self.total_tokens,
-            "run_time(s)": round(current_elapsed, 3),
-            "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
-        }
-
-    def export_summary_dict(self) -> Dict[str, Any]:
-        """匯出用：必回傳可序列化摘要（無定價表時 estimated_cost 可能為 0）。"""
-        with self.lock:
-            current_elapsed = self.elapsed_seconds
-            if self.startedAt is not None:
-                current_elapsed += perf_counter() - self.startedAt
             return {
                 "model": self.model_name,
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "total_tokens": self.total_tokens,
-                "run_time(s)": round(current_elapsed, 3),
+                "run_time(s)": round(total_rt, 3),
                 "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
-                "has_pricing": self.resolvePricing(self.model_name) is not None,
+            }
+
+    def export_summary_dict(self) -> Dict[str, Any]:
+        """匯出用：必回傳可序列化摘要（無定價表時 estimated_cost 可能為 0）。"""
+        total_rt = self._resolved_total_run_time_seconds()
+        with self.lock:
+            return {
+                "model": self.model_name,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "total_tokens": self.total_tokens,
+                "run_time(s)": round(total_rt, 3),
+                "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
             }
 
     def resolvePricing(self, model_name: str) -> Optional[Dict[str, float]]:
@@ -534,6 +584,19 @@ class CostTracker:
         input_cost = (input_tokens / 1_000_000) * input_price
         output_cost = (output_tokens / 1_000_000) * output_price
         return input_cost + output_cost
+
+
+def model_has_token_pricing(
+    model_name: str,
+    pricing_per_1m_tokens: Optional[Dict[str, Dict[str, float]]] = None,
+) -> bool:
+    """實驗腳本用：模型名稱是否在 CostTracker 定價表（含前綴比對）可解析。"""
+    name = str(model_name or "").strip()
+    if not name:
+        return False
+    tracker = CostTracker(name, pricing_per_1m_tokens=pricing_per_1m_tokens)
+    return tracker.resolvePricing(tracker.model_name) is not None
+
 
 VALID_DISCUSSION_MODES = {"sequential", "simultaneous"}
 VALID_PRIORITY_HINTS = {"high", "medium", "low"}
