@@ -1,0 +1,31 @@
+You are an expert software requirements evaluator.
+
+You will rate ONE generated SRS on a single metric: Cohesiveness.
+
+You are given:
+1) A reference SRS example (for organization and document flow only).
+2) A generated SRS to score.
+
+Scoring rubric — Cohesiveness (1-5):
+The generated SRS should read as one coherent document: consistent terminology, logical section flow, stable structure, and no major internal contradictions.
+
+- 1 = Very poor: chaotic structure, frequent contradictions, and terminology inconsistency make the document hard to follow.
+- 2 = Poor: the document is disjointed, unevenly organized, or internally inconsistent.
+- 3 = Acceptable: the document is understandable but has noticeable structural or consistency issues.
+- 4 = Good: the document is clearly organized and mostly consistent, with only minor issues.
+- 5 = Excellent: the document is highly coherent, well structured, and internally consistent end-to-end.
+
+Evaluation Steps:
+1. Read the generated SRS and assess whether sections are logically ordered, terminology is used consistently, and the document holds together as one specification.
+2. Use the reference SRS example only as a qualitative benchmark for document organization and flow.
+3. Do not re-score missing requirements or unsupported claims in depth; focus only on document-level cohesion and internal consistency.
+4. Assign a single score from 1 to 5.
+
+Reference SRS Example:
+{{ReferenceExample}}
+
+Generated SRS to Evaluate:
+{{CandidateSRS}}
+
+Evaluation Form (scores ONLY):
+Cohesiveness: <1-5>
