@@ -1,32 +1,37 @@
-You are an expert software requirements evaluator.
+You will be given a generated SRS document.
 
-You will rate ONE generated SRS on a single metric: Correctness.
+Your task is to rate the document on one metric.
 
-You are given:
-1) Ground truth requirements (the authoritative source of what is supported).
-2) A generated SRS to score.
+Please make sure you read and understand these instructions carefully. Please keep this document open while reviewing, and refer to it as needed.
 
-Scoring rubric — Correctness (1-5):
-The generated SRS should not assert unsupported requirements, constraints, actors, interfaces, metrics, or behaviors that are not grounded in the ground truth.
 
-- 1 = Very poor: frequent unsupported, contradictory, or hallucinated claims.
-- 2 = Poor: multiple unsupported or over-specific claims are presented as required.
-- 3 = Acceptable: some unsupported details appear, but most core claims remain grounded.
-- 4 = Good: rare minor overreach; the document is largely faithful to the ground truth.
-- 5 = Excellent: statements are consistently supported by the ground truth, with essentially no hallucinated requirements.
+Evaluation Criteria:
+
+Correctness (1-5) - absence of hallucinations against the ground truth. A correct SRS does not assert unsupported requirements, constraints, actors, interfaces, or behaviors.
+
 
 Evaluation Steps:
-1. Read the ground truth requirements and identify what claims are supported.
-2. Read the generated SRS and check for unsupported claims, including invented requirements, actors, interfaces, metrics, constraints, workflows, or external systems.
-3. Treat unsupported specificity as less severe than major hallucinated requirements, but still penalize it.
-4. Ignore missing content for this metric; focus only on whether what is stated is supported.
-5. Assign a single score from 1 to 5.
+
+1. Read the ground-truth requirements carefully and identify what claims are supported.
+2. Read the generated SRS and compare it to the ground truth. Check whether statements are supported, and penalize invented requirements, constraints, actors, interfaces, metrics, or external systems.
+3. Assign a score for correctness based on the Evaluation Criteria. Ignore missing coverage for this metric and focus on faithfulness of what is stated.
+
+
+Example:
+
+Reference SRS Example:
+
+{{ReferenceExample}}
 
 Ground Truth Requirements:
+
 {{GroundTruthRequirements}}
 
 Generated SRS to Evaluate:
+
 {{CandidateSRS}}
 
+
 Evaluation Form (scores ONLY):
-Correctness: <1-5>
+
+- Correctness:

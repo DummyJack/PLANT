@@ -1,31 +1,37 @@
-You are an expert software requirements evaluator.
+You will be given a generated SRS document.
 
-You will rate ONE generated SRS on a single metric: Completeness.
+Your task is to rate the document on one metric.
 
-You are given:
-1) Ground truth requirements (the authoritative checklist of what should be covered).
-2) A generated SRS to score.
+Please make sure you read and understand these instructions carefully. Please keep this document open while reviewing, and refer to it as needed.
 
-Scoring rubric — Completeness (1-5):
-The generated SRS should cover the material requirements in the ground truth.
 
-- 1 = Very poor: most ground-truth requirements are missing or only vaguely mentioned.
-- 2 = Poor: many requirements are missing, merged away, or covered unclearly.
-- 3 = Acceptable: major requirements are present, but there are noticeable omissions or weak coverage.
-- 4 = Good: nearly all material requirements are covered, with only minor omissions.
-- 5 = Excellent: all material ground-truth requirements are clearly and adequately covered.
+Evaluation Criteria:
+
+Completeness (1-5) - coverage of all ground-truth requirements. A complete SRS clearly includes every requirement stated in the ground truth without omission.
+
 
 Evaluation Steps:
-1. Read the ground truth requirements and treat them as the checklist of required content.
-2. Read the generated SRS and judge whether each material ground-truth requirement is clearly covered.
-3. Ignore writing style and ignore extra unsupported details for this metric; focus only on missing versus covered required content.
-4. Assign a single score from 1 to 5.
+
+1. Read the ground-truth requirements carefully and treat them as a complete checklist.
+2. Read the generated SRS and compare it to the ground truth. Check whether every requirement is present and adequately described.
+3. Assign a score for completeness based on the Evaluation Criteria. Ignore unsupported extra details for this metric.
+
+
+Example:
+
+Reference SRS Example:
+
+{{ReferenceExample}}
 
 Ground Truth Requirements:
+
 {{GroundTruthRequirements}}
 
 Generated SRS to Evaluate:
+
 {{CandidateSRS}}
 
+
 Evaluation Form (scores ONLY):
-Completeness: <1-5>
+
+- Completeness:
