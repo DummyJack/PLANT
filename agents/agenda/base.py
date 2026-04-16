@@ -3,7 +3,7 @@
 所有實作已拆至子模組：
   - main_meeting          : 每輪主會議生命週期
   - meeting_hidden_elicitation : 隱性需求挖掘
-  - meeting_conflict_review    : 衝突複核 / 需求變更
+  - meeting_conflict_review    : 衝突再審查 / 需求變更
   - meeting_subflows           : agenda loop / queue 子流程
 """
 from typing import Any, Dict

@@ -113,7 +113,7 @@ class MediatorAgent(BaseAgent):
                 reason = "new_requirement_affects_scope"
         elif category == "conflict_discussion":
             action = "formal_meeting"
-            reason = "conflict_discussion_requires_group_decision"
+            reason = "conflict_discussion_requires_group_recheck"
         elif category == "tradeoff":
             if requires_multi_party or blocks_decision or impact == "high":
                 action = "formal_meeting"
@@ -303,17 +303,17 @@ class MediatorAgent(BaseAgent):
 {json.dumps(registered, ensure_ascii=False)}
 
 # 討論模式（discussion_mode）情境說明
-- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：Conflict 協調、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
+- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：衝突再審查、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
 - **simultaneous（同時發言）**：適合「先各自表態、再比較差異」的議題。例如：腦力激盪、多方案並列、各自提出對某議題的立場或建議，不需即時回應前一位。每人只看到議題與專案狀態，不看同輪其他人的發言。
 請依議題性質選擇其一。
 
 # 標題與描述撰寫要求（重要）
 - **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，例如寫出涉及的對象、需求或 Conflict 重點，勿只寫類型名稱（如勿只寫「Conflict 討論」「需求取捨」）。
 - **description（描述）**：簡短說明「為什麼要開這個議題、要解決什麼」。可提及相關需求 id 或 Conflict id，並用一兩句話說明討論重點。
-- 範例：標題可為「管理員權限與一般使用者隱私的 Conflict 如何取捨」而非「Conflict 討論」；描述可為「CF-01 涉及 R-01 與 R-03，需協調兩方立場」。
+- 範例：標題可為「CF-01 與 CF-03 是否需要改判」而非「Conflict 討論」；描述可為「請逐筆檢查涉及的 requirement pair 是否真的存在互斥或應維持 Neutral」。
 
 # 議程類型與開題
-- **conflict_discussion**：當有 label 為 Conflict 且未解決的項目時，應考慮開此類協調立場。
+- **conflict_discussion**：當有 label 為 Conflict 或 Neutral 且需要再次檢查標籤是否正確時，應考慮開此類再審查議題。
 - **open_question**：當草稿（或摘要）中有待處理開放問題（含需求描述模糊、邊界待確認）時，可開此類。
 - **open_question**：若同輪有多個 open_question，執行層會自動合併為單一「集中回覆」議題，讓相關 agent 一次回答；因此可先正常產生 open_question，無需刻意拆得很細。
 - **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；此外，若有跡象顯示既有需求需要修正（例如描述不準確、優先順序變動、邊界條件改變），也可用此類議題讓 User 檢視並調整既有需求。
@@ -899,7 +899,7 @@ class MediatorAgent(BaseAgent):
         artifact: Optional[Dict[str, Any]] = None,
         registry=None,
     ) -> Dict[str, Any]:
-        """由主持人模型動態決定會前複核的討論模式。
+        """由主持人模型動態決定會前衝突再審查的討論模式。
 
         - 僅回傳 ``discussion_mode`` 與 ``participants``。
         - **sequential**：發言順序完全由 ``participants`` 陣列順序表達，**不**另產生
@@ -925,7 +925,7 @@ class MediatorAgent(BaseAgent):
                 if str(c.get("label") or "").strip() in {"Conflict", "Neutral"}:
                     n_candidates += 1
 
-        prompt = f"""你是需求會議主持人，即將進行「會前衝突批次再審查」（同一輪內可能有多筆 Conflict/Neutral 需一併討論）。
+        prompt = f"""你是需求會議主持人，即將進行「會前衝突批次再審查」（同一輪內可能有多筆 Conflict/Neutral pairs 需一併做標籤再審查）。
 
 請決定本輪討論模式（只能二選一）：
 - sequential：參與者依你指定的 participants **陣列順序**逐一發言。此模式**不得**使用 speaking_order 欄位；順序**只能**用 participants 表達。
@@ -944,7 +944,7 @@ class MediatorAgent(BaseAgent):
 
 規則：
 - participants 至少 2 人，且每個元素必須屬於上方集合；**陣列順序即為 sequential 時的發言順序**。
-- 若需逐步對質、修正他人論點，可優先 sequential；若只需快速蒐集獨立判斷可選 simultaneous。
+- 若需逐步比對證據、修正他人判準或逐筆重判，可優先 sequential；若只需快速蒐集獨立判斷可選 simultaneous。
 """
         data: Dict[str, Any] = {}
         try:

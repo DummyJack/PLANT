@@ -40,7 +40,7 @@ def _run_pre_round_review(
     recent_discussions: Optional[List[Dict[str, Any]]] = None,
     round_num: Optional[int] = None,
 ) -> Dict[str, Any]:
-    coordinator.flow.logger.info("Pre-Round Review")
+    coordinator.flow.logger.info("Pre-Round Review / Conflict Recheck")
     if round_num is not None:
         artifact = coordinator.run_pre_meeting_conflict_review(artifact, round_num)
     from .meeting_subflows import _count_unanswered_open_questions

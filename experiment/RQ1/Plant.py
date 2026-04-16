@@ -1272,9 +1272,7 @@ def main() -> None:
             else:
                 print(f"  {label}：{mu:.4f} ± {sd:.4f}")
 
-        summary_payload = {"runs": runs}
-        if summary_metrics:
-            summary_payload["metrics"] = summary_metrics
+        summary_cost: Optional[Dict[str, Any]] = None
         if run_costs_usd:
             cost_mu = float(np.mean(run_costs_usd))
             cost_sd = float(np.std(run_costs_usd))
@@ -1285,7 +1283,7 @@ def main() -> None:
             print(f"  平均 token：{token_mu:.1f} ± {token_sd:.1f}")
             print(f"  平均成本(USD)：{cost_mu:.8f} ± {cost_sd:.8f}")
             print(f"  平均執行時間(s)：{rt_mu:.3f} ± {rt_sd:.3f}")
-            summary_payload["cost"] = {
+            summary_cost = {
                 "average_token": {
                     "mean": token_mu,
                     "std": token_sd,
@@ -1304,6 +1302,13 @@ def main() -> None:
             }
         else:
             print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")
+
+        # 固定欄位順序：runs -> metrics -> cost
+        summary_payload = {"runs": runs}
+        if summary_metrics:
+            summary_payload["metrics"] = summary_metrics
+        if summary_cost is not None:
+            summary_payload["cost"] = summary_cost
 
         summary_path = RESULTS_DIR / f"summary_{OUTPUT_PREFIX}.json"
         with summary_path.open("w", encoding="utf-8") as f:

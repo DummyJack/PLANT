@@ -168,7 +168,7 @@ def _process_approval_queue(
             "id": row.get("topic_id"),
             "title": f"需求變更批准：{row.get('topic_id', '')}",
             "description": (
-                f"說明: {row.get('summary', '')}\n"
+                f"變更說明: {row.get('summary', '')}\n"
                 f"決議: {row.get('decision', '')}\n"
                 f"影響需求: {row.get('affected_requirement_ids', [])}\n"
                 f"驗證影響: {row.get('verification_impact', {})}"
