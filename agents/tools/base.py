@@ -57,14 +57,13 @@ class ToolRegistry:
         built: List[Any] = []
 
         if "web_search" in allowed and self.enable_tools.get("web_search", False):
-            ws_stop = self.config.get("web_search_stop")
-            ws_kw: Dict[str, Any] = {
-                "stop_config": ws_stop if isinstance(ws_stop, dict) else None,
-            }
-            cap = self.config.get("max_web_search_results")
-            if cap is not None:
-                ws_kw["max_results_cap"] = int(cap)
-            built.append(WebSearchTool(**ws_kw))
+            from utils import MAX_WEB_SEARCH_RESULTS
+            built.append(
+                WebSearchTool(
+                    stop_config=None,
+                    max_results_cap=MAX_WEB_SEARCH_RESULTS,
+                )
+            )
 
         if "file_parser" in allowed and (
             self.enable_tools.get("file_parser", True)
@@ -72,27 +71,21 @@ class ToolRegistry:
             doc_dir = Path("doc")
             doc_dir.mkdir(parents=True, exist_ok=True)
             if has_supported_doc_files(doc_dir):
-                fp_cfg = self.config.get("file_parser_rag") or {}
                 built.append(
                     FileParserTool(
                         base_dir=doc_dir,
-                        chunk_max_chars=int(fp_cfg.get("chunk_max_chars", 1200)),
-                        chunk_overlap=int(fp_cfg.get("chunk_overlap", 150)),
-                        read_chunks_max_chars=int(
-                            fp_cfg.get("read_chunks_max_chars", 48000)
-                        ),
-                        read_full_max_chars=int(
-                            fp_cfg.get("read_full_max_chars", 16000)
-                        ),
+                        chunk_max_chars=1200,
+                        chunk_overlap=150,
+                        read_chunks_max_chars=48000,
+                        read_full_max_chars=16000,
                     )
                 )
 
         if "plantuml_validate" in allowed and self.enable_tools.get("plantuml_validate", True):
-            opts = self.config.get("plantuml_validate") or {}
             built.append(
                 PlantUMLValidatorTool(
-                    use_online=opts.get("use_online", True),
-                    server_url=opts.get("server_url", ""),
+                    use_online=True,
+                    server_url="",
                 )
             )
 
