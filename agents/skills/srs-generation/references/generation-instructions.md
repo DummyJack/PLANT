@@ -1,62 +1,79 @@
 # SRS Generation Instructions
 
-Follow these steps exactly to generate the SRS document.
+Follow these steps to generate the SRS document.
 
-## Step 1: Generate Document
+## Step 1: Draft Using `template.md`
 
-Load and follow the SRS template from the skill reference file at:
+Load and follow:
 `skills/srs-generation/references/template.md`
 
-Generate the complete SRS following the template structure. Key requirements:
-- Functional requirement IDs: FR-<MODULE>-<NNN> (e.g., FR-AUTH-001)
-- Non-functional requirement IDs: NFR-<CATEGORY>-<NNN> (e.g., NFR-PERF-001)
-- Each functional requirement must include: description, input/output, acceptance criteria, priority
-- Each non-functional requirement must include: description, metric, target value, measurement method
-- Include a CRUD matrix for data operations
-- Include use case descriptions with actors, preconditions, main flow, alternate flows, postconditions
+Use this annotated template to draft the SRS content.
 
-## Step 2: Traceability Matrix
+At this stage:
+- use the template's section guidance to decide what each section should contain
+- write the document content in full
+- keep the draft coherent and structurally complete
+- do not output chain-of-thought or hidden reasoning
 
-**Chain mode** (PRD found):
-- Create a requirements traceability matrix mapping PRD items → SRS requirements
-- Every PRD feature should map to at least one SRS functional requirement
-- Flag any PRD items that are not covered by the SRS
+The draft may still reflect the authoring-oriented structure of `template.md`, but it should
+already be a readable SRS draft rather than notes or a planning outline.
 
-**Standalone mode** (no PRD):
-- Skip the PRD traceability matrix
-- Instead, include a "Requirements Source" section noting that requirements were derived from user clarification (not an upstream PRD)
-- Add a note: *"To establish full traceability, consider running `/spec-forge:prd` first, then re-running `/spec-forge:srs`."*
+## Step 2: Render Final Output Using `template-bare.md`
 
-## Step 3: Quality Check
+Load and follow:
+`skills/srs-generation/references/template-bare.md`
+
+Use this clean template to render the final SRS output.
+
+At this stage:
+- preserve the substantive content from the draft
+- align the final document to the clean section skeleton
+- remove prompt residue, comments, emoji, instructions, and placeholder guidance
+- do not introduce new requirements or unsupported facts
+
+## Step 3: Traceability
+
+If upstream source material exists, preserve traceability where supported by the context. This may
+include:
+- references
+- source-backed rationale
+- requirement-to-source mappings
+- verification links
+
+Traceability should support understanding and verification, but should not force obsolete document
+sections or legacy formatting that the current templates do not require.
+
+## Step 4: Quality Check
 
 Load the quality checklist from:
 `skills/srs-generation/references/checklist.md`
 
-Run through every item in the checklist. For any failed check, revise the document before finalizing.
+Run through every checklist item against the **final rendered SRS**. If any check fails, revise the
+draft and/or final rendering before finalizing.
 
-## Step 4: Write Output
+## Step 5: Write Output
 
-1. Sanitize the feature name to create a filename slug (lowercase, hyphens, no special chars)
+1. Sanitize the feature name to create a filename slug
 2. Create the `docs/` directory if it doesn't exist
 3. Write the final document to `docs/<feature-name>/srs.md`
-4. Confirm the file path and provide a brief summary
+4. Confirm the file path and provide a concise summary
 
 ## Important Guidelines
 
-- Requirements must be unambiguous — each requirement should have exactly one interpretation
-- Requirements must be testable — each must have clear acceptance criteria
-- Requirements must be traceable — link back to PRD items where applicable
-- Use "shall" for mandatory requirements, "should" for recommended, "may" for optional
-- Avoid implementation details — describe WHAT, not HOW
-- Include boundary conditions and error scenarios for each requirement
-- **Consumer-aware requirements**: If the upstream PRD (§10.1) marks AI Agent as an applicable consumer, ensure that: (1) §4.3 User Characteristics includes agent user classes with Consumer Type, Interaction Pattern, and autonomy level; (2) functional requirements where the primary actor is an agent use programmatic flows (API calls, not UI steps); (3) error responses for agent-facing requirements include structured, machine-parseable fields (error_code, message, field, constraint) — not just human-readable text; (4) acceptance criteria for agent-facing requirements include idempotency, deterministic schema, and timeout behavior conditions where relevant
+- Requirements must be unambiguous and testable.
+- Use `shall` for mandatory requirements, `should` for recommended ones, and `may` for optional ones.
+- Do not invent requirements, interfaces, constraints, or quantitative targets.
+- Keep the final document formal and reviewable.
+- Separate real requirements from assumptions, background, and appendix material according to the current templates.
 
 ## Anti-Shortcut Rules
 
-The following shortcuts are **strictly prohibited** — they are common AI failure modes that produce low-quality SRS documents:
-
-1. **Do NOT copy-paste PRD content as requirements.** The PRD describes *what the product should be*; the SRS must specify *what the system shall do* in precise, testable terms. Simply rephrasing PRD bullets is not requirements engineering.
-2. **Do NOT skip alternative flows and exception scenarios.** Every use case has error paths, edge cases, and recovery scenarios. Writing only the happy path is incomplete. Each functional requirement must include alternative and exception flows.
-3. **Do NOT use vague verbs.** Words like "handle", "manage", "process", or "support" are ambiguous. Replace with specific behaviors: "validate", "reject with error code 422", "persist to the `orders` table", "return within 200ms".
-4. **Do NOT omit boundary conditions.** Every input field, parameter, and data entity has limits. If you don't specify min/max lengths, allowed characters, and range constraints, engineers will guess differently.
-5. **Do NOT write untestable requirements.** If a requirement cannot be verified by a concrete test case, it is not a valid requirement. Every requirement must have measurable acceptance criteria (Given/When/Then or explicit conditions).
+1. Do not copy source material directly into the final SRS without converting it into formal,
+   reviewable requirement language.
+2. Do not let authoring hints from `template.md` leak into the final output.
+3. Do not preserve comments, emojis, `💬` notes, `➥` instructions, or placeholder guidance in the
+   final SRS.
+4. Do not treat incomplete notes, unresolved issues, or unsupported assumptions as approved
+   requirements.
+5. Do not force old-format artifacts such as legacy IEEE 830 chapter families, CRUD matrices, or
+   fixed use-case blocks unless the current template pair explicitly requires them.
