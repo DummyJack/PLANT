@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
-from utils import Collect, read_max_iterations
+from utils import Collect, read_max_iterations, human_setting
+from agents.agenda.meeting_conflict_review import _append_requirement_change_candidates
 
 
 def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
@@ -29,25 +30,64 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact["requirements"] = analysis["requirements"]
     flow.store.save_artifact(artifact)
 
-    if flow.config.get("enable_elicitation", True):
+    if human_setting(flow.config, "enable_elicitation", True):
         flow.logger.info("=== 隱性需求挖掘會議 ===")
         artifact = flow.meeting.run_hidden_requirement_elicitation_meeting(
             artifact, round_num=0,
         )
         if artifact.get("elicitation_candidates"):
-            from agents.profile.analyst import AnalystAgent
-            for cand in artifact["elicitation_candidates"]:
+            existing_texts = {
+                str(r.get("text") or "").strip()
+                for r in artifact.get("requirements", [])
+                if isinstance(r, dict) and str(r.get("text") or "").strip()
+            }
+            init_change_candidates = []
+            for idx, cand in enumerate(artifact["elicitation_candidates"], 1):
                 if not isinstance(cand, dict):
                     continue
-                cand.setdefault("status", "draft")
-                if not any(
-                    isinstance(r, dict) and r.get("text") == cand.get("text")
-                    for r in artifact.get("requirements", [])
-                ):
-                    artifact["requirements"].append(cand)
+                cand_text = str(cand.get("text") or "").strip()
+                if not cand_text or cand_text in existing_texts:
+                    continue
+                # source-or-drop：候選必須帶有明確引述或 stakeholder 依據，否則丟棄
+                has_source = bool(str(cand.get("source") or "").strip()) or bool(
+                    cand.get("source_stakeholders")
+                )
+                if not has_source:
+                    continue
+                candidate_req = dict(cand)
+                candidate_req.setdefault("status", "candidate")
+                candidate_req.setdefault("needs_review", True)
+                req_id = str(candidate_req.get("id") or "").strip() or f"REQ-INIT-ELICIT-{idx:03d}"
+                candidate_req["id"] = req_id
+                init_change_candidates.append(
+                    {
+                        "id": f"RC-INIT-ELICIT-{idx:03d}",
+                        "requirement_id": req_id,
+                        "change_type": "add",
+                        "field": "text",
+                        "before": None,
+                        "after": candidate_req,
+                        "reason": "Derived from init hidden elicitation.",
+                        "source_ids": ["ELICIT-INIT", req_id],
+                        "source_topic_id": "ELICIT-INIT",
+                        "status": "pending_review",
+                        "auto_apply": False,
+                    }
+                )
+                existing_texts.add(cand_text)
+            if init_change_candidates:
+                _append_requirement_change_candidates(artifact, init_change_candidates)
+                artifact["init_elicitation_summary"] = {
+                    "round": 0,
+                    "candidate_count": len(init_change_candidates),
+                    "candidate_requirement_ids": [
+                        row.get("requirement_id") for row in init_change_candidates
+                    ],
+                    "termination_reason": artifact.get("elicitation_termination_reason", ""),
+                }
             flow.logger.info(
-                "✓ 挖掘完成，新增 %s 筆需求（共 %s 筆）",
-                len(artifact["elicitation_candidates"]),
+                "✓ 挖掘完成，新增 %s 筆候選需求變更（正式需求仍維持 %s 筆）",
+                len(init_change_candidates),
                 len(artifact["requirements"]),
             )
             flow.store.save_artifact(artifact)

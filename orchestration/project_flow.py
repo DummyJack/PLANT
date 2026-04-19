@@ -1,6 +1,15 @@
 from datetime import datetime, timezone
 from typing import Any, Dict
-from .validation_gate import run_validation_gate
+import os
+
+
+def _sync_project_output_language(artifact: Dict[str, Any]) -> None:
+    meta = artifact.setdefault("meta", {})
+    lang = str(meta.get("output_language") or os.environ.get("PLANT_OUTPUT_LANGUAGE") or "zh-Hant").strip() or "zh-Hant"
+    if lang not in {"en", "zh-Hant"}:
+        lang = "zh-Hant"
+    os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
+    meta["output_language"] = lang
 
 
 def run_meeting_round(flow, artifact: Dict[str, Any], round_num: int) -> Dict[str, Any]:
@@ -18,6 +27,23 @@ def _write_pre_meeting_conflict_report(flow, artifact: Dict[str, Any], round_num
     )
     flow.store.save_markdown(conflict_md, "conflict_report.md")
     flow.logger.info("  ✓ 已存 conflict_report.md")
+
+
+def _run_one_round(
+    flow,
+    artifact: Dict[str, Any],
+    round_num: int,
+    *,
+    is_retry: bool = False,
+) -> Dict[str, Any]:
+    if is_retry:
+        flow.logger.info(f"=== Round {round_num}: 開會（正式 SRS 未通過，補充討論） ===")
+    else:
+        flow.logger.info(f"=== Round {round_num}: 開會 ===")
+    artifact = flow.run_meeting_round(artifact, round_num)
+    flow.store.save_artifact(artifact)
+    flow.logger.info(f"Round {round_num} 完成")
+    return artifact
 
 
 def run_project(flow, rough_idea: str) -> Dict[str, Any]:
@@ -43,6 +69,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         },
     }
     artifact = flow._ensure_artifact_contract(artifact)
+    _sync_project_output_language(artifact)
     flow._touch_artifact_meta(
         artifact,
         updated_by="flow.run.init",
@@ -53,28 +80,11 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 
     flow.logger.info("=== Phase 0: 初始草稿建立 ===")
     artifact = flow.run_init_phase(artifact)
-    if flow.config.get("enable_validation_gate", True):
-        run_validation_gate(
-            flow,
-            artifact,
-            stage="post_init_phase",
-            round_num=0,
-        )
-        flow.store.save_artifact(artifact)
+    flow.store.save_artifact(artifact)
     _write_pre_meeting_conflict_report(flow, artifact, round_num=0)
 
     for round_num in range(1, rounds + 1):
-        flow.logger.info(f"=== Round {round_num}/{rounds}: 開會 ===")
-        artifact = flow.run_meeting_round(artifact, round_num)
-        if flow.config.get("enable_validation_gate", True):
-            run_validation_gate(
-                flow,
-                artifact,
-                stage="post_round",
-                round_num=round_num,
-            )
-            flow.store.save_artifact(artifact)
-        flow.logger.info(f"Round {round_num} 完成\n")
+        artifact = _run_one_round(flow, artifact, round_num)
 
     flow.logger.info("=== 規格化 ===")
     flow.finalize(artifact)
@@ -90,6 +100,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     artifact.setdefault("feedback", {})
     artifact.setdefault("meta", {})
     artifact = flow._ensure_artifact_contract(artifact)
+    _sync_project_output_language(artifact)
     flow._touch_artifact_meta(
         artifact,
         updated_by="flow.run_continue.init",
@@ -106,17 +117,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     _write_pre_meeting_conflict_report(flow, artifact, round_num=start_round - 1)
 
     for round_num in range(start_round, start_round + rounds):
-        flow.logger.info(f"=== Round {round_num}: 開會 ===")
-        artifact = flow.run_meeting_round(artifact, round_num)
-        if flow.config.get("enable_validation_gate", True):
-            run_validation_gate(
-                flow,
-                artifact,
-                stage="post_round",
-                round_num=round_num,
-            )
-            flow.store.save_artifact(artifact)
-        flow.logger.info(f"Round {round_num} 完成\n")
+        artifact = _run_one_round(flow, artifact, round_num)
 
     flow.logger.info("=== 規格化 ===")
     flow.finalize(artifact)
