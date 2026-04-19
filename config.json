@@ -2,26 +2,20 @@
   "rounds": 1,
   "agenda_items": 5,
   "max_stakeholders": 5,
-  "tool_call_max_rounds": 1,
-  "max_web_search_results": 5,
-  "max_iterations": 1,
-  "enable_validation_gate": true,
-  "enforce_validation_gate_for_final_srs": true,
-  "enable_human_approval_queue": true,
-  "require_human_approval_for_changes": true,
-  "strict_formal_srs_mode": true,
-  "enable_elicitation": true,
-  "elicitation_max_turns": 10,
-  "conflict_recheck_requires_analyst_signoff": true,
-  "enable_all_conflict_check": true,
-  "min_approved_ratio_for_srs": 0.8,
+  "elicitation_max_turns": 5,
+  "human": {
+    "enable_elicitation": true,
+    "enable_human_escalation": true,
+    "enable_human_approval_queue": true,
+    "approval_queue_agent_first": true,
+    "require_human_approval_for_changes": true
+  },
   "enable_tools": {
     "web_search": true,
     "file_parser": true,
     "plantuml_validate": true,
     "artifact_query": true
   },
-  "enable_human_escalation": true,
   "enable_agenda_types": {
     "conflict_discussion": true,
     "open_question": true,
@@ -36,6 +30,7 @@
     "modeler": true,
     "documentor": true
   },
+  "enable_opa_topic_response": true,
   "agent_models": {
     "default": {
       "provider": "openai",
@@ -44,8 +39,8 @@
     },
     "user": {
       "provider": "openai",
-      "model": "gpt-4o-mini",
-      "temperature": 1
+      "model": "gpt-4.1",
+      "temperature": 0
     },
     "analyst": {
       "provider": "openai",
@@ -53,8 +48,8 @@
       "temperature": 0
     },
     "expert": {
-      "provider": "gemini",
-      "model": "gemini-3-flash-preview",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "temperature": 0
     },
     "mediator": {
@@ -63,8 +58,8 @@
       "temperature": 0
     },
     "modeler": {
-      "provider": "gemini",
-      "model": "gemini-3.1-flash-lite-preview",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "temperature": 0
     },
     "documentor": {

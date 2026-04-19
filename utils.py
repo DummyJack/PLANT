@@ -52,14 +52,33 @@ def _to_pos_int(value: Any, default: int) -> int:
         return default
 
 
+# 專案常數：Review loop / 工具呼叫 / 單次 web search 結果上限。
+# 這些值以前由 config.json 提供（max_iterations / tool_call_max_rounds / max_web_search_results），
+# 因為在本研究設定下固定不變，改為程式常數以降低 config 噪音。
+MAX_ITERATIONS: int = 1
+TOOL_CALL_MAX_ROUNDS: int = 1
+MAX_WEB_SEARCH_RESULTS: int = 5
+
+
 def read_max_iterations(
     config: Dict[str, Any],
     *,
     default: int = 3,
 ) -> int:
-    """讀取 max_iterations（僅支援單一整數設定）。"""
-    raw = config.get("max_iterations")
-    return _to_pos_int(raw, default)
+    """回傳固定的 MAX_ITERATIONS；保留簽名以相容既有呼叫點。"""
+    _ = config, default
+    return MAX_ITERATIONS
+
+
+def human_setting(config: Dict[str, Any], key: str, default: Any) -> Any:
+    """與人類互動／核准／挖掘流程相關設定。
+
+    優先讀 config[\"human\"][key]；若無則讀頂層同名鍵（舊版或實驗腳本直接寫入 flow.config 時相容）；再否則 default。
+    """
+    block = config.get("human")
+    if isinstance(block, dict) and key in block:
+        return block[key]
+    return config.get(key, default)
 
 
 def current_output_language() -> str:

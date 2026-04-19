@@ -19,7 +19,7 @@ from orchestration import (
     finalize as orchestration_finalize,
 )
 from store import Store
-from utils import Logger
+from utils import Logger, human_setting
 from agents.tools import ToolRegistry
 
 
@@ -97,7 +97,6 @@ class Flow:
         # policy 強制：由單一授權來源檢查所有 agent 的 skill/tool 指派。
         self._validate_policy_assignments()
 
-        tool_max = config.get("tool_call_max_rounds", 3)
         for name, agent in [
             ("user", self.user_agent),
             ("analyst", self.analyst_agent),
@@ -106,13 +105,12 @@ class Flow:
             ("modeler", self.modeler_agent),
             ("documentor", self.documentor_agent),
         ]:
-            agent.tool_call_max_rounds = tool_max
             agent.policy = self.policy
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
 
-        self.mediator_agent.enable_human_escalation = config.get(
-            "enable_human_escalation", True
+        self.mediator_agent.enable_human_escalation = bool(
+            human_setting(config, "enable_human_escalation", True)
         )
 
         eat = config.get("enable_agenda_types")
@@ -218,9 +216,32 @@ class Flow:
         am = self.config.get("agent_models") or {}
         default_cfg = am.get("default") or {}
         per_agent = am.get(agent_name) or default_cfg
-        provider = per_agent.get("provider", self.config.get("provider"))
-        model_name = per_agent.get("model", self.config.get("model"))
-        temperature = per_agent.get("temperature", self.config.get("temperature"))
+
+        def _first_str(*candidates: Any) -> str:
+            for v in candidates:
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s:
+                    return s
+            return ""
+
+        provider = _first_str(per_agent.get("provider"), default_cfg.get("provider"))
+        model_name = _first_str(per_agent.get("model"), default_cfg.get("model"))
+        if not provider or not model_name:
+            raise ValueError(
+                "agent_models 必須在 default 或各 agent 區塊設定 provider 與 model；"
+                f"目前無法建立 {agent_name!r} 的模型（缺 provider 或 model）。"
+            )
+
+        def _pick_temperature(a: Dict[str, Any], b: Dict[str, Any]) -> Any:
+            if "temperature" in a and a["temperature"] is not None:
+                return a["temperature"]
+            if "temperature" in b and b["temperature"] is not None:
+                return b["temperature"]
+            return None
+
+        temperature = _pick_temperature(per_agent, default_cfg)
         max_output_tokens = per_agent.get("max_output_tokens")
         if max_output_tokens is None:
             max_output_tokens = default_cfg.get("max_output_tokens")
@@ -264,8 +285,13 @@ class Flow:
 
     # Finalization
 
-    def finalize(self, artifact: Dict[str, Any]):
-        orchestration_finalize(self, artifact)
+    def finalize(
+        self,
+        artifact: Dict[str, Any],
+        *,
+        force_formal: bool = False,
+    ) -> Dict[str, Any]:
+        return orchestration_finalize(self, artifact, force_formal=force_formal)
 
     def _build_cost_summary(self) -> Optional[Dict[str, Any]]:
         cost_by_agent = {}

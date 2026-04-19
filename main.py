@@ -1,8 +1,10 @@
 import os
 import sys
 import traceback
+import re
 
 from pathlib import Path
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 from flow import Flow
 from store import Store
@@ -23,6 +25,27 @@ def format_loaded_models_summary(config: dict) -> str:
     if not parts:
         return "✓ 載入配置（agent_models 無有效項目）"
     return "✓ 載入配置 — " + "；".join(parts)
+
+
+def is_likely_english(text: str) -> bool:
+    text = str(text or "").strip()
+    if not text:
+        return False
+    ascii_words = re.findall(r"[A-Za-z]+", text)
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    return len(ascii_words) >= max(3, len(cjk_chars))
+
+
+def sync_main_output_language(rough_idea: str, artifact: Optional[Dict[str, Any]] = None) -> str:
+    lang = "en" if is_likely_english(rough_idea) else "zh-Hant"
+    os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
+    if isinstance(artifact, dict):
+        meta = artifact.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            artifact["meta"] = meta
+        meta["output_language"] = lang
+    return lang
 
 
 def main():
@@ -50,8 +73,11 @@ def main():
     for agent_cfg in agent_models.values():
         if isinstance(agent_cfg, dict) and agent_cfg.get("provider"):
             providers_to_check.add(agent_cfg["provider"])
-    if not providers_to_check and config.get("provider"):
-        providers_to_check.add(config.get("provider"))
+    if not providers_to_check:
+        print(
+            "錯誤：agent_models 內未設定任何 provider（請在 default 或各 agent 區塊填寫 provider）"
+        )
+        sys.exit(1)
 
     api_key_env = {
         "openai": "OPENAI_API_KEY",
@@ -90,6 +116,7 @@ def main():
         artifact = project_store.load_artifact()
         if artifact:
             rough_idea = artifact.get("rough_idea", "")
+            sync_main_output_language(rough_idea, artifact)
             print(f"專案的初始想法：{rough_idea}\n")
         else:
             print("⚠️  警告：無法載入專案的 artifact，將作為新專案處理\n")
@@ -98,6 +125,7 @@ def main():
             if not rough_idea:
                 print("錯誤：請提供初始想法")
                 sys.exit(1)
+            sync_main_output_language(rough_idea)
             project_id = base_store.create_project()
 
     # 由人類設定討論回合數，寫入 config
@@ -113,6 +141,8 @@ def main():
     print()
 
     try:
+        if not is_continue:
+            sync_main_output_language(rough_idea)
         flow = Flow(config, store, logger)
 
         if is_continue:
