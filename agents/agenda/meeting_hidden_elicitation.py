@@ -1,10 +1,16 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from utils import current_output_language
+from utils import current_output_language, human_setting
 
 
 # ---------- elicitation helpers ----------
+
+
+def _get_elicitation_mode(artifact: Dict[str, Any]) -> str:
+    meta = artifact.get("meta") if isinstance(artifact, dict) else {}
+    mode = str((meta or {}).get("elicitation_mode") or "").strip().lower()
+    return mode if mode in {"oracle", "main_flow"} else "main_flow"
 
 def _extract_first_question(text: str) -> str:
     parts = [p.strip() for p in str(text or "").replace("\n", " ").split("。") if p.strip()]
@@ -109,15 +115,30 @@ def _extract_elicitation_candidates(
     round_num: int,
     turn: int,
 ) -> List[Dict[str, Any]]:
-    discussion_text = ""
+    mode = _get_elicitation_mode(artifact)
+    discussion_parts: List[str] = []
+    asker_context = ""
+    user_signal_count = 0
     for c in contributions:
         if not isinstance(c, dict):
             continue
         agent = c.get("agent", "?")
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
         statement = (resp.get("statement") or resp.get("content") or "").strip()
-        if statement:
-            discussion_text += f"\n【{agent}】\n{statement}\n"
+        if not statement:
+            continue
+        if mode == "oracle":
+            discussion_parts.append(f"\n【{agent}】\n{statement}\n")
+            continue
+        if agent == "user":
+            user_signal_count += 1
+            discussion_parts.append(f"\n【user】\n{statement}\n")
+        elif not asker_context and str(agent).strip() in {"analyst", "expert", "modeler"}:
+            asker_context = f"\n【asker_question】\n{statement}\n"
+    discussion_text = ""
+    if mode == "main_flow" and asker_context:
+        discussion_text += asker_context
+    discussion_text += "".join(discussion_parts)
     if not discussion_text.strip():
         return []
 
@@ -136,6 +157,7 @@ def _extract_elicitation_candidates(
         raw = coordinator.flow.analyst_agent.extract_elicitation_candidates(
             discussion_text=discussion_text,
             existing_ids=sorted(existing_ids),
+            mode=mode,
         )
         if not isinstance(raw, list):
             return []
@@ -152,6 +174,8 @@ def _extract_elicitation_candidates(
             normalized["source"] = "elicitation"
             normalized["elicitation_round"] = round_num
             normalized["elicitation_turn"] = turn
+            normalized["elicitation_mode"] = mode
+            normalized["elicitation_user_signal_count"] = user_signal_count
             results.append(normalized)
         return results
     except Exception as e:
@@ -244,19 +268,14 @@ def _asker_should_use_support(
     """由 asker 自行判斷本輪要用 support 建議，或直接提問。"""
     if not support_inputs:
         return False
-    # 先用 asker's role 決定策略（可被 config 覆蓋）：
-    # always: 一律使用 support
-    # never: 一律直接提問
-    # decide: 交由該 asker 的模型判斷
-    role_policy_cfg = coordinator.flow.config.get("elicitation_support_by_asker") or {}
-    policy = str(role_policy_cfg.get(asker_role, "")).strip().lower()
-    if not policy:
-        default_policy = {
-            "analyst": "always",
-            "expert": "decide",
-            "modeler": "decide",
-        }
-        policy = default_policy.get(asker_role, "decide")
+    # 依 asker 角色決定策略（固定內建，不讀 config）：
+    # always: 一律使用 support；never: 一律直接提問；decide: 交由該 asker 模型判斷
+    default_policy = {
+        "analyst": "always",
+        "expert": "decide",
+        "modeler": "decide",
+    }
+    policy = str(default_policy.get(asker_role, "decide")).strip().lower()
     if policy == "always":
         return True
     if policy == "never":
@@ -311,7 +330,7 @@ def run_hidden_requirement_elicitation_meeting_block(
     round_num: int,
 ) -> Dict[str, Any]:
     """隱性需求挖掘會議：Mediator 規劃 -> 多輪對話 -> Analyst 結構化收尾。"""
-    if not coordinator.flow.config.get("enable_elicitation", True):
+    if not human_setting(coordinator.flow.config, "enable_elicitation", True):
         return artifact
 
     plan = coordinator.flow.mediator_agent.plan_elicitation_meeting(
@@ -456,8 +475,11 @@ def run_hidden_requirement_elicitation_meeting_block(
                 coordinator.flow.logger.warning("Support role '%s' 未註冊，跳過", role)
                 continue
             try:
-                response = agent.respond_to_topic(
-                    collector_topic, previous_responses=contributions, artifact_snapshot=snapshot
+                response = coordinator.flow.mediator_agent.collect_topic_response(
+                    agent,
+                    collector_topic,
+                    previous_responses=contributions,
+                    artifact_snapshot=snapshot,
                 )
                 contributions.append(
                     {
@@ -472,8 +494,11 @@ def run_hidden_requirement_elicitation_meeting_block(
         user_agent = coordinator.flow.registry.get("user")
         if user_agent:
             try:
-                user_signal = user_agent.respond_to_topic(
-                    collector_topic, previous_responses=contributions, artifact_snapshot=snapshot
+                user_signal = coordinator.flow.mediator_agent.collect_topic_response(
+                    user_agent,
+                    collector_topic,
+                    previous_responses=contributions,
+                    artifact_snapshot=snapshot,
                 )
                 contributions.append(
                     {
@@ -618,6 +643,7 @@ def run_hidden_requirement_elicitation_meeting_block(
                     user_revealed_ids_set.add(rid_s)
         user_revealed_ids = sorted(user_revealed_ids_set)
         user_action_type = user_action_types[-1] if user_action_types else "unknown"
+        elicitation_mode = _get_elicitation_mode(artifact)
         total_requirements = len(
             (getattr(user_agent, "current_task", {}) or {}).get("Implicit Requirements", []) or []
         )
@@ -637,7 +663,6 @@ def run_hidden_requirement_elicitation_meeting_block(
         asker_line = asker_statement[:120] + ("..." if len(asker_statement) > 120 else "")
         coordinator.flow.logger.info("  動作類型：%s", user_action_type or "unknown")
         coordinator.flow.logger.info("  與隱式需求相關：%s", user_is_relevant)
-        coordinator.flow.logger.info("  已取得的需求：%s", user_revealed_ids)
         coordinator.flow.logger.info(
             "Plant: collector:[%s], asker: %s | %s",
             collectors_label,
@@ -648,12 +673,28 @@ def run_hidden_requirement_elicitation_meeting_block(
             coordinator.flow.logger.info(
                 "  User: %s", user_statement[:80] + ("..." if len(user_statement) > 80 else "")
             )
-        coordinator.flow.logger.info(
-            "  觀察：總需求=%s，剩餘=%s，取得比例=%.2f%%",
-            total_requirements,
-            remaining_total,
-            ratio * 100.0,
-        )
+        if elicitation_mode == "oracle":
+            coordinator.flow.logger.info("  已取得的需求：%s", user_revealed_ids)
+            coordinator.flow.logger.info(
+                "  觀察：總需求=%s，剩餘=%s，取得比例=%.2f%%",
+                total_requirements,
+                remaining_total,
+                ratio * 100.0,
+            )
+        else:
+            cumulative_candidates = len(all_candidates) + len(new_candidates)
+            preview = [
+                str(c.get("text") or "").strip()
+                for c in new_candidates[:3]
+                if isinstance(c, dict) and str(c.get("text") or "").strip()
+            ]
+            coordinator.flow.logger.info(
+                "  觀察：new_candidates=%s，cumulative_candidates=%s",
+                len(new_candidates),
+                cumulative_candidates,
+            )
+            if preview:
+                coordinator.flow.logger.info("  新候選需求：%s", preview)
         if should_stop_after_this_turn:
             termination_reason = stop_reason_after_this_turn
             if stop_reason_after_this_turn == "forced_finish_at_max_turn":

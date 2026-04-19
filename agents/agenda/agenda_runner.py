@@ -5,16 +5,12 @@ from agents.profile.mediator import (
     AGENDA_CATEGORY_LABEL,
     AGENDA_ACTIONS,
 )
+from utils import MAX_ITERATIONS
 
 
 def self_review_round_cap_from_config(config: Dict[str, Any]) -> int:
-    mi = config.get("max_iterations")
-    if isinstance(mi, dict):
-        return max(1, int(mi.get("self_review_round_cap", 5)))
-    try:
-        return max(1, int(mi))
-    except (TypeError, ValueError):
-        return 5
+    _ = config
+    return MAX_ITERATIONS
 
 
 class AgendaRunner:
@@ -81,7 +77,572 @@ class AgendaRunner:
         except Exception as e:
             self.logger.warning(f"  更新 design_rationale.md 失敗: {e}")
 
+    def observe_action(self, action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        params = params or {}
+        state = self.get_state_summary()
+        return {
+            "action": action,
+            "params": params,
+            "topics_count": len(self.topics),
+            "round_discussions_count": len(self.round_discussions),
+            "open_questions_count": len(self.all_open_questions),
+            "state_summary": state,
+        }
+
+    def _record_runner_opa_trace(
+        self,
+        *,
+        stage: str,
+        action: str,
+        params: Dict[str, Any],
+        observation: Dict[str, Any],
+        decision: Dict[str, Any],
+        result: Dict[str, Any],
+        topic_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        trace_rows = [
+            {
+                "agent": "agenda_runner",
+                "mode": "agenda_action",
+                "iteration": 1,
+                "observation": {
+                    "action": observation.get("action"),
+                    "topics_count": observation.get("topics_count"),
+                    "round_discussions_count": observation.get("round_discussions_count"),
+                    "open_questions_count": observation.get("open_questions_count"),
+                },
+                "decision": {
+                    "action": decision.get("action"),
+                    "params": decision.get("params") or {},
+                    "reasoning": decision.get("reasoning", ""),
+                },
+                "result": {
+                    "error": result.get("error"),
+                    "result": result.get("result"),
+                },
+            }
+        ]
+        self.artifact.setdefault("meeting_opa_trace", []).extend(
+            {
+                "stage": stage,
+                "topic_id": topic_id,
+                "topic_title": None,
+                "topic_category": None,
+                "agent": "agenda_runner",
+                "trace": row,
+            }
+            for row in trace_rows
+        )
+        return trace_rows
+
+    def _record_action_substep_trace(
+        self,
+        *,
+        stage: str,
+        topic: Optional[Dict[str, Any]],
+        substep: str,
+        observation: Dict[str, Any],
+        decision: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        self.artifact.setdefault("meeting_opa_trace", []).append(
+            {
+                "stage": stage,
+                "topic_id": (topic or {}).get("id"),
+                "topic_title": (topic or {}).get("title"),
+                "topic_category": (topic or {}).get("category"),
+                "agent": "agenda_runner",
+                "trace": {
+                    "agent": "agenda_runner",
+                    "mode": "action_substep",
+                    "iteration": 1,
+                    "observation": observation,
+                    "decision": decision,
+                    "result": result,
+                    "substep": substep,
+                },
+            }
+        )
+
+    def _resolve_topic_via_substeps(
+        self,
+        *,
+        topic: Dict[str, Any],
+        contributions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        stage = "agenda_runner.resolve_topic"
+        topic_id = topic.get("id")
+
+        converge_obs = {
+            "topic_id": topic_id,
+            "contributions_count": len(contributions),
+        }
+        converge_decision = {
+            "action": "assess_convergence",
+            "params": {"topic_id": topic_id},
+            "reasoning": "先判斷議題是否已收斂，再決定是否進入投票與折衷流程。",
+        }
+        convergence = self.mediator.assess_discussion_convergence(topic, contributions)
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="resolve.assess_convergence",
+            observation=converge_obs,
+            decision=converge_decision,
+            result={
+                "converged": bool(convergence.get("converged")),
+                "reason": convergence.get("reason", ""),
+            },
+        )
+
+        suggested_next_actions = self.mediator.collect_suggested_next_actions(contributions)
+
+        if convergence.get("converged"):
+            resolution_decision = {
+                "action": "build_converged_resolution",
+                "params": {"topic_id": topic_id},
+                "reasoning": "討論已收斂，直接生成收斂型決議。",
+            }
+            resolution = self.mediator.build_converged_resolution(
+                topic, contributions, convergence,
+            )
+            resolution["suggested_next_actions"] = suggested_next_actions
+            self._record_action_substep_trace(
+                stage=stage,
+                topic=topic,
+                substep="resolve.build_converged_resolution",
+                observation={
+                    "topic_id": topic_id,
+                    "convergence_reason": convergence.get("reason", ""),
+                },
+                decision=resolution_decision,
+                result={
+                    "resolution_status": resolution.get("resolution_status", ""),
+                    "summary": resolution.get("summary", ""),
+                },
+            )
+        else:
+            compromise_decision = {
+                "action": "propose_compromise",
+                "params": {"topic_id": topic_id},
+                "reasoning": "討論未收斂，先產生 mediator compromise 候選方案。",
+            }
+            mc = self.mediator.propose_compromise_for_vote(topic, contributions)
+            self._record_action_substep_trace(
+                stage=stage,
+                topic=topic,
+                substep="resolve.propose_compromise",
+                observation={
+                    "topic_id": topic_id,
+                    "convergence_reason": convergence.get("reason", ""),
+                },
+                decision=compromise_decision,
+                result={
+                    "has_compromise": bool(mc),
+                    "keys": sorted(mc.keys()) if isinstance(mc, dict) else [],
+                },
+            )
+
+            vote_decision = {
+                "action": "collect_votes",
+                "params": {"topic_id": topic_id},
+                "reasoning": "以 compromise 候選方案蒐集投票，形成下一步決議依據。",
+            }
+            votes = self.mediator.collect_compromise_votes(
+                topic, contributions, mc, self.registry, artifact=self.artifact,
+            )
+            self._record_action_substep_trace(
+                stage=stage,
+                topic=topic,
+                substep="resolve.collect_votes",
+                observation={
+                    "topic_id": topic_id,
+                    "participants_count": len(topic.get("participants", []) or []),
+                },
+                decision=vote_decision,
+                result={
+                    "votes": votes,
+                    "vote_count": len(votes) if isinstance(votes, dict) else 0,
+                },
+            )
+
+            proposer = self._find_topic_proposer(topic)
+            synthesize_decision = {
+                "action": "synthesize_resolution",
+                "params": {
+                    "topic_id": topic_id,
+                    "proposed_by": proposer,
+                },
+                "reasoning": "結合 compromise 與投票結果，綜合生成正式決議。",
+            }
+            resolution = self.mediator.synthesize_and_resolve(
+                topic, contributions,
+                final_votes=votes,
+                mediator_compromise=mc,
+                proposer_agent=proposer,
+            )
+            resolution["suggested_next_actions"] = suggested_next_actions
+            self._record_action_substep_trace(
+                stage=stage,
+                topic=topic,
+                substep="resolve.synthesize_resolution",
+                observation={
+                    "topic_id": topic_id,
+                    "votes_present": bool(votes),
+                    "proposed_by": proposer,
+                },
+                decision=synthesize_decision,
+                result={
+                    "resolution_status": resolution.get("resolution_status", ""),
+                    "summary": resolution.get("summary", ""),
+                },
+            )
+
+        source_ids = list(topic.get("source_ids", []) or [])
+        derived_req_ids = [
+            sid for sid in source_ids
+            if isinstance(sid, str)
+            and sid.startswith(("REQ-", "R-", "FR-", "NFR-"))
+        ]
+        normalize_decision = {
+            "action": "finalize_resolution_contract",
+            "params": {"topic_id": topic_id},
+            "reasoning": "補齊決議的結構化欄位，讓後續 save/apply 流程只處理完整 contract。",
+        }
+        cur_req_ids = resolution.get("affected_requirement_ids") or []
+        if not cur_req_ids:
+            resolution["affected_requirement_ids"] = derived_req_ids
+        if not isinstance(resolution.get("verification_impact"), dict):
+            resolution["verification_impact"] = {
+                "level": "none",
+                "notes": "",
+            }
+        has_changes = bool(resolution.get("requirement_change_candidates"))
+        has_affected = bool(resolution.get("affected_requirement_ids"))
+        resolution["needs_approval"] = has_affected or has_changes
+        resolution["suggested_next_actions"] = suggested_next_actions
+        for _rc in (resolution.get("requirement_change_candidates") or []):
+            if isinstance(_rc, dict):
+                _rc.setdefault("source_topic_id", topic.get("id"))
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="resolve.finalize_resolution_contract",
+            observation={
+                "topic_id": topic_id,
+                "source_ids_count": len(source_ids),
+            },
+            decision=normalize_decision,
+            result={
+                "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
+                "needs_approval": resolution.get("needs_approval", False),
+                "change_candidates_count": len(
+                    resolution.get("requirement_change_candidates") or []
+                ),
+            },
+        )
+        return resolution
+
+    def _escalate_topic_via_substeps(
+        self,
+        *,
+        topic: Dict[str, Any],
+        contributions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        stage = "agenda_runner.escalate_to_human"
+        topic_id = topic.get("id")
+
+        options_decision = {
+            "action": "prepare_human_options",
+            "params": {"topic_id": topic_id},
+            "reasoning": "先整理可供人類裁決的選項，再進入裁決收集。",
+        }
+        options = None
+        if topic.get("category") in ("conflict_discussion",) and self.registry:
+            analyst = self.registry.get("analyst")
+            if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
+                options = analyst.get_resolution_options_for_topic(topic, self.artifact)
+        if not options:
+            options = self.mediator.prepare_human_options(topic, contributions)
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="escalate.prepare_human_options",
+            observation={
+                "topic_id": topic_id,
+                "contributions_count": len(contributions),
+            },
+            decision=options_decision,
+            result={
+                "options_count": len(options) if isinstance(options, list) else 0,
+            },
+        )
+
+        human_decision = {
+            "action": "collect_human_decision",
+            "params": {"topic_id": topic_id},
+            "reasoning": "將整理後的選項交由人類決策。",
+        }
+        resolution = self.collect.human_decision_on_topic(topic, options)
+        decision_text = str(resolution.get("decision", ""))
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="escalate.collect_human_decision",
+            observation={
+                "topic_id": topic_id,
+                "options_count": len(options) if isinstance(options, list) else 0,
+            },
+            decision=human_decision,
+            result={
+                "decision": decision_text,
+            },
+        )
+
+        wrap_decision = {
+            "action": "wrap_human_resolution",
+            "params": {"topic_id": topic_id},
+            "reasoning": "將人類裁決轉成標準化 topic result contract。",
+        }
+        wrapped = self.mediator.build_topic_result(
+            resolution_status="human_decision",
+            summary=decision_text or "本議題已升級由人類裁決。",
+            decision=decision_text,
+            votes={},
+            votes_summary="human_decision",
+            mediator_compromise={},
+            agreed_points=[decision_text] if decision_text else [],
+            unresolved_points=[],
+            new_open_questions=[],
+            affected_conflict_ids=[],
+            requirement_change_candidates=[],
+            needs_human=True,
+        )
+        wrapped["human_decision_raw"] = resolution
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="escalate.wrap_human_resolution",
+            observation={
+                "topic_id": topic_id,
+                "decision": decision_text,
+            },
+            decision=wrap_decision,
+            result={
+                "resolution_status": wrapped.get("resolution_status", ""),
+                "summary": wrapped.get("summary", ""),
+            },
+        )
+        return wrapped
+
+    def _save_topic_via_substeps(
+        self,
+        *,
+        topic: Dict[str, Any],
+        contributions: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        stage = "agenda_runner.save_topic"
+        topic_id = topic.get("id")
+
+        proposer_decision = {
+            "action": "name_topic",
+            "params": {"topic_id": topic_id},
+            "reasoning": "依討論結果重新命名議題，確保存檔名稱貼近正式決議。",
+        }
+        proposer = self._find_topic_proposer(topic)
+        topic["proposed_by"] = proposer
+        final_title = self.mediator.name_topic_after_discussion(
+            topic,
+            contributions,
+            resolution,
+            proposer_agent=proposer,
+        )
+        if final_title:
+            topic["title"] = final_title
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="save.name_topic",
+            observation={
+                "topic_id": topic_id,
+                "proposed_by": proposer,
+            },
+            decision=proposer_decision,
+            result={
+                "final_title": topic.get("title", ""),
+            },
+        )
+
+        markdown_decision = {
+            "action": "generate_meeting_markdown",
+            "params": {"topic_id": topic_id},
+            "reasoning": "將議題討論與決議生成正式會議紀錄文件。",
+        }
+        self.topic_idx += 1
+        meeting_md = self.mediator.generate_meeting_markdown(
+            topic,
+            contributions,
+            resolution,
+            round_num=self.round_num,
+            proposed_by=proposer,
+        )
+        meeting_filename = f"R{self.round_num}-M{self.topic_idx:02d}.md"
+        self.store.save_markdown(meeting_md, meeting_filename)
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="save.generate_meeting_markdown",
+            observation={
+                "topic_id": topic_id,
+                "contributions_count": len(contributions),
+            },
+            decision=markdown_decision,
+            result={
+                "filename": meeting_filename,
+                "markdown_length": len(meeting_md),
+            },
+        )
+
+        persist_decision = {
+            "action": "persist_discussion_record",
+            "params": {"topic_id": topic_id, "filename": meeting_filename},
+            "reasoning": "把本次議題結果寫入 round discussions 與 OPA trace。",
+        }
+        topic_record = {
+            "schema_version": topic.get("schema_version", "agenda_topic.v1"),
+            "id": topic.get("id"),
+            "title": topic.get("title"),
+            "description": topic.get("description", ""),
+            "category": topic.get("category", ""),
+            "participants": topic.get("participants", []),
+            "discussion_mode": topic.get("discussion_mode", "sequential"),
+            "speaking_order": topic.get("speaking_order", []),
+            "source_ids": topic.get("source_ids", []),
+            "source_proposal_ids": topic.get("source_proposal_ids", []),
+            "proposed_by": topic.get("proposed_by"),
+            "status": "saved",
+            "triage_action": topic.get("triage_action", "formal_meeting"),
+        }
+        self.round_discussions.append(
+            {
+                "topic": topic_record,
+                "source_ids": topic.get("source_ids", []),
+                "contributions": [
+                    {"agent": c.get("agent"), "response": c.get("response", {})}
+                    for c in contributions
+                ],
+                "resolution": resolution,
+            }
+        )
+        trace_rows = self.artifact.setdefault("meeting_opa_trace", [])
+        contribution_trace_count = 0
+        for c in contributions or []:
+            if not isinstance(c, dict):
+                continue
+            response = c.get("response") or {}
+            if not isinstance(response, dict):
+                continue
+            for row in (response.get("opa_trace") or []):
+                if not isinstance(row, dict):
+                    continue
+                contribution_trace_count += 1
+                trace_rows.append(
+                    {
+                        "stage": "agenda_topic",
+                        "topic_id": topic_record.get("id"),
+                        "topic_title": topic_record.get("title"),
+                        "topic_category": topic_record.get("category"),
+                        "agent": c.get("agent"),
+                        "trace": row,
+                    }
+                )
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="save.persist_discussion_record",
+            observation={
+                "topic_id": topic_id,
+                "round_discussions_before": len(self.round_discussions) - 1,
+            },
+            decision=persist_decision,
+            result={
+                "round_discussions_after": len(self.round_discussions),
+                "contribution_trace_count": contribution_trace_count,
+            },
+        )
+
+        rationale_decision = {
+            "action": "update_design_rationale",
+            "params": {"topic_id": topic_id},
+            "reasoning": "同步將本議題決議沉澱到 design rationale。",
+        }
+        self.update_design_rationale_for_topic(topic, contributions, resolution)
+        self._record_action_substep_trace(
+            stage=stage,
+            topic=topic,
+            substep="save.update_design_rationale",
+            observation={
+                "topic_id": topic_id,
+                "filename": meeting_filename,
+            },
+            decision=rationale_decision,
+            result={
+                "updated": True,
+            },
+        )
+        self.topic_status[topic_id]["saved"] = True
+        return {
+            "topic_id": topic_id,
+            "filename": meeting_filename,
+        }
+
+    def plan_action(
+        self,
+        action: str,
+        params: Optional[Dict[str, Any]] = None,
+        observation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        params = params or {}
+        observation = observation or {}
+        state_summary = observation.get("state_summary") or {}
+        if not action:
+            planned = self.mediator.plan_agenda_action_via_opa(state_summary, None)
+            return {
+                "action": planned.get("action", "finish_round"),
+                "params": planned.get("params") or {},
+                "reasoning": planned.get("reasoning", ""),
+                "planner_trace": planned.get("opa_trace", []),
+                "observation": observation,
+            }
+        return {
+            "action": action,
+            "params": params,
+            "reasoning": "依 agenda loop 決策執行指定 action。",
+            "observation": observation,
+        }
+
+    def execute_action(self, decision: Dict[str, Any]) -> Dict[str, Any]:
+        action = decision.get("action", "")
+        params = decision.get("params") or {}
+        return self._run_action_impl(action, params)
+
     def run(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+        observation = self.observe_action(action, params)
+        decision = self.plan_action(action, params, observation)
+        result = self.execute_action(decision)
+        result["opa_trace"] = self._record_runner_opa_trace(
+            stage=f"agenda_runner.{decision.get('action', action)}",
+            action=decision.get("action", action),
+            params=decision.get("params") or {},
+            observation=observation,
+            decision=decision,
+            result=result,
+            topic_id=(decision.get("params") or {}).get("topic_id"),
+        )
+        return result
+
+    def _run_action_impl(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
         params = params or {}
         obs = {"action": action, "result": None, "error": None}
 
@@ -240,57 +801,26 @@ class AgendaRunner:
                 obs["error"] = f"請先對 {topic_id} 執行 start_discussion"
                 return obs
             contributions = st.get("contributions") or []
-            self.logger.info(f"  決議: [{topic_id}] {topic.get('title', '')}")
-
-            convergence = self.mediator.assess_discussion_convergence(topic, contributions)
-            if convergence.get("converged"):
-                self.logger.info(f"    收斂：{convergence.get('reason', '')}")
-                resolution = self.mediator.build_converged_resolution(
-                    topic, contributions, convergence,
-                )
-            else:
-                self.logger.info(f"    未收斂：{convergence.get('reason', '')}，提出折衷方案")
-                mc = self.mediator.propose_compromise_for_vote(topic, contributions)
-                votes = self.mediator.collect_compromise_votes(
-                    topic, contributions, mc, self.registry, artifact=self.artifact,
-                )
-                proposer = self._find_topic_proposer(topic)
-                resolution = self.mediator.synthesize_and_resolve(
-                    topic, contributions,
-                    final_votes=votes,
-                    mediator_compromise=mc,
-                    proposer_agent=proposer,
-                )
-
-            # 補齊結構化會議輸出欄位（若上游未提供或為空）
-            source_ids = list(topic.get("source_ids", []) or [])
-            derived_req_ids = [
-                sid for sid in source_ids
-                if isinstance(sid, str)
-                and sid.startswith(("REQ-", "FR-", "NFR-", "R-"))
-            ]
-            cur_req_ids = resolution.get("affected_requirement_ids") or []
-            if not cur_req_ids:
-                resolution["affected_requirement_ids"] = derived_req_ids
-            if not isinstance(resolution.get("verification_impact"), dict):
-                resolution["verification_impact"] = {
-                    "level": "none",
-                    "notes": "",
-                }
-            has_changes = bool(resolution.get("requirement_change_candidates"))
-            has_affected = bool(resolution.get("affected_requirement_ids"))
-            resolution["needs_approval"] = has_affected or has_changes
-            for _rc in (resolution.get("requirement_change_candidates") or []):
-                if isinstance(_rc, dict):
-                    _rc.setdefault("source_topic_id", topic.get("id"))
-
+            resolution = self._resolve_topic_via_substeps(
+                topic=topic,
+                contributions=contributions,
+            )
+            convergence_reason = resolution.get("summary", "")
             self.topic_status[topic_id]["resolution"] = resolution
             rv = resolution.get("votes", {})
+            status_label = "收斂" if resolution.get("resolution_status") == "converged" else "未收斂"
+            votes_suffix = ""
             if rv:
                 votes_str = ", ".join(f"{a}: {v}" for a, v in rv.items())
-                self.logger.info(f"    投票: {votes_str} → {resolution.get('resolution', '')}")
-            else:
-                self.logger.info(f"    結果: {resolution.get('resolution', '')}")
+                votes_suffix = f"；投票: {votes_str}"
+            self.logger.info(
+                "  決議: [%s] %s｜%s｜結果: %s%s",
+                topic_id,
+                topic.get("title", ""),
+                f"{status_label}（{convergence_reason}）",
+                resolution.get("resolution", ""),
+                votes_suffix,
+            )
             needs_human = bool(resolution.get("needs_human"))
             obs["result"] = {
                 "topic_id": topic_id,
@@ -302,6 +832,9 @@ class AgendaRunner:
                 "unresolved_points_count": len(resolution.get("unresolved_points", []) or []),
                 "needs_human": needs_human,
             }
+            obs["status"] = "needs_human" if needs_human else "resolved"
+            obs["topic_id"] = topic_id
+            obs["summary"] = resolution.get("summary", "") or resolution.get("resolution", "")
             if needs_human:
                 self.topic_status[topic_id]["resolution"] = None
             return obs
@@ -319,35 +852,20 @@ class AgendaRunner:
             contributions = st_esc.get("contributions") or []
             self.logger.info(f"  人類裁決: [{topic_id}] {topic.get('title', '')}")
             options = None
-            if topic.get("category") in ("conflict_discussion",) and self.registry:
-                analyst = self.registry.get("analyst")
-                if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
-                    options = analyst.get_resolution_options_for_topic(topic, self.artifact)
-            if not options:
-                options = self.mediator.prepare_human_options(topic, contributions)
-            resolution = self.collect.human_decision_on_topic(topic, options)
-            decision_text = str(resolution.get("decision", ""))
-            wrapped = self.mediator.build_topic_result(
-                resolution_status="human_decision",
-                summary=decision_text or "本議題已升級由人類裁決。",
-                decision=decision_text,
-                votes={},
-                votes_summary="human_decision",
-                mediator_compromise={},
-                agreed_points=[decision_text] if decision_text else [],
-                unresolved_points=[],
-                new_open_questions=[],
-                affected_conflict_ids=[],
-                requirement_change_candidates=[],
-                needs_human=True,
+            wrapped = self._escalate_topic_via_substeps(
+                topic=topic,
+                contributions=contributions,
             )
-            wrapped["human_decision_raw"] = resolution
+            decision_text = str((wrapped.get("human_decision_raw") or {}).get("decision", ""))
             self.topic_status[topic_id]["resolution"] = wrapped
             obs["result"] = {
                 "topic_id": topic_id,
                 "resolution": "human_decision",
                 "summary": decision_text,
             }
+            obs["status"] = "human_decided"
+            obs["topic_id"] = topic_id
+            obs["summary"] = decision_text or "本議題已升級由人類裁決。"
             return obs
 
         if action == "save_topic":
@@ -363,55 +881,15 @@ class AgendaRunner:
             if not resolution:
                 obs["error"] = f"請先對 {topic_id} 執行 resolve_topic 或 escalate_to_human，之後才能 save_topic"
                 return obs
-            proposer = self._find_topic_proposer(topic)
-            topic["proposed_by"] = proposer
-            final_title = self.mediator.name_topic_after_discussion(
-                topic,
-                contributions,
-                resolution,
-                proposer_agent=proposer,
+            save_result = self._save_topic_via_substeps(
+                topic=topic,
+                contributions=contributions,
+                resolution=resolution,
             )
-            if final_title:
-                topic["title"] = final_title
-            self.topic_idx += 1
-            meeting_md = self.mediator.generate_meeting_markdown(
-                topic,
-                contributions,
-                resolution,
-                round_num=self.round_num,
-                proposed_by=proposer,
-            )
-            meeting_filename = f"R{self.round_num}-M{self.topic_idx:02d}.md"
-            self.store.save_markdown(meeting_md, meeting_filename)
-            topic_record = {
-                "schema_version": topic.get("schema_version", "agenda_topic.v1"),
-                "id": topic.get("id"),
-                "title": topic.get("title"),
-                "description": topic.get("description", ""),
-                "category": topic.get("category", ""),
-                "participants": topic.get("participants", []),
-                "discussion_mode": topic.get("discussion_mode", "sequential"),
-                "speaking_order": topic.get("speaking_order", []),
-                "source_ids": topic.get("source_ids", []),
-                "source_proposal_ids": topic.get("source_proposal_ids", []),
-                "proposed_by": topic.get("proposed_by"),
-                "status": "saved",
-                "triage_action": topic.get("triage_action", "formal_meeting"),
-            }
-            self.round_discussions.append(
-                {
-                    "topic": topic_record,
-                    "source_ids": topic.get("source_ids", []),
-                    "contributions": [
-                        {"agent": c.get("agent"), "response": c.get("response", {})}
-                        for c in contributions
-                    ],
-                    "resolution": resolution,
-                }
-            )
-            self.update_design_rationale_for_topic(topic, contributions, resolution)
-            self.topic_status[topic_id]["saved"] = True
-            obs["result"] = {"topic_id": topic_id, "filename": meeting_filename}
+            obs["result"] = save_result
+            obs["status"] = "saved"
+            obs["topic_id"] = topic_id
+            obs["summary"] = f"已儲存 {topic_id} 至 {save_result.get('filename')}"
             return obs
 
         if action == "expert_review":
@@ -419,13 +897,12 @@ class AgendaRunner:
             if not expert or not hasattr(expert, "run_review_loop"):
                 obs["error"] = "Expert agent 不可用"
                 return obs
-            ri = self.config.get("max_iterations") or {}
             cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
             if n is not None and isinstance(n, int) and 1 <= n <= cap:
                 max_iter = n
             else:
-                max_iter = min(int(ri.get("expert_review", cap)), cap)
+                max_iter = cap
             self.logger.info("  Expert review（%s 輪）", max_iter)
             result = expert.run_review_loop(
                 self.artifact, self.round_discussions,
@@ -451,13 +928,12 @@ class AgendaRunner:
             if not analyst or not hasattr(analyst, "run_review_loop"):
                 obs["error"] = "Analyst agent 不可用"
                 return obs
-            ri = self.config.get("max_iterations") or {}
             cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
             if n is not None and isinstance(n, int) and 1 <= n <= cap:
                 max_iter = n
             else:
-                max_iter = min(int(ri.get("analyst_review", cap)), cap)
+                max_iter = cap
             self.logger.info("  Analyst review（%s 輪）", max_iter)
             result = analyst.run_review_loop(
                 self.artifact, self.round_discussions,
@@ -483,13 +959,12 @@ class AgendaRunner:
             if not modeler or not hasattr(modeler, "run_review_loop"):
                 obs["error"] = "Modeler agent 不可用"
                 return obs
-            ri = self.config.get("max_iterations") or {}
             cap = self_review_round_cap_from_config(self.config)
             n = params.get("max_iterations")
             if n is not None and isinstance(n, int) and 1 <= n <= cap:
                 max_iter = n
             else:
-                max_iter = min(int(ri.get("modeler_review", cap)), cap)
+                max_iter = cap
             self.logger.info("  Modeler review（%s 輪）", max_iter)
             result = modeler.run_review_loop(
                 self.artifact, self.round_discussions,
