@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, List, Optional, Any
 from agents.base import BaseAgent
 from utils import (
@@ -58,50 +59,16 @@ class AnalystAgent(BaseAgent):
 
     # ===== Monitor =====
     def run_review_loop(self, artifact, recent_discussions=None, *, max_iterations):
-        observation = None
-        actions_taken = []
-        pending_issues = []
-        scan_results = None
-        loop_cap = self.self_review_round_cap()
-        effective_max = min(max_iterations, loop_cap)
-        i = 0
-
-        while i < effective_max:
-            state = self.build_review_state(
-                artifact, recent_discussions, actions_taken,
-                scan_results, i, effective_max,
-            )
-            decision = self.decide_next_review_action(state, observation)
-            if i == 0:
-                n = decision.get("max_iterations")
-                if n is not None and isinstance(n, int) and 1 <= n <= effective_max:
-                    effective_max = n
-                    self.logger.info("  Analyst review 輪數: %s/%s", effective_max, loop_cap)
-            action = decision.get("action", "done")
-            self.logger.info(f"  Analyst review [{i + 1}/{effective_max}]: {action}")
-            if action == "done" or action not in ANALYST_REVIEW_ACTIONS:
-                break
-
-            params = decision.get("params") or {}
-            observation = self.execute_review_action(
-                action, params, artifact, pending_issues, recent_discussions,
-            )
-            if action == "scan_discussions" and observation.get("result"):
-                scan_results = observation["result"]
-            actions_taken.append({
-                "action": action,
-                "params": params,
-                "result_summary": observation.get("summary", ""),
-            })
-            if observation.get("error"):
-                self.logger.warning(f"  Analyst review error: {observation['error']}")
-            i += 1
-
-        return {
-            "agent": self.name,
-            "actions_taken": actions_taken,
-            "pending_issues": pending_issues,
-        }
+        return self.run_opa_loop(
+            mode="review",
+            max_iterations=max_iterations,
+            loop_cap=self.self_review_round_cap(),
+            context={
+                "artifact": artifact,
+                "recent_discussions": recent_discussions,
+                "scan_results": None,
+            },
+        )
 
     def build_review_state(
         self, artifact, recent_discussions, actions_taken,
@@ -149,6 +116,36 @@ class AnalystAgent(BaseAgent):
                 ),
             }
         return state
+
+    def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
+        if mode == "topic_response":
+            topic = kwargs["topic"]
+            previous_responses = kwargs.get("previous_responses") or []
+            artifact_snapshot = kwargs.get("artifact_snapshot") or {}
+            return {
+                "topic": topic,
+                "topic_id": str(topic.get("id") or ""),
+                "topic_category": str(topic.get("category") or ""),
+                "previous_responses": previous_responses,
+                "previous_response_count": len(previous_responses),
+                "artifact_snapshot": artifact_snapshot,
+                "has_artifact_snapshot": bool(artifact_snapshot),
+                "recent_ask_history": topic.get("recent_ask_history") or [],
+                "collector_mode": bool(topic.get("collector_mode")),
+                "asker_agent": str(topic.get("asker_agent") or "").strip(),
+                "iteration": kwargs.get("iteration", 0) + 1,
+                "max_iterations": kwargs.get("max_iterations", 1),
+            }
+        if mode == "review":
+            return self.build_review_state(
+                kwargs["artifact"],
+                kwargs.get("recent_discussions"),
+                kwargs.get("actions_taken", []),
+                kwargs.get("scan_results"),
+                kwargs["iteration"],
+                kwargs["max_iterations"],
+            )
+        return super().build_observation(mode=mode, **kwargs)
 
     # ===== Plan =====
     def decide_next_review_action(self, state, last_observation=None):
@@ -217,6 +214,39 @@ class AnalystAgent(BaseAgent):
         if "max_iterations" in response:
             out["max_iterations"] = response["max_iterations"]
         return out
+
+    def decide_action(
+        self,
+        *,
+        mode: str,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "topic_response":
+            topic = observation.get("topic") or {}
+            topic_id = str(topic.get("id") or "")
+            if topic.get("category") == "conflict_discussion":
+                action = "respond_conflict_discussion"
+            elif topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
+                action = "propose_elicitation_question"
+            elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
+                action = "ask_elicitation_question"
+            else:
+                action = "respond_discussion"
+            return {
+                "action": action,
+                "params": {},
+                "reasoning": "根據議題類型選擇對應的單輪回應策略。",
+            }
+        if mode == "review":
+            return self.decide_next_review_action(observation, last_result)
+        return super().decide_action(
+            mode=mode,
+            observation=observation,
+            last_result=last_result,
+            **kwargs,
+        )
 
     # ===== Plan: topic proposal =====
     def propose_topics(
@@ -360,6 +390,12 @@ class AnalystAgent(BaseAgent):
 
 規則：
 - label 只用英文 "Conflict" 或 "Neutral"。
+- 先逐對檢查四件事：是否同一 subject、是否同一條件/情境/範圍、是否可同時滿足、是否只有在互斥時才構成衝突。
+- 若 requirements 屬於不同 subject、不同角色、不同條件、不同流程階段，或可作為同一流程中的互補/子步驟共存，不能僅因主題相近就標為 Conflict。
+- 若兩項需求只是不同細節、不同限制層級、不同呈現方式、不同補充說明，且可同時成立，應偏向 Neutral。
+- 只有在兩項需求處於同一 subject 與可比較範圍下，且無法同時滿足、或一方成立會直接違反另一方時，才標為 Conflict。
+- 不要把「資訊不足」、「尚待澄清」、「可能有 trade-off」或「看起來相關」直接升級成 Conflict。
+- 不要把「只是可共存」當成 Neutral 的唯一理由；仍需確認兩者不是同一需求的重述、細化、依賴或直接語義關聯。
 - references/conflict_patterns.md 中的各類 pattern 只能作為候選掃描線索，不可因為符合某個 pattern 就直接判為 Conflict。
 - 是否標為 Conflict，最終仍必須回到本題的核心判準：兩項需求是否明確互斥、無法同時成立、或一方成立將直接違反另一方。
 - 若某筆需求僅看起來屬於某類 conflict pattern，但最終可確認兩項需求既不衝突、也不重複，且沒有直接語義關係，才可標為 Neutral。
@@ -632,20 +668,46 @@ class AnalystAgent(BaseAgent):
         self,
         discussion_text: str,
         existing_ids: List[str],
+        *,
+        mode: str = "oracle",
     ) -> List[Dict[str, Any]]:
         """從隱性需求挖掘討論中提取候選需求（原始 JSON）。"""
+        mode_name = str(mode or "oracle").strip().lower()
+        if mode_name == "main_flow":
+            rules = (
+                "# 規則\n"
+                "- 請提取尚未被記錄的新需求候選；可根據使用者明確描述的情境、痛點、風險、異常處理或營運顧慮，推導出合理的新需求候選\n"
+                "- 只有在 user signal 足以支持該需求意圖時才可推導；不得憑空新增功能、角色、外部系統或量化目標\n"
+                "- 優先提取與失敗處理、資料同步、權限、流程約束、營運連續性、可用性或品質要求有關的需求候選\n"
+                "- 每筆需含：text, type (FR/NFR/constraint), priority (must/should/could), "
+                "source_stakeholders, source（引用討論中的原話或情境片段作為依據，不可編造）, "
+                "rationale（一句話理由，基於討論內容）, "
+                "verification_method (test/review/inspection), acceptance_criteria\n"
+                "- 若無法找到明確 source 引述，不得新增此候選；寧缺勿濫\n"
+                "- NFR 的 acceptance_criteria 應儘量包含可量測指標；若暫時無法量化，可保留最小可驗證描述\n"
+                "- 若沒有足夠支持的新需求候選，回傳空陣列\n"
+                "- 不要重複已有需求\n\n"
+            )
+        else:
+            rules = (
+                "# 規則\n"
+                "- 只提取討論中明確提及但尚未被記錄的新需求\n"
+                "- 每筆需含：text, type (FR/NFR/constraint), priority (must/should/could), "
+                "source_stakeholders, source（討論中的原話引述，作為來源憑證）, "
+                "rationale（一句話理由）, "
+                "verification_method (test/review/inspection), acceptance_criteria\n"
+                "- 缺乏 source 引述的需求不得輸出\n"
+                "- NFR 的 acceptance_criteria 必須含可量測指標\n"
+                "- 若無新需求，回傳空陣列\n"
+                "- 不要重複已有需求\n\n"
+            )
         prompt = (
             "你是需求分析師。以下是一場隱性需求挖掘會議的討論內容。"
             "請從中提取**尚未被記錄**的新需求候選。\n\n"
             f"# 討論內容\n{discussion_text}\n\n"
             f"# 目前已有的需求 ID\n{json.dumps(sorted(existing_ids), ensure_ascii=False)}\n\n"
-            "# 規則\n"
-            "- 只提取討論中明確提及但尚未被記錄的新需求\n"
-            "- 每筆需含：text, type (FR/NFR/constraint), priority (must/should/could), "
-            "source_stakeholders, verification_method (test/review/inspection), acceptance_criteria\n"
-            "- NFR 的 acceptance_criteria 必須含可量測指標\n"
-            "- 若無新需求，回傳空陣列\n"
-            "- 不要重複已有需求\n\n"
+            f"# 模式\n{mode_name}\n\n"
+            f"{rules}"
             '# 輸出 JSON\n{"candidates": [...]}'
         )
         messages = self.build_direct_messages(prompt)
@@ -654,13 +716,29 @@ class AnalystAgent(BaseAgent):
         return raw if isinstance(raw, list) else []
 
     @staticmethod
+    def _normalize_requirement_text(text: str) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        value = re.sub(r"^\s*[-*•]+\s*", "", value)
+        value = re.sub(
+            r"^\s*(需求|Requirement)\s*[:：]\s*",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = value.strip().strip("\"'“”「」")
+        value = re.sub(r"\s+", " ", value).strip()
+        return value
+
+    @staticmethod
     def _normalize_requirement_record(
         req: Dict[str, Any],
         *,
         fallback_source_stakeholders: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         out = dict(req) if isinstance(req, dict) else {}
-        out["text"] = str(out.get("text") or "").strip()
+        out["text"] = AnalystAgent._normalize_requirement_text(out.get("text"))
         rtype = str(out.get("type") or "FR").strip()
         if rtype not in {"FR", "NFR", "constraint"}:
             rtype = "FR"
@@ -682,9 +760,29 @@ class AnalystAgent(BaseAgent):
         out["source_stakeholders"] = src
         out["verification_method"] = str(out.get("verification_method") or "").strip()
         out["acceptance_criteria"] = str(out.get("acceptance_criteria") or "").strip()
+        out["rationale"] = str(out.get("rationale") or "").strip()
+        out["source"] = str(out.get("source") or "").strip()
+        # 若缺乏來源依據，避免把高風險具體承諾直接正規化成正式 requirement 細節。
+        source_missing = not out["source"] and not out["source_stakeholders"]
+        high_risk_tokens = (
+            "tls", "aes", "oauth", "pci", "gdpr", "iso", "wcag",
+            "第三方", "external", "api", "多分店", "跨店", "法規", "compliance",
+            "報表", "dashboard", "analytics", "accessibility", "第三方支付", "payment gateway",
+        )
+        if source_missing:
+            ac_lower = out["acceptance_criteria"].lower()
+            text_lower = out["text"].lower()
+            rationale_lower = out["rationale"].lower()
+            if out["acceptance_criteria"] and any(tok in ac_lower for tok in high_risk_tokens):
+                out["acceptance_criteria"] = "待補"
+            if any(tok in text_lower or tok in rationale_lower for tok in high_risk_tokens):
+                out["status"] = "candidate"
         status = str(out.get("status") or "draft").strip().lower()
-        if status not in {"draft", "approved", "baselined", "rejected"}:
+        if status not in {"candidate", "draft", "approved", "baselined", "rejected"}:
             status = "draft"
+        if not out["source"] and not out["source_stakeholders"]:
+            if status in {"draft"}:
+                status = "candidate"
         out["status"] = status
         return out
 
@@ -711,9 +809,10 @@ class AnalystAgent(BaseAgent):
 只輸出：
 {"scope":{"description":"...", "in_scope":["..."], "out_of_scope":["..."]}}
 
-規則：
+流程邊界：
 - description 來自 rough_idea。
-- in_scope / out_of_scope 須綜合 stakeholders 需求、requirements、conflicts、domain_research 與 system_models（若有）來判斷邊界。
+- scope 判斷應綜合 stakeholders、requirements、conflicts、domain_research 與 system_models（若有）。
+- 不得擴張 Context 未支持的範圍。
 - 勿輸出 Markdown。"""
         try:
             data = self._invoke_requirements_analyst_json(task, context)
@@ -739,20 +838,14 @@ class AnalystAgent(BaseAgent):
 只輸出：
 {{"requirements":[...]}}
 
-每筆需含：
-- text
-- type（FR 或 NFR）
-- priority（must / should / could）
-- source_stakeholders: ["{sh_label}"]
-- verification_method（test / review / inspection 其中之一）
-- acceptance_criteria（可驗證條件，盡量具體；NFR 必須含量測數值如 ≤2s、≥99.9%；禁止「快速」「適當」等模糊詞）
-
-規則：
+流程邊界：
 - 本輪只分析此一利害關係人。
+- source_stakeholders 固定填 ["{sh_label}"]。
 - id 先不要定，由系統後續指派。
-- type、priority 維持英文。
-- verification_method 需用英文（test/review/inspection）。
-- 勿輸出 Markdown。"""
+- 只整理 Context 已支持的需求；不要擴張 scope，不要編造未被支持的細節。
+- 勿輸出 Markdown。
+
+其餘 requirement record 內容與品質標準，一律遵循 requirements-analyst skill。"""
             try:
                 data = self._invoke_requirements_analyst_json(task, context)
             except Exception as e:
@@ -770,17 +863,24 @@ class AnalystAgent(BaseAgent):
                 )
                 all_requirements.append(normalized)
 
-        fr_list = [r for r in all_requirements if (r.get("type") or "").strip().upper() == "FR"]
-        nfr_list = [r for r in all_requirements if (r.get("type") or "").strip().upper() == "NFR"]
-        other_list = [r for r in all_requirements if r not in fr_list and r not in nfr_list]
-        for i, r in enumerate(fr_list, 1):
-            r["id"] = f"FR-{i}"
-        for i, r in enumerate(nfr_list, 1):
-            r["id"] = f"NFR-{i}"
-        for i, r in enumerate(other_list, 1):
-            r.setdefault("type", "FR")
-            r["id"] = f"FR-{len(fr_list) + i}"
-        return {"requirements": fr_list + nfr_list + other_list}
+        typed_groups: Dict[str, List[Dict[str, Any]]] = {}
+        ordered_types: List[str] = []
+        for r in all_requirements:
+            req_type = (r.get("type") or "").strip().upper() or "REQ"
+            if req_type not in typed_groups:
+                typed_groups[req_type] = []
+                ordered_types.append(req_type)
+            typed_groups[req_type].append(r)
+
+        assigned: List[Dict[str, Any]] = []
+        counter = 1
+        for req_type in ordered_types:
+            for r in typed_groups[req_type]:
+                r["type"] = req_type
+                r["id"] = f"REQ-{counter}"
+                assigned.append(r)
+                counter += 1
+        return {"requirements": assigned}
 
     def _ra_create_draft(
         self,
@@ -825,22 +925,14 @@ class AnalystAgent(BaseAgent):
         dec_tbl = analyst_draft_decision_table_note()
         task = f"""依 requirements-analyst skill，僅根據 Context 產出完整需求草稿 Markdown。{version_note}
 
-格式要求：
-- 只輸出 Markdown，勿包程式碼區塊。
-- 不要輸出文件頂層 H1；草稿直接從 Frontmatter 或概觀章節開始。
-- Frontmatter 只保留 status、stakeholders；stakeholders 用 Context.stakeholder_names。
-- 概觀只寫 Context.scope.description。
-- 約束依 Context.feedback 撰寫；勿產出依賴關係或成功標準。
-- Scope 章節寫 Context.scope.in_scope 與 Context.scope.out_of_scope。
-- 功能性需求用 FR-1、FR-2…；非功能性需求用 NFR-1、NFR-2…。
-- 非功能性需求與功能性需求都使用扁平表格格式，不分子類別。
-- FR 表格每列至少包含：id、text、priority、source_stakeholders、verification_method、acceptance_criteria。
-- NFR 表格每列至少包含：id、text、priority、source_stakeholders、verification_method、acceptance_criteria。
-- verification_method 只能使用 test/review/inspection（英文）。
-- NFR 的 acceptance_criteria 必須含可量測指標（如 ≤2s、≥99.9%、≤500ms），禁止「快速」「適當」等模糊詞。
-- 若 acceptance_criteria 暫缺，請明確標示「待補」。
-- {dec_tbl}
-- 若 Context.open_questions 有未結案項目，另立「開放問題」章節；若無可省略。"""
+流程邊界：
+- 這是一份草稿，不是正式定版文件。
+- 只整理 Context 內已有的需求、衝突、決議、研究與模型資訊。
+- 可以整理 wording 與結構，但不得改變需求語意，不得新增未定案內容。
+- 未解衝突、未回答 open questions、待補驗證或待補 acceptance 必須明確保留。
+
+其餘草稿結構、欄位格式與品質標準，一律遵循 requirements-analyst skill。
+{dec_tbl}"""
         try:
             raw = self._invoke_requirements_analyst_text(task, context)
         except Exception as e:
@@ -874,13 +966,14 @@ class AnalystAgent(BaseAgent):
 更新邊界：
 1. 保留所有既有需求；只調整受本輪 decisions 或 discussions 直接影響的條目。
 2. 與本輪無關的需求不要改動。
-3. 可追加 scope 內新需求；不得新增超出 scope.out_of_scope 的需求。
+3. 可追加 scope 內新需求；不得新增超出 scope.out_of_scope 的內容。
 4. 輸出的 requirements 陣列必須涵蓋所有既有 id，再視需要追加新項。
 5. 已解決的 conflict 對應需求應與決策方向一致。
+6. 可整理 wording，但不得改變需求實質內容，也不得把未定案內容寫成已確認。
 
-只輸出一個 JSON 物件：{{"requirements":[...]}}。
-每筆需含 id、text、type（FR/NFR/constraint）、priority、source_stakeholders、verification_method、acceptance_criteria；
-id、type、priority、verification_method 維持英文。"""
+其餘 requirement record 與品質標準，一律遵循 requirements-analyst skill。
+
+只輸出一個 JSON 物件：{"requirements":[...]}。"""
         try:
             data = self._invoke_requirements_analyst_json(task, context)
         except Exception as e:
@@ -909,12 +1002,8 @@ id、type、priority、verification_method 維持英文。"""
             requirements,
             artifact=artifact,
         )
-        applied_requirements = self._apply_safe_requirement_changes(
-            artifact.get("requirements", []),
-            change_candidates,
-        )
         return {
-            "requirements": applied_requirements,
+            "requirements": requirements,
             "conflicts": artifact.get("conflicts", []),
             "requirement_change_candidates": change_candidates,
         }
@@ -953,12 +1042,6 @@ id、type、priority、verification_method 維持英文。"""
             if before is None:
                 req_type = str(req.get("type") or "").strip()
                 text = str(req.get("text") or "").strip()
-                auto_apply_add = (
-                    req_type in {"constraint", "NFR"}
-                    and bool(source_ids)
-                    and bool(text)
-                    and len(text) <= 120
-                )
                 key = ("add", req_id)
                 if key in seen_keys:
                     continue
@@ -973,8 +1056,7 @@ id、type、priority、verification_method 維持英文。"""
                         "after": dict(req),
                         "reason": "Added by analyst draft update.",
                         "source_ids": list(source_ids),
-                        "status": "proposed" if auto_apply_add else "pending_review",
-                        "auto_apply": auto_apply_add,
+                        "status": "proposed",
                     }
                 )
                 next_index += 1
@@ -1010,7 +1092,6 @@ id、type、priority、verification_method 維持英文。"""
                         "reason": "Updated by analyst draft refresh after decisions/discussions.",
                         "source_ids": list(source_ids),
                         "status": "proposed",
-                        "auto_apply": field == "text",
                     }
                 )
                 next_index += 1
@@ -1204,8 +1285,13 @@ id、type、priority、verification_method 維持英文。"""
             return None
         return {"best_options": best_options, "compromise": compromise}
 
-    # ===== Action: meeting response =====
-    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+    def _build_topic_response_prompt(
+        self,
+        *,
+        topic: Dict[str, Any],
+        previous_responses: Optional[List[Dict[str, Any]]],
+        artifact_snapshot: Optional[Dict[str, Any]],
+    ) -> str:
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
         topic_id = str(topic.get("id") or "")
 
@@ -1233,6 +1319,10 @@ id、type、priority、verification_method 維持英文。"""
         skill_context = self.get_optional_skill_context(topic, artifact_snapshot)
         if skill_context:
             skill_section = f"\n# Skill 參考（本輪依議題類型觸發）\n{skill_context}\n"
+        allow_suggested_next_action = (
+            topic.get("category") != "conflict_discussion"
+            and not topic_id.startswith("ELICIT-")
+        )
 
         tool_hint = ""
         if self.tools:
@@ -1242,12 +1332,13 @@ id、type、priority、verification_method 維持英文。"""
         task_block = "請以需求分析師身分發言，聚焦需求定義、驗收邊界、風險與下一步。"
         rules_block = """- statement 需包含：結論、依據、風險/邊界、建議下一步。
 - 依據優先引用 requirement id、conflict id、既有討論或議題描述。
-- statement 中涉及需求時，須引用具體 ID（如 FR-01、NFR-02）；NFR 應提及可量測指標。
 - 保持中立；資訊不足時明確指出缺口，不可假設已確認。
 - 不要講實作細節；投票與最終決議不在此步完成。
 - 若需要他人補資訊，才在 open_questions 中提出具體問題。
 - open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
 - 可用純文字表格、流程或草圖輔助說明；若使用，請放在程式碼區塊。"""
+        if allow_suggested_next_action:
+            rules_block += "\n- 若你認為本議題討論結束後應由外層流程安排下一步，可額外提供 suggested_next_action；這只是建議，不會在會議中直接執行。"
         if topic.get("category") == "conflict_discussion":
             task_block = "請以需求分析師身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
             rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
@@ -1275,6 +1366,7 @@ id、type、priority、verification_method 維持英文。"""
             rules_block = """- 不要直接對 user 正式發問。
 - statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
 - 建議問題句只能有 1 個主問題，且要能直接轉成 requirement。
+- 問題應聚焦需求意圖、邊界、例外、限制或驗收缺口；避免把具體解法、技術標準或實作規格直接問成主問題。
 - open_questions 請輸出空陣列。"""
         elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
             stop_phrase = (
@@ -1298,8 +1390,18 @@ id、type、priority、verification_method 維持英文。"""
 - 若選擇提問，只能問 1 個主問題，不可合併多題。
 - 問題必須可回答、可抽取、可直接轉成 requirement。
 - 避免使用「還有什麼需求」「請多說一點」等泛問。
+- 問題應優先釐清需求意圖、業務邊界、例外情境、限制條件與驗收預期；避免直接要求具體技術方案、標準名稱、設備型號、版本、解析度或硬性數值承諾。
 - open_questions 請輸出空陣列。"""
-        user_prompt = f"""{topic_text}
+        suggested_next_action_json = ""
+        if allow_suggested_next_action:
+            suggested_next_action_json = """,
+    "suggested_next_action": {
+        "type": "analyst_review | expert_review | modeler_review | direct_clarification | new_topic",
+        "reason": "為何建議會後安排這一步",
+        "target_ids": ["可選，相關 requirement/conflict/topic id"],
+        "urgency": "low | medium | high"
+    }"""
+        return f"""{topic_text}
 {prev_text}
 {snapshot_text}
 {recent_ask_history_text}
@@ -1316,17 +1418,8 @@ id、type、priority、verification_method 維持英文。"""
 # 輸出 JSON
 {{{{
     "statement": "針對此議題的完整發言內容",
-    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]{suggested_next_action_json}
 }}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
-
-        return {
-            "agent": self.name,
-            "statement": response.get("statement", ""),
-            "open_questions": response.get("open_questions", []),
-        }
 
     def execute_review_action(
         self, action, params, artifact, pending_issues, recent_discussions,
@@ -1448,6 +1541,176 @@ id、type、priority、verification_method 維持英文。"""
 
         obs["error"] = f"未知動作: {action}"
         return obs
+
+    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_id = str(topic.get("id") or "")
+
+        prev_text = ""
+        if previous_responses:
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
+            prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
+
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        recent_ask_history_text = ""
+        recent_ask_history = topic.get("recent_ask_history") or []
+        if recent_ask_history:
+            recent_ask_history_text = (
+                "\n# 最近幾輪正式提問摘要\n"
+                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
+            )
+
+        skill_section = ""
+        skill_context = self.get_optional_skill_context(topic, artifact_snapshot)
+        if skill_context:
+            skill_section = f"\n# Skill 參考（本輪依議題類型觸發）\n{skill_context}\n"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 最後**必須**輸出下列 JSON。"
+
+        elicitation_hint = ""
+        task_block = "請以需求分析師身分發言，聚焦需求定義、驗收邊界、風險與下一步。"
+        rules_block = """- statement 需包含：結論、依據、風險/邊界、建議下一步。
+- 依據優先引用 requirement id、conflict id、既有討論或議題描述。
+- statement 中涉及需求時，須引用具體 ID（如 FR-01、NFR-02）；NFR 應提及可量測指標。
+- 保持中立；資訊不足時明確指出缺口，不可假設已確認。
+- 不要講實作細節；投票與最終決議不在此步完成。
+- 若需要他人補資訊，才在 open_questions 中提出具體問題。
+- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
+- 可用純文字表格、流程或草圖輔助說明；若使用，請放在程式碼區塊。"""
+        if topic.get("category") == "conflict_discussion":
+            task_block = "請以需求分析師身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
+            rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
+- statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
+- overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
+- 先只根據 requirement_a / requirement_b 原文獨立判斷，再與 current_label 比較；不要先順著 current_label 想理由。
+- 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
+- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 不要跳到實作方案或最終決策。
+- 若需要他人補資訊，才在 open_questions 中提出具體問題。
+- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
+- 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
+        if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
+            elicitation_hint = """# ELICIT Collector（Analyst）
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個需求缺口。
+- 優先補核心需求理解；若核心功能、範圍、偏好仍不清楚，不要先追後段細節。
+- 若沒有比既有方向更高價值的新問題，要明講。"""
+            task_block = "請以需求分析 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
+            rules_block = """- 不要直接對 user 正式發問。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
+- 建議問題句只能有 1 個主問題，且要能直接轉成 requirement。
+- open_questions 請輸出空陣列。"""
+        elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
+            stop_phrase = (
+                "I have gathered enough information"
+                if current_output_language() == "en"
+                else "我已蒐集足夠資訊"
+            )
+            elicitation_hint = """# ELICIT Asker（Analyst）
+- 你是本輪唯一正式提問者。
+- 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
+- 優先補流程、輸入/輸出、驗收條件、使用者偏好與呈現方式等核心缺口。
+- 若核心功能或偏好仍不清楚，不要優先追問 exception handling、韌性等後段細節。
+- 若 collectors 提出的方向太邊角，改寫成更核心的一題。"""
+            task_block = (
+                "請以需求分析 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"
+                "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求挖掘，則 statement 請只輸出以下固定句"
+                f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
+            )
+            rules_block = f"""- 若你判斷目前資訊已足以支撐核心需求理解，且再往下追問的增益有限，可直接輸出停止句：{stop_phrase}
+- 若核心流程、輸入/輸出範圍、使用者偏好、介面呈現偏好、重要限制仍有明顯空缺，不可停止。
+- 若選擇提問，只能問 1 個主問題，不可合併多題。
+- 問題必須可回答、可抽取、可直接轉成 requirement。
+- 避免使用「還有什麼需求」「請多說一點」等泛問。
+- open_questions 請輸出空陣列。"""
+        user_prompt = f"""{topic_text}
+{prev_text}
+{snapshot_text}
+{recent_ask_history_text}
+{skill_section}
+{tool_hint}
+{elicitation_hint}
+
+# 任務
+{task_block}
+
+# 規則
+{rules_block}
+
+# 輸出 JSON
+{{{{
+    "statement": "針對此議題的完整發言內容",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
+}}}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        response = self.chat_for_conflict_topic_response(messages)
+
+        return {
+            "agent": self.name,
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
+        }
+
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        return self.respond_to_conflict_topic(
+            topic,
+            previous_responses=previous_responses,
+            artifact_snapshot=artifact_snapshot,
+        )
+
+    def execute_action(
+        self,
+        *,
+        mode: str,
+        decision: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "topic_response":
+            user_prompt = self._build_topic_response_prompt(
+                topic=kwargs["topic"],
+                previous_responses=kwargs.get("previous_responses"),
+                artifact_snapshot=kwargs.get("artifact_snapshot"),
+            )
+            messages = self.build_direct_messages(user_prompt)
+            response = self.chat_for_topic_response(messages)
+            return {
+                "action": decision.get("action", ""),
+                "status": "success",
+                "statement": response.get("statement", ""),
+                "open_questions": response.get("open_questions", []),
+                "summary": f"完成 topic_response: {decision.get('action', '')}",
+            }
+        if mode != "review":
+            return super().execute_action(mode=mode, decision=decision, **kwargs)
+        result = self.execute_review_action(
+            decision.get("action", "done"),
+            decision.get("params") or {},
+            kwargs["artifact"],
+            kwargs["pending_issues"],
+            kwargs.get("recent_discussions"),
+        )
+        if (
+            decision.get("action") == "scan_discussions"
+            and isinstance(result, dict)
+            and result.get("result")
+        ):
+            result = dict(result)
+            result["context_updates"] = {"scan_results": result["result"]}
+        return result
 
     # ===== Skill helpers (keep at end) =====
     def _invoke_requirements_analyst_text(

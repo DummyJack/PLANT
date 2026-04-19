@@ -62,6 +62,168 @@ class MediatorAgent(BaseAgent):
             model, tools=tools, registry=registry, project_config=project_config
         )
 
+    def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
+        if mode == "agenda_action":
+            state_summary = kwargs.get("state_summary") or {}
+            return {
+                "state_summary": state_summary,
+                "topics_count": len(state_summary.get("topics") or []),
+                "open_topics_count": len(state_summary.get("open_topics") or []),
+                "queue_pending_count": int(state_summary.get("queue_pending_count") or 0),
+                "can_expand_agenda": bool(state_summary.get("can_expand_agenda")),
+                "iteration": kwargs.get("iteration", 0) + 1,
+                "max_iterations": kwargs.get("max_iterations", 1),
+            }
+        return super().build_observation(mode=mode, **kwargs)
+
+    def decide_action(
+        self,
+        *,
+        mode: str,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "agenda_action":
+            return self._plan_agenda_action_impl(
+                kwargs.get("state_summary") or {},
+                last_result,
+            )
+        return super().decide_action(
+            mode=mode,
+            observation=observation,
+            last_result=last_result,
+            **kwargs,
+        )
+
+    def execute_action(
+        self,
+        *,
+        mode: str,
+        decision: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "agenda_action":
+            return {
+                "action": decision.get("action", "finish_round"),
+                "status": "planned",
+                "summary": f"agenda action selected: {decision.get('action', 'finish_round')}",
+                "params": decision.get("params") or {},
+            }
+        return super().execute_action(mode=mode, decision=decision, **kwargs)
+
+    def plan_agenda_action_via_opa(
+        self,
+        state_summary: Dict[str, Any],
+        last_observation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        opa = self.run_single_opa(
+            mode="agenda_action",
+            context={
+                "state_summary": state_summary,
+                "last_result": last_observation,
+            },
+        )
+        decision = dict(opa.get("decision") or {})
+        decision["opa_trace"] = opa.get("opa_trace", [])
+        return decision
+
+    def collect_topic_response(
+        self,
+        agent: Any,
+        topic: Dict[str, Any],
+        *,
+        previous_responses: Optional[List[Dict[str, Any]]] = None,
+        artifact_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        is_conflict_discussion = str(topic.get("category") or "").strip() == "conflict_discussion"
+        use_opa = bool((self.project_config or {}).get("enable_opa_topic_response", True))
+        if is_conflict_discussion:
+            use_opa = False
+        agent_name = getattr(agent, "name", "")
+
+        if use_opa:
+            if not hasattr(agent, "run_single_opa"):
+                raise NotImplementedError(
+                    f"Agent '{getattr(agent, 'name', type(agent).__name__)}' does not support OPA topic_response"
+                )
+            opa = agent.run_single_opa(
+                mode="topic_response",
+                context={
+                    "topic": topic,
+                    "previous_responses": previous_responses,
+                    "artifact_snapshot": artifact_snapshot,
+                },
+            )
+            result = opa.get("result") or {}
+            return {
+                "agent": agent_name,
+                "statement": result.get("statement", ""),
+                "open_questions": result.get("open_questions", []),
+                "oracle_action_type": result.get("oracle_action_type", ""),
+                "oracle_is_relevant": bool(result.get("oracle_is_relevant", False)),
+                "oracle_revealed_ids": result.get("oracle_revealed_ids", []),
+                "suggested_next_action": result.get("suggested_next_action"),
+                "opa_trace": opa.get("opa_trace", []),
+            }
+
+        if is_conflict_discussion and hasattr(agent, "respond_to_conflict_topic"):
+            response = agent.respond_to_conflict_topic(
+                topic,
+                previous_responses=previous_responses,
+                artifact_snapshot=artifact_snapshot,
+            )
+        else:
+            if not (
+                hasattr(agent, "_build_topic_response_prompt")
+                and hasattr(agent, "build_direct_messages")
+                and hasattr(agent, "chat_for_topic_response")
+            ):
+                raise NotImplementedError(
+                    f"Agent '{getattr(agent, 'name', type(agent).__name__)}' does not support direct topic response"
+                )
+            user_prompt = agent._build_topic_response_prompt(  # type: ignore[attr-defined]
+                topic=topic,
+                previous_responses=previous_responses,
+                artifact_snapshot=artifact_snapshot,
+            )
+            messages = agent.build_direct_messages(user_prompt)
+            response = agent.chat_for_topic_response(messages)
+        if isinstance(response, dict):
+            return {
+                "agent": agent_name,
+                "statement": response.get("statement") or response.get("content", ""),
+                "open_questions": response.get("open_questions", []),
+                "oracle_action_type": response.get("oracle_action_type", ""),
+                "oracle_is_relevant": bool(response.get("oracle_is_relevant", False)),
+                "oracle_revealed_ids": response.get("oracle_revealed_ids", []),
+                "suggested_next_action": response.get("suggested_next_action"),
+                "opa_trace": [],
+            }
+        return {
+            "agent": agent_name,
+            "statement": str(response or ""),
+            "open_questions": [],
+            "oracle_action_type": "",
+            "oracle_is_relevant": False,
+            "oracle_revealed_ids": [],
+            "suggested_next_action": None,
+            "opa_trace": [],
+        }
+
+    def _build_reply_topic(
+        self,
+        *,
+        question: str,
+        from_agent: str,
+        follow_up_hint: str,
+    ) -> Dict[str, Any]:
+        return {
+            "id": "OQ",
+            "title": f"回答 {from_agent} 的問題",
+            "description": f"{question}\n\n{follow_up_hint}",
+        }
+
     # ===== Plan: agenda & triage =====
 
     def get_active_agenda_types(self):
@@ -82,12 +244,12 @@ class MediatorAgent(BaseAgent):
         """依 proposal schema 與類型規則決定分流：正式會議、定向問答、直接處理或人工裁決。"""
         category = (proposal.get("category") or "").strip()
         impact = (proposal.get("impact_level") or proposal.get("priority_hint") or "medium").strip().lower()
-        requires_multi_party = bool(proposal.get("requires_multi_party"))
-        blocks_decision = bool(proposal.get("blocks_decision"))
         needs_human = bool(proposal.get("needs_human"))
         routing_preference = (proposal.get("routing_preference") or "formal_meeting").strip()
         source_ids = [s for s in (proposal.get("source_ids") or []) if str(s).strip()]
         participants = [p for p in (proposal.get("participants") or []) if str(p).strip()]
+        deferred_rounds = int(proposal.get("deferred_rounds") or 0)
+        multi_party = len(participants) >= 3
 
         action = "direct_clarification"
         reason = "queue_first_default"
@@ -98,14 +260,14 @@ class MediatorAgent(BaseAgent):
             action = routing_preference
             reason = "proposal_requested_direct_routing"
         elif category == "open_question":
-            if requires_multi_party or blocks_decision or impact == "high" or int(proposal.get("deferred_rounds") or 0) >= 1:
+            if impact == "high" or deferred_rounds >= 1 or multi_party:
                 action = "formal_meeting"
-                reason = "open_question_blocks_decision"
+                reason = "open_question_requires_group_resolution"
             else:
                 action = "direct_clarification"
                 reason = "single_point_open_question"
         elif category == "new_requirement":
-            if impact in {"low", "medium"} and not requires_multi_party and not blocks_decision and len(source_ids) <= 1:
+            if impact in {"low", "medium"} and not multi_party and len(source_ids) <= 1:
                 action = "direct_clarification"
                 reason = "new_requirement_needs_scope_check_only"
             else:
@@ -115,7 +277,7 @@ class MediatorAgent(BaseAgent):
             action = "formal_meeting"
             reason = "conflict_discussion_requires_group_recheck"
         elif category == "tradeoff":
-            if requires_multi_party or blocks_decision or impact == "high":
+            if multi_party or impact == "high":
                 action = "formal_meeting"
                 reason = "tradeoff_requires_group_decision"
             else:
@@ -317,7 +479,7 @@ class MediatorAgent(BaseAgent):
 - **open_question**：當草稿（或摘要）中有待處理開放問題（含需求描述模糊、邊界待確認）時，可開此類。
 - **open_question**：若同輪有多個 open_question，執行層會自動合併為單一「集中回覆」議題，讓相關 agent 一次回答；因此可先正常產生 open_question，無需刻意拆得很細。
 - **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；此外，若有跡象顯示既有需求需要修正（例如描述不準確、優先順序變動、邊界條件改變），也可用此類議題讓 User 檢視並調整既有需求。
-- **tradeoff**：當需求摘要中有多個 NFR（NFR-1、NFR-2…）或 Conflict 涉及效能、可用性、成本等非功能需求之間的競合取捨時，**應考慮開此類**。
+- **tradeoff**：當需求摘要中有多個非功能需求，或 Conflict 涉及效能、可用性、成本等非功能面向之間的競合取捨時，**應考慮開此類**。
 - 其餘依專案狀態與優先順序判斷，無強制對應。
 
 # 約束
@@ -650,18 +812,24 @@ class MediatorAgent(BaseAgent):
             return True
         if int(q.get("deferred_count") or 0) >= 2:
             return True
-        if q.get("requires_multi_party") is True:
+        q_text = str(q.get("question") or "").strip()
+        if any(
+            kw in q_text
+            for kw in ("是否", "要不要", "能否", "可否", "scope", "優先", "衝突", "取捨", "tradeoff")
+        ):
             return True
-        if q.get("blocks_decision") is True:
+        if any(
+            kw in q_text for kw in ("各方", "多方", "哪一方", "是否都", "衝突")
+        ):
             return True
         return False
 
-    def decide_next_agenda_action(
+    def _plan_agenda_action_impl(
         self,
         state_summary: Dict[str, Any],
         last_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """根據當前狀態與上一動觀察，回傳下一個動作與參數。"""
+        """Agenda action 的實際 planner；由 OPA path 呼叫。"""
         last_observation = last_observation or {}
         state_text = json.dumps(state_summary, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation, ensure_ascii=False, indent=2)
@@ -1004,9 +1172,17 @@ class MediatorAgent(BaseAgent):
             contributions.extend(answer_contribs)
             oq_records.extend(answer_oq)
             try:
-                response = agent.respond_to_topic(
-                    topic, previous_responses=contributions, artifact_snapshot=snapshot
-                )
+                if str(topic.get("category") or "").strip() == "conflict_discussion":
+                    response = agent.respond_to_conflict_topic(
+                        topic, previous_responses=contributions, artifact_snapshot=snapshot
+                    )
+                else:
+                    response = self.collect_topic_response(
+                        agent,
+                        topic,
+                        previous_responses=contributions,
+                        artifact_snapshot=snapshot,
+                    )
                 contributions.append(
                     {
                         "agent": agent_name,
@@ -1045,9 +1221,17 @@ class MediatorAgent(BaseAgent):
             self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
             return {"agent": agent_name, "response": {"content": "（未註冊，跳過）"}}
         try:
-            response = agent.respond_to_topic(
-                topic, previous_responses=None, artifact_snapshot=snapshot
-            )
+            if str(topic.get("category") or "").strip() == "conflict_discussion":
+                response = agent.respond_to_conflict_topic(
+                    topic, previous_responses=None, artifact_snapshot=snapshot
+                )
+            else:
+                response = self.collect_topic_response(
+                    agent,
+                    topic,
+                    previous_responses=None,
+                    artifact_snapshot=snapshot,
+                )
             return {
                 "agent": agent_name,
                 "response": (
@@ -1130,6 +1314,47 @@ class MediatorAgent(BaseAgent):
                 })
         return [q for q in out if q.get("question")]
 
+    def collect_suggested_next_actions(
+        self,
+        contributions: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        suggestions: List[Dict[str, Any]] = []
+        seen = set()
+        for c in contributions or []:
+            if not isinstance(c, dict):
+                continue
+            agent_name = str(c.get("agent") or "").strip()
+            resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
+            suggestion = resp.get("suggested_next_action")
+            if not isinstance(suggestion, dict):
+                continue
+            action_type = str(suggestion.get("type") or "").strip()
+            reason = str(suggestion.get("reason") or "").strip()
+            target_ids = [
+                str(x).strip()
+                for x in (suggestion.get("target_ids") or [])
+                if str(x).strip()
+            ]
+            urgency = str(suggestion.get("urgency") or "").strip().lower()
+            if urgency not in {"low", "medium", "high"}:
+                urgency = "medium"
+            if not action_type or not reason:
+                continue
+            key = (agent_name, action_type, reason, tuple(target_ids), urgency)
+            if key in seen:
+                continue
+            seen.add(key)
+            suggestions.append(
+                {
+                    "from_agent": agent_name,
+                    "type": action_type,
+                    "reason": reason,
+                    "target_ids": target_ids,
+                    "urgency": urgency,
+                }
+            )
+        return suggestions
+
     def answer_questions_for_agent(
         self,
         contributions: List[Dict],
@@ -1150,16 +1375,16 @@ class MediatorAgent(BaseAgent):
         current_contributions = list(contributions)
         for q_record in questions:
             try:
-                q_topic = {
-                    "id": "OQ",
-                    "title": f"回答 {q_record['from_agent']} 的問題",
-                    "description": (
-                        f"{q_record['question']}\n\n"
+                q_topic = self._build_reply_topic(
+                    question=q_record["question"],
+                    from_agent=q_record["from_agent"],
+                    follow_up_hint=(
                         "（請簡要針對此問題回答；若前面發言已涵蓋可寫「如前述」或只補充重點。"
                         "回答後若尚未發言，可在輪到你發言時依此問答補充或微調立場。）"
                     ),
-                }
-                response = target_agent.respond_to_topic(
+                )
+                response = self.collect_topic_response(
+                    target_agent,
                     q_topic,
                     previous_responses=current_contributions,
                     artifact_snapshot=snapshot,
@@ -1222,7 +1447,8 @@ class MediatorAgent(BaseAgent):
                 ),
             }
             try:
-                response = agent.respond_to_topic(
+                response = self.collect_topic_response(
+                    agent,
                     follow_topic,
                     previous_responses=contributions,
                     artifact_snapshot=snapshot,
@@ -1293,15 +1519,15 @@ class MediatorAgent(BaseAgent):
                     },
                 )
             try:
-                q_topic = {
-                    "id": "OQ",
-                    "title": f"回答 {q_record['from_agent']} 的問題",
-                    "description": (
-                        f"{q_record['question']}\n\n"
+                q_topic = self._build_reply_topic(
+                    question=q_record["question"],
+                    from_agent=q_record["from_agent"],
+                    follow_up_hint=(
                         "（請簡要針對此問題回答，若前面發言已涵蓋可寫「如前述」或只補充重點，勿整段重複相同內容。）"
                     ),
-                }
-                response = target_agent.respond_to_topic(
+                )
+                response = self.collect_topic_response(
+                    target_agent,
                     q_topic,
                     previous_responses=contributions,
                     artifact_snapshot=snapshot,
@@ -1382,14 +1608,6 @@ class MediatorAgent(BaseAgent):
             )
             q_text = (oq.get("question") or "").strip()
             if oq.get("status") != "answered":
-                blocks_decision = any(
-                    kw in q_text for kw in ("是否", "要不要", "能否", "可否", "scope", "優先", "衝突", "取捨", "tradeoff")
-                )
-                requires_multi_party = any(
-                    kw in q_text for kw in ("各方", "多方", "哪一方", "是否都", "衝突")
-                )
-                oq["blocks_decision"] = blocks_decision
-                oq["requires_multi_party"] = requires_multi_party
                 oq["needs_agenda"] = self.should_escalate_open_question(oq)
                 if oq["needs_agenda"]:
                     oq["status"] = "escalate_to_topic"
@@ -1498,7 +1716,7 @@ class MediatorAgent(BaseAgent):
             statement = (c.get("response") or {}).get("statement", "")
             discussion_text += f"\n【{agent}】\n{statement}\n"
 
-        lang = "請以繁體中文撰寫標題、方案內容與理由。"
+        lang_line = "請以繁體中文撰寫標題、方案內容與理由。"
 
         user_prompt = f"""你是需求會議的主持人。請在完整閱讀各方發言後，整理出**一個**具體的折衷方案（單一決議 package），
 供各參與者下一步投票表決「是否同意採納」；**不要**改成羅列多套互斥選項讓人各選各的。
@@ -1512,7 +1730,7 @@ class MediatorAgent(BaseAgent):
 
 # 要求
 - 方案須可執行、條文明確，並簡要說明如何銜接各方立場
-- {lang}
+- {lang_line}
 
 # 輸出 JSON
 {{
@@ -1702,7 +1920,7 @@ class MediatorAgent(BaseAgent):
 - decision 必須與已接受的結論一致，不要改變決議方向。
 - agreed_points 列 1-3 點具體共識；unresolved_points 只留仍需追蹤事項，沒有就回空陣列。
 - agreed_points / unresolved_points 用簡短完整句。
-- affected_requirement_ids：列出本議題決議所影響的需求 ID（如 FR-01、NFR-02），從討論內容與已知決議框架的 affected_requirement_ids_hint 推導，不可為空。
+- affected_requirement_ids：列出本議題決議所影響的需求 ID（優先使用如 REQ-01 這種 canonical requirement id；若 artifact 仍存在舊 FR-/NFR- 形狀可相容沿用），從討論內容與已知決議框架的 affected_requirement_ids_hint 推導，不可為空。
 - requirement_change_candidates：若決議導致需求文字、優先順序或驗收條件等異動，請列出具體變更；每筆須含 requirement_id、change_type（update/add/remove）、field（text/priority/acceptance_criteria 等）、after（新值）、reason。無變更則空陣列。
 - {mediator_summary_decision_line()}
 
@@ -1712,10 +1930,10 @@ class MediatorAgent(BaseAgent):
     "decision": "具體決策內容",
     "agreed_points": ["共識要點1"],
     "unresolved_points": [],
-    "affected_requirement_ids": ["FR-01"],
+    "affected_requirement_ids": ["REQ-01"],
     "requirement_change_candidates": [
         {{{{
-            "requirement_id": "FR-01",
+            "requirement_id": "REQ-01",
             "change_type": "update",
             "field": "text",
             "after": "更新後的需求描述",
@@ -1753,7 +1971,7 @@ class MediatorAgent(BaseAgent):
     "decision": "",
     "agreed_points": [],
     "unresolved_points": ["未解決爭點"],
-    "affected_requirement_ids": ["FR-01"]
+    "affected_requirement_ids": ["REQ-01"]
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
@@ -2010,6 +2228,15 @@ class MediatorAgent(BaseAgent):
             md += "- **Needs human**: true\n"
         md += "\n"
 
+        def _clean_for_mom(text: str) -> str:
+            raw = self._sanitize_statement_fallback(text)
+            cleaned = self._extract_statement_from_structured_text(raw) or raw
+            stripped = cleaned.strip()
+            # 最後保險：若清理後仍像 JSON/dict/array 原文，就不顯示，避免 MoM 出現 JSON。
+            if stripped.startswith("{") or stripped.startswith("["):
+                return ""
+            return stripped
+
         main_contribs = [c for c in contributions if not c.get("is_reply", False)]
         md += "## 討論內容\n\n"
         if not main_contribs:
@@ -2018,10 +2245,9 @@ class MediatorAgent(BaseAgent):
             for c in main_contribs:
                 agent = c.get("agent", "?")
                 resp = c.get("response", {})
-                statement = resp.get("statement", "")
+                statement = _clean_for_mom(resp.get("statement", ""))
                 md += f"### {agent}\n\n"
-                if statement:
-                    md += f"{statement}\n\n"
+                md += f"{statement or '（本發言無可讀內容）'}\n\n"
 
         oq_pairs = []
         for c in contributions:
@@ -2031,7 +2257,7 @@ class MediatorAgent(BaseAgent):
             question = resp.get("reply_to_question", "")
             from_agent = resp.get("reply_to_agent", "?")
             reply_agent = c.get("agent", "?")
-            answer = resp.get("statement", "") or resp.get("content", "")
+            answer = _clean_for_mom(resp.get("statement", "") or resp.get("content", ""))
             if question or answer:
                 oq_pairs.append((from_agent, question, reply_agent, answer))
         if oq_pairs:
@@ -2116,40 +2342,68 @@ class MediatorAgent(BaseAgent):
         }
 
     def generate_design_rationale_entry(self, topic_context: Dict[str, Any]) -> str:
-        """生成單一議題的 Design Rationale 章節。"""
-        context_text = json.dumps(topic_context, ensure_ascii=False, indent=2)
-        user_prompt = f"""# 任務
-請根據以下單一議題的討論上下文，產出一段 Design Rationale 章節（Markdown）。
+        """結構化 render 單一議題的 Design Rationale 章節（不呼叫 LLM，避免事後敘事化）。"""
+        topic = topic_context.get("topic", {}) or {}
+        discussion = topic_context.get("discussion", {}) or {}
+        resolution = topic_context.get("resolution", {}) or {}
+        traceability_ids = topic_context.get("traceability_ids", []) or []
+        metadata = topic_context.get("metadata", {}) or {}
 
-# 議題上下文
-{context_text}
+        topic_id = topic.get("id", "T-??")
+        topic_title = topic.get("title", "")
 
-# 章節結構（必須完整）
-請以「## [topic_id] [topic_title]」作為章節標題，並依序包含以下小節：
-1. ### 問題與背景 (Issue / Context)
-2. ### 設計目標 (Goals / Objectives)
-3. ### 替代方案 (Alternatives)
-4. ### 評估準則 (Evaluation Criteria)
-5. ### 方案評估 (Evaluation)
-6. ### 最終決策 (Decision)
-7. ### 決策理由 (Justification)
-8. ### 取捨與影響 (Trade-offs & Impacts)
-9. ### 未決議事項 (Open Issues)
-10. ### 需求追蹤 (Traceability)
-11. ### 會議資訊 (Metadata)
+        def _bullet(items, empty="待補"):
+            items = [str(x).strip() for x in (items or []) if str(x).strip()]
+            if not items:
+                return f"- {empty}\n"
+            return "".join(f"- {it}\n" for it in items)
 
-# 重要規則
-- 僅根據上下文內容整理，禁止捏造不存在的決策、方案或需求。
-- 若某小節資訊不足，請明確寫「待補」。
-- {mediator_prose_line()}
-- 「替代方案」與「方案評估」至少列出上下文中有跡可循的選項；若無法辨識則寫「待補」。
-- 「需求追蹤」需優先使用 traceability_ids 與 source_ids。
-- 「會議資訊」至少包含：Round、議題 id、參與者、投票結果、產生時間。
-- 只輸出該議題章節 Markdown，勿使用程式碼區塊。"""
+        lines: List[str] = []
+        lines.append(f"## {topic_id} {topic_title}\n")
 
-        messages = self.build_direct_messages(user_prompt)
-        raw = self.model.chat(messages)
-        return (raw or "").strip()
+        lines.append("\n### 問題與背景 (Issue / Context)\n")
+        lines.append(f"{topic.get('description') or '待補'}\n")
+
+        lines.append("\n### 設計目標 (Goals / Objectives)\n")
+        lines.append(_bullet([topic.get("category_label", "")]))
+
+        lines.append("\n### 替代方案 (Alternatives)\n")
+        statements = discussion.get("statements", []) or []
+        alt_items = [f"{s.get('agent','?')}: {s.get('statement','')}" for s in statements]
+        lines.append(_bullet(alt_items))
+
+        lines.append("\n### 最終決策 (Decision)\n")
+        lines.append(f"{resolution.get('decision') or resolution.get('summary') or '待補'}\n")
+
+        lines.append("\n### 決策理由 (Justification)\n")
+        lines.append(f"{resolution.get('decision_summary') or resolution.get('summary') or '待補'}\n")
+
+        lines.append("\n### 取捨與影響 (Trade-offs & Impacts)\n")
+        lines.append(_bullet(resolution.get("agreed_points", [])))
+
+        lines.append("\n### 未決議事項 (Open Issues)\n")
+        unresolved = discussion.get("open_issues", []) or []
+        oq_items = [f"{q.get('from_agent','?')} → {q.get('to_agent','?')}: {q.get('question','')}" for q in unresolved]
+        oq_items += [str(x) for x in (resolution.get("unresolved_points") or [])]
+        lines.append(_bullet(oq_items))
+
+        lines.append("\n### 需求追蹤 (Traceability)\n")
+        trace_items = list(traceability_ids) + list(resolution.get("affected_requirement_ids") or [])
+        lines.append(_bullet(trace_items))
+
+        lines.append("\n### 會議資訊 (Metadata)\n")
+        votes = resolution.get("votes", {}) or {}
+        votes_str = ", ".join(f"{k}={v}" for k, v in votes.items()) if votes else "待補"
+        meta_items = [
+            f"Round: {metadata.get('round', '')}",
+            f"Topic ID: {topic_id}",
+            f"Participants: {', '.join(topic.get('participants', []) or []) or '待補'}",
+            f"Votes: {votes_str}",
+            f"Generated At: {metadata.get('generated_at', '')}",
+        ]
+        lines.append(_bullet(meta_items))
+
+        return "".join(lines).strip()
 
     def generate_design_rationale(self, topic_context: Dict[str, Any]) -> str:
         """初次建立 design_rationale.md。"""
@@ -2191,6 +2445,7 @@ class MediatorAgent(BaseAgent):
         verification_impact: Optional[Dict[str, Any]] = None,
         needs_approval: bool = False,
         requirement_change_candidates: Optional[List[Dict[str, Any]]] = None,
+        suggested_next_actions: Optional[List[Dict[str, Any]]] = None,
         needs_human: bool = False,
     ) -> Dict[str, Any]:
         """統一 topic_result schema，同時保留舊欄位以維持相容。"""
@@ -2227,6 +2482,9 @@ class MediatorAgent(BaseAgent):
         requirement_change_candidates = [
             row for row in (requirement_change_candidates or []) if isinstance(row, dict)
         ]
+        suggested_next_actions = [
+            row for row in (suggested_next_actions or []) if isinstance(row, dict)
+        ]
         dod_complete = bool(
             decision
             and (resolution_status not in {"agreed", "human_decision"}
@@ -2250,6 +2508,7 @@ class MediatorAgent(BaseAgent):
             "verification_impact": verification_impact,
             "needs_approval": bool(needs_approval),
             "requirement_change_candidates": requirement_change_candidates,
+            "suggested_next_actions": suggested_next_actions,
             "needs_human": bool(needs_human),
             "dod_complete": dod_complete,
         }
@@ -2295,7 +2554,7 @@ class MediatorAgent(BaseAgent):
 
     @staticmethod
     def extract_traceability_ids(topic: Dict, contributions: List[Dict], resolution: Dict) -> List[str]:
-        """從 source_ids 與討論/決議文字抓出可追溯 id（如 FR-1、NFR-2、CF-01）。"""
+        """從 source_ids 與討論/決議文字抓出可追溯 id（優先 REQ-*；相容 FR-* / NFR-* / CF-*）。"""
         ids = set()
         for sid in topic.get("source_ids", []) or []:
             if isinstance(sid, str) and sid.strip():

@@ -1,6 +1,7 @@
 import json
 import re
 import logging
+import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -43,7 +44,7 @@ DEFAULT_AGENT_TOOL_MAPPING: Dict[str, List[str]] = {
     "analyst": ["artifact_query"],
     "expert": ["web_search", "file_parser", "artifact_query"],
     "modeler": ["plantuml_validate", "artifact_query"],
-    "documentor": ["artifact_query"],
+    "documentor": [],
     "mediator": ["artifact_query"],
     "user": [],
 }
@@ -119,10 +120,13 @@ class AgentSkillToolPolicy:
 # Base Agent
 # ---------------------------------------------------------------------------
 
+from utils import MAX_ITERATIONS, TOOL_CALL_MAX_ROUNDS, MAX_WEB_SEARCH_RESULTS
+
+
 class BaseAgent:
     name: str = ""
     system_prompt: str = ""
-    tool_call_max_rounds: int = 3
+    tool_call_max_rounds: int = TOOL_CALL_MAX_ROUNDS
 
     def __init__(
         self,
@@ -141,21 +145,15 @@ class BaseAgent:
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
 
     def self_review_round_cap(self) -> int:
-        """自主複審 OODA：模型可自訂的 max_iterations 上限（與 max_iterations.self_review_round_cap 一致）。"""
-        mi = self.project_config.get("max_iterations")
-        if isinstance(mi, dict):
-            return max(1, int(mi.get("self_review_round_cap", 5)))
-        try:
-            return max(1, int(mi))
-        except (TypeError, ValueError):
-            return 5
+        """自主複審 OODA 上限（固定常數）。"""
+        return MAX_ITERATIONS
 
     def max_web_search_results_cap(self) -> int:
-        """單次 web_search 結果筆數上限（工具實例優先，否則讀 max_web_search_results）。"""
+        """單次 web_search 結果筆數上限；工具實例若已設定則優先採用。"""
         ws = self.tools.get("web_search")
         if ws is not None and hasattr(ws, "max_results_cap"):
             return max(1, int(ws.max_results_cap))
-        return max(1, int(self.project_config.get("max_web_search_results", 20)))
+        return MAX_WEB_SEARCH_RESULTS
 
     def parse_topic_response_json(self, raw: str) -> Dict[str, Any]:
         """解析工具迴圈輸出中的 JSON。"""
@@ -171,6 +169,152 @@ class BaseAgent:
                 except json.JSONDecodeError:
                     pass
         return {}
+
+    def _sanitize_statement_fallback(self, text: Any) -> str:
+        fallback = str(text or "").strip()
+        for prefix in ("```json", "```"):
+            if fallback.startswith(prefix):
+                fallback = fallback[len(prefix) :].strip()
+        if fallback.endswith("```"):
+            fallback = fallback[:-3].strip()
+        if fallback in {"{}", "[]", "null", '""', "```json\n{}\n```", "```json\n[]\n```"}:
+            return ""
+        return fallback
+
+    _STATEMENT_KEYS = (
+        "statement",
+        "content",
+        "answer",
+        "reply",
+        "text",
+        "message",
+        "summary",
+        "note",
+        "description",
+    )
+
+    def _extract_statement_from_structured_text(self, text: str) -> str:
+        """從 JSON/字典字串中抽取自然語言內容，避免 MoM 出現 JSON 原文。"""
+        raw = (text or "").strip()
+        if not raw:
+            return ""
+
+        # 剝除 ```json fence 或普通 ``` fence
+        if raw.startswith("```"):
+            first_nl = raw.find("\n")
+            if first_nl != -1:
+                raw = raw[first_nl + 1 :].strip()
+            if raw.endswith("```"):
+                raw = raw[:-3].strip()
+
+        if not raw:
+            return ""
+
+        parsed: Any = None
+        if raw.startswith("{") or raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(raw)
+                except Exception:
+                    # 試著擷取第一個 {...} 片段
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        try:
+                            parsed = json.loads(m.group(0))
+                        except Exception:
+                            try:
+                                parsed = ast.literal_eval(m.group(0))
+                            except Exception:
+                                parsed = None
+
+        if parsed is None:
+            return ""
+
+        def _pick_from_dict(d: Dict[str, Any]) -> str:
+            for key in self._STATEMENT_KEYS:
+                v = self._sanitize_statement_fallback(d.get(key))
+                if v and not (v.startswith("{") or v.startswith("[")):
+                    return v
+            # 實在沒有合適鍵，退而求其次把所有字串值串起來
+            parts: List[str] = []
+            for v in d.values():
+                if isinstance(v, str):
+                    s = v.strip()
+                    if s and not (s.startswith("{") or s.startswith("[")):
+                        parts.append(s)
+            return " ".join(parts).strip()
+
+        if isinstance(parsed, dict):
+            return _pick_from_dict(parsed)
+        if isinstance(parsed, list):
+            parts: List[str] = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    s = _pick_from_dict(item)
+                    if s:
+                        parts.append(s)
+                elif isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        parts.append(s)
+            return "\n".join(parts).strip()
+        if isinstance(parsed, str):
+            return parsed.strip()
+        return ""
+
+    def _normalize_topic_response_payload(
+        self,
+        payload: Any,
+        *,
+        raw_fallback: str = "",
+        debug_reason: str = "",
+    ) -> Dict[str, Any]:
+        data = dict(payload or {}) if isinstance(payload, dict) else {}
+        statement = self._sanitize_statement_fallback(data.get("statement"))
+        content = self._sanitize_statement_fallback(data.get("content"))
+        fallback = self._sanitize_statement_fallback(raw_fallback)
+        final_statement = statement or content or fallback
+        # Conflict recheck intentionally stores a JSON object string inside
+        # `statement` so downstream code can extract pair_reviews. Do not
+        # collapse it into an overall_assessment sentence.
+        preserve_structured_statement = False
+        if final_statement.lstrip().startswith("{") and "pair_reviews" in final_statement:
+            try:
+                parsed_statement = json.loads(final_statement)
+            except Exception:
+                parsed_statement = None
+            preserve_structured_statement = isinstance(parsed_statement, dict) and isinstance(
+                parsed_statement.get("pair_reviews"), list
+            )
+        if not preserve_structured_statement:
+            extracted = self._extract_statement_from_structured_text(final_statement)
+            if extracted:
+                final_statement = extracted
+        normalized = {
+            "statement": final_statement,
+            "open_questions": (
+                data.get("open_questions")
+                if isinstance(data.get("open_questions"), list)
+                else []
+            ),
+            "suggested_next_action": (
+                data.get("suggested_next_action")
+                if isinstance(data.get("suggested_next_action"), dict)
+                else None
+            ),
+        }
+        for key, value in data.items():
+            if key not in normalized:
+                normalized[key] = value
+        if debug_reason:
+            normalized["_debug_reason"] = debug_reason
+        if raw_fallback:
+            normalized["_debug_raw_response"] = str(raw_fallback)
+        if not final_statement and (data or raw_fallback):
+            normalized["_debug_empty_payload"] = True
+        return normalized
 
     # ------------------------------------------------------------------
     # Meeting helpers
@@ -207,6 +351,46 @@ class BaseAgent:
             raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
             if parse_json:
                 parsed = self.parse_topic_response_json(raw)
+                debug_reason = ""
+                if not parsed and (raw or "").strip():
+                    debug_reason = "tool_raw_not_json_or_empty"
+                elif parsed and not self._sanitize_statement_fallback(parsed.get("statement")):
+                    debug_reason = "tool_json_without_statement"
+                return self._normalize_topic_response_payload(
+                    parsed,
+                    raw_fallback=raw,
+                    debug_reason=debug_reason,
+                )
+            return self._normalize_topic_response_payload({"statement": raw, "open_questions": []})
+        action = kwargs.pop("action", f"{self.name}.topic.response")
+        try:
+            parsed = self.model.chat_json(messages, action=action, **kwargs)
+            debug_reason = ""
+            if isinstance(parsed, dict) and not self._sanitize_statement_fallback(parsed.get("statement")):
+                debug_reason = "chat_json_without_statement"
+            return self._normalize_topic_response_payload(parsed, debug_reason=debug_reason)
+        except Exception as e:
+            self.logger.warning("%s topic.response JSON 解析失敗，改用文字 fallback: %s", self.name, e)
+            raw = ""
+            try:
+                raw = self.model.chat(messages, action=action, **kwargs)
+            except Exception as fallback_e:
+                self.logger.warning("%s topic.response 文字 fallback 失敗: %s", self.name, fallback_e)
+            debug_reason = f"chat_json_exception:{type(e).__name__}"
+            return self._normalize_topic_response_payload(
+                {},
+                raw_fallback=raw,
+                debug_reason=debug_reason,
+            )
+
+    def chat_for_conflict_topic_response(
+        self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """有 tools 則 chat_with_tools，否則 chat_json。"""
+        if self.tools:
+            raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
+            if parse_json:
+                parsed = self.parse_topic_response_json(raw)
                 # 若解析後 statement 為空但模型有產出文字，用原始文字當 fallback，避免發言/回答留空
                 if not (parsed.get("statement") or "").strip() and (raw or "").strip():
                     fallback = (raw or "").strip()
@@ -223,6 +407,210 @@ class BaseAgent:
 
     def usage_action(self, suffix: str) -> str:
         return f"{self.name}.{suffix}"
+
+    # ------------------------------------------------------------------
+    # OPA helpers
+    # ------------------------------------------------------------------
+
+    def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} 尚未實作 build_observation(mode={mode!r})"
+        )
+
+    def decide_action(
+        self,
+        *,
+        mode: str,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} 尚未實作 decide_action(mode={mode!r})"
+        )
+
+    def execute_action(
+        self,
+        *,
+        mode: str,
+        decision: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} 尚未實作 execute_action(mode={mode!r})"
+        )
+
+    def summarize_opa_observation(
+        self, observation: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        if not isinstance(observation, dict):
+            return {}
+        summary: Dict[str, Any] = {}
+        for key in (
+            "iteration",
+            "max_iterations",
+            "requirements_count",
+            "has_scan_results",
+            "has_validator",
+        ):
+            if key in observation:
+                summary[key] = observation.get(key)
+        if "conflicts" in observation and isinstance(observation.get("conflicts"), list):
+            summary["conflict_count"] = len(observation.get("conflicts") or [])
+        if "recent_discussions" in observation and isinstance(
+            observation.get("recent_discussions"), list
+        ):
+            summary["recent_discussion_count"] = len(
+                observation.get("recent_discussions") or []
+            )
+        if "current_models" in observation and isinstance(
+            observation.get("current_models"), list
+        ):
+            summary["current_model_count"] = len(observation.get("current_models") or [])
+        if not summary:
+            summary["keys"] = sorted(observation.keys())
+        return summary
+
+    def make_opa_trace_entry(
+        self,
+        *,
+        mode: str,
+        iteration: int,
+        observation: Dict[str, Any],
+        decision: Dict[str, Any],
+        result: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        return {
+            "agent": self.name,
+            "mode": mode,
+            "iteration": iteration,
+            "observation": self.summarize_opa_observation(observation),
+            "decision": dict(decision or {}),
+            "result": dict(result or {}),
+        }
+
+    def run_opa_loop(
+        self,
+        *,
+        mode: str,
+        max_iterations: int,
+        loop_cap: int,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        context = dict(context or {})
+        observation = None
+        actions_taken = []
+        pending_issues = context.setdefault("pending_issues", [])
+        effective_max = min(max_iterations, loop_cap)
+        i = 0
+
+        while i < effective_max:
+            observation = self.build_observation(
+                mode=mode,
+                iteration=i,
+                max_iterations=effective_max,
+                actions_taken=actions_taken,
+                **context,
+            )
+            decision = self.decide_action(
+                mode=mode,
+                observation=observation,
+                last_result=context.get("last_result"),
+                **context,
+            )
+            if i == 0:
+                n = decision.get("max_iterations")
+                if n is not None and isinstance(n, int) and 1 <= n <= effective_max:
+                    effective_max = n
+                    self.logger.info(
+                        "  %s %s 輪數: %s/%s",
+                        self.__class__.__name__.replace("Agent", ""),
+                        mode,
+                        effective_max,
+                        loop_cap,
+                    )
+            action = decision.get("action", "done")
+            self.logger.info("  %s %s [%s/%s]: %s", self.__class__.__name__.replace("Agent", ""), mode, i + 1, effective_max, action)
+            if action == "done":
+                break
+
+            result = self.execute_action(
+                mode=mode,
+                decision=decision,
+                observation=observation,
+                **context,
+            )
+            context["last_result"] = result
+            if isinstance(result, dict):
+                context_updates = result.get("context_updates")
+                if isinstance(context_updates, dict):
+                    context.update(context_updates)
+            actions_taken.append(
+                {
+                    "action": action,
+                    "params": decision.get("params") or {},
+                    "result_summary": (result or {}).get("summary", ""),
+                }
+            )
+            if result and result.get("error"):
+                self.logger.warning("  %s %s error: %s", self.__class__.__name__.replace("Agent", ""), mode, result["error"])
+            context.setdefault("opa_trace", []).append(
+                self.make_opa_trace_entry(
+                    mode=mode,
+                    iteration=i + 1,
+                    observation=observation,
+                    decision=decision,
+                    result=result,
+                )
+            )
+            i += 1
+
+        return {
+            "agent": self.name,
+            "actions_taken": actions_taken,
+            "pending_issues": pending_issues,
+            "opa_trace": context.get("opa_trace", []),
+        }
+
+    def run_single_opa(
+        self,
+        *,
+        mode: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        context = dict(context or {})
+        observation = self.build_observation(
+            mode=mode,
+            iteration=0,
+            max_iterations=1,
+            actions_taken=[],
+            **context,
+        )
+        decision = self.decide_action(
+            mode=mode,
+            observation=observation,
+            last_result=None,
+            **context,
+        )
+        result = self.execute_action(
+            mode=mode,
+            decision=decision,
+            observation=observation,
+            **context,
+        )
+        trace_entry = self.make_opa_trace_entry(
+            mode=mode,
+            iteration=1,
+            observation=observation,
+            decision=decision,
+            result=result,
+        )
+        return {
+            "agent": self.name,
+            "decision": decision,
+            "result": result,
+            "opa_trace": [trace_entry],
+        }
 
     def format_previous_responses(
         self,
@@ -266,64 +654,6 @@ class BaseAgent:
     ) -> Optional[str]:
         """可選 skill 參考；預設 None。子類覆寫。"""
         return None
-
-    def respond_to_topic(
-        self,
-        topic: Dict,
-        previous_responses: Optional[List[Dict]] = None,
-        artifact_snapshot: Optional[Dict] = None,
-    ) -> Dict:
-        """子類覆寫：議題回應。"""
-        topic_text = self._build_topic_text(topic)
-
-        prev_text = self.format_previous_responses(
-            previous_responses, title="前面的發言"
-        )
-
-        snapshot_text = self._build_snapshot_text(artifact_snapshot)
-        tool_hint = self._build_tool_hint_for_meeting()
-
-        user_prompt = f"""你正在參與一場需求討論會議。請針對以下議題，從你的專業角色角度提供意見。
-
-{topic_text}
-{prev_text}
-{snapshot_text}
-{tool_hint}
-
-# 要求
-- 撰寫一段完整的發言（statement），針對議題表達你的觀點、建議與論述
-- 若有需要請其他角色回答的問題，列入 open_questions（to 填寫目標 agent 名稱，如 "user"、"analyst"、"expert"、"modeler"）
-- 投票將在討論結束後另行進行，發言時只需專注表達觀點
-
-# 發言風格（像現實會議中的專家）
-- 用完整句子、自然語氣表達，如同真人開會發言，避免制式開場白或逐條列點堆砌
-- 可適當保留不確定性（例如「依目前資訊看來…」「若在…前提下，建議…」）
-- 論點簡潔有據，需要時再展開說明
-- 建議採「先結論、再依據、再風險/下一步」的會議表達結構
-
-# 約束
-- 只從你的角色專業角度發言，不要代替其他角色
-- statement 必須是完整、有條理的發言內容
-- 論點必須基於已知資訊，禁止捏造
-- 若資訊不足，需明確說明不確定處與待確認事項
-
-輸出 JSON:
-{{{{
-    "statement": "針對此議題的完整發言內容",
-    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題內容"}}}}]
-}}}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(
-            messages,
-            action=self.usage_action("topic.response"),
-        )
-
-        return {
-            "agent": self.name,
-            "statement": response.get("statement", ""),
-            "open_questions": response.get("open_questions", []),
-        }
 
     def vote_on_topic(
         self,
