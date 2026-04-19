@@ -1542,7 +1542,7 @@ class AnalystAgent(BaseAgent):
         obs["error"] = f"未知動作: {action}"
         return obs
 
-    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+    def _respond_topic_core(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
         topic_id = str(topic.get("id") or "")
 
@@ -1665,12 +1665,135 @@ class AnalystAgent(BaseAgent):
             "open_questions": response.get("open_questions", []),
         }
 
-    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
-        return self.respond_to_conflict_topic(
+    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        return self._respond_topic_core(
             topic,
             previous_responses=previous_responses,
             artifact_snapshot=artifact_snapshot,
         )
+
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_id = str(topic.get("id") or "")
+
+        prev_text = ""
+        if previous_responses:
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
+            prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
+
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        recent_ask_history_text = ""
+        recent_ask_history = topic.get("recent_ask_history") or []
+        if recent_ask_history:
+            recent_ask_history_text = (
+                "\n# 最近幾輪正式提問摘要\n"
+                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
+            )
+
+        skill_section = ""
+        skill_context = self.get_optional_skill_context(topic, artifact_snapshot)
+        if skill_context:
+            skill_section = f"\n# Skill 參考（本輪依議題類型觸發）\n{skill_context}\n"
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 最後**必須**輸出下列 JSON。"
+
+        elicitation_hint = ""
+        task_block = "請以需求分析師身分發言，聚焦需求定義、驗收邊界、風險與下一步。"
+        rules_block = """- statement 需包含：結論、依據、風險/邊界、建議下一步。
+- 依據優先引用 requirement id、conflict id、既有討論或議題描述。
+- statement 中涉及需求時，須引用具體 ID（如 FR-01、NFR-02）；NFR 應提及可量測指標。
+- 保持中立；資訊不足時明確指出缺口，不可假設已確認。
+- 不要講實作細節；投票與最終決議不在此步完成。
+- 若需要他人補資訊，才在 open_questions 中提出具體問題。
+- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
+- 可用純文字表格、流程或草圖輔助說明；若使用，請放在程式碼區塊。"""
+        if topic.get("category") == "conflict_discussion":
+            task_block = "請以需求分析師身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
+            rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
+- statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
+- overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
+- 先只根據 requirement_a / requirement_b 原文獨立判斷，再與 current_label 比較；不要先順著 current_label 想理由。
+- 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
+- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 不要跳到實作方案或最終決策。
+- 若需要他人補資訊，才在 open_questions 中提出具體問題。
+- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
+- 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
+        if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
+            elicitation_hint = """# ELICIT Collector（Analyst）
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個需求缺口。
+- 優先補核心需求理解；若核心功能、範圍、偏好仍不清楚，不要先追後段細節。
+- 若沒有比既有方向更高價值的新問題，要明講。"""
+            task_block = "請以需求分析 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
+            rules_block = """- 不要直接對 user 正式發問。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
+- 建議問題句只能有 1 個主問題，且要能直接轉成 requirement。
+- open_questions 請輸出空陣列。"""
+        elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
+            stop_phrase = (
+                "I have gathered enough information"
+                if current_output_language() == "en"
+                else "我已蒐集足夠資訊"
+            )
+            elicitation_hint = """# ELICIT Asker（Analyst）
+- 你是本輪唯一正式提問者。
+- 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
+- 優先補流程、輸入/輸出、驗收條件、使用者偏好與呈現方式等核心缺口。
+- 若核心功能或偏好仍不清楚，不要優先追問 exception handling、韌性等後段細節。
+- 若 collectors 提出的方向太邊角，改寫成更核心的一題。"""
+            task_block = (
+                "請以需求分析 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"
+                "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求挖掘，則 statement 請只輸出以下固定句"
+                f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
+            )
+            rules_block = f"""- 若你判斷目前資訊已足以支撐核心需求理解，且再往下追問的增益有限，可直接輸出停止句：{stop_phrase}
+- 若核心流程、輸入/輸出範圍、使用者偏好、介面呈現偏好、重要限制仍有明顯空缺，不可停止。
+- 若選擇提問，只能問 1 個主問題，不可合併多題。
+- 問題必須可回答、可抽取、可直接轉成 requirement。
+- 避免使用「還有什麼需求」「請多說一點」等泛問。
+- open_questions 請輸出空陣列。"""
+        user_prompt = f"""{topic_text}
+{prev_text}
+{snapshot_text}
+{recent_ask_history_text}
+{skill_section}
+{tool_hint}
+{elicitation_hint}
+
+# 任務
+{task_block}
+
+# 規則
+{rules_block}
+
+# 輸出 JSON
+{{{{
+    "statement": "針對此議題的完整發言內容",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
+}}}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        response = self.chat_for_topic_response(messages)
+
+        return {
+            "agent": self.name,
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
+        }
 
     def execute_action(
         self,

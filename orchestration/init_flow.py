@@ -8,16 +8,20 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     rough_idea = artifact["rough_idea"]
 
     flow.logger.info("利害關係人識別與需求收集")
-    proposed = flow.user_agent.propose_stakeholders(rough_idea)
+    stakeholders = artifact.get("stakeholders") or []
+    if stakeholders:
+        flow.logger.info(f"✓ 使用 artifact 中預載的 {len(stakeholders)} 位利害關係人")
+    else:
+        proposed = flow.user_agent.propose_stakeholders(rough_idea)
 
-    max_sh = flow.config.get("max_stakeholders", 5)
-    selected_indices = Collect.user_selection(proposed, max_select=max_sh)
-    selected = [proposed[i]["name"] for i in selected_indices]
-    flow.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
+        max_sh = flow.config.get("max_stakeholders", 5)
+        selected_indices = Collect.user_selection(proposed, max_select=max_sh)
+        selected = [proposed[i]["name"] for i in selected_indices]
+        flow.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
 
-    stakeholders = flow.user_agent.generate_stakeholder_requirements(
-        rough_idea, selected
-    )
+        stakeholders = flow.user_agent.generate_stakeholder_requirements(
+            rough_idea, selected
+        )
     artifact["stakeholders"] = stakeholders
     flow.user_agent.stakeholders = stakeholders
     flow.store.save_artifact(artifact)

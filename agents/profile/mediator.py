@@ -137,6 +137,9 @@ class MediatorAgent(BaseAgent):
         artifact_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         is_conflict_discussion = str(topic.get("category") or "").strip() == "conflict_discussion"
+        use_direct_conflict_discussion_path = self._use_direct_conflict_discussion_path(
+            topic
+        )
         use_opa = bool((self.project_config or {}).get("enable_opa_topic_response", True))
         if is_conflict_discussion:
             use_opa = False
@@ -167,7 +170,13 @@ class MediatorAgent(BaseAgent):
                 "opa_trace": opa.get("opa_trace", []),
             }
 
-        if is_conflict_discussion and hasattr(agent, "respond_to_conflict_topic"):
+        if use_direct_conflict_discussion_path and hasattr(agent, "respond_to_topic"):
+            response = agent.respond_to_topic(
+                topic,
+                previous_responses=previous_responses,
+                artifact_snapshot=artifact_snapshot,
+            )
+        elif is_conflict_discussion and hasattr(agent, "respond_to_conflict_topic"):
             response = agent.respond_to_conflict_topic(
                 topic,
                 previous_responses=previous_responses,
@@ -210,6 +219,9 @@ class MediatorAgent(BaseAgent):
             "suggested_next_action": None,
             "opa_trace": [],
         }
+
+    def _use_direct_conflict_discussion_path(self, topic: Dict[str, Any]) -> bool:
+        return str(topic.get("category") or "").strip() == "conflict_discussion"
 
     def _build_reply_topic(
         self,
@@ -1172,8 +1184,8 @@ class MediatorAgent(BaseAgent):
             contributions.extend(answer_contribs)
             oq_records.extend(answer_oq)
             try:
-                if str(topic.get("category") or "").strip() == "conflict_discussion":
-                    response = agent.respond_to_conflict_topic(
+                if self._use_direct_conflict_discussion_path(topic):
+                    response = agent.respond_to_topic(
                         topic, previous_responses=contributions, artifact_snapshot=snapshot
                     )
                 else:
@@ -1221,8 +1233,8 @@ class MediatorAgent(BaseAgent):
             self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
             return {"agent": agent_name, "response": {"content": "（未註冊，跳過）"}}
         try:
-            if str(topic.get("category") or "").strip() == "conflict_discussion":
-                response = agent.respond_to_conflict_topic(
+            if self._use_direct_conflict_discussion_path(topic):
+                response = agent.respond_to_topic(
                     topic, previous_responses=None, artifact_snapshot=snapshot
                 )
             else:

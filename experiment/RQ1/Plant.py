@@ -175,20 +175,18 @@ class OracleUserAgent(UserAgent):
         self.current_task = task
         self.conversation_history = []
         self.oracle_trace = []
-        initial = str(task.get("initial_requirements") or "").strip()
+        initial = task_initial_requirements(task)
         if initial:
             self.conversation_history.append({"role": "user", "content": initial})
         self.remaining_requirements = []
-        for i, req in enumerate(task.get("Implicit Requirements", []) or [], start=1):
-            if not isinstance(req, dict):
-                continue
-            text = str(req.get("RequirementText") or "").strip()
+        for i, req in enumerate(task_implicit_requirements(task), start=1):
+            text = str(req.get("text") or "").strip()
             if not text:
                 continue
             self.remaining_requirements.append(
                 {
                     "id": f"IR-{i:02d}",
-                    "aspect": str(req.get("Aspect") or "").strip() or "Unknown",
+                    "aspect": str(req.get("aspect") or "").strip() or "Unknown",
                     "requirement": text,
                 }
             )
@@ -205,7 +203,7 @@ class OracleUserAgent(UserAgent):
     def generate_stakeholder_requirements(
         self, rough_idea: str, selected_stakeholders: List[str]
     ) -> List[Dict[str, Any]]:
-        initial = str(self.current_task.get("initial_requirements") or rough_idea).strip()
+        initial = task_initial_requirements(self.current_task) or str(rough_idea or "").strip()
         return [
             {
                 "name": "Oracle User",
@@ -270,7 +268,44 @@ class OracleUserAgent(UserAgent):
             return str(judgement.get("action_type") or "probe").strip().lower() or "probe"
         return "probe"
 
-    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+    def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
+        if mode == "topic_response":
+            topic = kwargs["topic"]
+            previous_responses = kwargs.get("previous_responses") or []
+            artifact_snapshot = kwargs.get("artifact_snapshot") or {}
+            return {
+                "topic": topic,
+                "topic_id": str(topic.get("id") or ""),
+                "topic_category": str(topic.get("category") or ""),
+                "previous_response_count": len(previous_responses),
+                "has_artifact_snapshot": bool(artifact_snapshot),
+                "iteration": kwargs.get("iteration", 0) + 1,
+                "max_iterations": kwargs.get("max_iterations", 1),
+            }
+        return super().build_observation(mode=mode, **kwargs)
+
+    def decide_action(
+        self,
+        *,
+        mode: str,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "topic_response":
+            return {
+                "action": "oracle_user_response",
+                "params": {},
+                "reasoning": "以 oracle user simulator 回應本輪 interviewer action。",
+            }
+        return super().decide_action(
+            mode=mode,
+            observation=observation,
+            last_result=last_result,
+            **kwargs,
+        )
+
+    def _oracle_topic_response(self, topic, previous_responses=None, artifact_snapshot=None):
         interviewer_actions, merged_action = self._latest_interviewer_inputs(
             topic, previous_responses
         )
@@ -400,6 +435,44 @@ class OracleUserAgent(UserAgent):
             "oracle_revealed_ids": elicited_req_ids,
         }
 
+    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        return self._oracle_topic_response(
+            topic,
+            previous_responses=previous_responses,
+            artifact_snapshot=artifact_snapshot,
+        )
+
+    def execute_action(
+        self,
+        *,
+        mode: str,
+        decision: Dict[str, Any],
+        observation: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if mode == "topic_response":
+            response = self._oracle_topic_response(
+                kwargs["topic"],
+                previous_responses=kwargs.get("previous_responses"),
+                artifact_snapshot=kwargs.get("artifact_snapshot"),
+            )
+            return {
+                "action": decision.get("action", ""),
+                "status": "success",
+                "statement": response.get("statement", ""),
+                "open_questions": response.get("open_questions", []),
+                "oracle_action_type": response.get("oracle_action_type", ""),
+                "oracle_is_relevant": bool(response.get("oracle_is_relevant", False)),
+                "oracle_revealed_ids": response.get("oracle_revealed_ids", []) or [],
+                "summary": "完成 oracle user topic_response",
+            }
+        return super().execute_action(
+            mode=mode,
+            decision=decision,
+            observation=observation,
+            **kwargs,
+        )
+
 
 def load_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
@@ -407,6 +480,41 @@ def load_json(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError(f"設定檔必須是 JSON object: {path}")
     return data
+
+
+def task_initial_requirements(task: Dict[str, Any]) -> str:
+    return str(task.get("initial_requirements") or "").strip()
+
+
+def task_implicit_requirements(task: Dict[str, Any]) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for req in (task.get("Implicit Requirements", []) or []):
+        if not isinstance(req, dict):
+            continue
+        text = str(req.get("RequirementText") or "").strip()
+        if not text:
+            continue
+        normalized.append(
+            {
+                "text": text,
+                "aspect": str(req.get("Aspect") or "").strip() or "Unknown",
+            }
+        )
+    return normalized
+
+
+def apply_rq1_flow_overrides(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(flow_cfg)
+    if isinstance(exp_cfg.get("enable_agents"), dict):
+        updated["enable_agents"] = exp_cfg["enable_agents"]
+    if isinstance(exp_cfg.get("agent_models"), dict):
+        updated["agent_models"] = exp_cfg["agent_models"]
+    updated["enable_elicitation"] = True
+    updated["elicitation_stop_mode"] = "baseline"
+    updated["rounds"] = 0
+    if exp_cfg.get("elicitation_max_turns") is not None:
+        updated["elicitation_max_turns"] = int(exp_cfg["elicitation_max_turns"])
+    return updated
 
 
 def next_result_index(prefix: str, results_dir: Path) -> int:
@@ -579,7 +687,7 @@ def build_oracle_configs(exp_cfg: Dict[str, Any], api_key: str, base_url: str) -
 
 def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "rough_idea": str(task.get("initial_requirements") or ""),
+        "rough_idea": task_initial_requirements(task),
         "stakeholders": [],
         "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
         "requirements": [],
@@ -589,7 +697,7 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         "open_questions": [],
         "decisions": [],
         "discussions": [],
-        "meta": {},
+        "meta": {"elicitation_mode": "oracle"},
         "elicitation_candidates": [],
     }
 
@@ -601,7 +709,7 @@ def run_one_task(
     *,
     show_trace: bool,
 ) -> Dict[str, Any]:
-    initial_req = str(task.get("initial_requirements") or "")
+    initial_req = task_initial_requirements(task)
     os.environ["PLANT_OUTPUT_LANGUAGE"] = "en" if is_likely_english(initial_req) else "zh-Hant"
     artifact = ensure_artifact(task)
     oracle_user.set_task(task)
@@ -646,8 +754,8 @@ def run_one_task(
     return {
         "name": task.get("name", ""),
         "application_type": task.get("application_type", ""),
-        "initial_requirements": task.get("initial_requirements", ""),
-        "implicit_total": len(task.get("Implicit Requirements", []) or []),
+        "initial_requirements": task_initial_requirements(task),
+        "implicit_total": len(task_implicit_requirements(task)),
         "requirements_before_elicitation": req_before,
         "elicitation_candidates": len(artifact.get("elicitation_candidates", []) or []),
         "requirements_after_elicitation": req_after,
@@ -699,7 +807,7 @@ def _extract_action_type_effectiveness(conversation: List[Dict[str, Any]]) -> Di
     stats: Dict[str, Dict[str, float]] = {}
     for turn in conversation:
         action_type = str(turn.get("action_type") or "unknown")
-        is_hit = bool(turn.get("is_relevant_to_url", False))
+        is_hit = bool(turn.get("is_relevant_to_implicit_requirements", False))
         if action_type not in stats:
             stats[action_type] = {"total": 0, "effective": 0}
         stats[action_type]["total"] += 1
@@ -725,11 +833,9 @@ def _compute_aspect_type_elicitation(
     # 命中 requirement id 作為分子。
     totals = {"Interaction": 0, "Content": 0, "Style": 0}
     elicited = {"Interaction": 0, "Content": 0, "Style": 0}
-    implicit = task.get("Implicit Requirements", []) or []
+    implicit = task_implicit_requirements(task)
     for i, req in enumerate(implicit, start=1):
-        if not isinstance(req, dict):
-            continue
-        aspect = str(req.get("Aspect") or "").strip()
+        aspect = str(req.get("aspect") or "").strip()
         if aspect not in totals:
             continue
         rid = f"IR-{i:02d}"
@@ -746,6 +852,16 @@ def _compute_aspect_type_elicitation(
             "elicitation_ratio": (hit / total) if total > 0 else 0.0,
         }
     return out
+
+
+def _reference_user_stories(task: Dict[str, Any]) -> List[str]:
+    stories = task.get("user_stories")
+    if isinstance(stories, list):
+        return [str(x) for x in stories if str(x).strip()]
+    legacy = task.get("URL", []) or []
+    if isinstance(legacy, list):
+        return [str(x) for x in legacy if str(x).strip()]
+    return []
 
 
 def _build_task_record(
@@ -869,7 +985,7 @@ def _build_task_record(
             "modeler": "\n\n".join(modeler_parts),
             "user": user_text,
             "action_type": action_type,
-            "is_relevant_to_url": hit,
+            "is_relevant_to_implicit_requirements": hit,
             "elicitation_ratio": (
                 len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
             ),
@@ -896,7 +1012,7 @@ def _build_task_record(
                     "modeler": "",
                     "user": "\n".join(agg.get("user_texts", []) or []),
                     "action_type": action_types[0] if action_types else "",
-                    "is_relevant_to_url": hit,
+                    "is_relevant_to_implicit_requirements": hit,
                     "elicitation_ratio": (
                         len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
                     ),
@@ -919,8 +1035,8 @@ def _build_task_record(
         "task_id": f"task_{task_idx}",
         "task_name": task.get("name", ""),
         "application_type": app_type,
-        "initial_requirements": task.get("initial_requirements", ""),
-        "user_stories": task.get("URL", []) or [],
+        "initial_requirements": task_initial_requirements(task),
+        "user_stories": _reference_user_stories(task),
         "user_answer_quality": user_answer_quality,
         "interviewer_model": interviewer_model,
         "conversation": conversation,
@@ -1064,19 +1180,7 @@ def main() -> None:
     exp_cfg = load_json(cfg_path)
 
     flow_cfg_path = FLOW_CONFIG_PATH
-    flow_cfg = load_json(flow_cfg_path)
-    if isinstance(exp_cfg.get("enable_agents"), dict):
-        flow_cfg["enable_agents"] = exp_cfg["enable_agents"]
-    if isinstance(exp_cfg.get("agent_models"), dict):
-        flow_cfg["agent_models"] = exp_cfg["agent_models"]
-    flow_cfg["enable_elicitation"] = True
-    flow_cfg["elicitation_stop_mode"] = "baseline"
-
-    # 只做「需求分析 + 挖掘會議」，不進正式 round。
-    flow_cfg["rounds"] = 0
-
-    if exp_cfg.get("elicitation_max_turns") is not None:
-        flow_cfg["elicitation_max_turns"] = int(exp_cfg["elicitation_max_turns"])
+    flow_cfg = apply_rq1_flow_overrides(load_json(flow_cfg_path), exp_cfg)
 
     data_path = DEFAULT_DATA_PATH
     print(f"正在載入資料檔案：{data_path}")
@@ -1169,8 +1273,8 @@ def main() -> None:
             print(f"任務 {i}/{len(tasks)}：task_{i-1}")
             print(f"系統名稱：{task.get('name', 'N/A')}")
             print(f"應用類型：{task.get('application_type', 'N/A')}")
-            print(f"初始需求：{str(task.get('initial_requirements', 'N/A'))[:100]}...")
-            print(f"總需求數：{len(task.get('Implicit Requirements', []) or [])}")
+            print(f"初始需求：{task_initial_requirements(task)[:100]}...")
+            print(f"總需求數：{len(task_implicit_requirements(task))}")
             print("\n開始對話...\n")
             token_before = 0
             for m in flow.agent_models.values():
@@ -1318,4 +1422,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -831,7 +831,7 @@ class ModelerAgent(BaseAgent):
     "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]{suggested_next_action_json}
 }}}}"""
 
-    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+    def _respond_topic_core(self, topic, previous_responses=None, artifact_snapshot=None):
         topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
         topic_id = str(topic.get("id") or "")
 
@@ -944,12 +944,129 @@ class ModelerAgent(BaseAgent):
             "open_questions": response.get("open_questions", []),
         }
 
-    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
-        return self.respond_to_conflict_topic(
+    # ===== Tool helpers =====
+
+    def respond_to_conflict_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        return self._respond_topic_core(
             topic,
             previous_responses=previous_responses,
             artifact_snapshot=artifact_snapshot,
         )
+
+    def respond_to_topic(self, topic, previous_responses=None, artifact_snapshot=None):
+        topic_text = f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n描述: {topic.get('description', '')}"
+        topic_id = str(topic.get("id") or "")
+
+        prev_text = ""
+        if previous_responses:
+            parts = [
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                for r in previous_responses
+            ]
+            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
+
+        snapshot_text = ""
+        if artifact_snapshot:
+            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+
+        recent_ask_history_text = ""
+        recent_ask_history = topic.get("recent_ask_history") or []
+        if recent_ask_history:
+            recent_ask_history_text = (
+                "\n# 最近幾輪正式提問摘要\n"
+                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
+            )
+
+        tool_hint = ""
+        if self.tools:
+            tool_hint = "\n# 工具使用\n- 若發言中涉及 PlantUML 片段，可先使用 plantuml_validate 驗證語法，再撰寫發言。\n- 最後**必須**輸出下列 JSON。"
+
+        elicitation_hint = ""
+        task_block = "請以系統建模專家身分發言，聚焦模型影響、元素邊界與更新建議。"
+        rules_block = """- statement 需包含：結論、影響分析、風險/邊界、建議下一步。
+- 需明確指出受影響的模型元素、圖型或責任邊界，不要只講抽象原則。
+- 若資訊不足，說明需補哪些介面、事件流程或資料邊界，不可臆測。
+- 可提到 Use Case / Class / Sequence 的具體影響。
+- 若需要他人補資訊，再在 open_questions 提具體問題。
+- 可用純文字表格或流程輔助；若使用，請放在程式碼區塊。"""
+        if (topic.get("category") or "").strip() == "conflict_discussion":
+            task_block = "請以系統建模專家身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，再與 current_label 比較決定 keep 或 modify。"
+            rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
+- statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
+- overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、independent_label、decision、proposed_label、confidence、reason。
+- 你的任務不是提出新需求，而是再審查目前的 Conflict/Neutral 標籤是否合理。
+- 只有在兩項需求在資料結構、狀態轉移、事件流程或責任邊界上無法同時成立時，才支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
+- 若只是流程未定、資料欄位未補齊、責任分工未明，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須指出模型層的互斥點；若支持 Neutral，必須說明為何兩項需求既不衝突、也不重複，且無直接語義關係。
+- 不要跳到技術實作細節。
+- 若需要他人補資訊，再在 open_questions 提具體問題。
+- 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
+        if topic_id.startswith("ELICIT-") and topic.get("collector_mode"):
+            elicitation_hint = """# ELICIT Collector（Modeler）
+- 你不是本輪正式提問者。
+- 你的任務是替 asker 找出現在最值得問 user 的一個資料、內容或互動缺口。
+- 優先補核心資料與互動理解；若核心內容仍不清楚，不要先追後段行為細節。
+- 若沒有高價值的新資料/內容問題，要明講。"""
+            task_block = "請以建模 collector 身分，輸出一段提問建議，供 asker 整合成正式主問題。"
+            rules_block = """- 不要直接對 user 正式發問。
+- statement 需包含：需求缺口、建議問題句、為何值得問、如何避免重複。
+- 建議問題句只能有 1 個主問題，且要能直接轉成資料內容或互動規則需求。
+- open_questions 請輸出空陣列。"""
+        elif topic_id.startswith("ELICIT-") and str(topic.get("asker_agent") or "").strip() == self.name:
+            stop_phrase = (
+                "I have gathered enough information"
+                if current_output_language() == "en"
+                else "我已蒐集足夠資訊"
+            )
+            elicitation_hint = """# ELICIT Asker（Modeler）
+- 你是本輪唯一正式提問者。
+- 你的任務是根據前面 collectors 的提問建議，整合成對 user 的唯一主問題。
+- 優先補資料內容、輸出結構、狀態/事件、互動邊界與呈現方式等核心缺口。
+- 若核心資料內容仍不清楚，不要優先追問 timeout、retry、resume、regeneration 等後段行為細節。
+- 若 collectors 提出的方向太技術化，改寫成 user 能直接回答的一題。"""
+            task_block = (
+                "請以建模 interviewer 身分，只輸出對 user 的一個正式主問題（1-3 句）；"
+                "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求挖掘，則 statement 請只輸出以下固定句"
+                f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
+            )
+            rules_block = f"""- 若你判斷目前資訊已足以支撐核心需求理解，且再往下追問的增益有限，可直接輸出停止句：{stop_phrase}
+- 若關鍵資料內容、輸出結構、狀態/事件、互動邊界、介面呈現方式仍未釐清，不可停止。
+- 若選擇提問，只能問 1 個主問題，不可合併多題。
+- 問題必須可回答、可抽取、可直接轉成資料內容或互動規則需求。
+- open_questions 請輸出空陣列。"""
+        user_prompt = f"""{topic_text}
+{prev_text}
+{snapshot_text}
+{recent_ask_history_text}
+{tool_hint}
+{elicitation_hint}
+
+# 任務
+{task_block}
+
+# 規則
+{rules_block}
+
+# 輸出 JSON
+{{{{
+    "statement": "針對此議題的完整發言內容",
+    "open_questions": [{{{{"to": "目標 agent 名稱", "question": "問題"}}}}]
+}}}}"""
+
+        messages = self.build_direct_messages(user_prompt)
+        response = self.chat_for_topic_response(messages)
+
+        return {
+            "agent": self.name,
+            "statement": response.get("statement", ""),
+            "open_questions": response.get("open_questions", []),
+        }
+
+    # ===== Tool helpers =====
 
     def decide_action(
         self,

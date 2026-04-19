@@ -170,6 +170,10 @@ class BaseAgent:
                     pass
         return {}
 
+    # ------------------------------------------------------------------
+    # Meeting helpers
+    # ------------------------------------------------------------------
+
     def _sanitize_statement_fallback(self, text: Any) -> str:
         fallback = str(text or "").strip()
         for prefix in ("```json", "```"):
