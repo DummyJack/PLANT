@@ -1,35 +1,38 @@
-You will be given a generated SRS document.
+You will be given SRS files through file input.
 
-Your task is to rate the document on one metric.
+Your task is to rate the CandidateSRS on one metric only: Correctness.
 
-Please make sure you read and understand these instructions carefully. Please keep this document open while reviewing, and refer to it as needed.
+Attached files:
+- CandidateSRS: the generated SRS to evaluate.
+- ReferenceExample: a high-quality reference SRS for the same problem space, when available.
 
 
 Evaluation Criteria:
 
-Correctness (1-5) - absence of hallucinations against the ground truth. A correct SRS does not assert unsupported requirements, constraints, actors, interfaces, or behaviors.
+Correctness (1-5) - source-bounded faithfulness and non-hallucination.
+
+Evaluate whether the CandidateSRS avoids fabricated, unsupported, contradictory, or externally false claims. ReferenceExample is only a source boundary and problem-framing aid. It is not a target answer, not a template, and not a completeness checklist.
+
+Do not penalize CandidateSRS merely because it omits something that appears in ReferenceExample. Missing coverage belongs to Completeness, not Correctness.
+
+New content in CandidateSRS is not automatically incorrect. Penalize it only when it makes concrete claims that are unsupported by the scenario/problem boundary, the reference boundary, or reliable external evidence.
+
+Pay special attention to:
+- hallucinated actors, systems, integrations, standards, legal obligations, or third-party services
+- unsupported quantitative commitments, such as exact latency, uptime, capacity, backup, retention, or performance guarantees
+- unsupported security, payment, compliance, or external service capability claims
+- internal contradictions or impossible workflows
+- externally verifiable claims that are false or misleading
+
+If web search is available, use it only to verify external claims in CandidateSRS, such as whether a regulation, standard, third-party service capability, or external factual claim is real and correctly described. Do not use web search to invent missing requirements or to penalize omissions.
 
 
 Evaluation Steps:
 
-1. Read the ground-truth requirements carefully and identify what claims are supported.
-2. Read the generated SRS and compare it to the ground truth. Check whether statements are supported, and penalize invented requirements, constraints, actors, interfaces, metrics, or external systems.
-3. Assign a score for correctness based on the Evaluation Criteria. Ignore missing coverage for this metric and focus on faithfulness of what is stated.
-
-
-Example:
-
-Reference SRS Example:
-
-{{ReferenceExample}}
-
-Ground Truth Requirements:
-
-{{GroundTruthRequirements}}
-
-Generated SRS to Evaluate:
-
-{{CandidateSRS}}
+1. Read CandidateSRS carefully and identify its concrete factual, external, quantitative, compliance, integration, security, payment, or service-capability claims.
+2. Use ReferenceExample only to understand the system boundary and problem framing.
+3. If web search is available, verify only external claims that need external evidence.
+4. Assign a score from 1 to 5 for correctness only.
 
 
 Evaluation Form (scores ONLY):

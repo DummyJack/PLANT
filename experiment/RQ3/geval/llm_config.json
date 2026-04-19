@@ -1,6 +1,11 @@
 {
   "model": "gpt-5.2",
-  "temperature": 1.0,
-  "max_tokens": 80,
-  "n": 3
+  "n": 3,
+  "reference_example": "Restaurant Menu & Ordering System",
+  "enable_reasoning": false,
+  "enable_web_search_for_correctness": true,
+  "enable_temperature": true,
+  "temperature": 0,
+  "max_output_tokens": 120,
+  "reasoning_effort": "low"
 }

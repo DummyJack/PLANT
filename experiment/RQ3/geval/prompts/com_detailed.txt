@@ -1,35 +1,36 @@
-You will be given a generated SRS document.
+You will be given SRS files through file input.
 
-Your task is to rate the document on one metric.
+Your task is to rate the CandidateSRS on one metric only: Completeness.
 
-Please make sure you read and understand these instructions carefully. Please keep this document open while reviewing, and refer to it as needed.
+Attached files:
+- CandidateSRS: the generated SRS to evaluate.
+- ReferenceExample: a high-quality reference SRS for the same problem space, when available.
 
 
 Evaluation Criteria:
 
-Completeness (1-5) - coverage of all ground-truth requirements. A complete SRS clearly includes every requirement stated in the ground truth without omission.
+Completeness (1-5) - semantic coverage of the important requirement intents for this target system.
+
+Use ReferenceExample as a coverage boundary, not as a required template. The CandidateSRS does not need to match the reference wording, section layout, order, or document length. It should receive credit when it covers the same important requirement intent in its own words.
+
+Focus on whether the CandidateSRS preserves the problem-specific requirement space, including:
+- actors / roles
+- workflows
+- interfaces
+- states
+- exceptions
+- operational constraints
+- verification-relevant requirements
+
+Do not evaluate correctness, external truth, writing style, or unsupported extra details for this metric. A generic SRS that only covers simplified menu/order/admin behavior should not receive a high completeness score if it misses important problem-specific roles, workflows, states, exceptions, interfaces, or operational needs.
 
 
 Evaluation Steps:
 
-1. Read the ground-truth requirements carefully and treat them as a complete checklist.
-2. Read the generated SRS and compare it to the ground truth. Check whether every requirement is present and adequately described.
-3. Assign a score for completeness based on the Evaluation Criteria. Ignore unsupported extra details for this metric.
-
-
-Example:
-
-Reference SRS Example:
-
-{{ReferenceExample}}
-
-Ground Truth Requirements:
-
-{{GroundTruthRequirements}}
-
-Generated SRS to Evaluate:
-
-{{CandidateSRS}}
+1. Read CandidateSRS and ReferenceExample carefully.
+2. Identify the important requirement intents in ReferenceExample, treating them as semantic coverage boundaries rather than wording or structure requirements.
+3. Check which important intents are adequately covered by CandidateSRS.
+4. Assign a score from 1 to 5 for completeness only.
 
 
 Evaluation Form (scores ONLY):

@@ -1,35 +1,36 @@
-You will be given a generated SRS document.
+You will be given SRS files through file input.
 
-Your task is to rate the document on one metric.
+Your task is to rate the CandidateSRS on one metric only: Cohesiveness.
 
-Please make sure you read and understand these instructions carefully. Please keep this document open while reviewing, and refer to it as needed.
+Attached files:
+- CandidateSRS: the generated SRS to evaluate.
+- ReferenceExample: a high-quality reference SRS for the same problem space, when available.
 
 
 Evaluation Criteria:
 
-Cohesiveness (1-5) - document-level coherence and organization. A cohesive SRS reads as a unified specification with consistent terminology, logical flow, and no major internal contradictions.
+Cohesiveness (1-5) - whether the CandidateSRS reads as a unified, coherent, problem-specific specification.
+
+Assess the CandidateSRS primarily on its own internal structure and consistency. Use ReferenceExample only as a loose qualitative benchmark for how concrete and problem-specific a good SRS can be. ReferenceExample is not a required template, and the CandidateSRS should not be penalized for using different sections, wording, or ordering.
+
+Focus on:
+- logical structure and flow
+- consistent terminology
+- coherent workflows and states
+- consistent roles, responsibilities, interfaces, and requirement boundaries
+- absence of major internal contradictions
+
+Do not deeply re-score missing coverage or external truth for this metric. Missing requirements belong to Completeness. Unsupported or false external claims belong to Correctness.
+
+A document should not receive a high cohesiveness score merely because it is neatly formatted. If it compresses important domain roles, workflows, interfaces, and states into a generic menu/order/admin description, its cohesiveness should be lower because it does not cohere as a problem-specific SRS.
 
 
 Evaluation Steps:
 
-1. Read the generated SRS carefully and assess whether sections are logically ordered and terminology is used consistently throughout.
-2. Use the reference SRS example as a qualitative benchmark for organization and flow. Do not re-score missing requirements or unsupported claims in depth for this metric.
-3. Assign a score for cohesiveness based on the Evaluation Criteria.
-
-
-Example:
-
-Reference SRS Example:
-
-{{ReferenceExample}}
-
-Ground Truth Requirements:
-
-{{GroundTruthRequirements}}
-
-Generated SRS to Evaluate:
-
-{{CandidateSRS}}
+1. Read CandidateSRS carefully.
+2. Assess whether its sections, terminology, roles, workflows, states, interfaces, and requirements form one consistent specification.
+3. Use ReferenceExample only as a loose qualitative benchmark, not as a mandatory structure.
+4. Assign a score from 1 to 5 for cohesiveness only.
 
 
 Evaluation Form (scores ONLY):
