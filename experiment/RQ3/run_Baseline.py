@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,38 +17,29 @@ from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 RESULTS_DIR = RQ3_DIR / "results"
 RESULT_PREFIX = "Baseline"
+SCENARIO_PATH = RQ3_DIR / "scenario.txt"
 
 # 實驗參數設置（"openai" 或 "gemini"，與 RQ2 Baseline 一致）
 BASELINE_PROVIDER = "openai"
 MODEL_NAME = "gpt-4.1"
 TEMPERATURE = 0.0
 
-# 若留空，執行時將在終端以 input 要求輸入情境（必填、不可僅空白）。
-context = "Restaurant Menu & Ordering System"
-
-
-# 情境以英文為主則輸出英文 SRS，否則輸出繁體中文 SRS。
-def scenario_output_language(scenario: str) -> str:
-    s = (scenario or "").strip()
-    if not s:
-        return "zh-Hant"
-    letters = re.findall(r"[A-Za-z]", s)
-    cjk = re.findall(r"[\u4e00-\u9fff]", s)
-    if not letters:
-        return "zh-Hant"
-    if not cjk:
-        return "en"
-    return "en" if len(letters) >= len(cjk) * 2 else "zh-Hant"
-
-
 def build_srs_prompt(scenario: str) -> list[dict[str, str]]:
-    lang = scenario_output_language(scenario)
-    if lang == "en":
-        user = f"""Based on the configured scenario: {scenario.strip()}. Generate a Software Requirements Specification (SRS) in IEEE 830 format. Write in Markdown format.""".strip()
-    else:
-        user = f"""請依據設置的情境：{scenario.strip()}。依照 IEEE 830 格式，產生一份軟體需求規格書，以 Markdown 格式撰寫。""".strip()
+    user = f"""請依據設置的情境：{scenario.strip()}，產生一份軟體需求規格書，以 Markdown 格式撰寫，請不要產生和規格書無關的內容。""".strip()
 
     return [{"role": "user", "content": user}]
+
+
+def load_scenario_text() -> str:
+    if SCENARIO_PATH.is_file():
+        return SCENARIO_PATH.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def prompt_scenario_interactive() -> str:
+    """當找不到情境檔或內容為空時，改由使用者於終端機輸入。"""
+    print(f"找不到情境檔或內容為空：{SCENARIO_PATH}")
+    return input("請輸入情境說明：").strip()
 
 
 def messages_user_text(messages: list[dict[str, str]]) -> str:
@@ -189,19 +179,15 @@ def main() -> None:
             print("錯誤：未找到 GEMINI_API_KEY")
             sys.exit(1)
 
-    scenario = (context or "").strip()
+    scenario = load_scenario_text()
     if not scenario:
-        print("run_Baseline.py 的 context 為空，請在終端輸入情境內容（必填）。")
-        while True:
-            raw = input("情境（context）：").strip()
-            if raw:
-                scenario = raw
-                break
-            print("錯誤：不可為空白，請重新輸入。")
+        scenario = prompt_scenario_interactive()
+    if not scenario:
+        print("錯誤：未提供情境內容")
+        sys.exit(1)
 
     model_name = str(MODEL_NAME).strip()
     temperature = float(TEMPERATURE)
-    out_lang = scenario_output_language(scenario)
 
     if not model_name:
         print("錯誤：model 不可為空")
@@ -218,7 +204,7 @@ def main() -> None:
     cost_path = RESULTS_DIR / f"cost_{RESULT_PREFIX}.json"
 
     print(f"RQ3 Baseline provider={provider} model={model_name}")
-    print(f"輸出語言（依情境偵測）: {out_lang}")
+    print("輸出語言：繁體中文")
     print(f"輸出 SRS：{srs_path}")
 
     tracker = CostTracker(model_name=model_name)
