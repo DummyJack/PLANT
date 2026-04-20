@@ -9,20 +9,7 @@ Attached files:
 
 Evaluation Criteria:
 
-Cohesiveness (1-5) - whether the CandidateSRS reads as a unified, coherent, problem-specific specification.
-
-Assess the CandidateSRS primarily on its own internal structure and consistency. Use ReferenceExample only as a loose qualitative benchmark for how concrete and problem-specific a good SRS can be. ReferenceExample is not a required template, and the CandidateSRS should not be penalized for using different sections, wording, or ordering.
-
-Focus on:
-- logical structure and flow
-- consistent terminology
-- coherent workflows and states
-- consistent roles, responsibilities, interfaces, and requirement boundaries
-- absence of major internal contradictions
-
-Do not deeply re-score missing coverage or external truth for this metric. Missing requirements belong to Completeness. Unsupported or false external claims belong to Correctness.
-
-A document should not receive a high cohesiveness score merely because it is neatly formatted. If it compresses important domain roles, workflows, interfaces, and states into a generic menu/order/admin description, its cohesiveness should be lower because it does not cohere as a problem-specific SRS.
+Cohesiveness (1-5) - whether the CandidateSRS reads as a unified, coherent, problem-specific specification. Assess the CandidateSRS primarily on its own internal structure and consistency. Use ReferenceExample only as a loose qualitative benchmark for how concrete and problem-specific a good SRS can be. ReferenceExample is not a required template, and the CandidateSRS should not be penalized for using different sections, wording, or ordering.
 
 
 Evaluation Steps:

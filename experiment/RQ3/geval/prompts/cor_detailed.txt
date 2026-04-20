@@ -11,25 +11,14 @@ Evaluation Criteria:
 
 Correctness (1-5) - source-bounded faithfulness and non-hallucination.
 
-Evaluate whether the CandidateSRS avoids fabricated, unsupported, contradictory, or externally false claims. ReferenceExample is only a source boundary and problem-framing aid. It is not a target answer, not a template, and not a completeness checklist.
-
-Do not penalize CandidateSRS merely because it omits something that appears in ReferenceExample. Missing coverage belongs to Completeness, not Correctness.
-
-New content in CandidateSRS is not automatically incorrect. Penalize it only when it makes concrete claims that are unsupported by the scenario/problem boundary, the reference boundary, or reliable external evidence.
-
-Pay special attention to:
-- hallucinated actors, systems, integrations, standards, legal obligations, or third-party services
-- unsupported quantitative commitments, such as exact latency, uptime, capacity, backup, retention, or performance guarantees
-- unsupported security, payment, compliance, or external service capability claims
-- internal contradictions or impossible workflows
-- externally verifiable claims that are false or misleading
+Evaluate whether the CandidateSRS avoids fabricated, contradictory, or externally false claims. ReferenceExample is only a source boundary and problem-framing aid. It is not a target answer, not a template, and not a completeness checklist. Do not penalize CandidateSRS merely because it omits something that appears in ReferenceExample. Missing coverage belongs to Completeness, not Correctness. New content in CandidateSRS is not automatically incorrect. Do not penalize the document merely for being ambitious, strongly phrased, or more specific than the reference, unless it becomes factually false, self-contradictory, or clearly hallucinatory.
 
 If web search is available, use it only to verify external claims in CandidateSRS, such as whether a regulation, standard, third-party service capability, or external factual claim is real and correctly described. Do not use web search to invent missing requirements or to penalize omissions.
 
 
 Evaluation Steps:
 
-1. Read CandidateSRS carefully and identify its concrete factual, external, quantitative, compliance, integration, security, payment, or service-capability claims.
+1. Read CandidateSRS carefully and identify its concrete factual, external, compliance, integration, security, payment, or service-capability claims.
 2. Use ReferenceExample only to understand the system boundary and problem framing.
 3. If web search is available, verify only external claims that need external evidence.
 4. Assign a score from 1 to 5 for correctness only.

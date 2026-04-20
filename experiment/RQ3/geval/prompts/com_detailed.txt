@@ -9,20 +9,7 @@ Attached files:
 
 Evaluation Criteria:
 
-Completeness (1-5) - semantic coverage of the important requirement intents for this target system.
-
-Use ReferenceExample as a coverage boundary, not as a required template. The CandidateSRS does not need to match the reference wording, section layout, order, or document length. It should receive credit when it covers the same important requirement intent in its own words.
-
-Focus on whether the CandidateSRS preserves the problem-specific requirement space, including:
-- actors / roles
-- workflows
-- interfaces
-- states
-- exceptions
-- operational constraints
-- verification-relevant requirements
-
-Do not evaluate correctness, external truth, writing style, or unsupported extra details for this metric. A generic SRS that only covers simplified menu/order/admin behavior should not receive a high completeness score if it misses important problem-specific roles, workflows, states, exceptions, interfaces, or operational needs.
+Completeness (1-5) - semantic coverage of the important requirement intents for this target system. Use ReferenceExample as a coverage boundary, not as a required template. The CandidateSRS does not need to match the reference wording, section layout, order, or document length. It should receive credit when it covers the same important requirement intent in its own words.
 
 
 Evaluation Steps:
