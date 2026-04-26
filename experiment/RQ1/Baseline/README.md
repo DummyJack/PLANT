@@ -88,7 +88,7 @@ ReqElicitBench/
 │   └── env/
 │       ├── reqelicit_gym.py          # Gymnasium Env + metrics computation
 │       ├── prompts.py                # Model calls (judge/user) + evaluation pipeline
-│       ├── utils.py                  # Prompt templates + helpers
+│       ├── env/utils.py              # Prompt templates + helpers
 │       └── task_data.py              # Dataset loader
 ├── run_reqelicitgym.py               # Main evaluation runner (all tasks)
 ├── run_reqelicitgym.sh               # Shell wrapper

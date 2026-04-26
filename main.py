@@ -1,51 +1,17 @@
-import os
 import sys
 import traceback
-import re
 
 from pathlib import Path
-from typing import Any, Dict, Optional
 from dotenv import load_dotenv
-from flow import Flow
-from store import Store
-from utils import Logger, ProjectManager
-
-def format_loaded_models_summary(config: dict) -> str:
-    """僅依 config 內 agent_models 原樣列出；不顯示 default 槽位。"""
-    am = config.get("agent_models") or {}
-    parts: list[str] = []
-    for name, slot in am.items():
-        if name == "default":
-            continue
-        if not isinstance(slot, dict):
-            continue
-        raw = slot.get("model")
-        model_name = raw if (raw is not None and str(raw).strip() != "") else "—"
-        parts.append(f"{name}: {model_name}")
-    if not parts:
-        return "✓ 載入配置（agent_models 無有效項目）"
-    return "✓ 載入配置 — " + "；".join(parts)
-
-
-def is_likely_english(text: str) -> bool:
-    text = str(text or "").strip()
-    if not text:
-        return False
-    ascii_words = re.findall(r"[A-Za-z]+", text)
-    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
-    return len(ascii_words) >= max(3, len(cjk_chars))
-
-
-def sync_main_output_language(rough_idea: str, artifact: Optional[Dict[str, Any]] = None) -> str:
-    lang = "en" if is_likely_english(rough_idea) else "zh-Hant"
-    os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
-    if isinstance(artifact, dict):
-        meta = artifact.get("meta")
-        if not isinstance(meta, dict):
-            meta = {}
-            artifact["meta"] = meta
-        meta["output_language"] = lang
-    return lang
+from flow.main import Flow
+from model import validate_provider_api_keys
+from storage import Store
+from utils import (
+    Logger,
+    ProjectManager,
+    format_loaded_models_summary,
+    sync_output_language,
+)
 
 
 def main():
@@ -68,101 +34,16 @@ def main():
         print("錯誤：找不到 config.json 檔案（請放在專案主目錄）")
         sys.exit(1)
 
-    agent_models = config.get("agent_models") or {}
-    providers_to_check = set()
-    for agent_cfg in agent_models.values():
-        if isinstance(agent_cfg, dict) and agent_cfg.get("provider"):
-            providers_to_check.add(agent_cfg["provider"])
-    if not providers_to_check:
-        print(
-            "錯誤：agent_models 內未設定任何 provider（請在 default 或各 agent 區塊填寫 provider）"
-        )
+    try:
+        validate_provider_api_keys(config)
+        session = ProjectManager.prepare_project_session(base_dir, base_store)
+    except ValueError as e:
+        print(f"錯誤：{str(e)}")
         sys.exit(1)
-
-    api_key_env = {
-        "openai": "OPENAI_API_KEY",
-        "claude": "ANTHROPIC_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-    }
-
-    for used_provider in providers_to_check:
-        required_key = api_key_env.get(used_provider)
-        if not required_key:
-            print(f"錯誤：不支援的 provider: {used_provider}")
-            sys.exit(1)
-        if not os.getenv(required_key):
-            print(f"錯誤：找不到 {required_key} 環境變數（provider={used_provider}）")
-            print(f"請在專案主目錄的 .env 檔案中設定 {required_key}=your_api_key")
-            sys.exit(1)
-
-    project_id, is_continue = ProjectManager.select_or_create_project(base_store)
-
-    artifact = None
-    if not is_continue:
-        rough_idea = input(
-            "\n請輸入您的初始想法(可以是一個模糊的系統概念、問題描述或需求)："
-        ).strip()
-
-        if not rough_idea:
-            print("錯誤：請提供初始想法")
-            sys.exit(1)
-
-        project_id = base_store.create_project()
-        print(f"\n✓ 已創建專案：{project_id}\n")
-    else:
-        project_store = Store(base_dir, project_id)
-        ProjectManager.display_project_info(project_store, project_id)
-
-        artifact = project_store.load_artifact()
-        if artifact:
-            rough_idea = artifact.get("rough_idea", "")
-            sync_main_output_language(rough_idea, artifact)
-            print(f"專案的初始想法：{rough_idea}\n")
-        else:
-            print("⚠️  警告：無法載入專案的 artifact，將作為新專案處理\n")
-            is_continue = False
-            rough_idea = input("請輸入您的初始想法：").strip()
-            if not rough_idea:
-                print("錯誤：請提供初始想法")
-                sys.exit(1)
-            sync_main_output_language(rough_idea)
-            project_id = base_store.create_project()
 
     # 由人類設定討論回合數，寫入 config
-    rounds = input_rounds("請輸入討論回合數：")
-    config["rounds"] = rounds
-    base_store.save_config(config)
-
-    store = Store(base_dir, project_id)
-    logger = Logger(store.log_dir)
-
-    print()
-    print("開始執行...")
-    print()
-
-    try:
-        if not is_continue:
-            sync_main_output_language(rough_idea)
-        flow = Flow(config, store, logger)
-
-        if is_continue:
-            flow.run_continue(artifact)
-        else:
-            flow.run(rough_idea)
-
-    except KeyboardInterrupt:
-        print("\n\n使用者中斷執行")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"執行錯誤：{str(e)}")
-        print(f"\n錯誤：{str(e)}")
-        traceback.print_exc()
-        sys.exit(1)
-
-
-def input_rounds(prompt: str) -> int:
     while True:
-        rounds_input = input(prompt).strip()
+        rounds_input = input("請輸入討論回合數：").strip()
         if not rounds_input:
             print("❌ 請輸入回合數")
             continue
@@ -172,9 +53,38 @@ def input_rounds(prompt: str) -> int:
                 print("❌ 回合數必須大於 0")
                 continue
             print(f"✓ 設定回合數：{rounds}")
-            return rounds
+            break
         except ValueError:
             print("❌ 回合數必須是數字")
+
+    config["rounds"] = rounds
+    base_store.save_config(config)
+
+    store = Store(base_dir, session.project_id)
+    logger = Logger(store.log_dir)
+
+    print()
+    print("開始執行...")
+    print()
+
+    try:
+        if not session.is_continue:
+            sync_output_language(session.rough_idea)
+        flow = Flow(config, store, logger)
+
+        if session.is_continue:
+            flow.run_continue(session.artifact)
+        else:
+            flow.run(session.rough_idea)
+
+    except KeyboardInterrupt:
+        print("\n\n使用者中斷執行")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"執行錯誤：{str(e)}")
+        print(f"\n錯誤：{str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

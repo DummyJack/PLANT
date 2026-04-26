@@ -2,7 +2,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from utils import Collect, read_max_iterations
-from utils import normalize_topic_proposal
+from agents.agenda.schema import normalize_topic_proposal
 from agents.profile.mediator import AGENDA_CATEGORY_LABEL
 from .agenda_runner import AgendaRunner
 

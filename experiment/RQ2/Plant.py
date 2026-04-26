@@ -21,7 +21,7 @@ sys.path.insert(0, str(RQ2_DIR))
 sys.path.insert(0, str(BASE_DIR))
 
 from dotenv import load_dotenv
-from flow import Flow
+from flow.main import Flow
 from metric import Metric
 from utils import json_dump_no_scientific, model_has_token_pricing
 
@@ -88,7 +88,7 @@ def _assert_agent_models_have_token_pricing(config: Dict[str, Any]) -> None:
         if not model_has_token_pricing(str(mn)):
             print(
                 f"警告：沒有找到 token 的定價：agent_models.{agent} 模型「{mn}」。"
-                "請在專案 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
+                "請在專案 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
                 "或改用已定價的模型名稱。"
             )
             sys.exit(1)

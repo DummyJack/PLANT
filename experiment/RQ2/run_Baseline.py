@@ -123,7 +123,7 @@ class BaselineModel:
         if not model_has_token_pricing(self.model_name):
             print(
                 f"警告：沒有找到 token 的定價：模型「{self.model_name}」。"
-                "請在專案 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
+                "請在專案 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
                 "或改用已定價的模型名稱。"
             )
             sys.exit(1)

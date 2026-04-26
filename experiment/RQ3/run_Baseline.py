@@ -195,7 +195,7 @@ def main() -> None:
     if not model_has_token_pricing(model_name):
         print(
             f"錯誤：模型 {model_name} 沒有 token 定價，"
-            "請先在 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 加入定價。"
+            "請先在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 加入定價。"
         )
         sys.exit(1)
 

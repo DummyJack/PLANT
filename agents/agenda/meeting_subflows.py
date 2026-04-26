@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional
 
 from agents.profile.mediator import AGENDA_CATEGORY_LABEL
-from utils import Collect, normalize_agenda_topic
+from agents.agenda.schema import normalize_agenda_topic
+from utils import Collect
 
 
 # ---------- 純工具 ----------

@@ -11,14 +11,18 @@ from agents.profile import (
 )
 from agents.agenda import MeetingCoordinator
 from model import create_model
-from orchestration import (
+from .project_flow import (
     run_project,
     run_continue_project,
-    run_init_phase as orchestration_run_init_phase,
-    run_meeting_round as orchestration_run_meeting_round,
-    finalize as orchestration_finalize,
+    run_meeting_round as flow_run_meeting_round,
 )
-from store import Store
+from .init_flow import (
+    run_init_phase as flow_run_init_phase,
+)
+from .finalize_flow import (
+    finalize as flow_finalize,
+)
+from storage import Store
 from utils import Logger, human_setting
 from agents.tools import ToolRegistry
 
@@ -264,14 +268,14 @@ class Flow:
     # Phase 0: 初始草稿建立
 
     def run_init_phase(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
-        return orchestration_run_init_phase(self, artifact)
+        return flow_run_init_phase(self, artifact)
 
     # Round k: 開會
 
     def run_meeting_round(
         self, artifact: Dict[str, Any], round_num: int
     ) -> Dict[str, Any]:
-        return orchestration_run_meeting_round(self, artifact, round_num)
+        return flow_run_meeting_round(self, artifact, round_num)
 
     def _run_agenda_loop(self, runner: Any) -> None:
         self.meeting._run_agenda_loop(runner)
@@ -291,7 +295,7 @@ class Flow:
         *,
         force_formal: bool = False,
     ) -> Dict[str, Any]:
-        return orchestration_finalize(self, artifact, force_formal=force_formal)
+        return flow_finalize(self, artifact, force_formal=force_formal)
 
     def _build_cost_summary(self) -> Optional[Dict[str, Any]]:
         cost_by_agent = {}

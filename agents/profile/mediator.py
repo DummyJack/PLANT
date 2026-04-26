@@ -9,12 +9,11 @@ from utils import (
     mediator_agenda_language_line,
     mediator_collect_line,
     mediator_human_options_line,
-    mediator_prose_line,
     mediator_reasoning_line,
     mediator_summary_decision_line,
     mediator_unresolved_vote_task_line,
 )
-from utils import normalize_agenda_topic
+from agents.agenda.schema import normalize_agenda_topic
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 with open(AGENTS_DIR / "agenda" / "agenda_types.json", "r", encoding="utf-8") as f:

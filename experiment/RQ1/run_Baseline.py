@@ -175,7 +175,7 @@ def main():
         if not model_has_token_pricing(mn):
             print(
                 f"警告：沒有找到 token 的定價：{label} 模型「{mn}」。"
-                "請在專案 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
+                "請在專案 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上該模型，"
                 "或改用已定價的模型名稱。"
             )
             sys.exit(1)
@@ -518,4 +518,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

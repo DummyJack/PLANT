@@ -44,7 +44,7 @@ class MeetingCoordinator:
             "repr": repr(value),
         }
 
-    # ------ 共用小工具（window 保留供 flow.py 委派呼叫） ------
+    # ------ 共用小工具（window 保留供 flow/main.py 委派呼叫） ------
 
     def _is_last_meeting_round(self, artifact: Dict[str, Any], round_num: int) -> bool:
         meta = artifact.get("meta") or {}

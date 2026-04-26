@@ -18,7 +18,7 @@ if str(BASE_DIR) not in sys.path:
 if str(RQ1_DIR) not in sys.path:
     sys.path.insert(0, str(RQ1_DIR))
 
-from flow import Flow
+from flow.main import Flow
 from agents.profile.user import UserAgent
 from Baseline.env.prompts import generate_user_response, judge_interviewer_action
 from metric import compute_ora, compute_overall_metrics, compute_tkqr
@@ -639,7 +639,7 @@ def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]
         if model_name and (not model_has_token_pricing(model_name)):
             print(
                 f"警告：沒有找到 token 的定價：agent_models.{agent} 模型「{model_name}」。"
-                "請在 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
+                "請在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
             )
             sys.exit(1)
     for k in ("oracle_user", "oracle_judge"):
@@ -647,7 +647,7 @@ def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]
         if model_name and (not model_has_token_pricing(model_name)):
             print(
                 f"警告：沒有找到 token 的定價：{k} 模型「{model_name}」。"
-                "請在 utils.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
+                "請在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
             )
             sys.exit(1)
 
