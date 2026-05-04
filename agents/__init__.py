@@ -1,7 +1,7 @@
 # Agents 根目錄 — 核心基礎設施（Base、Registry、Policy、ToolRegistry）
-from .base import BaseAgent
-from .base import AgentRegistry
-from .base import AgentSkillToolPolicy
+from agents.base import BaseAgent
+from agents.base import AgentRegistry
+from agents.base import AgentSkillToolPolicy
 from .tools import ToolRegistry
 
 __all__ = [

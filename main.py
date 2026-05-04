@@ -1,17 +1,18 @@
+# CLI entrypoint: selects project mode, collects input, and starts the flow.
 import sys
 import traceback
 
 from pathlib import Path
 from dotenv import load_dotenv
-from flow.main import Flow
+from flow.setup import Flow
 from model import validate_provider_api_keys
 from storage import Store
 from utils import (
     Logger,
     ProjectManager,
     format_loaded_models_summary,
-    sync_output_language,
 )
+from utils.language import sync_output_language
 
 
 def main():

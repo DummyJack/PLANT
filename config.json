@@ -2,13 +2,10 @@
   "rounds": 1,
   "agenda_items": 5,
   "max_stakeholders": 5,
-  "elicitation_max_turns": 5,
+  "elicitation_max_turns": 10,
   "human": {
     "enable_elicitation": true,
-    "enable_human_escalation": true,
-    "enable_human_approval_queue": true,
-    "approval_queue_agent_first": true,
-    "require_human_approval_for_changes": true
+    "require_user_confirmation_for_changes": true
   },
   "enable_tools": {
     "web_search": true,
@@ -30,7 +27,6 @@
     "modeler": true,
     "documentor": true
   },
-  "enable_opa_topic_response": true,
   "agent_models": {
     "default": {
       "provider": "openai",

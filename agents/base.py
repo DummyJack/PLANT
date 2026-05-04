@@ -1,3 +1,4 @@
+# Agent base layer: shared prompts, skill/tool policy, JSON parsing, and tool calling.
 import json
 import re
 import logging
@@ -5,8 +6,13 @@ import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from typing import Any, Dict, List, Optional, Set
-from agents.tools.base import BaseTool
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+
+from agents.profile.agent_loop import AgentActionLoop
+from utils.language import current_output_language
+
+if TYPE_CHECKING:
+    from agents.tools.base import BaseTool
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +40,8 @@ class AgentRegistry:
 DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
     "analyst": ["requirements-analyst", "conflict-analyzer"],
     "expert": ["domain-research"],
-    "modeler": ["plantuml-syntax"],
-    "documentor": ["srs-generation"],
+    "modeler": ["UML"],
+    "documentor": ["SRS"],
     "mediator": [],
     "user": [],
 }
@@ -50,12 +56,114 @@ DEFAULT_AGENT_TOOL_MAPPING: Dict[str, List[str]] = {
 }
 
 DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {
-    "domain-research": ["web_search", "file_parser"],
+    "domain-research": ["web_search", "file_parser", "artifact_query"],
     "requirements-analyst": ["artifact_query"],
-    "conflict-analyzer": [],
-    "srs-generation": ["artifact_query"],
-    "plantuml-syntax": ["plantuml_validate", "artifact_query"],
+    "conflict-analyzer": ["artifact_query"],
+    "UML": ["plantuml_validate", "artifact_query"],
+    "SRS": ["artifact_query"],
 }
+
+
+def build_pre_meeting_conflict_review_description(conflict_summaries: List[str]) -> str:
+    return (
+        "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
+        "請先根據每個 pair 的 requirement_a / requirement_b 原文獨立重判，"
+        "並將重判結果填入 proposed_label（Conflict 或 Neutral）。\n"
+        "你必須同時做兩層檢視：\n"
+        "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
+        "2) 逐筆（pair-by-pair）檢視：每個 [PAIR-xxx] 都必須明確寫出：\n"
+        "   - proposed_label: 你重判後建議採用的標籤（Conflict 或 Neutral）\n"
+        "   - confidence: high / medium / low\n"
+        "   - reason: 一句到兩句審查理由，需說明你的獨立判斷依據\n"
+        "reason 只能填純理由文字，不要包含 id、proposed_label、confidence 或欄位名稱。\n"
+        "Neutral 的定義：兩項需求既不衝突、也不重複，且沒有直接語義關係。\n\n"
+        "待審清單：\n" + "\n".join(conflict_summaries)
+    )
+
+
+JSON_OUTPUT_DIRECTIVE = "請只輸出合法 JSON，不要其他文字。"
+
+
+def directive_embed() -> str:
+    if current_output_language() == "en":
+        return "Please respond in English."
+    return "請使用繁體中文回覆。"
+
+
+def global_conventions_text() -> str:
+    if current_output_language() == "en":
+        return "Be specific, concise, and actionable; avoid vague wording. When citing URLs, paste full URLs directly instead of Markdown links."
+    return "請具體、精簡、可執行；避免空泛描述。引用網址時直接貼出完整 URL，不要使用 Markdown 超連結語法。"
+
+
+def short_reasoning_line() -> str:
+    if current_output_language() == "en":
+        return "Use one short English sentence for reasoning."
+    return "reasoning 請使用一句繁體中文簡述。"
+
+
+def user_requirement_cards() -> str:
+    if current_output_language() == "en":
+        return "Write requirement cards in English."
+    return "需求卡片請使用繁體中文。"
+
+
+def user_stakeholder_name_reason() -> str:
+    return "每位利害關係人需包含名稱與理由。"
+
+
+def analyst_draft_decision_table_note() -> str:
+    return "若有決策，請用精簡決策表呈現。"
+
+
+def expert_fallback_viewpoint() -> str:
+    return "請以領域專家角度，簡短給出觀點與風險提醒。"
+
+
+def mediator_agenda_language_line() -> str:
+    if current_output_language() == "en":
+        return "Use English for title/description."
+    return "title/description 請使用繁體中文。"
+
+
+def mediator_collect_line() -> str:
+    return "請清楚整理分歧與未解決事項。"
+
+
+def mediator_human_options_line() -> str:
+    return "請提供 2～4 個可選方案並附優缺點。"
+
+
+def mediator_reasoning_line() -> str:
+    if current_output_language() == "en":
+        return "reasoning should be one concise English sentence."
+    return "reasoning 請使用一句繁體中文。"
+
+
+def modeler_models_array_name_line() -> str:
+    return "陣列欄位名稱請使用 models。"
+
+
+def modeler_name_field_language() -> str:
+    if current_output_language() == "en":
+        return "Use English in the name field."
+    return "name 欄位請使用繁體中文。"
+
+
+def modeler_review_field_language() -> str:
+    if current_output_language() == "en":
+        return "Write review field descriptions in English."
+    return "review 欄位說明請使用繁體中文。"
+
+
+def documentor_srs_body_lang() -> str:
+    if current_output_language() == "en":
+        return "Write the document body in English."
+    return "內文請使用繁體中文。"
+
+
+def srs_title_instruction() -> str:
+    return "文件主標題必須為「[系統名稱]軟體需求規格書」。"
 
 
 @dataclass
@@ -120,10 +228,12 @@ class AgentSkillToolPolicy:
 # Base Agent
 # ---------------------------------------------------------------------------
 
-from utils import MAX_ITERATIONS, TOOL_CALL_MAX_ROUNDS, MAX_WEB_SEARCH_RESULTS
+MAX_ITERATIONS: int = 1
+TOOL_CALL_MAX_ROUNDS: int = 1
+MAX_WEB_SEARCH_RESULTS: int = 5
 
 
-class BaseAgent:
+class BaseAgent(AgentActionLoop):
     name: str = ""
     system_prompt: str = ""
     tool_call_max_rounds: int = TOOL_CALL_MAX_ROUNDS
@@ -131,13 +241,13 @@ class BaseAgent:
     def __init__(
         self,
         model,
-        tools: Optional[List[BaseTool]] = None,
+        tools: Optional[List["BaseTool"]] = None,
         registry=None,
         skill_names: Optional[List[str]] = None,
         project_config: Optional[Dict[str, Any]] = None,
     ):
         self.model = model
-        self.tools: Dict[str, BaseTool] = {t.name: t for t in (tools or [])}
+        self.tools: Dict[str, "BaseTool"] = {t.name: t for t in (tools or [])}
         self.registry = registry
         self.skill_names: List[str] = list(skill_names or [])
         self.policy = None
@@ -174,7 +284,7 @@ class BaseAgent:
     # Meeting helpers
     # ------------------------------------------------------------------
 
-    def _sanitize_statement_fallback(self, text: Any) -> str:
+    def sanitize_statement_fallback(self, text: Any) -> str:
         fallback = str(text or "").strip()
         for prefix in ("```json", "```"):
             if fallback.startswith(prefix):
@@ -197,7 +307,7 @@ class BaseAgent:
         "description",
     )
 
-    def _extract_statement_from_structured_text(self, text: str) -> str:
+    def extract_statement_from_structured_text(self, text: str) -> str:
         """從 JSON/字典字串中抽取自然語言內容，避免 MoM 出現 JSON 原文。"""
         raw = (text or "").strip()
         if not raw:
@@ -236,9 +346,9 @@ class BaseAgent:
         if parsed is None:
             return ""
 
-        def _pick_from_dict(d: Dict[str, Any]) -> str:
+        def pick_from_dict(d: Dict[str, Any]) -> str:
             for key in self._STATEMENT_KEYS:
-                v = self._sanitize_statement_fallback(d.get(key))
+                v = self.sanitize_statement_fallback(d.get(key))
                 if v and not (v.startswith("{") or v.startswith("[")):
                     return v
             # 實在沒有合適鍵，退而求其次把所有字串值串起來
@@ -251,12 +361,12 @@ class BaseAgent:
             return " ".join(parts).strip()
 
         if isinstance(parsed, dict):
-            return _pick_from_dict(parsed)
+            return pick_from_dict(parsed)
         if isinstance(parsed, list):
             parts: List[str] = []
             for item in parsed:
                 if isinstance(item, dict):
-                    s = _pick_from_dict(item)
+                    s = pick_from_dict(item)
                     if s:
                         parts.append(s)
                 elif isinstance(item, str):
@@ -268,7 +378,7 @@ class BaseAgent:
             return parsed.strip()
         return ""
 
-    def _normalize_topic_response_payload(
+    def normalize_topic_response_payload(
         self,
         payload: Any,
         *,
@@ -276,9 +386,9 @@ class BaseAgent:
         debug_reason: str = "",
     ) -> Dict[str, Any]:
         data = dict(payload or {}) if isinstance(payload, dict) else {}
-        statement = self._sanitize_statement_fallback(data.get("statement"))
-        content = self._sanitize_statement_fallback(data.get("content"))
-        fallback = self._sanitize_statement_fallback(raw_fallback)
+        statement = self.sanitize_statement_fallback(data.get("statement"))
+        content = self.sanitize_statement_fallback(data.get("content"))
+        fallback = self.sanitize_statement_fallback(raw_fallback)
         final_statement = statement or content or fallback
         # Conflict recheck intentionally stores a JSON object string inside
         # `statement` so downstream code can extract pair_reviews. Do not
@@ -293,7 +403,7 @@ class BaseAgent:
                 parsed_statement.get("pair_reviews"), list
             )
         if not preserve_structured_statement:
-            extracted = self._extract_statement_from_structured_text(final_statement)
+            extracted = self.extract_statement_from_structured_text(final_statement)
             if extracted:
                 final_statement = extracted
         normalized = {
@@ -324,7 +434,7 @@ class BaseAgent:
     # Meeting helpers
     # ------------------------------------------------------------------
 
-    def _build_snapshot_text(self, artifact_snapshot: Optional[Dict[str, Any]]) -> str:
+    def build_snapshot_text(self, artifact_snapshot: Optional[Dict[str, Any]]) -> str:
         if not artifact_snapshot:
             return ""
         return (
@@ -332,20 +442,27 @@ class BaseAgent:
             f"{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
         )
 
-    def _build_tool_hint_for_meeting(self) -> str:
-        if not self.tools:
-            return ""
-        return (
-            "\n# 工具使用\n"
-            "- 若需要查證、搜尋或驗證，可先使用可用工具。\n"
-            "- 使用完工具後，**必須**根據結果與你的判斷輸出下列 JSON，勿僅回傳工具結果。"
-        )
 
-    def _build_topic_text(self, topic: Dict[str, Any]) -> str:
+    def build_topic_text(self, topic: Dict[str, Any]) -> str:
         return (
             f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n"
             f"描述: {topic.get('description', '')}"
         )
+
+    def ensure_json_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        has_json_mention = any(
+            "json" in str(msg.get("content") or "").lower()
+            for msg in messages or []
+            if isinstance(msg, dict)
+        )
+        if has_json_mention:
+            return messages
+        updated = list(messages or [])
+        updated.append({"role": "user", "content": JSON_OUTPUT_DIRECTIVE})
+        return updated
+
+    def chat_json(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Dict[str, Any]:
+        return self.model.chat_json(self.ensure_json_messages(messages), **kwargs)
 
     def chat_for_topic_response(
         self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
@@ -358,21 +475,21 @@ class BaseAgent:
                 debug_reason = ""
                 if not parsed and (raw or "").strip():
                     debug_reason = "tool_raw_not_json_or_empty"
-                elif parsed and not self._sanitize_statement_fallback(parsed.get("statement")):
+                elif parsed and not self.sanitize_statement_fallback(parsed.get("statement")):
                     debug_reason = "tool_json_without_statement"
-                return self._normalize_topic_response_payload(
+                return self.normalize_topic_response_payload(
                     parsed,
                     raw_fallback=raw,
                     debug_reason=debug_reason,
                 )
-            return self._normalize_topic_response_payload({"statement": raw, "open_questions": []})
+            return self.normalize_topic_response_payload({"statement": raw, "open_questions": []})
         action = kwargs.pop("action", f"{self.name}.topic.response")
         try:
-            parsed = self.model.chat_json(messages, action=action, **kwargs)
+            parsed = self.chat_json(messages, action=action, **kwargs)
             debug_reason = ""
-            if isinstance(parsed, dict) and not self._sanitize_statement_fallback(parsed.get("statement")):
+            if isinstance(parsed, dict) and not self.sanitize_statement_fallback(parsed.get("statement")):
                 debug_reason = "chat_json_without_statement"
-            return self._normalize_topic_response_payload(parsed, debug_reason=debug_reason)
+            return self.normalize_topic_response_payload(parsed, debug_reason=debug_reason)
         except Exception as e:
             self.logger.warning("%s topic.response JSON 解析失敗，改用文字 fallback: %s", self.name, e)
             raw = ""
@@ -381,7 +498,7 @@ class BaseAgent:
             except Exception as fallback_e:
                 self.logger.warning("%s topic.response 文字 fallback 失敗: %s", self.name, fallback_e)
             debug_reason = f"chat_json_exception:{type(e).__name__}"
-            return self._normalize_topic_response_payload(
+            return self.normalize_topic_response_payload(
                 {},
                 raw_fallback=raw,
                 debug_reason=debug_reason,
@@ -407,214 +524,10 @@ class BaseAgent:
                 return parsed
             return {"statement": raw, "open_questions": []}
         action = kwargs.pop("action", f"{self.name}.topic.response")
-        return self.model.chat_json(messages, action=action, **kwargs)
+        return self.chat_json(messages, action=action, **kwargs)
 
     def usage_action(self, suffix: str) -> str:
         return f"{self.name}.{suffix}"
-
-    # ------------------------------------------------------------------
-    # OPA helpers
-    # ------------------------------------------------------------------
-
-    def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} 尚未實作 build_observation(mode={mode!r})"
-        )
-
-    def decide_action(
-        self,
-        *,
-        mode: str,
-        observation: Dict[str, Any],
-        last_result: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} 尚未實作 decide_action(mode={mode!r})"
-        )
-
-    def execute_action(
-        self,
-        *,
-        mode: str,
-        decision: Dict[str, Any],
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} 尚未實作 execute_action(mode={mode!r})"
-        )
-
-    def summarize_opa_observation(
-        self, observation: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        if not isinstance(observation, dict):
-            return {}
-        summary: Dict[str, Any] = {}
-        for key in (
-            "iteration",
-            "max_iterations",
-            "requirements_count",
-            "has_scan_results",
-            "has_validator",
-        ):
-            if key in observation:
-                summary[key] = observation.get(key)
-        if "conflicts" in observation and isinstance(observation.get("conflicts"), list):
-            summary["conflict_count"] = len(observation.get("conflicts") or [])
-        if "recent_discussions" in observation and isinstance(
-            observation.get("recent_discussions"), list
-        ):
-            summary["recent_discussion_count"] = len(
-                observation.get("recent_discussions") or []
-            )
-        if "current_models" in observation and isinstance(
-            observation.get("current_models"), list
-        ):
-            summary["current_model_count"] = len(observation.get("current_models") or [])
-        if not summary:
-            summary["keys"] = sorted(observation.keys())
-        return summary
-
-    def make_opa_trace_entry(
-        self,
-        *,
-        mode: str,
-        iteration: int,
-        observation: Dict[str, Any],
-        decision: Dict[str, Any],
-        result: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        return {
-            "agent": self.name,
-            "mode": mode,
-            "iteration": iteration,
-            "observation": self.summarize_opa_observation(observation),
-            "decision": dict(decision or {}),
-            "result": dict(result or {}),
-        }
-
-    def run_opa_loop(
-        self,
-        *,
-        mode: str,
-        max_iterations: int,
-        loop_cap: int,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        context = dict(context or {})
-        observation = None
-        actions_taken = []
-        pending_issues = context.setdefault("pending_issues", [])
-        effective_max = min(max_iterations, loop_cap)
-        i = 0
-
-        while i < effective_max:
-            observation = self.build_observation(
-                mode=mode,
-                iteration=i,
-                max_iterations=effective_max,
-                actions_taken=actions_taken,
-                **context,
-            )
-            decision = self.decide_action(
-                mode=mode,
-                observation=observation,
-                last_result=context.get("last_result"),
-                **context,
-            )
-            if i == 0:
-                n = decision.get("max_iterations")
-                if n is not None and isinstance(n, int) and 1 <= n <= effective_max:
-                    effective_max = n
-                    self.logger.info(
-                        "  %s %s 輪數: %s/%s",
-                        self.__class__.__name__.replace("Agent", ""),
-                        mode,
-                        effective_max,
-                        loop_cap,
-                    )
-            action = decision.get("action", "done")
-            self.logger.info("  %s %s [%s/%s]: %s", self.__class__.__name__.replace("Agent", ""), mode, i + 1, effective_max, action)
-            if action == "done":
-                break
-
-            result = self.execute_action(
-                mode=mode,
-                decision=decision,
-                observation=observation,
-                **context,
-            )
-            context["last_result"] = result
-            if isinstance(result, dict):
-                context_updates = result.get("context_updates")
-                if isinstance(context_updates, dict):
-                    context.update(context_updates)
-            actions_taken.append(
-                {
-                    "action": action,
-                    "params": decision.get("params") or {},
-                    "result_summary": (result or {}).get("summary", ""),
-                }
-            )
-            if result and result.get("error"):
-                self.logger.warning("  %s %s error: %s", self.__class__.__name__.replace("Agent", ""), mode, result["error"])
-            context.setdefault("opa_trace", []).append(
-                self.make_opa_trace_entry(
-                    mode=mode,
-                    iteration=i + 1,
-                    observation=observation,
-                    decision=decision,
-                    result=result,
-                )
-            )
-            i += 1
-
-        return {
-            "agent": self.name,
-            "actions_taken": actions_taken,
-            "pending_issues": pending_issues,
-            "opa_trace": context.get("opa_trace", []),
-        }
-
-    def run_single_opa(
-        self,
-        *,
-        mode: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        context = dict(context or {})
-        observation = self.build_observation(
-            mode=mode,
-            iteration=0,
-            max_iterations=1,
-            actions_taken=[],
-            **context,
-        )
-        decision = self.decide_action(
-            mode=mode,
-            observation=observation,
-            last_result=None,
-            **context,
-        )
-        result = self.execute_action(
-            mode=mode,
-            decision=decision,
-            observation=observation,
-            **context,
-        )
-        trace_entry = self.make_opa_trace_entry(
-            mode=mode,
-            iteration=1,
-            observation=observation,
-            decision=decision,
-            result=result,
-        )
-        return {
-            "agent": self.name,
-            "decision": decision,
-            "result": result,
-            "opa_trace": [trace_entry],
-        }
 
     def format_previous_responses(
         self,
@@ -640,8 +553,6 @@ class BaseAgent:
 
     def get_global_conventions_suffix(self) -> str:
         """全域輸出慣例後綴；子類可覆寫為 ''。"""
-        from utils import global_conventions_text
-
         text = global_conventions_text()
         if not text:
             return ""
@@ -649,114 +560,108 @@ class BaseAgent:
 
     def lang_directive(self) -> str:
         """task 內語系指示。"""
-        from utils import directive_embed
-
         return directive_embed()
 
     def get_optional_skill_context(
         self, topic: Dict, artifact_snapshot: Optional[Dict]
     ) -> Optional[str]:
-        """可選 skill 參考；預設 None。子類覆寫。"""
-        return None
+        """討論階段由 agent 自行判斷是否需要使用自己已掛載的 skill。"""
+        if not self.skill_names:
+            return None
+        topic_summary = {
+            "id": topic.get("id"),
+            "title": topic.get("title"),
+            "description": topic.get("description"),
+            "category": topic.get("category"),
+            "source_ids": topic.get("source_ids") or [],
+        }
+        decision_prompt = (
+            "你正在準備會議討論發言。請判斷是否需要先使用你自己的 skill 產生簡短參考。\n\n"
+            f"# Agent\n{self.name}\n\n"
+            f"# 可用 skills\n{json.dumps(self.skill_names, ensure_ascii=False)}\n\n"
+            f"# 議題\n{json.dumps(topic_summary, ensure_ascii=False, indent=2)}\n\n"
+            "# 判斷規則\n"
+            "- 只有 skill 能明顯改善本輪發言品質時才使用。\n"
+            "- 一次最多選一個 skill。\n"
+            "- 若目前只需要一般角色判斷，不要使用 skill。\n"
+            "- 不要為了形式而使用 skill。\n\n"
+            "# 輸出 JSON\n"
+            '{"use_skill": true/false, "skill_name": "可用 skill 名稱或空字串", "reason": "一句理由"}'
+        )
+        try:
+            decision = self.chat_json(self.build_direct_messages(decision_prompt))
+        except Exception as e:
+            self.logger.debug("討論 skill 使用判斷失敗: %s", e)
+            return None
 
-    def vote_on_topic(
+        if not isinstance(decision, dict) or not decision.get("use_skill"):
+            return None
+        skill_name = str(decision.get("skill_name") or "").strip()
+        if skill_name not in self.skill_names:
+            return None
+
+        context = {
+            "topic": topic,
+            "artifact_snapshot": artifact_snapshot or {},
+            "usage_reason": decision.get("reason", ""),
+        }
+        task = (
+            "請針對 Context 中的會議議題，依此 skill 產生本 agent 發言前可用的簡短參考。\n"
+            "只輸出 1 到 4 點重點；包含必要依據、風險、限制或建議方向。\n"
+            "不要產生最終決議，不要改寫 artifact，不要輸出 JSON。"
+        )
+        try:
+            raw = self.invoke_skill(skill_name, task, context=context)
+            text = (raw or "").strip()
+            if not text:
+                return None
+            return f"Skill: {skill_name}\nReason: {decision.get('reason', '')}\n{text}"
+        except Exception as e:
+            self.logger.debug("討論階段使用 skill '%s' 失敗: %s", skill_name, e)
+            return None
+
+    def build_topic_response_observation_payload(
+        self, **kwargs: Any
+    ) -> Dict[str, Any]:
+        topic = kwargs["topic"]
+        previous_responses = kwargs.get("previous_responses") or []
+        artifact_snapshot = kwargs.get("artifact_snapshot") or {}
+        return {
+            "topic": topic,
+            "topic_id": str(topic.get("id") or ""),
+            "topic_category": str(topic.get("category") or ""),
+            "previous_responses": previous_responses,
+            "previous_response_count": len(previous_responses),
+            "artifact_snapshot": artifact_snapshot,
+            "has_artifact_snapshot": bool(artifact_snapshot),
+            "recent_ask_history": topic.get("recent_ask_history") or [],
+            "iteration": kwargs.get("iteration", 0) + 1,
+            "max_iterations": kwargs.get("max_iterations", 1),
+        }
+
+    def decide_default_topic_response_action(
         self,
-        topic: Dict,
-        previous_responses: Optional[List[Dict]] = None,
-        artifact_snapshot: Optional[Dict] = None,
-        mediator_compromise: Optional[Dict] = None,
-    ) -> Dict[str, str]:
-        """議題討論完成後的最終投票。僅回傳 vote 與簡短理由。
-
-        若傳入 mediator_compromise 且含有效方案內容，表決對象為「是否同意採納該主持人方案」，
-        而非評判其他與會者發言。
-        """
-        topic_text = self._build_topic_text(topic)
-
-        mc = mediator_compromise or {}
-        mc_title = (mc.get("title") or "").strip()
-        mc_desc = (mc.get("description") or "").strip()
-        mc_rat = (mc.get("rationale") or "").strip()
-        has_mediator_package = bool(mc_desc or mc_title)
-
-        prev_text = ""
-        if not has_mediator_package:
-            prev_text = self.format_previous_responses(
-                previous_responses, title="本議題討論摘要（依發言順序）"
-            )
-
-        proposal_text = ""
-        if has_mediator_package:
-            proposal_text = (
-                "\n# 主持人提出的折衷方案（**本題唯一表決對象**）\n"
-                f"**標題**: {mc_title or '（無標題）'}\n\n"
-                f"**內容**:\n{mc_desc}\n\n"
-                f"**說明**: {mc_rat}\n\n"
-                "**重要**: 請僅針對上述主持人方案表決是否願意採納為本議題決議基礎；"
-                "勿改為比較或評判其他與會者先前發言孰是孰非。\n"
-            )
-
-        snapshot_text = self._build_snapshot_text(artifact_snapshot)
-
-        if has_mediator_package:
-            task_block = """# 任務
-- 你正在對「主持人折衷方案」表決是否同意採納（非對整場發言做總評）
-- 只需給出 vote 與簡短 rationale（1-2 句）
-
-# 投票規則
-- vote 只能是 "agreed" 或 "unresolved"
-- agreed：你**同意**以主持人方案作為本議題決議基礎
-- unresolved：你**無法接受**該方案（或認為仍有違反你專業底線／關鍵資訊不足），需再修訂
-"""
+        observation: Dict[str, Any],
+        *,
+        reasoning: str,
+    ) -> Dict[str, Any]:
+        topic = observation.get("topic") or {}
+        topic_id = str(topic.get("id") or "")
+        if topic.get("category") == "conflict_discussion":
+            action = "respond_conflict_discussion"
         else:
-            task_block = """# 任務
-- 主持人方案未能產生，請根據本議題討論摘要與你的專業立場表決
-- 只需給出 vote 與簡短 rationale（1-2 句）
-
-# 投票規則
-- vote 只能是 "agreed" 或 "unresolved"
-- agreed：你認為本議題可形成決策
-- unresolved：你認為仍有重要衝突或關鍵不確定，暫不應定案
-"""
-
-        user_prompt = f"""你正在進行本議題的「最終投票」。
-
-{topic_text}
-{proposal_text}{prev_text}
-{snapshot_text}
-
-{task_block}
-# 約束
-- 不要重寫長篇發言
-- 不要新增 open_questions
-- 若資訊不足，請投 unresolved 並在 rationale 說明原因
-
-輸出 JSON:
-{{
-    "vote": "agreed 或 unresolved",
-    "rationale": "簡短理由"
-}}"""
-
-        messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(
-            messages,
-            action=self.usage_action("topic.vote"),
-        )
-        v = (response.get("vote") or "").strip().lower()
-        vote = "agreed" if v == "agreed" else "unresolved"
-        rationale = (
-            response.get("rationale")
-            or response.get("reason")
-            or response.get("statement")
-            or ""
-        )
-        return {"agent": self.name, "vote": vote, "rationale": rationale}
+            action = "respond_discussion"
+        return {
+            "action": action,
+            "params": {},
+            "reasoning": reasoning,
+        }
 
     # ------------------------------------------------------------------
     # Skill execution helpers
     # ------------------------------------------------------------------
 
-    def _validate_skill_usage(self, skill_name: str) -> None:
+    def validate_skill_usage(self, skill_name: str) -> None:
         if skill_name not in self.skill_names:
             raise ValueError(
                 f"Agent '{self.name}' 未賦予 skill '{skill_name}'，可用: {self.skill_names}"
@@ -764,7 +669,7 @@ class BaseAgent:
         if self.policy and not self.policy.can_agent_use_skill(self.name, skill_name):
             raise ValueError(f"Policy 禁止 Agent '{self.name}' 使用 skill '{skill_name}'")
 
-    def _build_skill_messages(
+    def build_skill_messages(
         self,
         skill: Dict[str, Any],
         skill_name: str,
@@ -815,7 +720,7 @@ class BaseAgent:
             {"role": "user", "content": "\n".join(user_parts)},
         ]
 
-    def _run_skill_messages(
+    def run_skill_messages(
         self,
         skill_name: str,
         messages: List[Dict[str, str]],
@@ -842,12 +747,12 @@ class BaseAgent:
         組 system + user message 後呼叫 model，回傳模型輸出的字串。
         若此 agent 未賦予該 skill（skill_name 不在 self.skill_names），則拋錯。
         """
-        self._validate_skill_usage(skill_name)
+        self.validate_skill_usage(skill_name)
         from agents.skills.base import get_skill
 
         skill = get_skill(skill_name)
-        messages = self._build_skill_messages(skill, skill_name, task, context=context)
-        return self._run_skill_messages(skill_name, messages)
+        messages = self.build_skill_messages(skill, skill_name, task, context=context)
+        return self.run_skill_messages(skill_name, messages)
 
     def build_direct_messages(self, task: str, context: Optional[Dict] = None) -> List[Dict]:
         messages = []
@@ -945,30 +850,30 @@ class BaseAgent:
     # Tool execution helpers
     # ------------------------------------------------------------------
 
-    def _tool_loop_action(self, active_skill: Optional[str] = None) -> str:
+    def tool_loop_action(self, active_skill: Optional[str] = None) -> str:
         return self.usage_action(
             f"tool_loop.{active_skill}" if active_skill else "tool_loop.general"
         )
 
-    def _parse_tool_arguments(self, raw_arguments: str) -> Dict[str, Any]:
+    def parse_tool_arguments(self, raw_arguments: str) -> Dict[str, Any]:
         try:
             return json.loads(raw_arguments)
         except json.JSONDecodeError:
             return {}
 
-    def _run_single_tool_call(
+    def run_single_tool_call(
         self,
         tool_call: Any,
         *,
         active_skill: Optional[str] = None,
     ) -> tuple[str, str]:
         fname = tool_call.function.name
-        fargs = self._parse_tool_arguments(tool_call.function.arguments)
+        fargs = self.parse_tool_arguments(tool_call.function.arguments)
         self.logger.info("🔧 %s(%s)", fname, fargs)
         result = self.execute_tool(fname, fargs, active_skill=active_skill)
         return tool_call.id, result
 
-    def _append_openai_tool_results(
+    def append_openai_tool_results(
         self,
         messages: List[Dict[str, Any]],
         tool_calls_list: List[Any],
@@ -976,7 +881,7 @@ class BaseAgent:
         active_skill: Optional[str] = None,
     ) -> None:
         if len(tool_calls_list) == 1:
-            tool_call_id, result = self._run_single_tool_call(
+            tool_call_id, result = self.run_single_tool_call(
                 tool_calls_list[0], active_skill=active_skill
             )
             messages.append(
@@ -993,7 +898,7 @@ class BaseAgent:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_tc = {
                 executor.submit(
-                    self._run_single_tool_call, tc, active_skill=active_skill
+                    self.run_single_tool_call, tc, active_skill=active_skill
                 ): tc
                 for tc in tool_calls_list
             }
@@ -1013,7 +918,7 @@ class BaseAgent:
                 }
             )
 
-    def _chat_with_gemini_tools(
+    def chat_with_gemini_tools(
         self,
         messages: List[Dict[str, Any]],
         max_rounds: int,
@@ -1027,10 +932,10 @@ class BaseAgent:
                 name, args, active_skill=active_skill
             ),
             max_rounds=max_rounds,
-            action=self._tool_loop_action(active_skill),
+            action=self.tool_loop_action(active_skill),
         )
 
-    def _chat_with_openai_tools(
+    def chat_with_openai_tools(
         self,
         messages: List[Dict[str, Any]],
         max_rounds: int,
@@ -1038,7 +943,7 @@ class BaseAgent:
         active_skill: Optional[str] = None,
     ) -> str:
         tool_schemas = self.get_tool_schemas()
-        action = self._tool_loop_action(active_skill)
+        action = self.tool_loop_action(active_skill)
         tracker = self.model.costTracker
         for _ in range(max_rounds):
             tracker.start()
@@ -1074,7 +979,7 @@ class BaseAgent:
             if not getattr(msg, "tool_calls", None):
                 return msg.content or ""
             messages.append(msg.model_dump())
-            self._append_openai_tool_results(
+            self.append_openai_tool_results(
                 messages,
                 list(msg.tool_calls),
                 active_skill=active_skill,
@@ -1124,7 +1029,7 @@ class BaseAgent:
                 action=self.usage_action("chat.with_tools"),
             )
         if self.supports_gemini_tool_calling():
-            return self._chat_with_gemini_tools(
+            return self.chat_with_gemini_tools(
                 messages,
                 max_rounds,
                 active_skill=active_skill,
@@ -1135,7 +1040,7 @@ class BaseAgent:
                 messages,
                 action=self.usage_action("chat.no_tool_support"),
             )
-        return self._chat_with_openai_tools(
+        return self.chat_with_openai_tools(
             messages,
             max_rounds,
             active_skill=active_skill,
