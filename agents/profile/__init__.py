@@ -1,16 +1,39 @@
-# Profile 模組 — 各 Agent 角色的具體實作
-from .user import UserAgent
-from .analyst import AnalystAgent
-from .expert import ExpertAgent
-from .mediator import MediatorAgent
-from .modeler import ModelerAgent
-from .documentor import DocumentorAgent
+# Agent profile package exports concrete agent classes lazily.
+"""Lazy exports for concrete agent profiles."""
 
 __all__ = [
-    'UserAgent',
-    'AnalystAgent',
-    'ExpertAgent',
-    'MediatorAgent',
-    'ModelerAgent',
-    'DocumentorAgent',
+    "UserAgent",
+    "AnalystAgent",
+    "ExpertAgent",
+    "MediatorAgent",
+    "ModelerAgent",
+    "DocumentorAgent",
 ]
+
+
+def __getattr__(name):
+    if name == "UserAgent":
+        from .user import UserAgent
+
+        return UserAgent
+    if name == "AnalystAgent":
+        from .analyst import AnalystAgent
+
+        return AnalystAgent
+    if name == "ExpertAgent":
+        from .expert import ExpertAgent
+
+        return ExpertAgent
+    if name == "MediatorAgent":
+        from .mediator import MediatorAgent
+
+        return MediatorAgent
+    if name == "ModelerAgent":
+        from .modeler import ModelerAgent
+
+        return ModelerAgent
+    if name == "DocumentorAgent":
+        from .documentor import DocumentorAgent
+
+        return DocumentorAgent
+    raise AttributeError(name)

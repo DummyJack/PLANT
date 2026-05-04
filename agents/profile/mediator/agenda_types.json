@@ -1,0 +1,22 @@
+[
+  {
+    "id": "conflict_discussion",
+    "label": "衝突討論",
+    "description": "需要跨角色協調、投票或人工裁決，且無法透過直接釐清或保守更新解決的需求衝突"
+  },
+  {
+    "id": "open_question",
+    "label": "待決開放問題",
+    "description": "需要正式多人討論才能回答，且答案會影響後續需求、衝突判定、決策或範圍收斂的開放問題"
+  },
+  {
+    "id": "new_requirement",
+    "label": "提出新需求",
+    "description": "新增能力、限制或必要條件，且納入與否會影響現有需求、範圍或後續決策"
+  },
+  {
+    "id": "tradeoff",
+    "label": "需求取捨",
+    "description": "兩項以上目標、限制或偏好無法同時完全滿足，需明確取捨或界定可接受折衷"
+  }
+]
