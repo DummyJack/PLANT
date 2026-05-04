@@ -688,7 +688,7 @@ class MediatorAgenda:
     - queue 未處理完不得 finish_round
     - 有 deferred 項或新 open_questions 時，先判斷 expand / escalate；需求品質問題應併入正式議題討論
     - 若某題在討論後已明確自然收斂，應直接 resolve_topic 整理結論。
-    - formal meeting 題目經討論後仍無法收斂時，resolve_topic 會整理決策選項與 recommendation，等待使用者確認。
+    - formal meeting 題目經討論後仍無法收斂時，resolve_topic 會整理決策選項與 recommendation，接著必須 escalate_to_human 交由人類裁決，不交給 user agent。
     - 所有議題 save 完畢且 can_expand_decision_topics=true 時，應主動評估是否有新議題需補充討論（expand_decision_topics）；確認無追加需求才 finish_round
     - 需要 artifact 細節時先用 artifact_query
     - 一次只回一個動作

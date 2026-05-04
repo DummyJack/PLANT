@@ -155,6 +155,7 @@ def ingest_round_resolution_effects(
         verification_impact = resolution.get("verification_impact", {}) or {}
         if not isinstance(verification_impact, dict):
             verification_impact = {}
+        needs_human = bool(resolution.get("needs_human"))
         needs_approval = bool(resolution.get("needs_approval"))
         needs_user_confirmation = bool(resolution.get("needs_user_confirmation"))
         _dod_ok = bool(
@@ -172,10 +173,39 @@ def ingest_round_resolution_effects(
                     "notes": str(verification_impact.get("notes") or "").strip(),
                 },
                 "needs_approval": needs_approval,
+                "needs_human": needs_human,
                 "needs_user_confirmation": needs_user_confirmation,
                 "dod_complete": _dod_ok,
             }
         )
+        if needs_human:
+            existing_human_ids = {
+                str(row.get("issue_id") or row.get("topic_id") or "").strip()
+                for row in (artifact.get("human_decision_queue", []) or [])
+                if isinstance(row, dict)
+            }
+            issue_id = f"HQ-R{round_num:02d}-{topic.get('id') or len(existing_human_ids) + 1}"
+            if issue_id not in existing_human_ids:
+                artifact.setdefault("human_decision_queue", []).append(
+                    {
+                        "schema_version": "issue_proposal.v1",
+                        "issue_id": issue_id,
+                        "topic_id": topic.get("id"),
+                        "round": round_num,
+                        "title": topic.get("title"),
+                        "description": str(resolution.get("summary") or "").strip(),
+                        "category": "tradeoff",
+                        "source_ids": source_ids,
+                        "status": "pending",
+                        "needs_human": True,
+                        "routing_preference": "human_decision",
+                        "options": resolution.get("options", []) or [],
+                        "recommendation": resolution.get("recommendation", {}) or {},
+                        "affected_requirement_ids": affected_requirement_ids,
+                        "unresolved_points": resolution.get("unresolved_points", []) or [],
+                    }
+                )
+            continue
         if needs_user_confirmation or needs_approval:
             decision_id = f"D-R{round_num:02d}-{topic.get('id') or len(pending_decisions) + 1}"
             if decision_id not in seen_pending_decisions:
@@ -343,8 +373,6 @@ def execute_clarification_queue(
                 resolution_status="direct_clarification",
                 summary=statement or "已執行定向釐清，但未取得明確回答。",
                 decision="",
-                votes={},
-                votes_summary="direct_clarification",
                 mediator_compromise={},
                 agreed_points=[statement] if statement else [],
                 unresolved_points=[] if statement else ["尚未取得可用回答。"],
@@ -460,6 +488,20 @@ def execute_human_decision_queue(
                 "rationale": row.get("why_now", ""),
             },
         }
+        if row.get("options"):
+            best_options = []
+            for idx_opt, opt in enumerate(row.get("options") or [], start=1):
+                if not isinstance(opt, dict):
+                    continue
+                best_options.append(
+                    {
+                        "id": idx_opt,
+                        "title": f"{opt.get('id')}: {opt.get('summary') or opt.get('title') or ''}",
+                        "description": opt.get("summary") or opt.get("description") or "",
+                        "source": "formal_meeting_options",
+                    }
+                )
+            options = {"best_options": best_options, "compromise": {}}
         record_queue_item_trace(
             artifact,
             queue_name="human_decision_queue",
@@ -485,8 +527,6 @@ def execute_human_decision_queue(
             resolution_status="human_decision",
             summary=decision_text or "此議題已送人工裁決，但暫未定案。",
             decision=decision_text,
-            votes={},
-            votes_summary="human_decision_queue",
             mediator_compromise={},
             agreed_points=[decision_text] if decision_text else [],
             unresolved_points=[] if decision_text else ["人類選擇暫不裁決。"],

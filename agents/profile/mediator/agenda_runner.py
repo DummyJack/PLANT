@@ -217,7 +217,7 @@ class AgendaRunner:
             options_decision = {
                 "action": "analyze_decision_options",
                 "params": {"topic_id": topic_id},
-                "reasoning": "討論未收斂，整理成可供使用者確認的選項、影響與建議。",
+                "reasoning": "討論未收斂，整理成可供人類裁決的選項、影響與建議。",
             }
             decision_analysis = self.mediator.analyze_decision_options(topic, contributions)
             self.record_action_substep_trace(
@@ -239,18 +239,16 @@ class AgendaRunner:
                 resolution_status="pending_confirmation",
                 summary=decision_analysis.get("summary", ""),
                 decision="",
-                votes={},
-                votes_summary="未由代理人定案；改由使用者確認決策選項。",
                 mediator_compromise={"title": "", "description": "", "rationale": ""},
                 agreed_points=[],
                 unresolved_points=decision_analysis.get("unresolved_points", []),
                 new_open_questions=[],
                 affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
                 needs_approval=False,
-                needs_human=False,
+                needs_human=True,
                 options=decision_analysis.get("options", []),
                 recommendation=decision_analysis.get("recommendation", {}),
-                needs_user_confirmation=True,
+                needs_user_confirmation=False,
                 confirmation_status="pending",
             )
             resolution["suggested_next_actions"] = suggested_next_actions
@@ -260,12 +258,12 @@ class AgendaRunner:
                 substep="resolve.build_recommendation",
                 observation={
                     "topic_id": topic_id,
-                    "needs_user_confirmation": True,
+                    "needs_human": True,
                 },
                 decision={
                     "action": "build_recommendation",
                     "params": {"topic_id": topic_id},
-                    "reasoning": "將選項分析保存為 recommendation，等待使用者確認後才套用為正式需求。",
+                    "reasoning": "將選項分析保存為 recommendation，等待人類裁決後才套用為正式需求。",
                 },
                 result={
                     "resolution_status": resolution.get("resolution_status", ""),
@@ -295,7 +293,7 @@ class AgendaRunner:
             }
         has_changes = bool(resolution.get("requirement_change_candidates"))
         has_affected = bool(resolution.get("affected_requirement_ids"))
-        if resolution.get("needs_user_confirmation"):
+        if resolution.get("needs_human") or resolution.get("needs_user_confirmation"):
             resolution["needs_approval"] = False
         else:
             resolution["needs_approval"] = has_affected or has_changes
@@ -337,10 +335,25 @@ class AgendaRunner:
             "reasoning": "先整理可供人類裁決的選項，再進入裁決收集。",
         }
         options = None
+        status_resolution = (self.topic_status.get(topic_id, {}) or {}).get("resolution") or {}
+        if status_resolution.get("options"):
+            best_options = []
+            for idx_opt, opt in enumerate(status_resolution.get("options") or [], start=1):
+                if not isinstance(opt, dict):
+                    continue
+                best_options.append(
+                    {
+                        "id": idx_opt,
+                        "title": f"{opt.get('id')}: {opt.get('summary') or opt.get('title') or ''}",
+                        "description": opt.get("summary") or opt.get("description") or "",
+                        "source": "formal_meeting_options",
+                    }
+                )
+            options = {"best_options": best_options, "compromise": {}}
         if topic.get("category") in ("conflict_discussion",) and self.registry:
             analyst = self.registry.get("analyst")
             if analyst and hasattr(analyst, "get_resolution_options_for_topic"):
-                options = analyst.get_resolution_options_for_topic(topic, self.artifact)
+                options = options or analyst.get_resolution_options_for_topic(topic, self.artifact)
         if not options:
             options = self.mediator.prepare_human_options(topic, contributions)
         self.record_action_substep_trace(
@@ -387,8 +400,6 @@ class AgendaRunner:
             resolution_status="human_decision",
             summary=decision_text or "本議題已升級由人類裁決。",
             decision=decision_text,
-            votes={},
-            votes_summary="human_decision",
             mediator_compromise={},
             agreed_points=[decision_text] if decision_text else [],
             unresolved_points=[],
@@ -792,25 +803,19 @@ class AgendaRunner:
             )
             convergence_reason = resolution.get("summary", "")
             self.topic_status[topic_id]["resolution"] = resolution
-            rv = resolution.get("votes", {})
             status = resolution.get("resolution_status")
             if status == "agreed":
                 status_label = "收斂"
             elif status == "pending_confirmation":
-                status_label = "待使用者確認"
+                status_label = "待人類裁決"
             else:
                 status_label = "未收斂"
-            votes_suffix = ""
-            if rv:
-                votes_str = ", ".join(f"{a}: {v}" for a, v in rv.items())
-                votes_suffix = f"；legacy votes: {votes_str}"
             self.logger.info(
-                "  決議: [%s] %s｜%s｜結果: %s%s",
+                "  決議: [%s] %s｜%s｜結果: %s",
                 topic_id,
                 topic.get("title", ""),
                 f"{status_label}（{convergence_reason}）",
                 resolution.get("resolution", ""),
-                votes_suffix,
             )
             needs_human = bool(resolution.get("needs_human"))
             obs["result"] = {

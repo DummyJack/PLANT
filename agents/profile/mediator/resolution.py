@@ -78,8 +78,6 @@ class MediatorResolution:
             resolution_status="agreed",
             summary=summary,
             decision=decision,
-            votes={},
-            votes_summary="自然收斂（免投票）",
             mediator_compromise={"title": "", "description": "", "rationale": ""},
             agreed_points=[decision] if decision else [summary],
             unresolved_points=[],
@@ -95,7 +93,7 @@ class MediatorResolution:
         topic: Dict,
         contributions: List[Dict],
     ) -> Dict[str, Any]:
-        """將未收斂議題整理為可供使用者確認的決策選項，不由 agents 投票定案。"""
+        """將未收斂議題整理為可供人類裁決的決策選項，不由 agents 投票定案。"""
         main_contribs = [c for c in contributions if not c.get("is_reply", False)]
         discussion_text = ""
         for c in main_contribs:
@@ -104,8 +102,8 @@ class MediatorResolution:
             discussion_text += f"\n【{agent}】\n{statement}\n"
 
         user_prompt = f"""# 任務
-    你是需求分析協調者。請把以下尚未自然收斂的議題整理成「需要使用者確認的決策分析」。
-    不要替使用者做最終決策，也不要模擬投票。你只能提出選項、影響與建議。
+    你是需求分析協調者。請把以下尚未自然收斂的議題整理成「需要人類裁決的決策分析」。
+    不要替人類做最終決策，也不要模擬投票。你只能提出選項、影響與建議。
 
     # 議題
     標題: {topic.get("title", "")}
@@ -117,7 +115,7 @@ class MediatorResolution:
     # 要求
     - options 請列 2-4 個可執行方案；若只有一個合理方案，也至少提供「採用」與「暫緩」兩種選項。
     - 每個 option 必須包含 pros、cons、impact、risk。
-    - recommendation 只能是建議，不代表已決議。
+    - recommendation 只能是建議，不代表已決議；最後由人類裁決，不交給 user agent。
     - affected_requirement_ids 優先使用議題 source_ids 中的需求 id；若沒有，回空陣列。
     - 請以繁體中文撰寫。
 
@@ -138,10 +136,10 @@ class MediatorResolution:
         "option_id": "A",
         "rationale": "為何建議此方案",
         "confidence": "low | medium | high",
-        "needs_user_confirmation": true
+        "needs_human": true
       }},
       "affected_requirement_ids": ["REQ-01"],
-      "unresolved_points": ["需要使用者確認的事項"]
+      "unresolved_points": ["需要人類裁決的事項"]
     }}
     只輸出 JSON。"""
         messages = self.build_direct_messages(user_prompt)
@@ -180,9 +178,9 @@ class MediatorResolution:
             clean_options = [
                 {
                     "id": "A",
-                    "summary": "採用目前討論中最小可行需求範圍，並將細節留待使用者確認。",
+                    "summary": "採用目前討論中最小可行需求範圍，並將細節留待人類裁決。",
                     "pros": ["可讓 SRS 繼續收斂"],
-                    "cons": ["仍需要使用者確認具體邊界"],
+                    "cons": ["仍需要人類裁決具體邊界"],
                     "impact": ["需求內容可能需後續調整"],
                     "risk": "medium",
                 },
@@ -216,20 +214,20 @@ class MediatorResolution:
             unresolved_points = []
 
         return {
-            "summary": str(response.get("summary") or "此議題需要使用者確認後才能成為正式需求決策。").strip(),
+            "summary": str(response.get("summary") or "此議題需要人類裁決後才能成為正式需求決策。").strip(),
             "options": clean_options,
             "recommendation": {
                 "option_id": rec_option,
                 "rationale": str(recommendation.get("rationale") or "").strip(),
                 "confidence": confidence,
-                "needs_user_confirmation": True,
+                "needs_human": True,
             },
             "affected_requirement_ids": [
                 str(x).strip() for x in affected_requirement_ids if str(x).strip()
             ],
             "unresolved_points": [
                 str(x).strip() for x in unresolved_points if str(x).strip()
-            ] or ["需要使用者確認採用哪個方案。"],
+            ] or ["需要人類裁決採用哪個方案。"],
         }
 
     def prepare_human_options(self, topic: Dict, contributions: List[Dict]) -> Dict:

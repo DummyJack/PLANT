@@ -34,8 +34,6 @@ class MediatorAgentSupport:
         resolution_status: str,
         summary: str,
         decision: str,
-        votes: Optional[Dict[str, str]] = None,
-        votes_summary: str = "",
         mediator_compromise: Optional[Dict[str, Any]] = None,
         agreed_points: Optional[List[str]] = None,
         unresolved_points: Optional[List[str]] = None,
@@ -52,11 +50,10 @@ class MediatorAgentSupport:
         needs_user_confirmation: bool = False,
         confirmation_status: str = "",
     ) -> Dict[str, Any]:
-        """統一 topic_result schema；votes/approval 欄位僅為舊 artifact 相容。"""
+        """統一 topic_result schema。"""
         resolution_status = (resolution_status or "").strip() or "unresolved"
         summary = (summary or "").strip()
         decision = (decision or "").strip()
-        votes = votes or {}
         mediator_compromise = mediator_compromise or {
             "title": "",
             "description": "",
@@ -122,10 +119,6 @@ class MediatorAgentSupport:
             "confirmation_status": confirmation_status,
             "dod_complete": dod_complete,
         }
-        if votes:
-            result["votes"] = votes
-        if votes_summary:
-            result["votes_summary"] = votes_summary
         if mediator_compromise and any(str(v or "").strip() for v in mediator_compromise.values()):
             result["mediator_compromise"] = mediator_compromise
         if needs_approval:
@@ -299,7 +292,9 @@ class MediatorAgentSupport:
         md += f"- **Participants**: {', '.join(participants) if participants else '（無參與者）'}\n"
         md += f"- **Discussion mode**: {mode}\n"
 
-        if resolution.get("needs_user_confirmation"):
+        if resolution.get("needs_human"):
+            md += "- **Decision status**: pending human decision\n"
+        elif resolution.get("needs_user_confirmation"):
             md += "- **Decision status**: pending user confirmation\n"
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
@@ -324,7 +319,9 @@ class MediatorAgentSupport:
                 md += f"- **Confidence**: {recommendation.get('confidence')}\n"
             if recommendation.get("rationale"):
                 md += f"- **Rationale**: {recommendation.get('rationale')}\n"
-            if resolution.get("needs_user_confirmation"):
+            if resolution.get("needs_human"):
+                md += "- **Human decision**: pending\n"
+            elif resolution.get("needs_user_confirmation"):
                 md += "- **User confirmation**: pending\n"
             md += "\n"
         agreed_points = resolution.get("agreed_points", []) or []
@@ -505,7 +502,9 @@ class MediatorAgentSupport:
 
         lines.append("\n### 最終決策 (Decision)\n")
         decision_status = resolution.get("resolution_status") or resolution.get("resolution") or ""
-        if resolution.get("needs_user_confirmation"):
+        if resolution.get("needs_human"):
+            lines.append(f"待人類裁決：{resolution.get('summary') or '待補'}\n")
+        elif resolution.get("needs_user_confirmation"):
             lines.append(f"待使用者確認：{resolution.get('summary') or '待補'}\n")
         else:
             lines.append(f"{resolution.get('decision') or resolution.get('summary') or '待補'}\n")
@@ -600,7 +599,7 @@ class MediatorAgent(
 規則：
 1. 根據 proposal pool、queue、open conflicts、open questions 與本輪容量分流議題；不得憑空新增議題來源。
 2. 優先走 direct clarification / direct apply / human decision；只有真的需要協調時才進 formal meeting。
-3. 未自然收斂時，整理可選方案、影響與 recommendation，等待使用者確認；不得由代理人替使用者定案。
+3. 未自然收斂時，整理可選方案、影響與 recommendation，交由人類裁決；不得由代理人或 user agent 替人類定案。
 4. 保持中立，不直接編寫 requirement；輸出可追蹤的 topic_result。
 5. 無法形成明確建議時，升級至人類裁決。"""
 

@@ -800,7 +800,6 @@ def build_pair_review_records(
                 "confidence": confidence,
                 "rationale": str(decision.get("reason") or "").strip(),
                 "decided_by": str(decision.get("decided_by") or "").strip(),
-                "consensus_status": "reviewed" if agent_judgments else "fallback",
                 "agent_judgments": agent_judgments,
             }
         )
