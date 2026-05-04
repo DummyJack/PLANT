@@ -1,3 +1,4 @@
+# Config helpers for model summaries, iteration limits, and human settings.
 from typing import Any, Dict
 
 MAX_ITERATIONS: int = 1

@@ -1,3 +1,4 @@
+# Cost tracker: runtime, usage records, and estimated model costs.
 import threading
 
 from time import perf_counter
@@ -105,7 +106,7 @@ class CostTracker:
         with self.lock:
             return list(self.call_records)
 
-    def _resolved_total_run_time_seconds(self) -> float:
+    def resolved_total_run_time_seconds(self) -> float:
         """總耗時：segment 計時與各次 addUsage(..., run_time_s=...) 加總取較大者。"""
         with self.lock:
             from_segments = float(self.elapsed_seconds)
@@ -121,7 +122,7 @@ class CostTracker:
         if pricing is None:
             return None
 
-        total_rt = self._resolved_total_run_time_seconds()
+        total_rt = self.resolved_total_run_time_seconds()
         with self.lock:
             return {
                 "model": self.model_name,
@@ -134,7 +135,7 @@ class CostTracker:
 
     def export_summary_dict(self) -> Dict[str, Any]:
         """匯出用：必回傳可序列化摘要（無定價表時 estimated_cost 可能為 0）。"""
-        total_rt = self._resolved_total_run_time_seconds()
+        total_rt = self.resolved_total_run_time_seconds()
         with self.lock:
             return {
                 "model": self.model_name,

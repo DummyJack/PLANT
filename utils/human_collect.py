@@ -1,3 +1,4 @@
+# Human input helpers for project choices and topic decisions.
 from typing import Dict, List
 
 
