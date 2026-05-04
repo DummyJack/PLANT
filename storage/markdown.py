@@ -1,4 +1,17 @@
+# Markdown storage helpers: clean LLM fences and route output files.
 from pathlib import Path
+
+
+def clean_llm_output(text: str) -> str:
+    """Remove a single outer Markdown code fence often added by LLMs."""
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        first_newline = cleaned.find("\n")
+        if first_newline != -1:
+            cleaned = cleaned[first_newline + 1 :]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
 
 
 def markdown_target_dir(artifact_dir: Path, output_dir: Path, filename: str) -> Path:

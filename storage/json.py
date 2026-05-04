@@ -1,3 +1,4 @@
+# JSON storage helpers with no-scientific-number serialization.
 import json
 import re
 

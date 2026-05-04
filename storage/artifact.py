@@ -1,9 +1,10 @@
+# Artifact storage helpers: load/save artifact and draft markdown files.
 import json
 
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .json_io import save_json_file
+from .json import save_json_file
 
 
 def load_artifact(artifact_dir: Path) -> Optional[Dict[str, Any]]:

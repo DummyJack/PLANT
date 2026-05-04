@@ -1,3 +1,4 @@
+# Project storage helpers: list, load, and create project folders.
 import json
 
 from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -1,3 +1,4 @@
+# Store facade: project directories, artifact files, markdown, config, and PlantUML.
 import json
 
 from pathlib import Path
@@ -10,7 +11,7 @@ from .artifact import (
     save_artifact as artifact_save_artifact,
     save_draft as artifact_save_draft,
 )
-from .json_io import load_json_file, save_json_file
+from .json import load_json_file, save_json_file
 from .markdown import markdown_target_dir, save_markdown as markdown_save_markdown
 from .plantuml import (
     save_plantuml_files as plantuml_save_plantuml_files,
@@ -96,7 +97,7 @@ class Store:
 
     # Markdown
 
-    def _markdown_target_dir(self, filename: str) -> Path:
+    def markdown_target_dir(self, filename: str) -> Path:
         return markdown_target_dir(self.artifact_dir, self.output_dir, filename)
 
     def save_markdown(self, content: str, filename: str):

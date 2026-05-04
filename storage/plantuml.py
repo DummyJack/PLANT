@@ -1,3 +1,4 @@
+# PlantUML storage helpers: write generated diagram files safely.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Optional
