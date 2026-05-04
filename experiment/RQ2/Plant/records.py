@@ -17,7 +17,6 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
     source.pop("req_a", None)
     source.pop("req_b", None)
     source.pop("confidence", None)
-    source.pop("consensus_status", None)
     source.pop("requirement_ids", None)
 
     source.pop("reason", None)

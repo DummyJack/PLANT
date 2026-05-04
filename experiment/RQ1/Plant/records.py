@@ -471,18 +471,9 @@ def build_task_record(
         turn_entry = {
             "turn": turn_no,
             "mediator": format_mediator_record_statement(tlog),
-            "analyst": {
-                "action": role_actions.get("analyst", ""),
-                "statement": "\n\n".join(role_parts["analyst"]),
-            },
-            "expert": {
-                "action": role_actions.get("expert", ""),
-                "statement": "\n\n".join(role_parts["expert"]),
-            },
-            "modeler": {
-                "action": role_actions.get("modeler", ""),
-                "statement": "\n\n".join(role_parts["modeler"]),
-            },
+            "analyst": "\n\n".join(role_parts["analyst"]),
+            "expert": "\n\n".join(role_parts["expert"]),
+            "modeler": "\n\n".join(role_parts["modeler"]),
             "user": user_text,
             "action_type": action_type,
             "is_relevant_to_implicit_requirements": hit,
@@ -506,9 +497,9 @@ def build_task_record(
                 {
                     "turn": turn_no,
                     "mediator": "",
-                    "analyst": {"action": "", "statement": ""},
-                    "expert": {"action": "", "statement": ""},
-                    "modeler": {"action": "", "statement": ""},
+                    "analyst": "",
+                    "expert": "",
+                    "modeler": "",
                     "user": "\n".join(
                         keep_user_record_statement(text)
                         for text in (agg.get("user_texts", []) or [])
