@@ -1,3 +1,4 @@
+# LLM base layer: provider factory, usage tracking, and API key validation.
 import inspect
 import os
 
@@ -138,9 +139,6 @@ class BaseLLM(ABC):
 
     def getUsageCallRecords(self) -> List[Dict[str, Any]]:
         return self.costTracker.get_call_records()
-
-    def resetCostSummary(self):
-        self.costTracker.reset()
 
 
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:

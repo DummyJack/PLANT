@@ -1,3 +1,4 @@
+# Claude model adapter for chat and JSON responses.
 import json
 
 from typing import Dict, List, Optional, Tuple
@@ -117,12 +118,6 @@ class ClaudeModel(BaseLLM):
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
     ) -> Dict:
-        messages = list(messages)
-        has_json_mention = any(
-            "json" in (msg.get("content") or "").lower() for msg in messages
-        )
-        if not has_json_mention:
-            messages.append({"role": "user", "content": "請只輸出合法 JSON，不要其他文字。"})
         text = self.chat(
             messages,
             temperature,

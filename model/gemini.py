@@ -1,3 +1,4 @@
+# Gemini model adapter for chat, JSON responses, and tool calls.
 import json
 import logging
 import os
@@ -432,12 +433,6 @@ class GeminiModel(BaseLLM):
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
     ) -> Dict:
-        messages = list(messages)
-        has_json_mention = any(
-            "json" in (msg.get("content") or "").lower() for msg in messages
-        )
-        if not has_json_mention:
-            messages.append({"role": "user", "content": "請只輸出合法 JSON。"})
         system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()
         text = ""

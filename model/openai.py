@@ -1,3 +1,4 @@
+# OpenAI model adapter for chat and JSON responses.
 import json
 import os
 
@@ -62,14 +63,6 @@ class OpenAIModel(BaseLLM):
         action: Optional[str] = None,
     ) -> Dict:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
-
-        # OpenAI response_format: json_object 要求 messages 中須包含 "json" 字樣
-        has_json_mention = any(
-            "json" in msg.get("content", "").lower() for msg in messages
-        )
-        if not has_json_mention:
-            messages = list(messages)
-            messages.append({"role": "user", "content": "請以 JSON 格式回應。"})
 
         self.costTracker.start()
         response = None
