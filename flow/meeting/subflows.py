@@ -1,13 +1,14 @@
+# Meeting subflows: queues, direct clarification/apply, and agenda loop dispatch.
 from typing import Any, Dict, List, Optional
 
 from agents.profile.mediator import AGENDA_CATEGORY_LABEL
-from agents.agenda.schema import normalize_agenda_topic
+from agents.profile.mediator.validation import normalize_decision_topic
 from utils import Collect
 
 
 # ---------- 純工具 ----------
 
-def _partition_queue_skip_formal(
+def partition_queue_skip_formal(
     queue: List[Any],
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     non_formal: List[Dict[str, Any]] = []
@@ -22,7 +23,7 @@ def _partition_queue_skip_formal(
     return non_formal, formal
 
 
-def _count_unanswered_open_questions(artifact: Dict[str, Any]) -> int:
+def count_unanswered_open_questions(artifact: Dict[str, Any]) -> int:
     return sum(
         1
         for q in (artifact.get("open_questions", []) or [])
@@ -30,7 +31,7 @@ def _count_unanswered_open_questions(artifact: Dict[str, Any]) -> int:
     )
 
 
-def _record_queue_item_trace(
+def record_queue_item_trace(
     artifact: Dict[str, Any],
     *,
     queue_name: str,
@@ -62,7 +63,7 @@ def _record_queue_item_trace(
 
 # ---------- queue round summary ----------
 
-def _build_queue_round_summary(
+def build_queue_round_summary(
     artifact: Dict[str, Any],
     *,
     round_num: int,
@@ -103,7 +104,7 @@ def _build_queue_round_summary(
 
 # ---------- ingest effects ----------
 
-def _ingest_round_resolution_effects(
+def ingest_round_resolution_effects(
     coordinator: Any,
     artifact: Dict[str, Any],
     round_discussions: List[Dict[str, Any]],
@@ -113,13 +114,10 @@ def _ingest_round_resolution_effects(
     oq_pool = artifact.get("open_questions", []) or []
     new_candidates: List[Dict[str, Any]] = []
     resolution_effects = artifact.get("topic_resolution_effects", []) or []
-    approval_queue = artifact.get("approval_queue", []) or []
-    seen_approval = {
-        (
-            str(row.get("topic_id") or "").strip(),
-            tuple(sorted(str(x).strip() for x in (row.get("affected_requirement_ids") or []) if str(x).strip())),
-        )
-        for row in approval_queue
+    pending_decisions = artifact.get("pending_decisions", []) or []
+    seen_pending_decisions = {
+        str(row.get("decision_id") or row.get("topic_id") or "").strip()
+        for row in pending_decisions
         if isinstance(row, dict)
     }
     for item in round_discussions:
@@ -140,13 +138,13 @@ def _ingest_round_resolution_effects(
                 }
             )
         if resolution.get("resolution_status") in {"agreed", "human_decision", "direct_clarification"}:
-            from .meeting_conflict_review import _close_related_open_questions
-            _close_related_open_questions(artifact, source_ids, round_num=round_num)
+            from .conflict_review import close_related_open_questions
+            close_related_open_questions(artifact, source_ids, round_num=round_num)
         affected_conflict_ids = resolution.get("affected_conflict_ids", []) or []
         decision_id = str(resolution.get("decision_id") or "").strip()
         if resolution.get("resolution_status") == "human_decision" and affected_conflict_ids and decision_id:
-            from .meeting_conflict_review import _mark_conflicts_resolved_by_ids
-            _mark_conflicts_resolved_by_ids(
+            from .conflict_review import mark_conflicts_resolved_by_ids
+            mark_conflicts_resolved_by_ids(
                 artifact, affected_conflict_ids, decision_id=decision_id,
             )
         affected_requirement_ids = [
@@ -158,6 +156,7 @@ def _ingest_round_resolution_effects(
         if not isinstance(verification_impact, dict):
             verification_impact = {}
         needs_approval = bool(resolution.get("needs_approval"))
+        needs_user_confirmation = bool(resolution.get("needs_user_confirmation"))
         _dod_ok = bool(
             resolution.get("decision")
             and affected_requirement_ids
@@ -173,27 +172,37 @@ def _ingest_round_resolution_effects(
                     "notes": str(verification_impact.get("notes") or "").strip(),
                 },
                 "needs_approval": needs_approval,
+                "needs_user_confirmation": needs_user_confirmation,
                 "dod_complete": _dod_ok,
             }
         )
-        if needs_approval:
-            key = (str(topic.get("id") or "").strip(), tuple(sorted(affected_requirement_ids)))
-            if key not in seen_approval:
-                approval_queue.append(
+        if needs_user_confirmation or needs_approval:
+            decision_id = f"D-R{round_num:02d}-{topic.get('id') or len(pending_decisions) + 1}"
+            if decision_id not in seen_pending_decisions:
+                pending_decisions.append(
                     {
+                        "schema_version": "decision_analysis.v1",
+                        "decision_id": decision_id,
                         "topic_id": topic.get("id"),
                         "round": round_num,
-                        "status": "pending",
+                        "title": topic.get("title"),
+                        "source_ids": source_ids,
+                        "status": "pending_confirmation",
                         "summary": str(resolution.get("summary") or "").strip(),
-                        "decision": str(resolution.get("decision") or "").strip(),
+                        "options": resolution.get("options", []) or [],
+                        "recommendation": resolution.get("recommendation", {}) or {},
                         "affected_requirement_ids": affected_requirement_ids,
+                        "unresolved_points": resolution.get("unresolved_points", []) or [],
+                        "decision": str(resolution.get("decision") or "").strip(),
                         "verification_impact": {
                             "level": str(verification_impact.get("level") or "none").strip() or "none",
                             "notes": str(verification_impact.get("notes") or "").strip(),
                         },
+                        "reason": "needs_user_confirmation" if needs_user_confirmation else "needs_change_confirmation",
                     }
                 )
-                seen_approval.add(key)
+                seen_pending_decisions.add(decision_id)
+            continue
         for candidate in resolution.get("requirement_change_candidates", []) or []:
             if not isinstance(candidate, dict):
                 continue
@@ -201,14 +210,14 @@ def _ingest_round_resolution_effects(
             new_candidates.append(candidate)
     artifact["open_questions"] = oq_pool
     artifact["topic_resolution_effects"] = resolution_effects
-    artifact["approval_queue"] = approval_queue
-    from .meeting_conflict_review import _append_requirement_change_candidates
-    _append_requirement_change_candidates(artifact, new_candidates)
+    artifact["pending_decisions"] = pending_decisions
+    from .conflict_review import append_requirement_change_candidates
+    append_requirement_change_candidates(artifact, new_candidates)
 
 
 # ---------- queue topic record ----------
 
-def _queue_topic_record(
+def queue_topic_record(
     coordinator: Any,
     row: Dict[str, Any],
     *,
@@ -216,7 +225,7 @@ def _queue_topic_record(
     index: int,
     triage_action: str,
 ) -> Dict[str, Any]:
-    normalized = normalize_agenda_topic(
+    normalized = normalize_decision_topic(
         {
             "id": f"{queue_prefix}-{index:02d}",
             "title": (row.get("title") or "待處理事項").strip(),
@@ -226,7 +235,7 @@ def _queue_topic_record(
             "discussion_mode": row.get("discussion_mode", "sequential"),
             "speaking_order": row.get("speaking_order", []),
             "source_ids": row.get("source_ids", []),
-            "source_proposal_ids": [row.get("proposal_id")] if row.get("proposal_id") else [],
+            "source_issue_ids": [row.get("issue_id")] if row.get("issue_id") else [],
             "triage_action": triage_action,
             "status": "processed",
         },
@@ -235,7 +244,7 @@ def _queue_topic_record(
         index=index,
     )
     return normalized or {
-        "schema_version": "agenda_topic.v1",
+        "schema_version": "decision_topic.v1",
         "id": f"{queue_prefix}-{index:02d}",
         "title": (row.get("title") or "待處理事項").strip(),
         "description": (row.get("description") or "").strip(),
@@ -244,7 +253,7 @@ def _queue_topic_record(
         "discussion_mode": row.get("discussion_mode", "sequential"),
         "speaking_order": row.get("speaking_order", []),
         "source_ids": row.get("source_ids", []),
-        "source_proposal_ids": [row.get("proposal_id")] if row.get("proposal_id") else [],
+        "source_issue_ids": [row.get("issue_id")] if row.get("issue_id") else [],
         "status": "processed",
         "triage_action": triage_action,
     }
@@ -252,7 +261,7 @@ def _queue_topic_record(
 
 # ---------- 三條 queue 執行 ----------
 
-def _execute_clarification_queue(
+def execute_clarification_queue(
     coordinator: Any,
     artifact: Dict[str, Any],
     runner: Any,
@@ -268,22 +277,22 @@ def _execute_clarification_queue(
     for idx, row in enumerate(queue, 1):
         if not isinstance(row, dict):
             continue
-        topic = _queue_topic_record(
+        topic = queue_topic_record(
             coordinator, row, queue_prefix="CQ", index=idx, triage_action="direct_clarification",
         )
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="clarification_queue",
             topic=topic,
             substep="clarification.observe_item",
-            observation={"proposal_id": row.get("proposal_id"), "index": idx},
-            decision={"action": "prepare_topic", "params": {"topic_id": topic.get("id")}, "reasoning": "將 queue item 正規化為 agenda topic。"},
+            observation={"issue_id": row.get("issue_id"), "index": idx},
+            decision={"action": "prepare_topic", "params": {"topic_id": topic.get("id")}, "reasoning": "將 queue item 正規化為 decision topic。"},
             result={"target_candidates": topic.get("participants", []), "source_ids": topic.get("source_ids", [])},
         )
         target_name = ((topic.get("speaking_order") or topic.get("participants") or ["analyst"])[0] or "analyst")
         agent = coordinator.flow.registry.get(target_name) if coordinator.flow.registry else None
         if not agent:
-            _record_queue_item_trace(
+            record_queue_item_trace(
                 artifact,
                 queue_name="clarification_queue",
                 topic=topic,
@@ -295,7 +304,7 @@ def _execute_clarification_queue(
             row["status"] = "deferred"
             row["queue_processed_round"] = round_num
             execution_log.append(
-                {"round": round_num, "queue": "clarification_queue", "proposal_id": row.get("proposal_id"), "status": "deferred_no_agent"}
+                {"round": round_num, "queue": "clarification_queue", "issue_id": row.get("issue_id"), "status": "deferred_no_agent"}
             )
             continue
         try:
@@ -305,7 +314,7 @@ def _execute_clarification_queue(
                 previous_responses=None,
                 artifact_snapshot=snapshot,
             )
-            _record_queue_item_trace(
+            record_queue_item_trace(
                 artifact,
                 queue_name="clarification_queue",
                 topic=topic,
@@ -387,7 +396,7 @@ def _execute_clarification_queue(
                     )
             row["status"] = "answered" if statement else "deferred"
             row["queue_processed_round"] = round_num
-            _record_queue_item_trace(
+            record_queue_item_trace(
                 artifact,
                 queue_name="clarification_queue",
                 topic=topic,
@@ -397,11 +406,11 @@ def _execute_clarification_queue(
                 result={"status": row["status"]},
             )
             execution_log.append(
-                {"round": round_num, "queue": "clarification_queue", "proposal_id": row.get("proposal_id"), "status": row["status"], "handled_by": target_name}
+                {"round": round_num, "queue": "clarification_queue", "issue_id": row.get("issue_id"), "status": row["status"], "handled_by": target_name}
             )
         except Exception as e:
             coordinator.flow.logger.warning("clarification_queue 執行失敗: %s", e)
-            _record_queue_item_trace(
+            record_queue_item_trace(
                 artifact,
                 queue_name="clarification_queue",
                 topic=topic,
@@ -416,7 +425,7 @@ def _execute_clarification_queue(
     artifact["queue_execution_log"] = execution_log
 
 
-def _execute_human_decision_queue(
+def execute_human_decision_queue(
     coordinator: Any,
     artifact: Dict[str, Any],
     runner: Any,
@@ -430,15 +439,15 @@ def _execute_human_decision_queue(
     for idx, row in enumerate(queue, 1):
         if not isinstance(row, dict):
             continue
-        topic = _queue_topic_record(
+        topic = queue_topic_record(
             coordinator, row, queue_prefix="HQ", index=idx, triage_action="human_decision",
         )
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="human_decision_queue",
             topic=topic,
             substep="human.observe_item",
-            observation={"proposal_id": row.get("proposal_id"), "index": idx},
+            observation={"issue_id": row.get("issue_id"), "index": idx},
             decision={"action": "prepare_human_decision", "params": {"topic_id": topic.get("id")}, "reasoning": "將 queue item 整理成人類裁決輸入。"},
             result={"source_ids": topic.get("source_ids", [])},
         )
@@ -451,7 +460,7 @@ def _execute_human_decision_queue(
                 "rationale": row.get("why_now", ""),
             },
         }
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="human_decision_queue",
             topic=topic,
@@ -461,7 +470,7 @@ def _execute_human_decision_queue(
             result={"options_count": 1},
         )
         resolution_raw = Collect.human_decision_on_topic(topic, options)
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="human_decision_queue",
             topic=topic,
@@ -527,15 +536,15 @@ def _execute_human_decision_queue(
                 }
             )
             artifact["decisions"] = decisions
-            from .meeting_conflict_review import _mark_conflicts_resolved_by_ids
-            _mark_conflicts_resolved_by_ids(
+            from .conflict_review import mark_conflicts_resolved_by_ids
+            mark_conflicts_resolved_by_ids(
                 artifact, resolution.get("affected_conflict_ids", []), decision_id=decision_id,
             )
             row["status"] = "decided"
         else:
             row["status"] = "deferred"
         row["queue_processed_round"] = round_num
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="human_decision_queue",
             topic=topic,
@@ -545,12 +554,12 @@ def _execute_human_decision_queue(
             result={"status": row["status"], "decision_id": decision_id},
         )
         execution_log.append(
-            {"round": round_num, "queue": "human_decision_queue", "proposal_id": row.get("proposal_id"), "status": row["status"]}
+            {"round": round_num, "queue": "human_decision_queue", "issue_id": row.get("issue_id"), "status": row["status"]}
         )
     artifact["queue_execution_log"] = execution_log
 
 
-def _execute_direct_apply_queue(
+def execute_direct_apply_queue(
     coordinator: Any,
     artifact: Dict[str, Any],
     *,
@@ -565,12 +574,12 @@ def _execute_direct_apply_queue(
     for row in queue:
         if not isinstance(row, dict):
             continue
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="direct_apply_queue",
             topic=None,
             substep="direct_apply.observe_item",
-            observation={"proposal_id": row.get("proposal_id")},
+            observation={"issue_id": row.get("issue_id")},
             decision={"action": "inspect_direct_apply_item", "params": {"source_ids": row.get("source_ids", [])}, "reasoning": "檢查 queue item 是否可形成 requirement change candidate。"},
             result={"source_ids": row.get("source_ids", [])},
         )
@@ -579,19 +588,19 @@ def _execute_direct_apply_queue(
             if isinstance(sid, str) and sid.startswith(("REQ-", "FR-", "NFR-"))
         ]
         if not req_ids:
-            _record_queue_item_trace(
+            record_queue_item_trace(
                 artifact,
                 queue_name="direct_apply_queue",
                 topic=None,
                 substep="direct_apply.skip_no_requirement_id",
-                observation={"proposal_id": row.get("proposal_id")},
+                observation={"issue_id": row.get("issue_id")},
                 decision={"action": "skip", "params": {}, "reasoning": "缺少 requirement id，無法轉成 change candidate。"},
                 result={"status": "skipped_no_requirement_id"},
             )
             row["status"] = "skipped_no_requirement_id"
             row["queue_processed_round"] = round_num
             execution_log.append(
-                {"round": round_num, "queue": "direct_apply_queue", "proposal_id": row.get("proposal_id"), "status": row["status"]}
+                {"round": round_num, "queue": "direct_apply_queue", "issue_id": row.get("issue_id"), "status": row["status"]}
             )
             continue
         candidate_id = f"RC-QA-{next_idx:03d}"
@@ -609,12 +618,12 @@ def _execute_direct_apply_queue(
                 "auto_apply": False,
             }
         )
-        _record_queue_item_trace(
+        record_queue_item_trace(
             artifact,
             queue_name="direct_apply_queue",
             topic=None,
             substep="direct_apply.queue_change_candidate",
-            observation={"proposal_id": row.get("proposal_id"), "requirement_id": req_ids[0]},
+            observation={"issue_id": row.get("issue_id"), "requirement_id": req_ids[0]},
             decision={"action": "queue_change_candidate", "params": {"requirement_id": req_ids[0]}, "reasoning": "將 direct-apply item 轉成待審 requirement change candidate。"},
             result={"candidate_id": candidate_id},
         )
@@ -622,16 +631,16 @@ def _execute_direct_apply_queue(
         row["status"] = "queued_change_candidate"
         row["queue_processed_round"] = round_num
         execution_log.append(
-            {"round": round_num, "queue": "direct_apply_queue", "proposal_id": row.get("proposal_id"), "status": row["status"]}
+            {"round": round_num, "queue": "direct_apply_queue", "issue_id": row.get("issue_id"), "status": row["status"]}
         )
-    from .meeting_conflict_review import _append_requirement_change_candidates
-    _append_requirement_change_candidates(artifact, candidates)
+    from .conflict_review import append_requirement_change_candidates
+    append_requirement_change_candidates(artifact, candidates)
     artifact["queue_execution_log"] = execution_log
 
 
 # ---------- routed queues ----------
 
-def _run_routed_queues(
+def run_routed_queues(
     coordinator: Any,
     artifact: Dict[str, Any],
     runner: Any,
@@ -644,7 +653,7 @@ def _run_routed_queues(
     if drain_non_formal:
         for k in keys:
             q = artifact.get(k) or []
-            nf, fm = _partition_queue_skip_formal(q)
+            nf, fm = partition_queue_skip_formal(q)
             artifact[k] = nf
             held_formal[k] = fm
         n_skip = sum(len(held_formal[k]) for k in keys)
@@ -659,9 +668,9 @@ def _run_routed_queues(
         total_before = sum(len(artifact.get(k) or []) for k in keys)
         if drain_non_formal and total_before == 0:
             break
-        _execute_clarification_queue(coordinator, artifact, runner, round_num=round_num)
-        _execute_human_decision_queue(coordinator, artifact, runner, round_num=round_num)
-        _execute_direct_apply_queue(coordinator, artifact, round_num=round_num)
+        execute_clarification_queue(coordinator, artifact, runner, round_num=round_num)
+        execute_human_decision_queue(coordinator, artifact, runner, round_num=round_num)
+        execute_direct_apply_queue(coordinator, artifact, round_num=round_num)
         artifact["clarification_queue"] = [
             row for row in (artifact.get("clarification_queue", []) or [])
             if isinstance(row, dict) and row.get("status") == "deferred"
@@ -689,62 +698,27 @@ def _run_routed_queues(
             artifact[k] = held_formal[k] + (artifact.get(k) or [])
 
 
-# ---------- topic post-processing ----------
-
-def _triggered_roles_for_topic(
-    topic_discussion: Dict[str, Any],
-    artifact: Dict[str, Any],
-) -> List[str]:
-    roles: List[str] = []
-    resolution = topic_discussion.get("resolution", {})
-    if not isinstance(resolution, dict):
-        return roles
-    status = (resolution.get("resolution_status") or "").strip()
-    if status not in {"agreed", "human_decision", "direct_clarification"}:
-        roles.extend(["analyst", "expert"])
-    if resolution.get("new_open_questions"):
-        roles.append("expert")
-    if resolution.get("requirement_change_candidates"):
-        roles.append("analyst")
-    if (
-        artifact.get("system_models", {}).get("models")
-        and resolution.get("requirement_change_candidates")
-    ):
-        roles.append("modeler")
-    deduped: List[str] = []
-    for r in roles:
-        if r not in deduped:
-            deduped.append(r)
-    return deduped
-
-
-def _post_topic_processing(
+def post_topic_processing(
     coordinator: Any,
     artifact: Dict[str, Any],
     topic_discussion: Dict[str, Any],
     *,
     round_num: int,
 ) -> None:
-    _ingest_round_resolution_effects(
+    ingest_round_resolution_effects(
         coordinator, artifact, [topic_discussion], round_num=round_num,
     )
     coordinator.flow.store.save_artifact(artifact)
-    roles = _triggered_roles_for_topic(topic_discussion, artifact)
-    if roles:
-        coordinator.flow.logger.info("議題後觸發 review：%s", ", ".join(roles))
-        from .main_meeting import _run_enabled_reviews
-        _run_enabled_reviews(coordinator, artifact, recent_discussions=[topic_discussion], roles=roles)
-        coordinator.flow.store.save_artifact(artifact)
 
 
 # ---------- agenda loop ----------
 
 def run_agenda_loop_block(coordinator: Any, runner: Any) -> None:
-    obs = runner.run("generate_agenda", None)
+    obs = runner.run("generate_decision_topics", None)
     if obs.get("error"):
         coordinator.flow.logger.warning(f"  議程生成失敗: {obs['error']}")
-    drain = coordinator._is_last_meeting_round(runner.artifact, runner.round_num)
-    _run_routed_queues(
+    drain = coordinator.is_last_meeting_round(runner.artifact, runner.round_num)
+    run_routed_queues(
         coordinator,
         runner.artifact,
         runner,

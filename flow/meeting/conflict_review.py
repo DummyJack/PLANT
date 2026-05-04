@@ -1,47 +1,16 @@
+# Conflict and requirement-change helpers for meeting rounds.
 import json
 import re
 from typing import Any, Dict, List, Optional
 
-from utils import Collect, human_setting
-
-_HIGH_RISK_FORMALIZATION_PATTERNS = [
-    r"\btls\b",
-    r"\baes\b",
-    r"\boauth\b",
-    r"\bpci\b",
-    r"\bgdpr\b",
-    r"\biso\b",
-    r"\bwcag\b",
-    r"\bapi\b",
-    r"\bexternal\b",
-    r"\bdashboard\b",
-    r"\banalytics\b",
-    r"\bpayment\s*gateway\b",
-    r"第三方",
-    r"多分店",
-    r"跨店",
-    r"法規",
-    r"合規",
-    r"compliance",
-    r"加密",
-    r"稽核",
-    r"權限控管",
-    r"解析度",
-    r"螢幕尺寸",
-    r"android\s*\d",
-    r"iphone\s*\d",
-    r"ipad",
-]
-_MEASURABLE_PATTERN = re.compile(
-    r"(<=|>=|<|>|=|≦|≧|\d+\s*(ms|s|sec|seconds|分鐘|小時|%|percent|筆|次|items|users|人))",
-    re.IGNORECASE,
-)
-
+from agents.base import build_pre_meeting_conflict_review_description
+from flow.requirements import next_requirement_id
+from utils import human_setting
 
 # ---------- artifact 層級靜態工具 ----------
 
 
-def _append_requirement_change_candidates(
+def append_requirement_change_candidates(
     artifact: Dict[str, Any],
     change_candidates: List[Dict[str, Any]],
 ) -> None:
@@ -77,30 +46,7 @@ def _append_requirement_change_candidates(
     artifact["requirement_change_candidates"] = existing
 
 
-def _has_source_backing(req: Dict[str, Any]) -> bool:
-    return bool(str(req.get("source") or "").strip()) or bool(req.get("source_stakeholders"))
-
-
-def _is_high_risk_requirement(req: Dict[str, Any]) -> bool:
-    haystacks = [
-        str(req.get("text") or ""),
-        str(req.get("acceptance_criteria") or ""),
-        str(req.get("rationale") or ""),
-    ]
-    joined = " \n ".join(haystacks)
-    lower = joined.lower()
-    if _MEASURABLE_PATTERN.search(joined):
-        return True
-    return any(re.search(pattern, lower, re.IGNORECASE) for pattern in _HIGH_RISK_FORMALIZATION_PATTERNS)
-
-
-def _can_auto_formalize_requirement(req: Dict[str, Any]) -> bool:
-    if not _is_high_risk_requirement(req):
-        return True
-    return _has_source_backing(req)
-
-
-def _close_related_open_questions(
+def close_related_open_questions(
     artifact: Dict[str, Any],
     source_ids: List[str],
     *,
@@ -126,7 +72,7 @@ def _close_related_open_questions(
         q["answered_round"] = round_num
 
 
-def _mark_conflicts_resolved_by_ids(
+def mark_conflicts_resolved_by_ids(
     artifact: Dict[str, Any],
     conflict_ids: List[str],
     *,
@@ -144,209 +90,28 @@ def _mark_conflicts_resolved_by_ids(
             c["resolved_by_decision_id"] = decision_id
 
 
-def _set_requirement_status_by_ids(
-    artifact: Dict[str, Any],
-    requirement_ids: List[str],
-    *,
-    status: str,
-    round_num: int,
-) -> None:
-    if not requirement_ids:
-        return
-    target = {str(rid).strip() for rid in requirement_ids if str(rid).strip()}
-    if not target:
-        return
-    valid = {"draft", "approved", "baselined", "rejected"}
-    normalized = status if status in valid else "draft"
-    for req in artifact.get("requirements", []) or []:
-        if not isinstance(req, dict):
-            continue
-        rid = str(req.get("id") or "").strip()
-        if rid not in target:
-            continue
-        req["status"] = normalized
-        req["status_updated_round"] = round_num
-
-
-def _approval_status_by_topic(artifact: Dict[str, Any]) -> Dict[str, str]:
+def pending_decision_status_by_topic(artifact: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
-    for row in artifact.get("approval_queue", []) or []:
+    for row in artifact.get("pending_decisions", []) or []:
         if not isinstance(row, dict):
             continue
         tid = str(row.get("topic_id") or "").strip()
         if not tid:
             continue
-        out[tid] = str(row.get("status") or "pending").strip() or "pending"
-    return out
-
-
-# ---------- approval queue ----------
-
-def _process_approval_queue(
-    coordinator: Any,
-    artifact: Dict[str, Any],
-    *,
-    round_num: int,
-    force_human_for_pending: bool = False,
-) -> Dict[str, int]:
-    queue = artifact.get("approval_queue", []) or []
-    if not queue:
-        return {"approved": 0, "rejected": 0, "pending": 0}
-
-    enable_human = bool(
-        human_setting(coordinator.flow.config, "enable_human_approval_queue", True)
-    )
-    agent_first = bool(
-        human_setting(coordinator.flow.config, "approval_queue_agent_first", True)
-    )
-    approval_log = artifact.get("approval_log", []) or []
-    approved = rejected = pending = 0
-
-    def _agent_precheck_decision(row: Dict[str, Any]) -> Dict[str, str]:
-        """先由系統/agent 規則做一次批准判定；無法判定再交由人工。"""
-        affected_ids = [str(x).strip() for x in (row.get("affected_requirement_ids", []) or []) if str(x).strip()]
-        decision_text = str(row.get("decision") or row.get("summary") or "").strip()
-        vi = row.get("verification_impact") or {}
-        level = str((vi.get("level") if isinstance(vi, dict) else "") or "").strip().lower()
-
-        if not affected_ids or not decision_text:
-            return {"status": "pending", "reason": "insufficient_decision_or_scope"}
-
-        # 低風險且資訊完整時，先由 agents 形成決議並通過。
-        if level in {"", "none", "low"}:
-            return {"status": "approved", "reason": "agent_precheck_low_risk"}
-
-        # 中風險交由人工做最終裁決（若關閉人工則暫保留 pending）。
-        if level in {"medium", "med", "moderate"}:
-            return {"status": "pending", "reason": "agent_precheck_need_human_medium_risk"}
-
-        # 高風險/未知等級，不自動批准。
-        return {"status": "pending", "reason": "agent_precheck_need_human_high_or_unknown_risk"}
-
-    for row in queue:
-        if not isinstance(row, dict):
-            continue
-        status = str(row.get("status") or "pending").strip() or "pending"
-        if status in {"approved", "rejected"}:
-            if status == "approved":
-                approved += 1
-            else:
-                rejected += 1
-            continue
-
-        if not enable_human:
-            row["status"] = "approved"
-            row["approved_round"] = round_num
-            row["approved_by"] = "system_auto"
-            _set_requirement_status_by_ids(
-                artifact, row.get("affected_requirement_ids", []) or [],
-                status="approved", round_num=round_num,
-            )
-            approved += 1
-            approval_log.append(
-                {"topic_id": row.get("topic_id"), "round": round_num, "status": "approved", "approved_by": "system_auto", "decision": "auto_approved_by_config"}
-            )
-            continue
-
-        if agent_first:
-            precheck = _agent_precheck_decision(row)
-            if precheck.get("status") == "approved":
-                row["status"] = "approved"
-                row["approved_round"] = round_num
-                row["approved_by"] = "agent_precheck"
-                _set_requirement_status_by_ids(
-                    artifact, row.get("affected_requirement_ids", []) or [],
-                    status="approved", round_num=round_num,
-                )
-                approved += 1
-                approval_log.append(
-                    {
-                        "topic_id": row.get("topic_id"),
-                        "round": round_num,
-                        "status": "approved",
-                        "approved_by": "agent_precheck",
-                        "decision": {"reason": precheck.get("reason", "agent_precheck")},
-                    }
-                )
-                continue
-            # 兩段式：agent 判定為 pending 後，僅在最終升級階段才進人工；否則維持 pending 等下輪。
-            row["agent_precheck_reason"] = precheck.get("reason", "")
-            if not force_human_for_pending:
-                row["status"] = "pending"
-                pending += 1
-                approval_log.append(
-                    {
-                        "topic_id": row.get("topic_id"),
-                        "round": round_num,
-                        "status": "pending",
-                        "approved_by": "agent_precheck",
-                        "decision": {"reason": precheck.get("reason", "agent_precheck_pending")},
-                    }
-                )
-                continue
-
-        topic = {
-            "id": row.get("topic_id"),
-            "title": f"需求變更批准：{row.get('topic_id', '')}",
-            "description": (
-                f"變更說明: {row.get('summary', '')}\n"
-                f"決議: {row.get('decision', '')}\n"
-                f"影響需求: {row.get('affected_requirement_ids', [])}\n"
-                f"驗證影響: {row.get('verification_impact', {})}"
-            ),
-        }
-        options = {
-            "best_options": [
-                {"id": 1, "title": "批准本次需求變更", "description": "允許本議題相關變更進入下一版需求草稿。", "source": "approval_queue"},
-                {"id": 2, "title": "駁回本次需求變更", "description": "不套用本議題相關變更，維持現有需求。", "source": "approval_queue"},
-            ],
-            "compromise": {"id": 3, "title": "暫緩批准", "description": "保留 pending，待下一輪補充資訊後再決定。", "rationale": "目前資訊不足或仍有風險疑慮。"},
-        }
-        result = Collect.human_decision_on_topic(topic, options)
-        choice = int(result.get("chosen_option_id") or -1)
-        if choice == 1:
-            row["status"] = "approved"
-            row["approved_round"] = round_num
-            row["approved_by"] = "human"
-            _set_requirement_status_by_ids(
-                artifact, row.get("affected_requirement_ids", []) or [],
-                status="approved", round_num=round_num,
-            )
-            approved += 1
-        elif choice == 2:
-            row["status"] = "rejected"
-            row["approved_round"] = round_num
-            row["approved_by"] = "human"
-            _set_requirement_status_by_ids(
-                artifact, row.get("affected_requirement_ids", []) or [],
-                status="rejected", round_num=round_num,
-            )
-            rejected += 1
-        elif str(result.get("resolution") or "").strip() == "agreed":
-            row["status"] = "approved"
-            row["approved_round"] = round_num
-            row["approved_by"] = "human"
-            _set_requirement_status_by_ids(
-                artifact, row.get("affected_requirement_ids", []) or [],
-                status="approved", round_num=round_num,
-            )
-            approved += 1
+        status = str(row.get("status") or "pending_confirmation").strip()
+        if status in {"confirmed", "approved"}:
+            out[tid] = "confirmed"
+        elif status in {"rejected", "declined"}:
+            out[tid] = "rejected"
         else:
-            row["status"] = "pending"
-            pending += 1
-        row["approval_decision"] = result
-        approval_log.append(
-            {"topic_id": row.get("topic_id"), "round": round_num, "status": row.get("status"), "approved_by": row.get("approved_by", "human"), "decision": result}
-        )
+            out[tid] = "pending_confirmation"
 
-    artifact["approval_queue"] = queue
-    artifact["approval_log"] = approval_log
-    return {"approved": approved, "rejected": rejected, "pending": pending}
+    return out
 
 
 # ---------- apply change candidates ----------
 
-def _is_safe_add_candidate(candidate: Dict[str, Any]) -> bool:
+def is_safe_add_candidate(candidate: Dict[str, Any]) -> bool:
     after = candidate.get("after")
     if not isinstance(after, dict):
         return False
@@ -355,6 +120,9 @@ def _is_safe_add_candidate(candidate: Dict[str, Any]) -> bool:
     req_type = str(after.get("type") or after.get("requirement_type") or "").strip().upper()
     priority = str(after.get("priority") or "").strip()
     source_ids = [str(s).strip() for s in (candidate.get("source_ids") or []) if str(s).strip()]
+    source_topic_id = str(candidate.get("source_topic_id") or candidate.get("topic_id") or "").strip()
+    if source_topic_id.startswith("ELICIT-") or any(sid.startswith("ELICIT-") for sid in source_ids):
+        return False
     if not req_id or not text or not source_ids:
         return False
     if priority not in {"must", "should", "could"}:
@@ -365,13 +133,6 @@ def _is_safe_add_candidate(candidate: Dict[str, Any]) -> bool:
         return False
     if len(text) > 220 or "\n" in text:
         return False
-    high_risk_keywords = (
-        "整合", "串接", "介接", "第三方", "external", "api", "角色", "actor",
-        "支付", "付款", "登入流程", "新頁面", "新模組", "法規", "compliance",
-    )
-    lower_text = text.lower()
-    if any(k in text or k in lower_text for k in high_risk_keywords):
-        return False
     # 功能需求僅在屬於需求補完型來源時自動吸收，避免一般會議決議過度擴 scope。
     if req_type.startswith("FR") or normalized_type == "fr":
         allowed_prefixes = ("ELICIT-", "OQ-", "DR-", "REQ-")
@@ -380,82 +141,7 @@ def _is_safe_add_candidate(candidate: Dict[str, Any]) -> bool:
     return True
 
 
-def _append_new_conflicts_from_meeting(
-    artifact: Dict[str, Any],
-    new_conflicts: List[Dict[str, Any]],
-) -> int:
-    if not isinstance(new_conflicts, list) or not new_conflicts:
-        return 0
-
-    conflicts = artifact.setdefault("conflicts", [])
-    if not isinstance(conflicts, list):
-        artifact["conflicts"] = []
-        conflicts = artifact["conflicts"]
-
-    existing_keys = set()
-    conflict_count = 0
-    design_count = 0
-    for row in conflicts:
-        if not isinstance(row, dict):
-            continue
-        label = str(row.get("label") or "").strip()
-        desc = str(row.get("description") or "").strip()
-        req_ids = tuple(
-            sorted(str(rid).strip() for rid in (row.get("requirement_ids") or []) if str(rid).strip())
-        )
-        existing_keys.add((label, desc, req_ids))
-        if label == "Conflict":
-            conflict_count += 1
-            if str(row.get("id") or "").strip().startswith("CF-D"):
-                design_count += 1
-
-    added = 0
-    for row in new_conflicts:
-        if not isinstance(row, dict):
-            continue
-        desc = str(row.get("description") or "").strip()
-        req_ids = [
-            str(rid).strip()
-            for rid in (row.get("requirement_ids") or row.get("related_requirements") or [])
-            if str(rid).strip()
-        ]
-        key = ("Conflict", desc, tuple(sorted(req_ids)))
-        if not desc or key in existing_keys:
-            continue
-
-        conflict_type = str(row.get("conflict_type") or "").strip()
-        stakeholder_names = [
-            str(name).strip()
-            for name in (row.get("stakeholder_names") or [])
-            if str(name).strip()
-        ]
-        if stakeholder_names or req_ids:
-            conflict_count += 1
-            entry_id = f"CF-{conflict_count:02d}"
-        else:
-            design_count += 1
-            entry_id = f"CF-D{design_count:02d}"
-
-        entry: Dict[str, Any] = {
-            "id": entry_id,
-            "label": "Conflict",
-            "description": desc,
-        }
-        if conflict_type:
-            entry["conflict_type"] = conflict_type
-        if stakeholder_names:
-            entry["stakeholder_names"] = stakeholder_names
-        if req_ids:
-            entry["requirement_ids"] = req_ids
-
-        conflicts.append(entry)
-        existing_keys.add(key)
-        added += 1
-
-    return added
-
-
-def _is_low_risk_update_candidate(
+def is_low_risk_update_candidate(
     candidate: Dict[str, Any],
     *,
     requirements_by_id: Dict[str, Dict[str, Any]],
@@ -468,7 +154,7 @@ def _is_low_risk_update_candidate(
         return False
 
     if change_type == "add":
-        return _is_safe_add_candidate(candidate)
+        return is_safe_add_candidate(candidate)
 
     if change_type != "update" or not req_id or req_id not in requirements_by_id:
         return False
@@ -492,14 +178,11 @@ def _is_low_risk_update_candidate(
         return False
     if "\n" in after:
         return False
-    high_risk_keywords = (
-        "第三方", "external", "api", "介接", "整合", "新頁面", "新模組",
-        "支付", "付款", "登入", "權限", "角色", "actor", "database", "法規", "compliance",
-    )
-    lower_after = after.lower()
-    if any(k in after or k in lower_after for k in high_risk_keywords):
-        return False
     return True
+
+
+def normalize_requirement_text_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
 def apply_requirement_change_candidates(
@@ -513,11 +196,12 @@ def apply_requirement_change_candidates(
     by_id = {req.get("id"): req for req in requirements if req.get("id")}
     applied_ids: List[str] = []
     pending_ids: List[str] = []
+    skipped_duplicate_ids: List[str] = []
     candidates = artifact.get("requirement_change_candidates", []) or []
-    approval_by_topic = _approval_status_by_topic(artifact)
-    require_approval = bool(
+    decision_status_by_topic = pending_decision_status_by_topic(artifact)
+    require_confirmation = bool(
         human_setting(
-            coordinator.flow.config, "require_human_approval_for_changes", True
+            coordinator.flow.config, "require_user_confirmation_for_changes", True
         )
     )
 
@@ -530,26 +214,69 @@ def apply_requirement_change_candidates(
         req_id = candidate.get("requirement_id")
         status = (candidate.get("status") or "").strip()
         topic_id = str(candidate.get("source_topic_id") or candidate.get("topic_id") or "").strip()
-        low_risk_auto_approve = _is_low_risk_update_candidate(candidate, requirements_by_id=by_id)
+        low_risk_auto_approve = is_low_risk_update_candidate(candidate, requirements_by_id=by_id)
 
         if status == "applied":
             if cid:
                 applied_ids.append(cid)
             continue
 
-        if require_approval:
-            topic_approval = approval_by_topic.get(topic_id, "pending") if topic_id else "pending"
-            if topic_approval != "approved" and not low_risk_auto_approve:
+        if change_type == "add":
+            after = candidate.get("after")
+            if not isinstance(after, dict):
                 candidate["status"] = "pending_review"
                 if cid:
                     pending_ids.append(cid)
                 continue
-            if topic_approval != "approved" and low_risk_auto_approve:
-                candidate["approval_bypassed"] = "low_risk_auto_approve"
+
+            from agents.profile.analyst import AnalystAgent
+
+            new_req = AnalystAgent.normalize_requirement_record(dict(after))
+            text_key = normalize_requirement_text_key(new_req.get("text"))
+            existing_texts = {
+                normalize_requirement_text_key(req.get("text"))
+                for req in requirements
+                if isinstance(req, dict) and str(req.get("text") or "").strip()
+            }
+            if not text_key:
+                candidate["status"] = "pending_review"
+                if cid:
+                    pending_ids.append(cid)
+                continue
+            if text_key in existing_texts:
+                candidate["status"] = "skipped_duplicate"
+                if cid:
+                    skipped_duplicate_ids.append(cid)
+                continue
+
+            if not req_id or req_id in by_id:
+                req_id = new_req.get("id") or next_requirement_id(requirements)
+            if req_id in by_id:
+                req_id = next_requirement_id(requirements)
+            new_req["id"] = req_id
+            new_req["status"] = "unverified"
+            requirements.append(new_req)
+            by_id[req_id] = new_req
+            candidate["requirement_id"] = req_id
+            candidate["status"] = "applied"
+            candidate["confirmation_bypassed"] = "new_requirement_added_unverified"
+            if cid:
+                applied_ids.append(cid)
+            continue
+
+        if require_confirmation:
+            decision_status = decision_status_by_topic.get(topic_id, "pending_confirmation") if topic_id else "pending_confirmation"
+            if decision_status != "confirmed" and not low_risk_auto_approve:
+                candidate["status"] = "pending_review"
+                if cid:
+                    pending_ids.append(cid)
+                continue
+            if decision_status != "confirmed" and low_risk_auto_approve:
+                candidate["confirmation_bypassed"] = "low_risk_auto_approve"
 
         apply_allowed = (
-            not require_approval
-            or approval_by_topic.get(topic_id, "pending") == "approved"
+            not require_confirmation
+            or decision_status_by_topic.get(topic_id, "pending_confirmation") == "confirmed"
             or low_risk_auto_approve
         )
 
@@ -557,14 +284,8 @@ def apply_requirement_change_candidates(
             if field in {"text", "priority", "acceptance_criteria", "verification_method"}:
                 proposed_req = dict(by_id[req_id])
                 proposed_req[field] = candidate.get("after")
-                if low_risk_auto_approve and not _can_auto_formalize_requirement(proposed_req):
-                    candidate["status"] = "pending_review"
-                    candidate["formalization_blocked_reason"] = "high_risk_without_source_backing"
-                    if cid:
-                        pending_ids.append(cid)
-                    continue
                 by_id[req_id][field] = candidate.get("after")
-                by_id[req_id]["status"] = "approved"
+                by_id[req_id]["status"] = "unverified"
                 candidate["status"] = "applied"
                 if cid:
                     applied_ids.append(cid)
@@ -573,32 +294,11 @@ def apply_requirement_change_candidates(
                 after = candidate.get("after")
                 if isinstance(after, list):
                     by_id[req_id][field] = after
-                    by_id[req_id]["status"] = "approved"
+                    by_id[req_id]["status"] = "unverified"
                     candidate["status"] = "applied"
                     if cid:
                         applied_ids.append(cid)
                     continue
-
-        if change_type == "add" and apply_allowed and req_id and req_id not in by_id:
-            after = candidate.get("after")
-            if isinstance(after, dict) and (low_risk_auto_approve or approval_by_topic.get(topic_id, "pending") == "approved" or not require_approval):
-                from agents.profile.analyst import AnalystAgent
-                new_req = AnalystAgent._normalize_requirement_record(dict(after))
-                if not new_req.get("id"):
-                    new_req["id"] = req_id
-                if low_risk_auto_approve and not _can_auto_formalize_requirement(new_req):
-                    candidate["status"] = "pending_review"
-                    candidate["formalization_blocked_reason"] = "high_risk_without_source_backing"
-                    if cid:
-                        pending_ids.append(cid)
-                    continue
-                new_req["status"] = "approved"
-                requirements.append(new_req)
-                by_id[req_id] = new_req
-                candidate["status"] = "applied"
-                if cid:
-                    applied_ids.append(cid)
-                continue
 
         candidate["status"] = "pending_review"
         if cid:
@@ -609,45 +309,53 @@ def apply_requirement_change_candidates(
     artifact["requirement_change_apply_result"] = {
         "applied_ids": applied_ids,
         "pending_ids": pending_ids,
+        "skipped_duplicate_ids": skipped_duplicate_ids,
     }
     return artifact
 
 
 # ---------- 衝突再審查逐筆裁定工具 ----------
 
-_PAIR_ID_RE = re.compile(r"\[(PAIR[^\]]+)\]|\"id\"\s*:\s*\"(PAIR[^\"]+)\"", re.IGNORECASE)
+_PAIR_ID_RE = re.compile(
+    r"\[(PAIR[^\]]+)\]|\"id\"\s*:\s*\"(PAIR[^\"]+)\"|\b(PAIR-\d+)\b",
+    re.IGNORECASE,
+)
 _LABEL_RE = re.compile(r"\b(Conflict|Neutral)\b", re.IGNORECASE)
-_DECISION_RE = re.compile(r"\b(keep|modify)\b", re.IGNORECASE)
 _CONF_RE = re.compile(r"\b(high|medium|low)\b", re.IGNORECASE)
+_PROPOSED_LABEL_RE = re.compile(
+    r"\bproposed_label\s*[:：]\s*(Conflict|Neutral)\b",
+    re.IGNORECASE,
+)
+_REASON_FIELD_RE = re.compile(r"\breason\s*[:：]\s*(.+)$", re.IGNORECASE)
 _PAIRWISE_CONFLICT_JUDGMENT_MODE = "pairwise_conflict_judgment"
 
 
-def _normalize_pair_review_record(
+def normalize_pair_review_record(
     review: Dict[str, Any],
     *,
     pair_id_set: set[str],
+    current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not isinstance(review, dict):
         return None
     pair_id = str(review.get("id") or "").strip()
     if not pair_id or pair_id not in pair_id_set:
         return None
-    independent_label = str(review.get("independent_label") or "").strip()
     proposed_label = str(review.get("proposed_label") or "").strip()
-    decision = str(review.get("decision") or "").strip().lower()
     confidence = str(review.get("confidence") or "").strip().lower()
     reason = str(review.get("reason") or "").strip()
-    if independent_label not in {"Conflict", "Neutral"}:
-        independent_label = ""
     if proposed_label not in {"Conflict", "Neutral"}:
         proposed_label = ""
-    if decision not in {"keep", "modify"}:
-        decision = ""
+    current_label = ""
+    if current_labels_by_id:
+        current_label = str(current_labels_by_id.get(pair_id) or "").strip()
+    decision = ""
+    if proposed_label and current_label in {"Conflict", "Neutral"}:
+        decision = "keep" if proposed_label == current_label else "modify"
     if confidence not in {"high", "medium", "low"}:
         confidence = ""
     return {
         "id": pair_id,
-        "independent_label": independent_label,
         "decision": decision,
         "proposed_label": proposed_label,
         "confidence": confidence,
@@ -655,10 +363,11 @@ def _normalize_pair_review_record(
     }
 
 
-def _extract_pair_reviews_from_statement(
+def extract_pair_reviews_from_statement(
     statement: str,
     *,
     known_pair_ids: List[str],
+    current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """從 agent statement 提取逐筆 pair_reviews。
 
@@ -680,7 +389,11 @@ def _extract_pair_reviews_from_statement(
         raw_reviews = parsed.get("pair_reviews")
         if isinstance(raw_reviews, list):
             for raw_review in raw_reviews:
-                normalized = _normalize_pair_review_record(raw_review, pair_id_set=pair_id_set)
+                normalized = normalize_pair_review_record(
+                    raw_review,
+                    pair_id_set=pair_id_set,
+                    current_labels_by_id=current_labels_by_id,
+                )
                 if normalized:
                     reviews.append(normalized)
     if reviews:
@@ -693,28 +406,29 @@ def _extract_pair_reviews_from_statement(
         pair_match = _PAIR_ID_RE.search(line)
         if not pair_match:
             continue
-        pair_id = (pair_match.group(1) or pair_match.group(2) or "").strip()
+        pair_id = (pair_match.group(1) or pair_match.group(2) or pair_match.group(3) or "").strip()
         if not pair_id or pair_id not in pair_id_set:
             continue
-        decision_match = _DECISION_RE.search(line)
+        proposed_label_match = _PROPOSED_LABEL_RE.search(line)
         labels = [m.group(1) for m in _LABEL_RE.finditer(line)]
         conf_match = _CONF_RE.search(line)
         reason = line
-        if "理由" in line:
+        reason_match = _REASON_FIELD_RE.search(line)
+        if reason_match:
+            reason = reason_match.group(1).strip() or line
+        elif "理由" in line:
             reason = line.split("理由", 1)[-1].lstrip(":： ").strip() or line
 
-        independent_label = labels[0] if labels else ""
-        proposed_label = labels[-1] if labels else ""
-        normalized = _normalize_pair_review_record(
+        proposed_label = proposed_label_match.group(1) if proposed_label_match else (labels[0] if labels else "")
+        normalized = normalize_pair_review_record(
             {
                 "id": pair_id,
-                "independent_label": independent_label,
-                "decision": (decision_match.group(1).lower() if decision_match else ""),
                 "proposed_label": proposed_label,
                 "confidence": (conf_match.group(1).lower() if conf_match else ""),
                 "reason": reason,
             },
             pair_id_set=pair_id_set,
+            current_labels_by_id=current_labels_by_id,
         )
         if normalized:
             reviews.append(normalized)
@@ -730,10 +444,11 @@ def _extract_pair_reviews_from_statement(
     return deduped
 
 
-def _collect_discussion_rows_and_pair_reviews(
+def collect_discussion_rows_and_pair_reviews(
     contributions: List[Dict[str, Any]],
     *,
     known_pair_ids: List[str],
+    current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> tuple[list[dict], list[dict]]:
     """整理會議發言與逐筆裁定資料。"""
     discussion_rows: List[Dict[str, Any]] = []
@@ -751,12 +466,77 @@ def _collect_discussion_rows_and_pair_reviews(
             continue
         agent_name = str(c.get("agent") or "").strip()
         discussion_rows.append({"agent": agent_name, "statement": statement})
-        for review in _extract_pair_reviews_from_statement(statement, known_pair_ids=known_pair_ids):
+        for review in extract_pair_reviews_from_statement(
+            statement,
+            known_pair_ids=known_pair_ids,
+            current_labels_by_id=current_labels_by_id,
+        ):
             extracted_pair_reviews.append({"agent": agent_name, **review})
     return discussion_rows, extracted_pair_reviews
 
 
-def _build_fallback_keep_decisions(
+def ensure_conflict_review_participant_contributions(
+    coordinator: Any,
+    topic: Dict[str, Any],
+    artifact: Dict[str, Any],
+    contributions: List[Dict[str, Any]],
+    participants: List[str],
+) -> List[Dict[str, Any]]:
+    """若某位審查 agent 沒有有效發言，單獨補收一次，避免 agent_judgments 只剩少數角色。"""
+    existing_with_statement = {
+        str(c.get("agent") or "").strip()
+        for c in contributions or []
+        if isinstance(c, dict)
+        and str(c.get("agent") or "").strip()
+        and get_contribution_statement(c)
+    }
+    missing = [
+        str(p).strip()
+        for p in participants or []
+        if str(p).strip() and str(p).strip() not in existing_with_statement
+    ]
+    if not missing:
+        return contributions
+
+    snapshot = coordinator.flow.mediator_agent.build_artifact_snapshot(artifact)
+    out = list(contributions or [])
+    retry_topic = {
+        **topic,
+        "discussion_mode": "simultaneous",
+        "participants": missing,
+        "title": f"{topic.get('title', '')}｜缺席角色補審",
+    }
+    for agent_name in missing:
+        agent = coordinator.flow.registry.get(agent_name)
+        if not agent:
+            coordinator.flow.logger.warning("Conflict review 補審：Agent '%s' 未註冊，跳過", agent_name)
+            continue
+        try:
+            response = coordinator.flow.mediator_agent.collect_topic_response(
+                agent,
+                retry_topic,
+                previous_responses=None,
+                artifact_snapshot=snapshot,
+            )
+            out.append(
+                {
+                    "agent": agent_name,
+                    "response": response if isinstance(response, dict) else {"content": str(response)},
+                }
+            )
+        except Exception as e:
+            coordinator.flow.logger.warning("Conflict review 補審：%s 發言失敗: %s", agent_name, e)
+    return out
+
+
+def get_contribution_statement(contribution: Dict[str, Any]) -> str:
+    if not isinstance(contribution, dict):
+        return ""
+    resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
+    return str(resp.get("statement") or resp.get("content") or "").strip()
+
+
+def build_fallback_keep_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     *,
     reason: str,
@@ -777,7 +557,7 @@ def _build_fallback_keep_decisions(
     return decisions
 
 
-def _build_programmatic_merge_decisions(
+def build_programmatic_merge_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     extracted_pair_reviews: List[Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
@@ -839,8 +619,8 @@ def _build_programmatic_merge_decisions(
             {
                 "id": cid,
                 "new_label": decided_label,
-                "reason": reasons[0] if reasons else "rule_based_merge_keep_current_label",
-                "decided_by": "rule_based_merge",
+                "reason": reasons[0] if reasons else "consensus_keep_current_label",
+                "decided_by": "consensus",
             }
         )
         if decided_label == current_label:
@@ -853,39 +633,45 @@ def _build_programmatic_merge_decisions(
     return auto_decisions, signoff_targets, debug
 
 
-def _analyst_signoff_conflict_recheck(
+def analyst_signoff_conflict_recheck(
     coordinator: Any,
     contributions: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """由 Analyst 根據 pair 原文與各 agent 逐筆裁定做最終判定。"""
-    discussion_rows, extracted_pair_reviews = _collect_discussion_rows_and_pair_reviews(
+    discussion_rows, extracted_pair_reviews = collect_discussion_rows_and_pair_reviews(
         contributions,
         known_pair_ids=list(conflicts_by_id.keys()),
+        current_labels_by_id={
+            cid: str(conflict.get("label") or "").strip()
+            for cid, conflict in conflicts_by_id.items()
+            if isinstance(conflict, dict)
+        },
     )
     debug_info: Dict[str, Any] = {
         "contributions_count": len(contributions or []),
         "discussion_rows_count": len(discussion_rows),
         "extracted_pair_reviews_count": len(extracted_pair_reviews),
         "extracted_pair_reviews_preview": extracted_pair_reviews[:3],
+        "extracted_pair_reviews": extracted_pair_reviews,
     }
     coordinator.flow.logger.info(
-        "RQ2 signoff debug: contributions=%s discussion_rows=%s extracted_pair_reviews=%s",
+        "Conflict judgment signoff: contributions=%s discussion_rows=%s extracted_pair_reviews=%s",
         len(contributions or []),
         len(discussion_rows),
         len(extracted_pair_reviews),
     )
     if extracted_pair_reviews:
         coordinator.flow.logger.info(
-            "RQ2 signoff debug: pair_reviews preview=%s",
+            "Conflict judgment signoff: pair_reviews preview=%s",
             json.dumps(extracted_pair_reviews[:3], ensure_ascii=False),
         )
     else:
         coordinator.flow.logger.warning(
-            "RQ2 signoff debug: no extracted_pair_reviews were produced from meeting contributions"
+            "Conflict judgment signoff: no extracted_pair_reviews were produced from meeting contributions"
         )
 
-    auto_decisions, proposal_list, merge_debug = _build_programmatic_merge_decisions(
+    auto_decisions, proposal_list, merge_debug = build_programmatic_merge_decisions(
         conflicts_by_id,
         extracted_pair_reviews,
     )
@@ -893,7 +679,7 @@ def _analyst_signoff_conflict_recheck(
     debug_info["auto_decisions_preview"] = auto_decisions[:3]
 
     if not proposal_list:
-        coordinator.flow.logger.info("RQ2 signoff debug: no disputed pairs, skip analyst signoff")
+        coordinator.flow.logger.info("Conflict judgment signoff: no disputed pairs, skip analyst signoff")
         debug_info["proposal_list_count"] = 0
         debug_info["proposal_pair_ids_preview"] = []
         debug_info["signoff_status"] = "skipped_no_disputed_pairs"
@@ -901,7 +687,7 @@ def _analyst_signoff_conflict_recheck(
         debug_info["decisions_preview"] = auto_decisions[:3]
         return auto_decisions, debug_info
     coordinator.flow.logger.info(
-        "RQ2 signoff debug: proposal_list=%s pair_ids=%s",
+        "Conflict judgment signoff: proposal_list=%s pair_ids=%s",
         len(proposal_list),
         [row.get("id") for row in proposal_list[:5]],
     )
@@ -918,10 +704,10 @@ def _analyst_signoff_conflict_recheck(
         if not results:
             coordinator.flow.logger.warning("Analyst 衝突裁定回傳格式異常，維持原標籤")
             coordinator.flow.logger.warning(
-                "RQ2 signoff debug: analyst returned empty/invalid decisions"
+                "Conflict judgment signoff: analyst returned empty/invalid decisions"
             )
             debug_info["signoff_status"] = "empty_or_invalid_decisions"
-            fallback = auto_decisions + _build_fallback_keep_decisions(
+            fallback = auto_decisions + build_fallback_keep_decisions(
                 {row["id"]: conflicts_by_id[row["id"]] for row in proposal_list if row.get("id") in conflicts_by_id},
                 reason="fallback_keep_current_label_due_to_empty_signoff",
             )
@@ -936,7 +722,7 @@ def _analyst_signoff_conflict_recheck(
         merged_results = auto_decisions + results
         coordinator.flow.logger.info("Analyst 衝突裁定完成：%s 筆", len(results))
         coordinator.flow.logger.info(
-            "RQ2 signoff debug: decisions preview=%s",
+            "Conflict judgment signoff: decisions preview=%s",
             json.dumps(merged_results[:3], ensure_ascii=False),
         )
         debug_info["signoff_status"] = "ok"
@@ -947,7 +733,7 @@ def _analyst_signoff_conflict_recheck(
         coordinator.flow.logger.warning("Analyst 衝突裁定失敗，維持原標籤: %s", e)
         debug_info["signoff_status"] = "exception"
         debug_info["exception"] = str(e)
-        fallback = auto_decisions + _build_fallback_keep_decisions(
+        fallback = auto_decisions + build_fallback_keep_decisions(
             {row["id"]: conflicts_by_id[row["id"]] for row in proposal_list if row.get("id") in conflicts_by_id},
             reason="fallback_keep_current_label_due_to_signoff_exception",
         )
@@ -955,6 +741,70 @@ def _analyst_signoff_conflict_recheck(
         debug_info["decisions_preview"] = fallback[:3]
         debug_info["fallback_applied"] = True
         return fallback, debug_info
+
+
+def build_pair_review_records(
+    conflicts_by_id: Dict[str, Dict[str, Any]],
+    decisions: List[Dict[str, Any]],
+    extracted_pair_reviews: List[Dict[str, Any]],
+    *,
+    round_num: int,
+    topic_id: str,
+) -> List[Dict[str, Any]]:
+    reviews_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for review in extracted_pair_reviews or []:
+        if not isinstance(review, dict):
+            continue
+        rid = str(review.get("id") or "").strip()
+        if rid:
+            reviews_by_id.setdefault(rid, []).append(review)
+
+    decision_by_id = {
+        str(dec.get("id") or "").strip(): dec
+        for dec in decisions or []
+        if isinstance(dec, dict) and str(dec.get("id") or "").strip()
+    }
+
+    records: List[Dict[str, Any]] = []
+    for pair_id, conflict in conflicts_by_id.items():
+        req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
+        decision = decision_by_id.get(pair_id, {})
+        final_label = str(decision.get("new_label") or conflict.get("label") or "").strip()
+        if final_label not in {"Conflict", "Neutral"}:
+            final_label = str(conflict.get("label") or "Neutral").strip() or "Neutral"
+        agent_judgments = reviews_by_id.get(pair_id, [])
+        confidences = [
+            str(row.get("confidence") or "").strip().lower()
+            for row in agent_judgments
+            if str(row.get("confidence") or "").strip().lower() in {"high", "medium", "low"}
+        ]
+        confidence = "medium"
+        if confidences and all(c == "high" for c in confidences):
+            confidence = "high"
+        elif "low" in confidences:
+            confidence = "low"
+        records.append(
+            {
+                "pair_id": pair_id,
+                "round": round_num,
+                "topic_id": topic_id,
+                "req_a": req_ids[0] if len(req_ids) >= 1 else "",
+                "req_b": req_ids[1] if len(req_ids) >= 2 else "",
+                "requirement_ids": req_ids,
+                "initial_label": str(
+                    (conflict.get("pre_meeting_review") or {}).get("from_label")
+                    or conflict.get("label")
+                    or ""
+                ).strip(),
+                "final_label": final_label,
+                "confidence": confidence,
+                "rationale": str(decision.get("reason") or "").strip(),
+                "decided_by": str(decision.get("decided_by") or "").strip(),
+                "consensus_status": "reviewed" if agent_judgments else "fallback",
+                "agent_judgments": agent_judgments,
+            }
+        )
+    return records
 
 
 # ---------- 會前衝突再審查主流程 ----------
@@ -1022,7 +872,13 @@ def run_pre_meeting_conflict_review_block(
     plan = coordinator.flow.mediator_agent.plan_pre_meeting_conflict_review(
         candidates[0], artifact=artifact, registry=coordinator.flow.registry
     )
-    participants = plan.get("participants") or ["analyst", "expert", "modeler", "user"]
+    participants = [
+        str(p).strip()
+        for p in (plan.get("participants") or ["analyst", "expert", "modeler"])
+        if str(p).strip() and str(p).strip() != "user"
+    ]
+    if len(participants) < 2:
+        participants = ["analyst", "expert", "modeler"]
     discussion_mode = str(plan.get("discussion_mode") or "sequential").strip().lower()
     if discussion_mode not in {"sequential", "simultaneous"}:
         discussion_mode = "sequential"
@@ -1030,21 +886,7 @@ def run_pre_meeting_conflict_review_block(
     topic = {
         "id": f"PM-R{round_num}",
         "title": f"會前衝突批次再審查（Round {round_num}）",
-        "description": (
-            "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
-            "請先只根據每個 pair 的 requirement_a / requirement_b 原文，獨立判斷它應為 Conflict 或 Neutral；"
-            "再與 current_label 比較，決定 keep 或 modify。\n"
-            "你必須同時做兩層檢視：\n"
-            "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
-            "2) 逐筆（pair-by-pair）檢視：每個 [PAIR-xxx] 都必須明確寫出：\n"
-            "   - independent_label: 你獨立重判後的標籤\n"
-            "   - decision: keep 或 modify\n"
-            "   - proposed_label: 最終建議標籤（Conflict 或 Neutral）\n"
-            "   - confidence: high / medium / low\n"
-            "   - reason: 一句到兩句理由\n"
-            "Neutral 的定義：兩項需求既不衝突、也不重複，且沒有直接語義關係。\n\n"
-            "待審清單：\n" + "\n".join(conflict_summaries)
-        ),
+        "description": build_pre_meeting_conflict_review_description(conflict_summaries),
         "category": "conflict_discussion",
         "participants": participants,
         "discussion_mode": discussion_mode,
@@ -1061,15 +903,16 @@ def run_pre_meeting_conflict_review_block(
         contributions, oq_records = coordinator.flow.mediator_agent.moderate_sequential(
             topic, coordinator.flow.registry, artifact=artifact
         )
-    if isinstance(oq_records, list) and oq_records:
-        oq_pool = artifact.setdefault("open_questions", [])
-        for oq in oq_records:
-            if isinstance(oq, dict):
-                oq_pool.append(
-                    {**oq, "topic_id": topic["id"], "status": oq.get("status") or "pending", "round": round_num}
-                )
+        oq_records = []
+    contributions = ensure_conflict_review_participant_contributions(
+        coordinator,
+        topic,
+        artifact,
+        contributions,
+        participants,
+    )
     coordinator.flow.logger.info(
-        "RQ2 review debug: topic=%s mode=%s participants=%s contributions=%s open_questions=%s",
+        "Conflict judgment meeting: topic=%s mode=%s participants=%s contributions=%s open_questions=%s",
         topic["id"],
         discussion_mode,
         participants,
@@ -1078,7 +921,7 @@ def run_pre_meeting_conflict_review_block(
     )
     if contributions:
         coordinator.flow.logger.info(
-            "RQ2 review debug: contribution_agents=%s",
+            "Conflict judgment meeting: contribution_agents=%s",
             [
                 str(c.get("agent") or "").strip()
                 for c in contributions
@@ -1102,9 +945,10 @@ def run_pre_meeting_conflict_review_block(
             continue
         conversation_rows.append(f"{agent_name}: {statement}")
 
-    decisions, signoff_debug = _analyst_signoff_conflict_recheck(
+    decisions, signoff_debug = analyst_signoff_conflict_recheck(
         coordinator, contributions, conflicts_by_id
     )
+    extracted_pair_reviews = signoff_debug.get("extracted_pair_reviews", [])
 
     changed = 0
     for dec in decisions:
@@ -1126,8 +970,25 @@ def run_pre_meeting_conflict_review_block(
             "reason": str(dec.get("reason") or ""),
         }
 
+    pair_review_records = build_pair_review_records(
+        conflicts_by_id,
+        decisions,
+        extracted_pair_reviews if isinstance(extracted_pair_reviews, list) else [],
+        round_num=round_num,
+        topic_id=topic["id"],
+    )
+    existing_pair_reviews = [
+        row for row in (artifact.get("pair_reviews", []) or [])
+        if not (
+            isinstance(row, dict)
+            and int(row.get("round") or -1) == int(round_num)
+            and str(row.get("topic_id") or "") == topic["id"]
+        )
+    ]
+    existing_pair_reviews.extend(pair_review_records)
+    artifact["pair_reviews"] = existing_pair_reviews
+
     recheck_log = artifact.setdefault("conflict_recheck_log", [])
-    include_debug = bool(coordinator.flow.config.get("rq2_debug", False))
     recheck_log.append(
         {
             "round": round_num,
@@ -1139,15 +1000,7 @@ def run_pre_meeting_conflict_review_block(
             "changed_count": changed,
             "conversation": conversation_rows,
             "decisions": decisions,
-            "debug": (
-                {
-                    "contributions_count": len(contributions or []),
-                    "open_questions_count": len(oq_records or []),
-                    **signoff_debug,
-                }
-                if include_debug
-                else {}
-            ),
+            "pair_reviews": pair_review_records,
         }
     )
 

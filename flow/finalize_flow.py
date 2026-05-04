@@ -1,114 +1,28 @@
+# Finalization flow: prepare formal SRS artifact and write final outputs.
 from copy import deepcopy
 from typing import Any, Dict, List, Set
 
-
-def _requirement_status(req: Dict[str, Any]) -> str:
-    status = str(req.get("status") or "draft").strip().lower()
-    if status not in {"draft", "approved", "baselined", "rejected"}:
-        status = "draft"
-    return status
+from flow.requirements import normalize_requirement_status
 
 
-def _build_srs_artifact(artifact: Dict[str, Any], allowed_statuses: Set[str]) -> Dict[str, Any]:
+def requirement_status(req: Dict[str, Any]) -> str:
+    return normalize_requirement_status(req.get("status"))
+
+
+def build_srs_artifact(artifact: Dict[str, Any], allowed_statuses: Set[str]) -> Dict[str, Any]:
     out = deepcopy(artifact)
     out["requirements"] = [
         dict(req)
         for req in (artifact.get("requirements", []) or [])
-        if isinstance(req, dict) and _requirement_status(req) in allowed_statuses
+        if isinstance(req, dict) and requirement_status(req) in allowed_statuses
     ]
     return out
 
 
-def _collect_rtm_rows(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
-    effects = artifact.get("topic_resolution_effects", []) or []
-    decision_by_topic: Dict[str, List[str]] = {}
-    decision_by_requirement: Dict[str, List[tuple]] = {}
-    for dec in artifact.get("decisions", []) or []:
-        if not isinstance(dec, dict):
-            continue
-        tid = str(dec.get("source_topic_id") or "").strip()
-        did = str(dec.get("id") or "").strip()
-        if not did:
-            continue
-        if tid:
-            decision_by_topic.setdefault(tid, []).append(did)
-        for _rid in (dec.get("affected_requirement_ids", []) or []):
-            _rid_s = str(_rid).strip()
-            if _rid_s:
-                decision_by_requirement.setdefault(_rid_s, []).append((did, tid))
-
-    rows: List[Dict[str, Any]] = []
-    for req in artifact.get("requirements", []) or []:
-        if not isinstance(req, dict):
-            continue
-        rid = str(req.get("id") or "").strip()
-        if not rid:
-            continue
-        linked_topics = []
-        for row in effects:
-            if not isinstance(row, dict):
-                continue
-            tid = str(row.get("topic_id") or "").strip()
-            affected = [
-                str(x).strip()
-                for x in (row.get("affected_requirement_ids", []) or [])
-                if str(x).strip()
-            ]
-            if tid and rid in affected:
-                linked_topics.append(tid)
-        linked_decisions = []
-        for tid in linked_topics:
-            linked_decisions.extend(decision_by_topic.get(tid, []))
-        for _did, _dtid in decision_by_requirement.get(rid, []):
-            linked_decisions.append(_did)
-            if _dtid:
-                linked_topics.append(_dtid)
-        linked_topics = sorted(set(linked_topics))
-        linked_decisions = sorted(set(linked_decisions))
-        rows.append(
-            {
-                "requirement_id": rid,
-                "status": _requirement_status(req),
-                "source_stakeholders": req.get("source_stakeholders", []),
-                "topic_ids": linked_topics,
-                "decision_ids": linked_decisions,
-                "verification_method": str(req.get("verification_method") or "").strip(),
-                "acceptance_criteria": str(req.get("acceptance_criteria") or "").strip(),
-            }
-        )
-    return rows
-
-
-def _render_rtm_markdown(rows: List[Dict[str, Any]]) -> str:
-    header = (
-        "# Supporting Traceability Artifact\n\n"
-        "此文件為正式 SRS 之外的補充性追溯工件，用於輔助檢視需求來源、相關議題與驗證資訊；"
-        "不構成正式 SRS 本體章節。\n\n"
-        "| Requirement ID | Status | Source Stakeholders | Topic IDs | Decision IDs | Verification Method | Acceptance Criteria |\n"
-        "|---|---|---|---|---|---|---|\n"
-    )
-    lines = []
-    for row in rows:
-        lines.append(
-            "| {rid} | {status} | {src} | {topics} | {decisions} | {vm} | {ac} |".format(
-                rid=row.get("requirement_id", ""),
-                status=row.get("status", ""),
-                src=", ".join(row.get("source_stakeholders", []) or []) or "待補",
-                topics=", ".join(row.get("topic_ids", []) or []) or "待補",
-                decisions=", ".join(row.get("decision_ids", []) or []) or "待補",
-                vm=row.get("verification_method", "") or "待補",
-                ac=row.get("acceptance_criteria", "") or "待補",
-            )
-        )
-    if not lines:
-        lines.append("| (無) | - | - | - | - | - | - |")
-    return header + "\n".join(lines) + "\n"
-
-
-def _render_unapproved_requirements_markdown(rows: List[Dict[str, Any]]) -> str:
+def render_unverified_requirements_markdown(rows: List[Dict[str, Any]]) -> str:
     md = (
-        "# Unapproved Requirements\n\n"
-        "以下需求尚未進入 approved/baselined，未納入正式 SRS。\n\n"
+        "# Unverified Requirements\n\n"
+        "以下需求尚未通過 verified 狀態，未納入正式 SRS。\n\n"
         "| Requirement ID | Status | Text |\n"
         "|---|---|---|\n"
     )
@@ -119,7 +33,7 @@ def _render_unapproved_requirements_markdown(rows: List[Dict[str, Any]]) -> str:
         out.append(
             "| {rid} | {status} | {text} |".format(
                 rid=req.get("id", ""),
-                status=_requirement_status(req),
+                status=requirement_status(req),
                 text=(str(req.get("text") or "").strip() or "待補").replace("\n", " "),
             )
         )
@@ -129,80 +43,56 @@ def _render_unapproved_requirements_markdown(rows: List[Dict[str, Any]]) -> str:
 def finalize(
     flow,
     artifact: Dict[str, Any],
-    *,
-    force_formal: bool = False,
 ) -> Dict[str, Any]:
-    report_dir = (
-        flow.store.artifact_dir
-        if hasattr(flow.store, "artifact_dir")
-        else flow.store.project_dir
-    )
-    blocked = False
-    blocking_reasons: List[str] = []
-    allowed_statuses = {"approved", "baselined"}
-    approved_artifact = _build_srs_artifact(artifact, allowed_statuses)
-    approved_count = len(approved_artifact.get("requirements", []) or [])
+    allowed_statuses = {"verified"}
+    verified_artifact = build_srs_artifact(artifact, allowed_statuses)
+    verified_count = len(verified_artifact.get("requirements", []) or [])
 
     total_reqs = len([
         r for r in (artifact.get("requirements", []) or [])
         if isinstance(r, dict)
     ])
-    ratio = (approved_count / total_reqs) if total_reqs > 0 else 0.0
+    ratio = (verified_count / total_reqs) if total_reqs > 0 else 0.0
 
-    rtm_rows = _collect_rtm_rows(artifact)
-    flow.store.save_markdown(_render_rtm_markdown(rtm_rows), "rtm.md")
-    if hasattr(flow.store, "project_dir"):
-        flow.store.save_json(
-            {"rows": rtm_rows},
-            report_dir / "rtm.json",
-        )
-        flow.logger.info("✓ 已儲存 rtm.json")
+    if verified_count <= 0:
+        raise ValueError("沒有 verified requirements，不能產生正式 SRS")
 
-    unapproved_rows = [
+    unverified_rows = [
         dict(req)
         for req in (artifact.get("requirements", []) or [])
-        if isinstance(req, dict) and _requirement_status(req) not in allowed_statuses
+        if isinstance(req, dict) and requirement_status(req) not in allowed_statuses
     ]
-    if unapproved_rows:
-        flow.store.save_markdown(
-            _render_unapproved_requirements_markdown(unapproved_rows),
-            "unapproved_requirements.md",
-        )
-        flow.logger.info("✓ 已儲存 unapproved_requirements.md")
+    if unverified_rows:
+        artifact["unverified_requirements"] = render_unverified_requirements_markdown(unverified_rows)
+        flow.logger.info("✓ 已寫入 artifact.unverified_requirements")
 
     flow.logger.info("產生 SRS（正式）")
-    srs_md = flow.documentor_agent.generate_srs(approved_artifact)
+    srs_md = flow.documentor_agent.generate_srs(verified_artifact)
     flow.store.save_markdown(srs_md, "srs.md")
     flow.logger.info("✓ 產生 srs.md")
-    # 正式產出後，將 approved/baselined 需求提升版本；無此狀態則僅保留原樣。
+    # 正式產出後，保留 verified 狀態並記錄 baseline version。
     baseline_version = int((artifact.get("meta") or {}).get("baseline_version") or 0) + 1
     for req in artifact.get("requirements", []) or []:
         if not isinstance(req, dict):
             continue
-        if _requirement_status(req) in {"approved", "baselined"}:
-            req["status"] = "baselined"
+        if requirement_status(req) == "verified":
             req["baseline_version"] = baseline_version
     artifact.setdefault("meta", {})["baseline_version"] = baseline_version
     flow.store.save_artifact(artifact)
 
-    cost_summary = flow._build_cost_summary()
+    cost_summary = flow.build_cost_summary()
     if cost_summary:
         flow.store.save_json(cost_summary, flow.store.project_dir / "cost_summary.json")
         flow.logger.info("✓ 已儲存 cost_summary.json")
     else:
         flow.logger.info("無定價資訊，略過 cost_summary")
 
-    agent_usage = flow._build_agent_usage_summary()
+    agent_usage = flow.build_agent_usage_summary()
     flow.store.save_json(agent_usage, flow.store.project_dir / "agent_usage.json")
     flow.logger.info("✓ 已儲存 agent_usage.json")
     return {
-        "blocked": blocked,
-        "effective_blocked": False,
-        "force_formal": force_formal,
         "produced_formal_srs": True,
-        "blocking_reasons": blocking_reasons,
-        "approved_count": approved_count,
+        "verified_count": verified_count,
         "total_requirements": total_reqs,
-        "approved_ratio": ratio,
-        "strict_mode": False,
+        "verified_ratio": ratio,
     }

@@ -1,357 +1,126 @@
+# Project flow orchestration: run init, meeting rounds, and finalization.
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
-from agents.base import AgentRegistry, AgentSkillToolPolicy
-from agents.profile import (
-    UserAgent,
-    AnalystAgent,
-    ExpertAgent,
-    MediatorAgent,
-    ModelerAgent,
-    DocumentorAgent,
-)
-from agents.agenda import MeetingCoordinator
-from model import create_model
-from .project_flow import (
-    run_project,
-    run_continue_project,
-    run_meeting_round as flow_run_meeting_round,
-)
-from .init_flow import (
-    run_init_phase as flow_run_init_phase,
-)
-from .finalize_flow import (
-    finalize as flow_finalize,
-)
-from storage import Store
-from utils import Logger, human_setting
-from agents.tools import ToolRegistry
+from typing import Any, Dict
+import os
 
 
-class Flow:
-    def __init__(self, config: Dict[str, Any], store: Store, logger: Logger):
-        self.config = config
-        self.store = store
-        self.logger = logger
+def sync_project_output_language(artifact: Dict[str, Any]) -> None:
+    meta = artifact.setdefault("meta", {})
+    lang = str(meta.get("output_language") or os.environ.get("PLANT_OUTPUT_LANGUAGE") or "zh-Hant").strip() or "zh-Hant"
+    if lang not in {"en", "zh-Hant"}:
+        lang = "zh-Hant"
+    os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
+    meta["output_language"] = lang
 
-        self.agent_models = {
-            "user": self.build_agent_model("user"),
-            "analyst": self.build_agent_model("analyst"),
-            "expert": self.build_agent_model("expert"),
-            "mediator": self.build_agent_model("mediator"),
-            "modeler": self.build_agent_model("modeler"),
-            "documentor": self.build_agent_model("documentor"),
-        }
 
-        self.registry = AgentRegistry()
-        enable_agents = config.get("enable_agents") or {}
-        self.policy = AgentSkillToolPolicy()
-        artifact_path = None
-        if getattr(self.store, "project_id", None) and hasattr(self.store, "artifact_dir"):
-            artifact_path = str(self.store.artifact_dir / "artifact.json")
-        self.tool_registry = ToolRegistry(
-            config=self.config,
-            policy=self.policy,
-            artifact_path=artifact_path,
-        )
+def run_meeting_round(flow, artifact: Dict[str, Any], round_num: int) -> Dict[str, Any]:
+    return flow.meeting.run_meeting_round(artifact, round_num)
 
-        analyst_tools = self.tool_registry.build_tools_for_agent("analyst")
-        expert_tools = self.tool_registry.build_tools_for_agent("expert")
-        mediator_tools = self.tool_registry.build_tools_for_agent("mediator")
-        modeler_tools = self.tool_registry.build_tools_for_agent("modeler")
-        documentor_tools = self.tool_registry.build_tools_for_agent("documentor")
 
-        self.user_agent = UserAgent(
-            self.agent_models["user"],
-            registry=self.registry,
-            project_config=self.config,
-        )
-        self.analyst_agent = AnalystAgent(
-            self.agent_models["analyst"],
-            tools=analyst_tools,
-            registry=self.registry,
-            project_config=self.config,
-        )
-        self.expert_agent = ExpertAgent(
-            self.agent_models["expert"],
-            tools=expert_tools,
-            registry=self.registry,
-            doc_dir="doc",
-            project_config=self.config,
-        )
-        self.mediator_agent = MediatorAgent(
-            self.agent_models["mediator"],
-            tools=mediator_tools,
-            registry=self.registry,
-            project_config=self.config,
-        )
-        self.modeler_agent = ModelerAgent(
-            self.agent_models["modeler"],
-            tools=modeler_tools,
-            registry=self.registry,
-            project_config=self.config,
-        )
-        self.documentor_agent = DocumentorAgent(
-            self.agent_models["documentor"],
-            self.store,
-            tools=documentor_tools,
-            registry=self.registry,
-            project_config=self.config,
-        )
+def write_pre_meeting_conflict_report(flow, artifact: Dict[str, Any], round_num: int) -> None:
+    if not artifact.get("conflicts"):
+        return
+    flow.logger.info("產出需求 Conflict 報告")
+    conflict_md = flow.analyst_agent.generate_conflict_report(
+        artifact,
+        round_num=round_num,
+        recent_decisions_limit=flow.config.get("agenda_items", 5),
+    )
+    flow.store.save_markdown(conflict_md, "conflict_report.md")
+    flow.logger.info("  ✓ 已存 conflict_report.md")
 
-        # policy 強制：由單一授權來源檢查所有 agent 的 skill/tool 指派。
-        self._validate_policy_assignments()
 
-        for name, agent in [
-            ("user", self.user_agent),
-            ("analyst", self.analyst_agent),
-            ("expert", self.expert_agent),
-            ("mediator", self.mediator_agent),
-            ("modeler", self.modeler_agent),
-            ("documentor", self.documentor_agent),
-        ]:
-            agent.policy = self.policy
-            if enable_agents.get(name, True):
-                self.registry.register(name, agent)
+def run_one_round(
+    flow,
+    artifact: Dict[str, Any],
+    round_num: int,
+    *,
+    is_retry: bool = False,
+) -> Dict[str, Any]:
+    if is_retry:
+        flow.logger.info(f"=== Round {round_num}: 開會（正式 SRS 未通過，補充討論） ===")
+    else:
+        flow.logger.info(f"=== Round {round_num}: 開會 ===")
+    artifact = flow.run_meeting_round(artifact, round_num)
+    flow.store.save_artifact(artifact)
+    flow.logger.info(f"Round {round_num} 完成")
+    return artifact
 
-        self.mediator_agent.enable_human_escalation = bool(
-            human_setting(config, "enable_human_escalation", True)
-        )
 
-        eat = config.get("enable_agenda_types")
-        if isinstance(eat, dict):
-            self.mediator_agent.enabled_agenda_type_ids = [
-                k for k, v in eat.items() if v
-            ]
-        self.meeting = MeetingCoordinator(self)
+def run_project(flow, rough_idea: str) -> Dict[str, Any]:
+    rounds = flow.config.get("rounds", 1)
+    now = datetime.now(timezone.utc).isoformat()
+    artifact = {
+        "rough_idea": rough_idea,
+        "stakeholders": [],
+        "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
+        "requirements": [],
+        "conflicts": [],
+        "feedback": {},
+        "system_models": {},
+        "discussions": [],
+        "decisions": [],
+        "open_questions": [],
+        "meta": {
+            "schema_version": 1,
+            "created_at": now,
+            "updated_at": now,
+            "updated_by": "flow.run.init",
+            "last_round": 0,
+        },
+    }
+    artifact = flow.ensure_artifact_contract(artifact)
+    sync_project_output_language(artifact)
+    flow.touch_artifact_meta(
+        artifact,
+        updated_by="flow.run.init",
+        round_num=0,
+    )
+    artifact.setdefault("meta", {})["session_end_round"] = int(rounds)
+    flow.store.save_artifact(artifact)
 
-    def _validate_policy_assignments(self) -> None:
-        self.policy.validate_mapping_integrity()
-        assignments = [
-            ("user", self.user_agent),
-            ("analyst", self.analyst_agent),
-            ("expert", self.expert_agent),
-            ("mediator", self.mediator_agent),
-            ("modeler", self.modeler_agent),
-            ("documentor", self.documentor_agent),
-        ]
-        for agent_name, agent in assignments:
-            try:
-                self.policy.validate_agent_assignment(
-                    agent_name,
-                    agent.skill_names,
-                    list(agent.tools.keys()),
-                )
-            except ValueError as e:
-                raise ValueError(
-                    f"Agent policy validation failed for '{agent_name}': {e}"
-                ) from e
+    flow.logger.info("=== Phase 0: 初始草稿建立 ===")
+    artifact = flow.run_init_phase(artifact)
+    flow.store.save_artifact(artifact)
+    write_pre_meeting_conflict_report(flow, artifact, round_num=0)
 
-    def _ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
-        """集中初始化 artifact 目前需要的最小欄位。"""
-        artifact.setdefault("elicitation_candidates", [])
-        return artifact
+    for round_num in range(1, rounds + 1):
+        artifact = run_one_round(flow, artifact, round_num)
 
-    @staticmethod
-    def _touch_artifact_meta(
-        artifact: Dict[str, Any],
-        *,
-        updated_by: str,
-        round_num: Optional[int] = None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        meta = artifact.setdefault("meta", {})
-        meta.setdefault("schema_version", 1)
-        meta.setdefault("created_at", now)
-        meta["updated_at"] = now
-        meta["updated_by"] = updated_by
-        if round_num is not None:
-            meta["last_round"] = round_num
+    flow.logger.info("=== 規格化 ===")
+    flow.finalize(artifact)
+    flow.logger.info("流程完成！")
+    return artifact
 
-    def _run_enabled_reviews(
-        self,
-        artifact: Dict[str, Any],
-        *,
-        recent_discussions: Optional[List[Dict[str, Any]]],
-        roles: List[str],
-    ) -> None:
-        self.meeting._run_enabled_reviews(
-            artifact,
-            recent_discussions=recent_discussions,
-            roles=roles,
-        )
 
-    def _recent_topic_discussions(
-        self,
-        artifact: Dict[str, Any],
-        *,
-        rounds: int = 1,
-    ) -> List[Dict[str, Any]]:
-        return self.meeting._recent_topic_discussions(
-            artifact, rounds=rounds
-        )
+def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
+    artifact = existing_artifact
+    artifact.setdefault(
+        "scope", {"in_scope": [], "out_of_scope": [], "description": ""}
+    )
+    artifact.setdefault("feedback", {})
+    artifact.setdefault("meta", {})
+    artifact = flow.ensure_artifact_contract(artifact)
+    sync_project_output_language(artifact)
+    flow.touch_artifact_meta(
+        artifact,
+        updated_by="flow.run_continue.init",
+    )
 
-    def _normalize_topic_proposal(
-        self,
-        item: Dict[str, Any],
-        *,
-        proposed_by: str,
-        round_num: int,
-        index: int,
-    ) -> Optional[Dict[str, Any]]:
-        return self.meeting._normalize_topic_proposal(
-            item,
-            proposed_by=proposed_by,
-            round_num=round_num,
-            index=index,
-        )
+    flow.user_agent.stakeholders = artifact.get("stakeholders", [])
 
-    def _collect_topic_proposals(
-        self,
-        artifact: Dict[str, Any],
-        *,
-        round_num: int,
-    ) -> List[Dict[str, Any]]:
-        return self.meeting._collect_topic_proposals(
-            artifact,
-            round_num=round_num,
-        )
+    rounds = flow.config.get("rounds", 1)
+    start_round = len(artifact.get("discussions", [])) + 1
+    end_round = start_round + int(rounds) - 1
+    artifact.setdefault("meta", {})["session_end_round"] = end_round
+    flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
 
-    def build_agent_model(self, agent_name: str):
-        am = self.config.get("agent_models") or {}
-        default_cfg = am.get("default") or {}
-        per_agent = am.get(agent_name) or default_cfg
+    write_pre_meeting_conflict_report(flow, artifact, round_num=start_round - 1)
 
-        def _first_str(*candidates: Any) -> str:
-            for v in candidates:
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    return s
-            return ""
+    for round_num in range(start_round, start_round + rounds):
+        artifact = run_one_round(flow, artifact, round_num)
 
-        provider = _first_str(per_agent.get("provider"), default_cfg.get("provider"))
-        model_name = _first_str(per_agent.get("model"), default_cfg.get("model"))
-        if not provider or not model_name:
-            raise ValueError(
-                "agent_models 必須在 default 或各 agent 區塊設定 provider 與 model；"
-                f"目前無法建立 {agent_name!r} 的模型（缺 provider 或 model）。"
-            )
-
-        def _pick_temperature(a: Dict[str, Any], b: Dict[str, Any]) -> Any:
-            if "temperature" in a and a["temperature"] is not None:
-                return a["temperature"]
-            if "temperature" in b and b["temperature"] is not None:
-                return b["temperature"]
-            return None
-
-        temperature = _pick_temperature(per_agent, default_cfg)
-        max_output_tokens = per_agent.get("max_output_tokens")
-        if max_output_tokens is None:
-            max_output_tokens = default_cfg.get("max_output_tokens")
-        if max_output_tokens is None:
-            max_output_tokens = per_agent.get("max_tokens")
-        if max_output_tokens is None:
-            max_output_tokens = default_cfg.get("max_tokens")
-
-        kwargs = {"temperature": temperature}
-        if max_output_tokens is not None:
-            kwargs["max_output_tokens"] = max_output_tokens
-        return create_model(provider=provider, model_name=model_name, **kwargs)
-
-    def run(self, rough_idea: str) -> Dict[str, Any]:
-        return run_project(self, rough_idea)
-
-    def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
-        return run_continue_project(self, existing_artifact)
-
-    # Phase 0: 初始草稿建立
-
-    def run_init_phase(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
-        return flow_run_init_phase(self, artifact)
-
-    # Round k: 開會
-
-    def run_meeting_round(
-        self, artifact: Dict[str, Any], round_num: int
-    ) -> Dict[str, Any]:
-        return flow_run_meeting_round(self, artifact, round_num)
-
-    def _run_agenda_loop(self, runner: Any) -> None:
-        self.meeting._run_agenda_loop(runner)
-
-    def _apply_mediator_updates(
-        self,
-        artifact: Dict[str, Any],
-        updates: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return self.meeting._apply_mediator_updates(artifact, updates)
-
-    # Finalization
-
-    def finalize(
-        self,
-        artifact: Dict[str, Any],
-        *,
-        force_formal: bool = False,
-    ) -> Dict[str, Any]:
-        return flow_finalize(self, artifact, force_formal=force_formal)
-
-    def _build_cost_summary(self) -> Optional[Dict[str, Any]]:
-        cost_by_agent = {}
-        for agent_name, model in self.agent_models.items():
-            if not hasattr(model, "getCostSummary"):
-                continue
-            summary = model.getCostSummary()
-            if summary:
-                cost_by_agent[agent_name] = summary
-        if not cost_by_agent:
-            return None
-
-        total_input = sum(v.get("input_tokens", 0) for v in cost_by_agent.values())
-        total_output = sum(v.get("output_tokens", 0) for v in cost_by_agent.values())
-        total_tokens = sum(v.get("total_tokens", 0) for v in cost_by_agent.values())
-        total_elapsed = sum(v.get("run_time(s)", 0.0) for v in cost_by_agent.values())
-        total_cost = sum(v.get("estimated_cost(USD)", 0.0) for v in cost_by_agent.values())
-        return {
-            "project_id": self.store.project_id,
-            "agents": cost_by_agent,
-            "totals": {
-                "input_tokens": total_input,
-                "output_tokens": total_output,
-                "total_tokens": total_tokens,
-                "run_time(s)": round(total_elapsed, 3),
-                "estimated_cost(USD)": round(total_cost, 8),
-            },
-        }
-
-    def _build_agent_usage_summary(self) -> Dict[str, Any]:
-        agents_context: Dict[str, Any] = {}
-        total_in = total_out = total_all = 0
-        api_calls = 0
-        for agent_name, model in self.agent_models.items():
-            records = (
-                model.getUsageCallRecords()
-                if hasattr(model, "getUsageCallRecords")
-                else []
-            )
-            agents_context[agent_name] = {
-                "model": getattr(model, "model_name", ""),
-                "calls": records,
-            }
-            for r in records:
-                total_in += int(r.get("input_tokens", 0) or 0)
-                total_out += int(r.get("output_tokens", 0) or 0)
-                total_all += int(r.get("total_tokens", 0) or 0)
-                api_calls += 1
-
-        return {
-            "project_id": self.store.project_id,
-            "agents": agents_context,
-            "totals": {
-                "input_tokens": total_in,
-                "output_tokens": total_out,
-                "total_tokens": total_all,
-                "api_calls": api_calls,
-            },
-        }
+    flow.logger.info("=== 規格化 ===")
+    flow.finalize(artifact)
+    flow.logger.info("流程完成！")
+    return artifact
