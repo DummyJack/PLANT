@@ -1,3 +1,4 @@
+# Web search tool wrapper: gather external evidence with redundancy controls.
 import copy
 import logging
 import re

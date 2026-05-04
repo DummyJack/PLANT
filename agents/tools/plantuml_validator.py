@@ -1,3 +1,4 @@
+# PlantUML validator tool: validate diagrams online or with local fallback checks.
 import logging
 import re
 import urllib.error
@@ -44,21 +45,21 @@ class PlantUMLValidatorTool(BaseTool):
         return "~h" + code.encode("utf-8").hex()
 
     def validate_online(self, code: str) -> str:
-        """用官方線上伺服器驗證：請求 PNG，語法錯誤時伺服器會回傳錯誤圖（通常較小）"""
+        """用官方線上伺服器驗證；線上不可用時退回本地基本檢查。"""
         try:
             encoded = self.encode_hex(code)
-            url = f"{self.server_url}/png/{encoded}"
+            url = f"{self.server_url}/svg/{encoded}"
             req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                body = resp.read()
-            # 語法錯誤時 PlantUML 仍回 200，但內容是「錯誤說明圖」，體積通常較小
-            if len(body) < 2000:
-                return "語法錯誤: 伺服器回傳錯誤圖（圖表可能無效或語法有誤）"
+                body = resp.read().decode("utf-8", errors="ignore")
+            if re.search(r"(syntax\s+error|error\s+line|plantuml\s+error)", body, re.IGNORECASE):
+                return "語法錯誤: PlantUML 伺服器回傳錯誤訊息"
             return "驗證通過: PlantUML 語法正確（透過線上伺服器）"
         except urllib.error.HTTPError as e:
             return f"語法錯誤或伺服器錯誤: HTTP {e.code}"
         except urllib.error.URLError as e:
-            return f"無法連線至 PlantUML 伺服器: {e.reason}"
+            logger.info("PlantUML 線上驗證不可用，改用本地基本檢查: %s", e.reason)
+            return self.fallback_validate(code)
         except Exception as e:
             logger.warning(f"線上驗證失敗: {e}")
             return self.fallback_validate(code)

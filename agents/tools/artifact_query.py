@@ -1,3 +1,4 @@
+# Artifact query tool: read compact project state for agents and skills.
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -58,7 +59,7 @@ class ArtifactQueryTool(BaseTool):
                 ensure_ascii=False,
                 indent=2,
             )
-        artifact = self._load_artifact()
+        artifact = self.load_artifact()
         if artifact is None:
             return json.dumps(
                 {"ok": False, "error": f"找不到 artifact: {self.artifact_path}"},
@@ -67,7 +68,7 @@ class ArtifactQueryTool(BaseTool):
             )
 
         if mode == "get_section":
-            result = self._get_section(
+            result = self.get_section(
                 artifact,
                 section=str(kwargs.get("section") or "").strip(),
                 fields=kwargs.get("fields"),
@@ -75,7 +76,7 @@ class ArtifactQueryTool(BaseTool):
                 compact=bool(kwargs.get("compact", False)),
             )
         elif mode == "find_items":
-            result = self._find_items(
+            result = self.find_items(
                 artifact,
                 section=str(kwargs.get("section") or "").strip(),
                 filters=kwargs.get("filters") or {},
@@ -84,54 +85,54 @@ class ArtifactQueryTool(BaseTool):
                 compact=bool(kwargs.get("compact", False)),
             )
         elif mode == "related_context":
-            result = self._related_context(
+            result = self.related_context(
                 artifact,
                 item_id=str(kwargs.get("item_id") or "").strip(),
                 compact=bool(kwargs.get("compact", False)),
             )
         else:
-            result = self._summarize(
+            result = self.summarize(
                 artifact,
                 section=str(kwargs.get("section") or "").strip(),
             )
 
         return json.dumps(result, ensure_ascii=False, indent=2)
 
-    def _load_artifact(self) -> Optional[Dict[str, Any]]:
+    def load_artifact(self) -> Optional[Dict[str, Any]]:
         if not self.artifact_path.exists():
             return None
         with open(self.artifact_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    def _as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
+    def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
-    def _limit_value(self, limit: Any) -> int:
+    def limit_value(self, limit: Any) -> int:
         try:
             return max(1, int(limit))
         except (TypeError, ValueError):
             return 20
 
-    def _compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
             "requirements": ["id", "text", "type", "priority", "source_stakeholders", "source", "rationale", "acceptance_criteria", "verification_method", "status"],
             "conflicts": ["id", "label", "description", "requirement_ids", "conflict_type", "status"],
             "decisions": ["id", "decision", "summary", "status"],
             "open_questions": ["from_agent", "to_agent", "question", "status", "topic_id"],
-            "topic_proposals": ["proposal_id", "title", "category", "priority_hint", "proposed_by", "round"],
+            "issue_proposals": ["issue_id", "title", "category", "priority_hint", "proposed_by", "round"],
         }
         fields = presets.get(section)
         if not fields:
             return dict(item)
         return {k: item.get(k) for k in fields if k in item}
 
-    def _select_fields(self, item: Dict[str, Any], fields: Any) -> Dict[str, Any]:
+    def select_fields(self, item: Dict[str, Any], fields: Any) -> Dict[str, Any]:
         if not isinstance(fields, list) or not fields:
             return dict(item)
         return {k: item.get(k) for k in fields if isinstance(k, str)}
 
-    def _match_filters(self, item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    def match_filters(self, item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         if not isinstance(filters, dict):
             return True
         item_id = str(item.get("id") or "")
@@ -162,25 +163,25 @@ class ArtifactQueryTool(BaseTool):
                 return False
         return True
 
-    def _post_process(
+    def post_process(
         self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, limit: Any
     ) -> List[Dict[str, Any]]:
         out = []
-        max_n = self._limit_value(limit)
+        max_n = self.limit_value(limit)
         for item in items[:max_n]:
-            row = self._compact_item(section, item) if compact else dict(item)
-            row = self._select_fields(row, fields)
+            row = self.compact_item(section, item) if compact else dict(item)
+            row = self.select_fields(row, fields)
             out.append(row)
         return out
 
-    def _get_section(
+    def get_section(
         self, artifact: Dict[str, Any], *, section: str, fields: Any, limit: Any, compact: bool
     ) -> Dict[str, Any]:
         if not section:
             return {"ok": False, "error": "get_section 需要 section"}
         raw = artifact.get(section)
         if isinstance(raw, list):
-            items = self._post_process(section, raw, fields, compact, limit)
+            items = self.post_process(section, raw, fields, compact, limit)
             return {
                 "ok": True,
                 "mode": "get_section",
@@ -197,13 +198,13 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 為單一區塊",
         }
 
-    def _find_items(
+    def find_items(
         self, artifact: Dict[str, Any], *, section: str, filters: Dict[str, Any], fields: Any, limit: Any, compact: bool
     ) -> Dict[str, Any]:
         if not section:
             return {"ok": False, "error": "find_items 需要 section"}
-        rows = [it for it in self._as_list(artifact, section) if self._match_filters(it, filters)]
-        items = self._post_process(section, rows, fields, compact, limit)
+        rows = [it for it in self.as_list(artifact, section) if self.match_filters(it, filters)]
+        items = self.post_process(section, rows, fields, compact, limit)
         return {
             "ok": True,
             "mode": "find_items",
@@ -213,12 +214,12 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 符合條件 {len(items)} 筆",
         }
 
-    def _related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: bool) -> Dict[str, Any]:
+    def related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: bool) -> Dict[str, Any]:
         if not item_id:
             return {"ok": False, "error": "related_context 需要 item_id"}
-        req = next((r for r in self._as_list(artifact, "requirements") if r.get("id") == item_id), None)
-        conflict = next((c for c in self._as_list(artifact, "conflicts") if c.get("id") == item_id), None)
-        decision = next((d for d in self._as_list(artifact, "decisions") if d.get("id") == item_id), None)
+        req = next((r for r in self.as_list(artifact, "requirements") if r.get("id") == item_id), None)
+        conflict = next((c for c in self.as_list(artifact, "conflicts") if c.get("id") == item_id), None)
+        decision = next((d for d in self.as_list(artifact, "decisions") if d.get("id") == item_id), None)
         target = req or conflict or decision
         target_section = "requirements" if req else ("conflicts" if conflict else ("decisions" if decision else ""))
         if not target:
@@ -231,40 +232,40 @@ class ArtifactQueryTool(BaseTool):
         if req:
             rid = req.get("id")
             related_conflicts = [
-                c for c in self._as_list(artifact, "conflicts")
+                c for c in self.as_list(artifact, "conflicts")
                 if rid in set((c.get("requirement_ids") or c.get("related_requirements") or []))
             ]
             blob = rid or ""
             related_decisions = [
-                d for d in self._as_list(artifact, "decisions")
+                d for d in self.as_list(artifact, "decisions")
                 if blob and blob in json.dumps(d, ensure_ascii=False)
             ]
             related_open_questions = [
-                q for q in self._as_list(artifact, "open_questions")
+                q for q in self.as_list(artifact, "open_questions")
                 if blob and blob in json.dumps(q, ensure_ascii=False)
             ]
         elif conflict:
             rel_ids = set(conflict.get("requirement_ids") or conflict.get("related_requirements") or [])
             related_conflicts = [conflict]
             related_decisions = [
-                d for d in self._as_list(artifact, "decisions")
+                d for d in self.as_list(artifact, "decisions")
                 if item_id in json.dumps(d, ensure_ascii=False)
             ]
             related_open_questions = [
-                q for q in self._as_list(artifact, "open_questions")
+                q for q in self.as_list(artifact, "open_questions")
                 if item_id in json.dumps(q, ensure_ascii=False)
             ]
-            req = [r for r in self._as_list(artifact, "requirements") if r.get("id") in rel_ids]
+            req = [r for r in self.as_list(artifact, "requirements") if r.get("id") in rel_ids]
 
         if compact:
-            target = self._compact_item(target_section, target) if target_section else dict(target)
+            target = self.compact_item(target_section, target) if target_section else dict(target)
             if isinstance(req, dict):
-                req = self._compact_item("requirements", req)
+                req = self.compact_item("requirements", req)
             elif isinstance(req, list):
-                req = [self._compact_item("requirements", x) for x in req]
-            related_conflicts = [self._compact_item("conflicts", x) for x in related_conflicts]
-            related_decisions = [self._compact_item("decisions", x) for x in related_decisions]
-            related_open_questions = [self._compact_item("open_questions", x) for x in related_open_questions]
+                req = [self.compact_item("requirements", x) for x in req]
+            related_conflicts = [self.compact_item("conflicts", x) for x in related_conflicts]
+            related_decisions = [self.compact_item("decisions", x) for x in related_decisions]
+            related_open_questions = [self.compact_item("open_questions", x) for x in related_open_questions]
 
         return {
             "ok": True,
@@ -278,7 +279,7 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{item_id} 相關上下文已整理",
         }
 
-    def _summarize(self, artifact: Dict[str, Any], *, section: str) -> Dict[str, Any]:
+    def summarize(self, artifact: Dict[str, Any], *, section: str) -> Dict[str, Any]:
         if section:
             raw = artifact.get(section)
             count = len(raw) if isinstance(raw, list) else (1 if raw else 0)
@@ -290,11 +291,11 @@ class ArtifactQueryTool(BaseTool):
                 "summary": f"{section} 目前共有 {count} 筆",
             }
         summary = {
-            "requirements": len(self._as_list(artifact, "requirements")),
-            "conflicts": len(self._as_list(artifact, "conflicts")),
-            "decisions": len(self._as_list(artifact, "decisions")),
-            "open_questions": len(self._as_list(artifact, "open_questions")),
-            "discussions": len(self._as_list(artifact, "discussions")),
+            "requirements": len(self.as_list(artifact, "requirements")),
+            "conflicts": len(self.as_list(artifact, "conflicts")),
+            "decisions": len(self.as_list(artifact, "decisions")),
+            "open_questions": len(self.as_list(artifact, "open_questions")),
+            "discussions": len(self.as_list(artifact, "discussions")),
         }
         return {
             "ok": True,

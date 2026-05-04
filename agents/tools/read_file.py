@@ -1,3 +1,4 @@
+# Read-file tool: search and read chunks from doc reference files.
 """doc/ 檔案工具：search_chunks / read_chunks / read_full；依副檔名切塊（md、txt、json、pdf、doc）。"""
 from __future__ import annotations
 
@@ -533,19 +534,15 @@ class FileParserTool(BaseTool):
         self,
         base_dir: Optional[Path] = None,
         *,
-        chunk_max_chars: int = 1200,
-        chunk_overlap: int = 150,
-        read_chunks_max_chars: int = 48000,
-        read_full_max_chars: int = 16000,
+        chunk_max_chars: Optional[int] = None,
+        chunk_overlap: int = 0,
     ):
         self.base_dir = Path(base_dir) if base_dir else Path("doc")
-        cm = max(1, int(chunk_max_chars))
+        cm = None if chunk_max_chars is None else max(1, int(chunk_max_chars))
         co = max(0, int(chunk_overlap))
-        co = min(co, cm - 1) if cm > 1 else 0
+        co = min(co, cm - 1) if cm and cm > 1 else 0
         self.chunk_max_chars = cm
         self.chunk_overlap = co
-        self.read_chunks_max_chars = max(1, int(read_chunks_max_chars))
-        self.read_full_max_chars = max(1, int(read_full_max_chars))
         self._file_sig: Dict[str, Tuple[float, int]] = {}
         self._chunks: List[Dict[str, Any]] = []
         self._chunk_by_id: Dict[str, Dict[str, Any]] = {}
@@ -629,14 +626,14 @@ class FileParserTool(BaseTool):
                     path=path,
                     suffix=suffix,
                     text=text,
-                    max_size=self.chunk_max_chars,
+                    max_size=self.chunk_max_chars or max(1, len(text)),
                     overlap=self.chunk_overlap,
                     read_text=self.read_text_by_type,
                 ):
                     if not chunk_text.strip():
                         continue
                     cid = f"{rel}{CHUNK_SEP}{i}"
-                    preview = chunk_text.strip().replace("\n", " ")[:280]
+                    preview = chunk_text.strip().replace("\n", " ")
                     row = {
                         "chunk_id": cid,
                         "file_path": rel,
@@ -696,19 +693,12 @@ class FileParserTool(BaseTool):
             return f"錯誤：無法讀取檔案：{e}"
 
         if output_format == "text":
-            if len(text) > self.read_full_max_chars:
-                return (
-                    "錯誤：read_full 僅適合短文件。"
-                    f"此檔案約 {len(text)} 字元，超過上限 {self.read_full_max_chars}。"
-                    "請先用 action=search_chunks，再用 action=read_chunks；"
-                    "若只需整體概覽，可改用 output_format=json_summary。"
-                )
             return text
         payload = {
             "file_path": str(path.relative_to(self.base_dir.resolve())),
             "suffix": suffix,
             "char_count": len(text),
-            "preview": text[:2000],
+            "preview": text,
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -778,7 +768,6 @@ class FileParserTool(BaseTool):
 
         self.ensure_index()
         parts: List[str] = []
-        total = 0
         missing: List[str] = []
         for cid in ids[:40]:
             row = self._chunk_by_id.get(cid)
@@ -790,13 +779,7 @@ class FileParserTool(BaseTool):
                 f"bytes [{row['char_start']}:{row['char_end']}] ===\n"
                 f"{row['text']}\n"
             )
-            if total + len(block) > self.read_chunks_max_chars:
-                parts.append(
-                    f"\n…（已達 read_chunks 總長度上限 {self.read_chunks_max_chars}，其餘 chunk 已省略）\n"
-                )
-                break
             parts.append(block)
-            total += len(block)
 
         if not parts and missing:
             return (

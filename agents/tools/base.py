@@ -1,3 +1,4 @@
+# Tool base and registry: construct policy-approved tools per agent.
 from pathlib import Path
 
 from abc import ABC, abstractmethod
@@ -50,7 +51,7 @@ class ToolRegistry:
         from agents.profile.expert import has_supported_doc_files
         from .web_search import WebSearchTool
         from .plantuml_validator import PlantUMLValidatorTool
-        from .file_parser import FileParserTool
+        from .read_file import FileParserTool
         from .artifact_query import ArtifactQueryTool
 
         allowed = set(self.policy.allowed_tools_for_agent(agent_name))
@@ -74,10 +75,6 @@ class ToolRegistry:
                 built.append(
                     FileParserTool(
                         base_dir=doc_dir,
-                        chunk_max_chars=1200,
-                        chunk_overlap=150,
-                        read_chunks_max_chars=48000,
-                        read_full_max_chars=16000,
                     )
                 )
 
