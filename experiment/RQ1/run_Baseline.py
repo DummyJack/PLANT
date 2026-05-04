@@ -17,11 +17,12 @@ BASE_DIR = RQ1_DIR.parent.parent
 # 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
 env_path = BASE_DIR / ".env"
 load_dotenv(env_path)
-DEFAULT_CONFIG_PATH = RQ1_DIR / "baseline_config.json"
-# 結果輸出目錄與檔名前綴（固定於程式，不經 baseline_config.json）
+# Baseline 設定檔位於 Baseline/config.json。
+DEFAULT_CONFIG_PATH = RQ1_DIR / "Baseline" / "config.json"
+# 結果輸出目錄與檔名前綴（固定於程式，不經 Baseline/config.json）
 RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
-# 預設資料檔、任務數與互動行為（固定於程式，不經 baseline_config.json）
+# 預設資料檔、任務數與互動行為（固定於程式，不經 Baseline/config.json）
 DEFAULT_DATA_FILE = "ReqElicitBench_10.json"
 # 未設定 max_tasks 且下方為 None 時，是否在終端機詢問要跑幾題
 PROMPT_FOR_MAX_TASKS = True
@@ -31,7 +32,7 @@ PROMPT_FOR_RUNS = True
 DEFAULT_MAX_TASKS = None
 # Gemini「OpenAI 相容」Chat Completions（官方文件）
 GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
-# 未指定 --base-url 且未設 OPENAI_BASE_URL 時的預設 API base（固定於程式，不經 baseline_config.json）
+# 未指定 --base-url 且未設 OPENAI_BASE_URL 時的預設 API base（固定於程式，不經 Baseline/config.json）
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 # 將 RQ1 目錄加入 Python 路徑，以便匯入 Baseline 套件
@@ -48,7 +49,7 @@ from Baseline.interviewer import Interviewer
 from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 
-def _resolve_data_path(raw: str) -> str:
+def resolve_data_path(raw: str) -> str:
     """相對路徑則相對於 RQ1 目錄解析。"""
     p = Path(raw)
     if p.is_absolute():
@@ -62,11 +63,11 @@ def load_baseline_file_config(path: Path) -> dict:
     with path.open(encoding="utf-8") as f:
         cfg = json.load(f)
     if not isinstance(cfg, dict):
-        raise TypeError("baseline_config.json 頂層必須為物件")
+        raise TypeError("Baseline/config.json 頂層必須為物件")
     return cfg
 
 
-def _next_result_index(prefix: str, results_dir: Path) -> int:
+def next_result_index(prefix: str, results_dir: Path) -> int:
     """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
     pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
@@ -91,7 +92,7 @@ def main():
         v = file_cfg.get(key, default)
         return default if v is None else v
 
-    # api_key 不寫入 JSON，僅環境變數；Gemini 請在 baseline_config.json 設 "use_gemini": true
+    # api_key 不寫入 JSON，僅環境變數；Gemini 請在 Baseline/config.json 設 "use_gemini": true
     use_gemini = bool(pick("use_gemini", False))
     api_key = os.environ.get("OPENAI_API_KEY", "")
     base_url = os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
@@ -105,7 +106,7 @@ def main():
     interviewer_model = pick("interviewer_model", "gpt-4o-mini")
     gym_model = pick("gym_model", "gpt-5.2")
     use_thinking = bool(pick("use_thinking", False))
-    data_path = _resolve_data_path(DEFAULT_DATA_FILE)
+    data_path = resolve_data_path(DEFAULT_DATA_FILE)
 
     max_tasks = None
     if max_tasks is None:
@@ -220,7 +221,7 @@ def main():
     round_ids_used: List[str] = []
 
     for run_idx in range(runs):
-        run_id = str(_next_result_index(RESULTS_FILE_PREFIX, RESULTS_DIR))
+        run_id = str(next_result_index(RESULTS_FILE_PREFIX, RESULTS_DIR))
         round_ids_used.append(run_id)
 
         evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
@@ -282,7 +283,7 @@ def main():
         _orig_interviewer_model_call = baseline_interviewer_module.model_call
         _orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
 
-        def _tracked_ask_question(conversation_history, return_usage=False):
+        def tracked_ask_question(conversation_history, return_usage=False):
             start = perf_counter()
             out = _orig_ask_question(conversation_history, return_usage=return_usage)
             elapsed = perf_counter() - start
@@ -296,7 +297,7 @@ def main():
                 return question, usage_info
             return out
 
-        def _tracked_model_call(
+        def tracked_model_call(
             system_prompt,
             user_prompt,
             model_config,
@@ -322,9 +323,9 @@ def main():
                 return response, usage_info
             return response
 
-        interviewer.ask_question = _tracked_ask_question
-        baseline_prompts.model_call = _tracked_model_call
-        baseline_interviewer_module.model_call = _tracked_model_call
+        interviewer.ask_question = tracked_ask_question
+        baseline_prompts.model_call = tracked_model_call
+        baseline_interviewer_module.model_call = tracked_model_call
         baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
         baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
         print(f"Interviewer 已建立：{interviewer}")

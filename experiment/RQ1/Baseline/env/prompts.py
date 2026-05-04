@@ -3,7 +3,11 @@ import os
 import time
 from openai import OpenAI
 from typing import Dict, Any, List, Tuple, Optional
-from .utils import build_history_into_prompt, parse_output_as_json
+from .utils import (
+    build_history_into_prompt,
+    parse_output_as_json,
+    relevant_requirement_ids_from_judgement,
+)
 from .utils import JUDGE_PROMPT_SYSTEM, JUDGE_PROMPT_USER
 from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 
@@ -31,7 +35,7 @@ def use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
     return True
 
 
-def _apply_token_limit_to_create_kw(
+def apply_token_limit_to_create_kw(
     create_kw: Dict[str, Any], model_config: Dict[str, Any], max_val: int
 ) -> None:
     """Gemini 相容端點使用 max_tokens；其餘依設定在 max_completion_tokens / max_tokens 擇一。"""
@@ -44,7 +48,7 @@ def _apply_token_limit_to_create_kw(
         create_kw["max_tokens"] = max_val
 
 
-def _chat_message_text(message: Any) -> str:
+def chat_message_text(message: Any) -> str:
     c = getattr(message, "content", None) if message is not None else None
     return (c or "").strip() if isinstance(c, str) else ""
 
@@ -92,9 +96,9 @@ def model_call(
                 temperature=model_config["temperature"],
                 timeout=model_config["timeout"],
             )
-            _apply_token_limit_to_create_kw(create_kw, model_config, max_val)
+            apply_token_limit_to_create_kw(create_kw, model_config, max_val)
             response = client.chat.completions.create(**create_kw)
-            response_text = _chat_message_text(response.choices[0].message)
+            response_text = chat_message_text(response.choices[0].message)
             
             # Extract usage information
             usage_info = None
@@ -187,9 +191,9 @@ def model_call_with_thinking(
                     _gemini_thinking_notice_flag[0] = True
             else:
                 create_kw["extra_body"] = {"enable_thinking": True}
-            _apply_token_limit_to_create_kw(create_kw, model_config, max_val)
+            apply_token_limit_to_create_kw(create_kw, model_config, max_val)
             response = client.chat.completions.create(**create_kw)
-            response_text = _chat_message_text(response.choices[0].message)
+            response_text = chat_message_text(response.choices[0].message)
             
             # Extract usage information
             usage_info = None
@@ -298,14 +302,16 @@ def generate_user_response(
     """
     action_type = action_judgement.get("action_type", "probe")
     is_relevant = action_judgement.get("is_relevant_to_implied_requirements", False)
-    relevant_req_id = action_judgement.get("relevant_implied_requirements_id")
-    
-    implied_requirement = None
-    if is_relevant and relevant_req_id:
+    relevant_req_ids = relevant_requirement_ids_from_judgement(action_judgement)
+
+    implied_requirements: List[str] = []
+    if is_relevant and relevant_req_ids:
+        relevant_req_id_set = set(relevant_req_ids)
         for req in remaining_requirements:
-            if req.get("id") == relevant_req_id:
-                implied_requirement = req.get("requirement", "")
-                break
+            if req.get("id") in relevant_req_id_set:
+                req_text = str(req.get("requirement") or "").strip()
+                if req_text:
+                    implied_requirements.append(req_text)
 
     conversation_history_str = build_history_into_prompt(conversation_history, with_note=False)
 
@@ -315,7 +321,11 @@ def generate_user_response(
         latest_utterance=action,
         action_type=action_type,
         is_relevant=is_relevant,
-        relevant_requirement=implied_requirement if implied_requirement else "null"
+        relevant_requirement=(
+            "\n".join(f"- {text}" for text in implied_requirements)
+            if implied_requirements
+            else "null"
+        )
     )
     if return_usage:
         response_json, usage_info = model_call(
@@ -354,7 +364,8 @@ def evaluate_action(
     Returns:
         Tuple of (user_response, elicited_requirements, reward, judgement)
     """
-    #format: {action_type: str, is_relevant_to_implied_requirements: bool, relevant_implied_requirements_id: str, reasoning: str}
+    # format: {action_type: str, is_relevant_to_implied_requirements: bool,
+    #          relevant_implied_requirements_id: str|null, reasoning: str}
     judge_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     user_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if return_usage:
@@ -400,14 +411,15 @@ def evaluate_action(
     
     # Determine elicited requirements
     is_relevant = judgement.get("is_relevant_to_implied_requirements")
-    relevant_req_id = judgement.get("relevant_implied_requirements_id")
+    relevant_req_ids = relevant_requirement_ids_from_judgement(judgement)
     elicited_requirements = []
-    if is_relevant and relevant_req_id:
+    if is_relevant and relevant_req_ids:
+        relevant_req_id_set = set(relevant_req_ids)
         # check the requirement is in the remaining requirements
         for req in remaining_requirements:
-            if req.get("id") == relevant_req_id:
-                elicited_requirements.append(relevant_req_id)
-                break
+            req_id = req.get("id")
+            if req_id in relevant_req_id_set:
+                elicited_requirements.append(req_id)
     ## TODO: implement reward calculation
     reward = 0.0
 

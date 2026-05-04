@@ -397,6 +397,7 @@ class ReqElicitGym(gym.Env):
             "user": user_response,
             "action_type": action_info.get("action_type", "unknown"),
             "is_relevant_to_url": action_info.get("is_relevant_to_implied_requirements", False),
+            "elicited_requirements": action_info.get("elicited_requirements", []),
             "elicitation_ratio": current_elicitation_ratio,  # Add elicitation ratio after this turn
         }
         self.current_task_conversation_turns.append(conversation_turn)
@@ -584,7 +585,6 @@ class ReqElicitGym(gym.Env):
             "task_id": task_id,
             "task_name": self.current_task.get("name", ""),
             "initial_requirements": self.current_task.get("initial_requirements", ""),
-            "user_stories": self.current_task.get("URL", []),
             "user_answer_quality": self.config.user_answer_quality,
             "interviewer_model": self.interviewer_model_name or "unknown",
             "conversation": self.current_task_conversation_turns.copy(),
@@ -777,9 +777,6 @@ class ReqElicitGym(gym.Env):
                 if self.config.verbose:
                     print(f"  動作類型：{action_info.get('action_type', 'unknown')}")
                     print(f"  與隱式需求相關：{action_info.get('is_relevant_to_implied_requirements', False)}")
-                    relevant_req_id = action_info.get("relevant_implied_requirements_id")
-                    if relevant_req_id:
-                        print(f"  相關需求 ID：{relevant_req_id}")
                     print(f"  已取得的需求：{action_info.get('elicited_requirements', [])}")
                     print(f"  Interviewer: {interviewer_question[:80]}...")
                     user_response = action_info.get("user_response", "")

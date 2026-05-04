@@ -72,6 +72,26 @@ def build_history_into_prompt(conversation_history: List[Dict[str, str]], with_n
     
     return history_str.strip()
 
+def relevant_requirement_ids_from_judgement(judgement: Dict[str, Any]) -> List[str]:
+    """Return relevant requirement ids from new list schema or old single-id schema."""
+    if not isinstance(judgement, dict):
+        return []
+    raw_ids = judgement.get("relevant_implied_requirements_ids")
+    ids: List[str] = []
+    if isinstance(raw_ids, list):
+        ids.extend(str(x).strip() for x in raw_ids if str(x).strip())
+    single_id = str(judgement.get("relevant_implied_requirements_id") or "").strip()
+    if single_id and single_id.lower() != "null":
+        ids.append(single_id)
+    deduped: List[str] = []
+    seen = set()
+    for rid in ids:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        deduped.append(rid)
+    return deduped
+
 JUDGE_PROMPT_SYSTEM = """## **Task**
 You are an expert judge evaluating the type of an interviewer's action in a requirement elicitation conversation.
 
@@ -92,7 +112,7 @@ You are an expert judge evaluating the type of an interviewer's action in a requ
 {
     "action_type": "clarify/probe/finish",
     "is_relevant_to_implied_requirements": true/false,
-    "relevant_implied_requirements_id": "requirement_id if relevant, or null",
+    "relevant_implied_requirements_id": "one requirement_id if relevant, or null",
     "reasoning": "brief explanation"
 }
 ```
@@ -100,6 +120,7 @@ You are an expert judge evaluating the type of an interviewer's action in a requ
 ## **Important Notes**
 - Be precise in identifying action types
 - For "probe" actions, check if the question relates to any remaining_requirements
+- If a single probe appears related to multiple remaining_requirements, choose the single best matching requirement_id
 - "is_relevant_to_implied_requirements" should be true only if the probe is asking about something covered in the remaining_requirements
 - If action is not "probe", "is_relevant_to_implied_requirements" can be false
 """
@@ -146,6 +167,6 @@ Please respond naturally to the interviewer's question or statement.
 **Context of this latest utterance:**
 - Action type: {action_type}
 - Is relevant to your requirements: {is_relevant}
-- Relevant Requirement: {relevant_requirement} 
-Note: if is_relevant is false, the relevant_requirement is null.
+- Relevant Requirements: {relevant_requirement} 
+Note: if is_relevant is false, the relevant_requirements value is null.
 """

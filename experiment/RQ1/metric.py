@@ -42,7 +42,7 @@ def compute_ora(num_rounds: int, total_requirements: int) -> float:
     return math.exp(-deviation_squared / (2 * sigma ** 2))
 
 
-def _aggregate_action_type_effectiveness(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def aggregate_action_type_effectiveness(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     agg: Dict[str, Dict[str, int]] = {}
     for t in task_results:
         for action_type, stats in (t.get("action_type_effectiveness") or {}).items():
@@ -63,7 +63,7 @@ def _aggregate_action_type_effectiveness(task_results: List[Dict[str, Any]]) -> 
     return out
 
 
-def _aggregate_aspect_type_elicitation(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def aggregate_aspect_type_elicitation(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for aspect in ("Interaction", "Content", "Style"):
         total = sum(
@@ -82,7 +82,7 @@ def _aggregate_aspect_type_elicitation(task_results: List[Dict[str, Any]]) -> Di
     return out
 
 
-def _application_type_statistics(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def application_type_statistics(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for t in task_results:
         app_type = str(t.get("application_type", "Unknown"))
@@ -149,9 +149,9 @@ def compute_overall_metrics(task_results: List[Dict[str, Any]]) -> Dict[str, Any
         "elicitation_ratio_from_totals": (
             (total_elicited / total_requirements) if total_requirements > 0 else 0.0
         ),
-        "action_type_effectiveness": _aggregate_action_type_effectiveness(task_results),
-        "aspect_type_elicitation": _aggregate_aspect_type_elicitation(task_results),
-        "application_type_statistics": _application_type_statistics(task_results),
+        "action_type_effectiveness": aggregate_action_type_effectiveness(task_results),
+        "aspect_type_elicitation": aggregate_aspect_type_elicitation(task_results),
+        "application_type_statistics": application_type_statistics(task_results),
         "total_tasks": total_tasks,
         "total_requirements_all_tasks": total_requirements,
         "total_elicited_all_tasks": total_elicited,
