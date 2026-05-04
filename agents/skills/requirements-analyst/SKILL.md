@@ -44,6 +44,9 @@ If unclear on any of these, ASK before proceeding.
 - Dependencies should be actionable
 - Scope should be clear (in AND out)
 - Conflicts should be surfaced, not hidden
+- If stakeholder statements, elicitation candidates, or source-backed requirement candidates are present, do not return an empty requirements list. Convert supported statements into draft requirements, or explicitly keep them as pending candidates with a reason.
+- Hidden elicitation candidates must not disappear: each candidate should be absorbed into requirements, rejected with a reason, or preserved as pending review.
+- A draft SRS must be grounded in the structured requirements artifact; do not create Markdown-only requirements that are absent from the structured requirements list.
 
 ## Output Format
 

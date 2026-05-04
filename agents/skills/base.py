@@ -1,8 +1,9 @@
+# Skill loader for agents/skills/<name>/SKILL.md metadata and body.
 """Skill loader for agents/skills/<name>/SKILL.md."""
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 SKILLS_ROOT = Path(__file__).resolve().parent
 skill_cache: Dict[str, Dict[str, Any]] = {}
@@ -22,16 +23,6 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
         elif key and line.startswith(" "):
             attrs[key] = (attrs[key] + "\n" + line.strip()).strip()
     return attrs, body.strip()
-
-
-def list_skills() -> List[str]:
-    names = []
-    if not SKILLS_ROOT.is_dir():
-        return names
-    for path in SKILLS_ROOT.iterdir():
-        if path.is_dir() and (path / "SKILL.md").exists():
-            names.append(path.name)
-    return sorted(names)
 
 
 def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
@@ -97,6 +88,3 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
         skill_cache[skill_name] = result
     return result
 
-
-def load_skill(skill_name: str) -> Dict[str, Any]:
-    return get_skill(skill_name)
