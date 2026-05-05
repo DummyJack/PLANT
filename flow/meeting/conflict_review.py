@@ -444,6 +444,55 @@ def extract_pair_reviews_from_statement(
     return deduped
 
 
+def normalize_conflict_review_statement_for_record(
+    statement: str,
+    *,
+    known_pair_ids: List[str],
+    current_labels_by_id: Optional[Dict[str, str]] = None,
+) -> str:
+    """將 conflict review 發言正規化為 review_summary + pair_reviews 的 JSON 字串。"""
+    text = str(statement or "").strip()
+    if not text:
+        return ""
+
+    reviews = extract_pair_reviews_from_statement(
+        text,
+        known_pair_ids=known_pair_ids,
+        current_labels_by_id=current_labels_by_id,
+    )
+    if not reviews:
+        return text
+
+    review_summary = ""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        review_summary = str(
+            parsed.get("review_summary") or parsed.get("overall_assessment") or ""
+        ).strip()
+
+    if not review_summary:
+        first_pair = _PAIR_ID_RE.search(text)
+        prefix = text[: first_pair.start()].strip() if first_pair else ""
+        review_summary = re.sub(
+            r"^(overall\s*[:,]?\s*)",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    return json.dumps(
+        {
+            "review_summary": review_summary,
+            "pair_reviews": reviews,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def collect_discussion_rows_and_pair_reviews(
     contributions: List[Dict[str, Any]],
     *,
@@ -482,7 +531,7 @@ def ensure_conflict_review_participant_contributions(
     contributions: List[Dict[str, Any]],
     participants: List[str],
 ) -> List[Dict[str, Any]]:
-    """若某位審查 agent 沒有有效發言，單獨補收一次，避免 agent_judgments 只剩少數角色。"""
+    """若某位審查 agent 沒有有效發言，單獨補收一次，避免 meeting_conflict_review 只剩少數角色。"""
     existing_with_statement = {
         str(c.get("agent") or "").strip()
         for c in contributions or []
@@ -772,10 +821,10 @@ def build_pair_review_records(
         final_label = str(decision.get("new_label") or conflict.get("label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
             final_label = str(conflict.get("label") or "Neutral").strip() or "Neutral"
-        agent_judgments = reviews_by_id.get(pair_id, [])
+        meeting_conflict_review = reviews_by_id.get(pair_id, [])
         confidences = [
             str(row.get("confidence") or "").strip().lower()
-            for row in agent_judgments
+            for row in meeting_conflict_review
             if str(row.get("confidence") or "").strip().lower() in {"high", "medium", "low"}
         ]
         confidence = "medium"
@@ -800,7 +849,7 @@ def build_pair_review_records(
                 "confidence": confidence,
                 "rationale": str(decision.get("reason") or "").strip(),
                 "decided_by": str(decision.get("decided_by") or "").strip(),
-                "agent_judgments": agent_judgments,
+                "meeting_conflict_review": meeting_conflict_review,
             }
         )
     return records
@@ -808,7 +857,7 @@ def build_pair_review_records(
 
 # ---------- 會前衝突再審查主流程 ----------
 
-def run_pre_meeting_conflict_review_block(
+def conflict_review(
     coordinator: Any, artifact: Dict[str, Any], round_num: int
 ) -> Dict[str, Any]:
     """針對本輪所有 Conflict/Neutral pairs 執行一次會前再審查與逐筆裁定。"""
@@ -934,6 +983,12 @@ def run_pre_meeting_conflict_review_block(
     ]
 
     conversation_rows: List[str] = []
+    known_pair_ids = list(conflicts_by_id.keys())
+    current_labels_by_id = {
+        cid: str(conflict.get("label") or "").strip()
+        for cid, conflict in conflicts_by_id.items()
+        if isinstance(conflict, dict)
+    }
     for c in contributions:
         if not isinstance(c, dict):
             continue
@@ -942,6 +997,14 @@ def run_pre_meeting_conflict_review_block(
         statement = str(resp.get("statement") or resp.get("content") or "").strip()
         if not agent_name or not statement:
             continue
+        normalized_statement = normalize_conflict_review_statement_for_record(
+            statement,
+            known_pair_ids=known_pair_ids,
+            current_labels_by_id=current_labels_by_id,
+        )
+        resp["statement"] = normalized_statement
+        c["response"] = resp
+        statement = normalized_statement
         conversation_rows.append(f"{agent_name}: {statement}")
 
     decisions, signoff_debug = analyst_signoff_conflict_recheck(

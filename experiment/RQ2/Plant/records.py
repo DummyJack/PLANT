@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Tuple
 from metric import Metric
 from utils import json_dump_no_scientific
 
+def record_pair_id_from_index(index: int) -> str:
+    return f"PAIR-{int(index) + 1}"
+
 def normalize_pair_details(details: Any) -> Dict[str, Any]:
     """整理 pair details 的輸出欄位與順序。"""
     if not isinstance(details, dict):
@@ -27,13 +30,13 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
         cleaned["round"] = round_value
 
     for key, value in source.items():
-        if key == "agent_judgments" and isinstance(value, list):
-            judgments = []
-            for judgment in value:
-                if not isinstance(judgment, dict):
-                    judgments.append(judgment)
+        if key == "meeting_conflict_review" and isinstance(value, list):
+            review_rows = []
+            for review in value:
+                if not isinstance(review, dict):
+                    review_rows.append(review)
                     continue
-                item = dict(judgment)
+                item = dict(review)
                 item.pop("id", None)
                 item.pop("confidence", None)
                 item.pop("independent_label", None)
@@ -41,8 +44,8 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
                     item["reason"] = item.pop("rationale")
                 else:
                     item.pop("rationale", None)
-                judgments.append(item)
-            cleaned[key] = judgments
+                review_rows.append(item)
+            cleaned["meeting_conflict_review"] = review_rows
         else:
             cleaned[key] = value
 
@@ -83,9 +86,7 @@ def build_rq2_record_by_type(
                 pair_index = int(decision.get("pair_index"))
             except (TypeError, ValueError):
                 continue
-            description = str(decision.pop("description", "") or "").strip()
-            if description:
-                description_by_pair_index[pair_index] = description
+            description_by_pair_index[pair_index] = str(decision.get("reason") or "").strip()
         pairs_out: List[Dict[str, Any]] = []
         for local_pair_index, (row_index, row) in enumerate(items):
             packed = results_by_idx.get(row_index)
@@ -119,14 +120,13 @@ def build_rq2_record_by_type(
             description = description_by_pair_index.get(local_pair_index, "")
             details = normalize_pair_details(base.pop("details", {}))
             base.pop("id", None)
-            base = {"id": f"PAIR-{local_pair_index}", **base}
-            if description:
-                reordered: Dict[str, Any] = {}
-                for key, value in base.items():
-                    reordered[key] = value
-                    if key == "pred":
-                        reordered["description"] = description
-                base = reordered
+            base = {"id": record_pair_id_from_index(local_pair_index), **base}
+            reordered: Dict[str, Any] = {}
+            for key, value in base.items():
+                reordered[key] = value
+                if key == "pred":
+                    reordered["description"] = description
+            base = reordered
             base["details"] = details
             pairs_out.append(base)
         block.pop("pair_reviews", None)

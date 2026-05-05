@@ -392,7 +392,7 @@ class BaseAgent(AgentActionLoop):
         final_statement = statement or content or fallback
         # Conflict recheck intentionally stores a JSON object string inside
         # `statement` so downstream code can extract pair_reviews. Do not
-        # collapse it into an overall_assessment sentence.
+        # collapse it into a review_summary sentence.
         preserve_structured_statement = False
         if final_statement.lstrip().startswith("{") and "pair_reviews" in final_statement:
             try:

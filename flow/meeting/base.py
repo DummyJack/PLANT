@@ -16,7 +16,7 @@ from .main import (
     recent_topic_discussions,
     run_meeting_round_block,
 )
-from .conflict_review import run_pre_meeting_conflict_review_block
+from .conflict_review import conflict_review
 from .hidden_elicitation import run_hidden_requirement_elicitation_meeting_block
 from .subflows import run_agenda_loop_block
 
@@ -315,7 +315,7 @@ class MeetingCoordinator:
             stage="pre_meeting_conflict_review",
             round_num=round_num,
             artifact=artifact,
-            action_fn=run_pre_meeting_conflict_review_block,
+            action_fn=conflict_review,
             action_kwargs={
                 "coordinator": self,
                 "artifact": artifact,

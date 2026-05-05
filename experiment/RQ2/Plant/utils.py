@@ -14,6 +14,14 @@ RQ2_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
 
+def record_pair_id_from_internal(pair_id: Any) -> str:
+    """Convert internal PAIR-000 ids to record-facing PAIR-1 ids."""
+    text = str(pair_id or "").strip()
+    m = re.fullmatch(r"PAIR-(\d+)", text)
+    if not m:
+        return text
+    return f"PAIR-{int(m.group(1)) + 1}"
+
 def print_multi_run_summary(
     *,
     runs: int,
@@ -386,14 +394,48 @@ def extract_pre_meeting_details(
     conv = entry.get("conversation")
     if not isinstance(conv, list):
         conv = list(entry.get("dialogue") or [])
-    normalized_conv: Dict[str, str] = {}
+    normalized_conv: Dict[str, Any] = {}
+
+    def normalize_conversation_statement(statement: str) -> Any:
+        text = str(statement or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text
+        if not isinstance(parsed, dict):
+            return text
+        pair_reviews = parsed.get("pair_reviews")
+        if not isinstance(pair_reviews, list):
+            return text
+        return {
+            "review_summary": str(
+                parsed.get("review_summary") or parsed.get("overall_assessment") or ""
+            ).strip(),
+            "pair_reviews": [
+                {
+                    **row,
+                    "id": record_pair_id_from_internal(row.get("id")),
+                }
+                if isinstance(row, dict)
+                else row
+                for row in pair_reviews
+            ],
+        }
 
     def add_conversation_statement(agent_name: str, statement: str) -> None:
         key = agent_name or "statement"
+        normalized_statement = normalize_conversation_statement(statement)
         if key in normalized_conv and normalized_conv[key]:
-            normalized_conv[key] = f"{normalized_conv[key]}\n\n{statement}"
+            previous = normalized_conv[key]
+            if isinstance(previous, str) and isinstance(normalized_statement, str):
+                normalized_conv[key] = f"{previous}\n\n{normalized_statement}"
+            else:
+                existing = previous if isinstance(previous, list) else [previous]
+                normalized_conv[key] = existing + [normalized_statement]
         else:
-            normalized_conv[key] = statement
+            normalized_conv[key] = normalized_statement
 
     for item in conv:
         if isinstance(item, str):

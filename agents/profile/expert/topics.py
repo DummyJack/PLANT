@@ -137,7 +137,7 @@ class ExpertTopics:
     - 你的任務是逐筆再審查目前這批 Conflict/Neutral pairs，而不是重新定義需求。
     - 你必須先根據 requirement_a / requirement_b 原文獨立重判，並將重判結果填入 proposed_label。
     - statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
-    - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
+    - statement JSON 結構必須為：{"review_summary":"...","pair_reviews":[...]}。
     - pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、proposed_label、confidence、reason。
     - reason 必須以 Expert 角度撰寫成完整審查意見：說明你的獨立判斷依據，以及是否涉及外部規範、標準、合規限制、品質底線或風險；若不需要外部依據即可判斷，也要明確說明判斷依據來自需求本身。
     - 只有在外部規範、品質底線、權限或安全限制使兩項需求無法同時成立時，才支持 Conflict。

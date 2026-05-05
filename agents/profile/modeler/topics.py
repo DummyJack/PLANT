@@ -135,8 +135,8 @@ class ModelerTopics:
         if (topic.get("category") or "").strip() == "conflict_discussion":
             task_block = "請以系統建模專家身分逐筆再審查目前這批 Conflict/Neutral pairs，先根據 requirement_a / requirement_b 原文獨立重判，並將重判結果填入 proposed_label。"
             rules_block = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
-    - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
-    - overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
+    - statement JSON 結構必須為：{"review_summary":"...","pair_reviews":[...]}。
+    - review_summary 用 1-3 句說明整批標註品質是否有系統性偏誤。
     - pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx]；每筆都要有：id、proposed_label、confidence、reason。
     - reason 必須以 Modeler 角度撰寫成完整審查意見：說明你的獨立判斷依據，並至少指出資料結構、狀態轉移、事件流程、責任邊界、Use Case/Class/Sequence 影響中的一種；不要只寫一般語義判斷。
     - 你的任務不是提出新需求，而是再審查目前的 Conflict/Neutral 標籤是否合理。
