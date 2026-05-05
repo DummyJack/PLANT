@@ -3,9 +3,6 @@
   "enable_agents": {
     "documentor": false
   },
-  "enable_tools": {
-    "plantuml_validate": false
-  },
   "agent_models": {
     "default": {
       "provider": "openai",
