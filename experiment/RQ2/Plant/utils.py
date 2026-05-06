@@ -354,7 +354,7 @@ def inject_supplemented_conflicts(
 def extract_pre_meeting_details(
     artifact: Dict[str, Any], *, round_num: int = 0
 ) -> Dict[str, Any]:
-    """同一 type 整批只做一次會前複核：回傳可寫入 record 的會議資訊（不含 summary / raw_log_entry）。"""
+    """同一 type 整批只做一次會前複核，回傳給 records.py 再整理的中介格式。"""
     details: Dict[str, Any] = {
         "round": int(round_num),
         "changed_count": 0,

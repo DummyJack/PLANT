@@ -8,41 +8,6 @@ from .oracle_user import OracleUserAgent
 from .utils import task_implicit_requirements, task_initial_requirements
 
 
-def extract_first_question(text: str) -> str:
-    parts = [p.strip() for p in str(text or "").replace("\n", " ").split("。") if p.strip()]
-    for p in parts:
-        if "？" in p or "?" in p:
-            return p
-    return parts[0] if parts else ""
-
-
-def compact_text(text: str, max_len: int = 160) -> str:
-    value = " ".join(str(text or "").split())
-    return value
-
-
-def extract_focus_area(text: str) -> str:
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    for sep in ("：", ":"):
-        if sep in value:
-            head = value.split(sep, 1)[0].strip()
-            if 2 <= len(head) <= 20:
-                return head
-    return compact_text(value, 24)
-
-
-def extract_reason_excerpt(text: str) -> str:
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    parts = [p.strip() for p in value.replace("\n", " ").split("。") if p.strip()]
-    if not parts:
-        return compact_text(value, 140)
-    return compact_text(parts[0], 140)
-
-
 def resolve_role_model_name(flow_cfg: Dict[str, Any], role: str) -> str:
     agent_models = flow_cfg.get("agent_models", {})
     if not isinstance(agent_models, dict):
@@ -91,10 +56,7 @@ def build_plant_interviewer_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
 
 
 def resolve_interviewer_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]) -> str:
-    # 回傳實際參與的 interviewer agents + 對應模型。
     participants: List[str] = []
-
-    # 優先以每輪 contributions 推回實際有發言的 interviewer。
     for tlog in (per_task.get("elicitation_log", []) or []):
         if not isinstance(tlog, dict):
             continue

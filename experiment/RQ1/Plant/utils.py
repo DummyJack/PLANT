@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-from flow.requirements import (
+from agents.profile.analyst.requirements import (
     build_requirement_candidates_from_requirements,
     merge_requirement_candidates,
     normalize_requirement_statuses,

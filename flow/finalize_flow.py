@@ -2,7 +2,7 @@
 from copy import deepcopy
 from typing import Any, Dict, List, Set
 
-from flow.requirements import normalize_requirement_status
+from agents.profile.analyst.requirements import normalize_requirement_status
 
 
 def requirement_status(req: Dict[str, Any]) -> str:

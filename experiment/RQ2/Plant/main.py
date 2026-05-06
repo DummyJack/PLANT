@@ -35,20 +35,6 @@ RESULTS_DIR = RQ2_DIR / "results"
 
 load_dotenv(BASE_DIR / ".env")
 
-def pair_batch_gap_status(
-    k: int,
-    *,
-    missing_before: set[int],
-    supplemented: set[int],
-    unresolved: set[int],
-) -> str:
-    """初判漏檢／單對補判結果。"""
-    if k in unresolved:
-        return "unexpected_unresolved"
-    if k in supplemented:
-        return "recovered_by_single_pair_fallback"
-    return "covered_by_batch_detection"
-
 def run_type_group_batch(
     flow: Flow,
     items: List[Tuple[int, Dict[str, Any]]],
@@ -178,9 +164,6 @@ def run_type_group_batch(
         meeting_details["supplemented_pair_indices"] = sorted(supplemented_labels.keys())
         meeting_details["supplement_unresolved_pair_indices"] = sorted(unresolved_missing)
     meetings_by_type[type_name] = meeting_details
-    missing_before_set = set(missing_before_supplement)
-    supplemented_set = set(supplemented_labels.keys())
-    unresolved_set = set(unresolved_missing)
     print("會前衝突再審查會議：", flush=True)
     decisions = meeting_details.get("decisions") or []
     if isinstance(decisions, list) and decisions:
@@ -234,7 +217,8 @@ def run_conflict(
     - data_path 為 None：使用預設 cn_100.csv（或 cn_pairs.csv）；亦可傳入 .json 陣列。
     - count > 0：只取前 count 筆。
     - record 輸出為 **陣列**：每個元素為 ``{ "<type 名稱>": { …, "pairs": [ … ] } }``，同一 type 僅一筆；
-      會議欄位為單次會前複核之扁平結構（``round`` / ``conversation`` / ``decisions`` 等）。
+      會議欄位保留 round / changed_count / discussion_mode / participants / conversation，
+      pair 決策理由整理到 pairs[].description 與 details。
     """
     try:
         if data_path is not None:

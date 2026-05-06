@@ -6,7 +6,7 @@ from utils import Collect, read_max_iterations
 from agents.profile.mediator import AGENDA_CATEGORY_LABEL
 from agents.profile.mediator.agenda_runner import AgendaRunner
 from agents.profile.mediator.validation import normalize_issue_proposal as normalize_issue_proposal_schema
-from flow.requirements import (
+from agents.profile.analyst.requirements import (
     merge_requirement_candidates,
     normalize_requirement_status,
     normalize_requirement_statuses,

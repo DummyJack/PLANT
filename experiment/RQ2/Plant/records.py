@@ -9,7 +9,7 @@ def record_pair_id_from_index(index: int) -> str:
     return f"PAIR-{int(index) + 1}"
 
 def normalize_pair_details(details: Any) -> Dict[str, Any]:
-    """整理 pair details 的輸出欄位與順序。"""
+    """移除主流程內部欄位與舊格式欄位，只保留 RQ2 record 要展示的 pair details。"""
     if not isinstance(details, dict):
         details = {}
 
