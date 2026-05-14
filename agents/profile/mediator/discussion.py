@@ -17,6 +17,9 @@ class MediatorDiscussion:
         proposed_label = str(raw.get("proposed_label") or "").strip()
         if proposed_label not in {"Conflict", "Neutral"}:
             return None
+        confidence = str(raw.get("confidence") or "").strip().lower()
+        if confidence not in {"high", "medium", "low"}:
+            confidence = ""
         current_label = ""
         if current_labels_by_id:
             current_label = str(current_labels_by_id.get(pair_id) or "").strip()
@@ -27,6 +30,7 @@ class MediatorDiscussion:
             "id": pair_id,
             "decision": decision,
             "proposed_label": proposed_label,
+            "confidence": confidence,
             "reason": str(raw.get("reason") or "").strip(),
         }
 
@@ -150,8 +154,13 @@ class MediatorDiscussion:
             "previous_responses": previous_responses,
             "artifact_snapshot": artifact_snapshot,
         }
+        loop_name = (
+            "conflict_review"
+            if str(issue.get("category") or "").strip() == "conflict_discussion"
+            else "agent_response"
+        )
         opa = agent.run_action_loop(
-            name="agent_response",
+            name=loop_name,
             max_iterations=3,
             loop_cap=agent.agent_loop_round_cap(),
             context=context,

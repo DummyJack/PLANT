@@ -14,18 +14,17 @@ from .decision import MediatorDecision
 class MediatorAgentSupport:
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
-            "以下為本輪需審查的 Conflict/Neutral 項目。\n"
-            "請先根據每個 pair 的 requirements 原文清單獨立重判，"
-            "若只有兩筆需求，requirement_a / requirement_b 是前兩筆需求的別名，"
+            "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
+            "請先根據每個 pair 的 requirement_a / requirement_b 原文獨立重判，"
             "並將重判結果填入 proposed_label（Conflict 或 Neutral）。\n"
-            "current_label 是 Analyst 初判，只是待挑戰標籤；不要預設它正確，也不要替既有標籤辯護。\n"
             "你必須同時做兩層檢視：\n"
             "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
-            "2) 逐筆（pair-by-pair）檢視：每個 [PAIR-xxx] 都必須明確寫出：\n"
+            "2) 逐筆檢視：每個 [PAIR-xxx] 都必須明確寫出：\n"
             "   - proposed_label: 你重判後建議採用的標籤（Conflict 或 Neutral）\n"
+            "   - confidence: high / medium / low\n"
             "   - reason: 一句到兩句審查理由，需說明你的獨立判斷依據\n"
-            "reason 只能填純理由文字，不要包含 id、proposed_label 或欄位名稱。\n"
-            "請依照你自己的 agent 角色角度判斷，不要只重複其他 agent 的一般語意判斷。\n\n"
+            "reason 只能填純理由文字，不要包含 id、proposed_label、confidence 或欄位名稱。\n"
+            "Neutral 的定義：兩項需求既不衝突、也不重複，且沒有直接語義關係。\n\n"
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
 
@@ -222,8 +221,8 @@ class MediatorAgent(
         )
 
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
-        return """- artifact_query 用於查詢目前 requirements、conflicts、open_questions、decisions、discussion records 與 issue pool 相關脈絡。
-- 工具只能補足主持、triage、分流、收斂判斷所需的專案事實。
+        return """- artifact_query 用於查詢目前需求、衝突、未決問題、決策、討論紀錄與議題池相關脈絡。
+- 工具只能補足主持、分類、分流、收斂判斷所需的專案事實。
 - 若資訊不足或未收斂，整理成待決選項或升級人類裁決，不得自行替利害關係人定案。"""
 
     def closure_vote_prompt(

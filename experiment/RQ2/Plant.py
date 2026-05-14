@@ -41,7 +41,7 @@ def choose_scenario(data_path: Optional[Path]) -> Optional[str]:
     for idx, scenario in enumerate(scenarios, 1):
         print(f"  {idx}. {scenario}（{scenario_counts[scenario]} 筆）")
 
-    raw_scenario = input("請選擇要執行的情境（Enter: 全部，可輸入編號或名稱）：").strip()
+    raw_scenario = input("請選擇要執行的情境（Enter: 全部，輸入編號）：").strip()
     if not raw_scenario:
         return None
     if raw_scenario.isdigit():
@@ -50,10 +50,7 @@ def choose_scenario(data_path: Optional[Path]) -> Optional[str]:
             return scenarios[selected_idx - 1]
         print("錯誤：情境編號超出範圍")
         sys.exit(1)
-    if raw_scenario in scenario_counts:
-        return raw_scenario
-
-    print(f"錯誤：找不到情境「{raw_scenario}」")
+    print("錯誤：請輸入情境編號")
     sys.exit(1)
 
 

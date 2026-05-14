@@ -111,35 +111,10 @@ class AnalystConflicts:
         }
 
     def run_conflict_detection(self, artifact: Dict) -> Dict:
-        steps = [
-            {
-                "id": "pairwise_conflict_detection",
-                "action": "run_pairwise_conflict_detection",
-                "reasoning": "先執行相鄰兩兩需求衝突判斷。",
-            }
-        ]
-        if bool((artifact.get("meta") or {}).get("enable_group_conflict_check", True)):
-            steps.append(
-                {
-                    "id": "group_conflict_detection",
-                    "action": "run_group_conflict_detection",
-                    "reasoning": "再檢查三個以上需求共同成立時才會出現的群組衝突。",
-                }
-            )
-        return self.run_conflict_analysis_loop(
-            "run_conflict_detection",
-            artifact=artifact,
-            action_plan={
-                "goal": "先做兩兩需求衝突判斷，再視設定做 3+ 群組衝突判斷。",
-                "steps": steps,
-            },
-        )
+        return self.execute_conflict_detection(artifact)
 
     def run_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
-        return self.run_conflict_analysis_loop(
-            "run_pairwise_conflict_detection",
-            artifact=artifact,
-        )
+        return self.execute_pairwise_conflict_detection(artifact)
 
     def signoff_conflict_recheck(
         self,
@@ -147,15 +122,11 @@ class AnalystConflicts:
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, Any]], str]:
-        output = self.run_conflict_analysis_loop(
-            "signoff_conflict_recheck",
-            proposal_list=proposal_list,
-            discussion_rows=discussion_rows,
+        return self.execute_signoff_conflict_recheck(
+            proposal_list,
+            discussion_rows,
             extracted_pair_reviews=extracted_pair_reviews,
         )
-        if isinstance(output, tuple):
-            return output
-        return [], ""
 
     def generate_conflict_report(
         self,
@@ -226,27 +197,25 @@ class AnalystConflicts:
         return context
 
     def conflict_detection_base_task(self) -> str:
-        return f"""請使用 conflict-analyzer skill 作為主要分析框架，僅根據 Context.requirements 對 requirement pair 產生初步 Conflict / Neutral label；Context.requirements 是 reqt_candidates 需求池，本步不看正式 requirements、系統模型或其他回饋。
-
-核心問題：
-- 這一步是 initial classification，不是最終裁定。
-- 只根據兩條 requirement 原文與其直接語義判斷，不替需求補不存在的前提、設計方案或外部情境。
-- conflict-analyzer skill 的類型與範例不是封閉清單；若 requirement 原文顯示其他會造成需求衝突、驗收衝突、責任不清、重複但不一致、scope 不清或需要先合併/刪除/改寫/人工裁定的原因，也應判為 Conflict。
+        return """依 conflict-analyzer skill，僅根據 Context.requirements（需求清單）辨識需求關係；本步不看系統模型或其他回饋。
 
 判斷任務：
 - label 只用英文 "Conflict" 或 "Neutral"。
+- 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
 
-Analyst 判準：
-- 從需求意圖、scope boundary、acceptance boundary、SRS 條文品質、需求是否應合併/拆分、驗收標準是否一致來判斷。
-- 若兩條需求會造成需求意圖不一致、scope 不清、acceptance boundary 不一致、條文重複但語意不同，或必須先合併/拆分/改寫/人工裁定才能清楚驗收，標為 Conflict。
-- 若兩條需求描述同一 requirement slot、同一使用意圖或同一驗收責任，但 wording、限制、觸發條件、優先級或 acceptance criteria 不一致，標為 Conflict。
-- 若需求衝突原因不在上述例子中，但會讓驗收、追蹤、責任分配或需求治理出現不可接受的不一致，也可標為 Conflict；description 必須明確說明該原因。
-- Neutral 的 description 必須說明為什麼兩個需求不產生衝突。
+Conflict 判準：
+- 需求必須處於同一主體與可比較範圍。
+- 只有在無法同時滿足，或一方成立會直接違反另一方時，才標為 Conflict。
+- 資訊不足、尚待澄清、一般取捨、範圍未明、角色不同或流程階段不同，不可直接升級為 Conflict。
 - conflict_type 只是描述結果，不是產生 Conflict 的理由。
 
+Neutral 判準：
+- 只有在可明確判定兩項需求不衝突、不重複，且沒有直接語義關係時，才標為 Neutral。
+- 若兩項需求是重述、細化、依賴、範圍重疊、同一流程相鄰步驟或同一輸出行為，不要標為 Neutral。
+
 輸出要求：
-- Conflict：需包含 description、requirement_ids 或 related_requirements；description 說明涉及哪些需求、衝突點與原因。
-- Neutral：需包含 description；可選填 requirement_ids；description 說明為什麼兩個需求不產生衝突。
+- Conflict：需包含 description、requirement_ids 或 related_requirements；description 說明涉及哪些需求、互斥點與為何不能同時成立。
+- Neutral：需包含 description；可選填 requirement_ids；description 說明為何無衝突、無重複且無直接語義關係。
 - requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。
 """
 
@@ -425,17 +394,17 @@ Analyst 判準：
             f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
             f"# 補充會議內容（僅在 pair_reviews 不足時參考）\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 裁定規則\n"
-            "- 先看 requirements 原文清單，再看各 agent 的 pair_reviews。\n"
-            "- 若只有兩筆需求，requirement_a / requirement_b 是前兩筆需求的別名。\n"
+            "- 先看 requirement_a / requirement_b 原文，再看各 agent 的 pair_reviews。\n"
             "- discussion_rows 只在 pair_reviews 證據不足時作補充參考。\n"
             "- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。\n"
-            "- 任一 agent 的 pair_review 若提出可由 requirements 原文支持的角色專屬有效證據，可作為改判依據；有效證據優先於多數同意或既有 current_label。\n"
-            "- 若 extracted_pair_reviews 為空，仍須根據 requirements 原文重新裁定；不要只因缺少 review 就維持 current_label。\n"
-            "- conflict-analyzer skill 的衝突類型不是封閉清單；若原文或 pair_reviews 顯示其他會造成 SRS 條文、驗收、責任、追蹤、scope 或需求治理不一致的原因，也可裁定為 Conflict。\n"
-            "- Analyst 最終裁定角度：檢查 pair_reviews 是否指出 SRS 條文、scope、驗收、義務/風險、模型元素、流程、狀態、事件或輸出承諾層級的衝突。\n"
-            "- 若任一 agent 的 pair_review 提出可由 requirement 原文支持的角色專屬衝突證據，應納入裁定；不要因其他 agent 說可同時實作就排除。\n"
-            "- 不要因多個 agent 都說「可共存、互補、wording difference」就自動維持 Neutral；若 pair_reviews 顯示同一 requirement slot、capability、entity relationship 或 trigger-output pattern 存在不同需求承諾，仍應改判 Conflict。\n"
-            "- 若 new_label 為 Neutral，reason 必須說明為什麼兩個需求不產生衝突。\n"
+            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirement_a / requirement_b 原文本身已足以明確推翻現標籤。\n"
+            "- 若證據不足、理由不一致或沒有明確共識，維持 current_label。\n"
+            "- Conflict 只在兩項需求無法同時成立，或一方成立會直接違反另一方時成立。\n"
+            "- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也可裁定為 Conflict。\n"
+            "- Neutral 只在兩項需求既不衝突、也不重複，且沒有直接語義關係時成立。\n"
+            "- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。\n"
+            "- 若支持 Neutral 的 pair_reviews 主要以子集、細化、補充步驟或同流程關係作為理由，必須重新檢查是否其實已存在直接語義關係；若存在，不可僅因不互斥就維持 Neutral。\n"
+            "- 若 pair 呈現重複、近似重複、細化、範圍重疊，或同一需求槽位的措辭、限制、觸發條件、數量、頻率差異，需檢查是否必須合併、改寫、刪除或裁定；若是，不可維持 Neutral。\n"
             "- 你必須對 proposal_list 中的每一個 pair 都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
             "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n"
             "- 請直接做最終裁定，不要重述整場會議。\n\n"
@@ -471,18 +440,18 @@ Analyst 判準：
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, str]], str]:
-        """Analyst rewrites final conflict-review reasons after labels are fixed."""
+        """Analyst 整理已定案的衝突再審查理由。"""
         if not decision_list:
             return [], ""
         prompt = (
             "以下每筆 Conflict/Neutral pair 的 final_label 已經決定。"
-            "請在不改變 final_label 的前提下，整理一段可放入 record 的最終理由。\n\n"
+            "請在不改變 final_label 的前提下，整理一段可放入紀錄的最終理由。\n\n"
             f"# 已決定的 pairs\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
             f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
             f"# 補充會議內容\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 規則\n"
             "- 不可新增、刪除或改變任何 pair 的 final_label/new_label。\n"
-            "- reason 必須根據 requirement 原文、各 agent 的 pair_reviews 與最終裁定整理。\n"
+            "- reason 必須根據需求原文、各 agent 的 pair_reviews 與最終裁定整理。\n"
             "- reason 要清楚說明為什麼最後維持或改成該標籤。\n"
             "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n\n"
             "# 輸出 JSON array\n"

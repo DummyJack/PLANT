@@ -24,32 +24,30 @@ ANALYST_ISSUE_TASK = (
     "來源追蹤與未決缺口。"
 )
 
-ANALYST_ISSUE_RULES = """- statement 需說明：此議題對 requirements 的影響、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
+ANALYST_ISSUE_RULES = """- statement 需說明：此議題對需求的影響、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
 - 依據優先引用 requirement id、conflict id、stakeholder 觀點、既有討論或議題描述。
-- 判斷重點是需求是否清楚、可驗收、可追蹤、scope 是否穩定、是否需要拆成 FR / NFR / constraint 或保留為 open question。
-- 若提出需求修正，必須指出要改哪個欄位：requirement text、priority、acceptance criteria 或 source trace。
+- 判斷重點是需求是否清楚、可驗收、可追蹤、範圍是否穩定、是否需要拆成功能需求、非功能需求、限制條件或保留為未決問題。
+- 若提出需求修正，必須指出要改哪個欄位：需求文字、優先級、驗收條件或來源追蹤。
 - 若資訊不足，請說明缺少哪個可寫入需求的必要訊號，而不是只說需要更多資訊。
 - 若需要他人補資訊，才在 open_questions 中提出能直接支援需求修正的具體問題。
 - open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
-- 若建議新增或修改需求，請說明應落在 requirement、acceptance criteria 或 open question 哪一類。"""
+- 若建議新增或修改需求，請說明應落在需求、驗收條件或未決問題哪一類。"""
 
 ANALYST_CONFLICT_ISSUE_TASK = (
-    "請以需求分析師身分逐筆再審查目前這批 Conflict/Neutral pairs，"
-    "先根據 requirements 原文清單獨立重判，並將重判結果填入 proposed_label。"
+    "請逐筆再審查目前這批 Conflict/Neutral pairs，"
+    "先根據 requirement_a / requirement_b 原文獨立重判，並將重判結果填入 proposed_label。"
 )
 
 ANALYST_CONFLICT_ISSUE_RULES = f"""{CONFLICT_REVIEW_RESPONSE_CONTRACT}
-- 這一步是對 initial classification 的再審查，請使用 conflict-analyzer skill 作為審查框架，檢查 initial_label 是否漏判或誤判，而不是替 initial_label 辯護。
-- 先只根據 requirements 原文清單獨立判斷 proposed_label；若只有兩筆需求，requirement_a / requirement_b 是前兩筆需求的別名。
-- 特別檢查 conflict-analyzer skill 中的 conflict relation 是否被漏掉，以及是否有 skill 範例未列出但 requirement 原文支持的其他衝突原因。
-- 特別檢查是否有同一 requirement slot、capability、entity relationship、trigger-output pattern 或 acceptance responsibility 的不同需求承諾被誤判成 Neutral。
-- Analyst 角度：看 SRS 條文、scope、acceptance、來源追蹤與需求治理是否會不一致，或是否需要先合併/拆分/改寫才能清楚驗收。
-- 若需求原文顯示其他需求分析層級的衝突，也可判為 Conflict；reason 必須明確說明。
-- 若 proposed_label 為 Neutral，reason 必須說明為什麼兩個需求不產生衝突。
+- 先只根據 requirement_a / requirement_b 原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
+- reason 必須寫成完整審查意見：說明你的獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
 {CONFLICT_REVIEW_EVIDENCE_RULES}
+- 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
+- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
 - 不要跳到實作方案或最終決策。
 - 此會議不提出 open_questions；資訊不足時請在 reason 中說明不確定性，open_questions 必須輸出空陣列。
-- 不可用 JSON-like 條列或文字摘要取代合法 JSON。"""
+- 不可用類 JSON 條列或文字摘要取代合法 JSON。"""
 
 
 class AnalystIssues:

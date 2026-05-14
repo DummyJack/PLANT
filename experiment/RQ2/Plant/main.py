@@ -197,7 +197,7 @@ def run_conflict(
     - 依 CSV/JSON 的 types 分組；**同一 type 內**整批做一次 pairwise 辨識，再全組一次衝突複核。
     - data_path 為 None：使用預設 cn_100.csv（或 cn_pairs.csv）；亦可傳入 .json 陣列。
     - count > 0：只取前 count 筆。
-    - record 輸出為 **陣列**：每個元素為 ``{ "<type 名稱>": { …, "pairs": [ … ] } }``，同一 type 僅一筆；
+    - record 輸出為 type-indexed object：``{ "<type 名稱>": [pair, ...] }``，同一 type 僅一筆；
       pair 決策理由整理到每筆 pair 的 conflict_meeting。
     """
     try:

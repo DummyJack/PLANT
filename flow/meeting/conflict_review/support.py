@@ -14,6 +14,7 @@ PROPOSED_LABEL_RE = re.compile(
     r"\bproposed_label\s*[:：]\s*(Conflict|Neutral)\b",
     re.IGNORECASE,
 )
+CONFIDENCE_FIELD_RE = re.compile(r"\bconfidence\s*[:：]\s*(high|medium|low)\b", re.IGNORECASE)
 REASON_FIELD_RE = re.compile(r"\breason\s*[:：]\s*(.+)$", re.IGNORECASE)
 
 
@@ -47,8 +48,11 @@ def pair_review_record(
         return None
     proposed_label = str(review.get("proposed_label") or "").strip()
     reason = str(review.get("reason") or "").strip()
+    confidence = str(review.get("confidence") or "").strip().lower()
     if proposed_label not in {"Conflict", "Neutral"}:
         proposed_label = ""
+    if confidence not in {"high", "medium", "low"}:
+        confidence = ""
     current_label = ""
     if current_labels_by_id:
         current_label = str(current_labels_by_id.get(pair_id) or "").strip()
@@ -59,6 +63,7 @@ def pair_review_record(
         "id": pair_id,
         "decision": decision,
         "proposed_label": proposed_label,
+        "confidence": confidence,
         "reason": reason,
     }
 
@@ -115,6 +120,7 @@ def extract_pair_reviews_from_statement(
         if not pair_id or pair_id not in pair_id_set:
             continue
         proposed_label_match = PROPOSED_LABEL_RE.search(line)
+        confidence_match = CONFIDENCE_FIELD_RE.search(line)
         labels = [m.group(1) for m in LABEL_RE.finditer(line)]
         reason = line
         reason_match = REASON_FIELD_RE.search(line)
@@ -132,6 +138,11 @@ def extract_pair_reviews_from_statement(
             {
                 "id": pair_id,
                 "proposed_label": proposed_label,
+                "confidence": (
+                    confidence_match.group(1).lower()
+                    if confidence_match
+                    else ""
+                ),
                 "reason": reason,
             },
             pair_id_set=pair_id_set,
@@ -646,18 +657,63 @@ def analyst_finalize_conflict_review_reasons(
                 "requirement_b": dict(conflict.get("requirement_b") or {}),
             }
         )
-    reason_rows, raw_output = coordinator.flow.analyst_agent.finalize_conflict_review_reasons(
-        decision_items,
-        discussion_rows,
-        extracted_pair_reviews=reviews_for_prompt,
-    )
-    reason_by_id = {
-        str(row.get("id") or "").strip(): str(row.get("reason") or "").strip()
-        for row in reason_rows
-        if isinstance(row, dict)
-        and str(row.get("id") or "").strip()
-        and str(row.get("reason") or "").strip()
-    }
+    def reviews_for_ids(pair_ids: set[str]) -> List[Dict[str, Any]]:
+        return [
+            row for row in reviews_for_prompt
+            if isinstance(row, dict) and str(row.get("id") or "").strip() in pair_ids
+        ]
+
+    def fetch_reason_batch(batch: List[Dict[str, Any]]) -> tuple[List[Dict[str, str]], str]:
+        batch_ids = {
+            str(item.get("id") or "").strip()
+            for item in batch
+            if str(item.get("id") or "").strip()
+        }
+        return coordinator.flow.analyst_agent.finalize_conflict_review_reasons(
+            batch,
+            discussion_rows,
+            extracted_pair_reviews=reviews_for_ids(batch_ids),
+        )
+
+    reason_by_id: Dict[str, str] = {}
+    raw_outputs: List[str] = []
+    batch_size = 8
+    for start in range(0, len(decision_items), batch_size):
+        batch = decision_items[start : start + batch_size]
+        reason_rows, raw_output = fetch_reason_batch(batch)
+        if raw_output:
+            raw_outputs.append(raw_output)
+        for row in reason_rows:
+            if not isinstance(row, dict):
+                continue
+            pair_id = str(row.get("id") or "").strip()
+            reason = str(row.get("reason") or "").strip()
+            if pair_id and reason:
+                reason_by_id[pair_id] = reason
+
+    missing = [
+        str(item.get("id") or "").strip()
+        for item in decision_items
+        if str(item.get("id") or "").strip() not in reason_by_id
+    ]
+    if missing:
+        retry_items = [
+            item for item in decision_items
+            if str(item.get("id") or "").strip() in set(missing)
+        ]
+        for start in range(0, len(retry_items), batch_size):
+            batch = retry_items[start : start + batch_size]
+            reason_rows, raw_output = fetch_reason_batch(batch)
+            if raw_output:
+                raw_outputs.append(raw_output)
+            for row in reason_rows:
+                if not isinstance(row, dict):
+                    continue
+                pair_id = str(row.get("id") or "").strip()
+                reason = str(row.get("reason") or "").strip()
+                if pair_id and reason:
+                    reason_by_id[pair_id] = reason
+
     missing = [
         str(item.get("id") or "").strip()
         for item in decision_items
@@ -675,7 +731,7 @@ def analyst_finalize_conflict_review_reasons(
     return {
         "final_reason_status": "ok",
         "reason_count": len(reason_by_id),
-        "raw_final_reason_output": raw_output,
+        "raw_final_reason_output": raw_outputs,
     }
 
 def ensure_conflict_review_participant_contributions(

@@ -82,9 +82,9 @@ def build_rq2_record_by_type(
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
     meetings_by_type: Dict[str, Any],
     results_by_idx: Dict[int, Tuple[Any, Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
-    """組裝寫入 record 的「每 type 一筆」列表（每筆為單一 type key 的 pair 列表）。"""
-    out: List[Dict[str, Any]] = []
+) -> Dict[str, List[Dict[str, Any]]]:
+    """組裝寫入 record 的 type-indexed object。"""
+    out: Dict[str, List[Dict[str, Any]]] = {}
     for g, items in grouped.items():
         meeting = meetings_by_type.get(g)
         block: Dict[str, Any] = dict(meeting) if isinstance(meeting, dict) else {}
@@ -145,7 +145,7 @@ def build_rq2_record_by_type(
             }
             base["conflict_meeting"] = [conflict_meeting]
             pairs_out.append(base)
-        out.append({str(g): pairs_out})
+        out[str(g)] = pairs_out
     return out
 
 def build_rq2_result_payload(
