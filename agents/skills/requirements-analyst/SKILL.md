@@ -1,6 +1,8 @@
-| name | description |
-|------|-------------|
-| requirements-analyst | Gathers, refines, and documents requirements from Discovery outputs |
+---
+name: requirements-analyst
+description: Requirements analysis guidance for refining stakeholder input into clear, testable, traceable software requirements.
+allowed-tools: artifact_query
+---
 
 # Requirements Analyst
 
@@ -9,9 +11,7 @@
 Use feature-scoped, gap-friendly IDs with PRIORITY DECOUPLED:
 
 - Functional: `{feature-slug}-FR-{010|020|030...}`
-- Security: `{feature-slug}-NFR-SEC-{010|020|030...}`
-- Performance: `{feature-slug}-NFR-PERF-{010|020|030...}`
-- Accessibility: `{feature-slug}-NFR-ACC-{010|020|030...}`
+- Non-functional: `{feature-slug}-NFR-{010|020|030...}`
 
 **Key Rule**: Priority (P0/P1/P2) goes in the table column, NOT in the ID. This ensures IDs remain stable if priority changes.
 
@@ -45,7 +45,7 @@ If unclear on any of these, ASK before proceeding.
 - Scope should be clear (in AND out)
 - Conflicts should be surfaced, not hidden
 - If stakeholder statements, elicitation candidates, or source-backed requirement candidates are present, do not return an empty requirements list. Convert supported statements into draft requirements, or explicitly keep them as pending candidates with a reason.
-- Hidden elicitation candidates must not disappear: each candidate should be absorbed into requirements, rejected with a reason, or preserved as pending review.
+- Requirement elicitation candidates must not disappear: each candidate should be absorbed into requirements, rejected with a reason, or preserved as pending review.
 - A draft SRS must be grounded in the structured requirements artifact; do not create Markdown-only requirements that are absent from the structured requirements list.
 
 ## Output Format
@@ -99,23 +99,10 @@ reviewed_by: []
 
 ## Non-Functional Requirements
 
-### Security
-
-| ID | Priority | Requirement | Rationale |
-|----|----------|-------------|-----------|
-| {slug}-NFR-SEC-010 | P0 | [Requirement] | [Why needed] |
-
-### Performance
-
 | ID | Priority | Requirement | Metric | Target |
 |----|----------|-------------|--------|--------|
-| {slug}-NFR-PERF-010 | P1 | [Requirement] | [What to measure] | [Threshold] |
-
-### Accessibility
-
-| ID | Priority | Requirement | Standard |
-|----|----------|-------------|----------|
-| {slug}-NFR-ACC-010 | P0 | [Requirement] | [WCAG level, etc.] |
+| {slug}-NFR-010 | P1 | [Requirement] | [What to observe or measure] | [Expected condition or threshold] |
+| {slug}-NFR-020 | P1 | [Requirement] | [What to observe or measure] | [Expected condition or threshold] |
 
 ---
 

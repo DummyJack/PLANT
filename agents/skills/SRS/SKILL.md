@@ -241,9 +241,9 @@ CON-TECH-XXX: Technical constraints
 
 ### Requirement Tables
 ```markdown
-| ID | Description | Priority | Status | Source |
-|----|-------------|----------|--------|--------|
-| FR-001 | User login | M | Approved | Stakeholder Meeting 2024-01-15 |
+| ID | Description | Priority | Source |
+|----|-------------|----------|--------|
+| FR-001 | User login | M | Stakeholder Meeting 2024-01-15 |
 ```
 
 ### Cross-References

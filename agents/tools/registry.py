@@ -1,0 +1,40 @@
+# Tool registry: builds configured tools for each agent.
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
+class ToolRegistry:
+    """宣告式工具註冊與配置入口。"""
+
+    def __init__(self, config: Dict[str, Any], policy, artifact_path: Optional[str] = None):
+        self.config = config
+        self.policy = policy
+        self.enable_tools = config.get("enable_tools") or {}
+        self.artifact_path = artifact_path
+
+    def build_tools_for_agent(self, agent_name: str) -> List[Any]:
+        from .artifact_query import ArtifactQueryTool
+        from .plantuml_validator import PlantUMLValidatorTool
+        from .read_file import FileParserTool, has_supported_files
+        from .web_search import WebSearchTool
+
+        allowed = set(self.policy.allowed_tools_for_agent(agent_name))
+        built: List[Any] = []
+
+        if "web_search" in allowed and self.enable_tools.get("web_search", False):
+            built.append(WebSearchTool(stop_config=None))
+
+        if "file_parser" in allowed and self.enable_tools.get("file_parser", True):
+            doc_dir = Path("doc")
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            if has_supported_files(doc_dir):
+                built.append(FileParserTool(base_dir=doc_dir))
+
+        if "plantuml_validate" in allowed and self.enable_tools.get("plantuml_validate", True):
+            built.append(PlantUMLValidatorTool(use_online=True, server_url=""))
+
+        if "artifact_query" in allowed and self.enable_tools.get("artifact_query", True):
+            if self.artifact_path:
+                built.append(ArtifactQueryTool(artifact_path=self.artifact_path))
+
+        return built

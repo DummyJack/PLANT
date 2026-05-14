@@ -4,7 +4,6 @@ import re
 import urllib.error
 import urllib.request
 
-from typing import Any
 from .base import BaseTool
 
 logger = logging.getLogger("Plant.PlantUMLValidator")

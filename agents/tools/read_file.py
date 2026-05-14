@@ -8,16 +8,21 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-# 單一 JSON 物件頂層鍵 / 陣列元素數量上限，避免索引爆炸
-JSON_MAX_KEYS = 3000
-JSON_MAX_LIST_ITEMS = 5000
-
 from .base import BaseTool
 
 logger = logging.getLogger("Plant.FileParserTool")
 
 SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
 CHUNK_SEP = "##"  # chunk_id = "{relative_posix_path}##{index}"
+
+
+def has_supported_files(base_dir: Path) -> bool:
+    if not base_dir.is_dir():
+        return False
+    return any(
+        p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+        for p in base_dir.rglob("*")
+    )
 
 
 def rel_posix(path: Path, base: Path) -> str:
@@ -336,15 +341,12 @@ def json_top_level_pieces(obj: Any) -> List[str]:
     """每段為可獨立閱讀的 JSON 片段字串（pretty）。"""
     if isinstance(obj, dict):
         keys = list(obj.keys())
-        if len(keys) > JSON_MAX_KEYS:
-            keys = keys[:JSON_MAX_KEYS]
         out: List[str] = []
         for k in keys:
             out.append(json_dumps_safe({k: obj[k]}))
         return out
     if isinstance(obj, list):
-        items = obj[:JSON_MAX_LIST_ITEMS]
-        return [json_dumps_safe(item) for item in items]
+        return [json_dumps_safe(item) for item in obj]
     return [json_dumps_safe(obj)]
 
 
@@ -543,15 +545,15 @@ class FileParserTool(BaseTool):
         co = min(co, cm - 1) if cm and cm > 1 else 0
         self.chunk_max_chars = cm
         self.chunk_overlap = co
-        self._file_sig: Dict[str, Tuple[float, int]] = {}
-        self._chunks: List[Dict[str, Any]] = []
-        self._chunk_by_id: Dict[str, Dict[str, Any]] = {}
+        self.file_sig: Dict[str, Tuple[float, int]] = {}
+        self.chunks: List[Dict[str, Any]] = []
+        self.chunk_by_id: Dict[str, Dict[str, Any]] = {}
 
     def reset_session(self) -> None:
         """新一段 tool 對話時清空索引，下次 search 會重建。"""
-        self._file_sig.clear()
-        self._chunks.clear()
-        self._chunk_by_id.clear()
+        self.file_sig.clear()
+        self.chunks.clear()
+        self.chunk_by_id.clear()
 
     def safe_resolve(self, file_path: str) -> Tuple[Optional[Path], Optional[str]]:
         try:
@@ -596,18 +598,18 @@ class FileParserTool(BaseTool):
             try:
                 rel = rel_posix(p, self.base_dir)
                 st = p.stat()
-                sig[rel] = (st.st_mtime, st.size)
+                sig[rel] = (st.st_mtime, st.st_size)
             except (OSError, ValueError):
                 continue
         return sig
 
     def rebuild_index(self) -> None:
-        self._chunks.clear()
-        self._chunk_by_id.clear()
+        self.chunks.clear()
+        self.chunk_by_id.clear()
         if not self.base_dir.is_dir():
-            self._file_sig = {}
+            self.file_sig = {}
             return
-        for rel, _ in sorted(self._file_sig.items()):
+        for rel, _ in sorted(self.file_sig.items()):
             path = self.base_dir / rel
             if not path.is_file():
                 continue
@@ -643,8 +645,8 @@ class FileParserTool(BaseTool):
                         "text": chunk_text,
                         "preview": preview,
                     }
-                    self._chunks.append(row)
-                    self._chunk_by_id[cid] = row
+                    self.chunks.append(row)
+                    self.chunk_by_id[cid] = row
                     i += 1
             except Exception as e:
                 logger.warning("索引切塊失敗 %s: %s", rel, e, exc_info=True)
@@ -652,9 +654,9 @@ class FileParserTool(BaseTool):
 
     def ensure_index(self) -> Optional[str]:
         sig = self.current_file_signature()
-        if sig == self._file_sig and self._chunks:
+        if sig == self.file_sig and self.chunks:
             return None
-        self._file_sig = sig
+        self.file_sig = sig
         self.rebuild_index()
         return None
 
@@ -707,18 +709,18 @@ class FileParserTool(BaseTool):
         if not query or not isinstance(query, str) or not query.strip():
             return "錯誤：search_chunks 請提供非空的 query。"
         self.ensure_index()
-        if not self._chunks:
+        if not self.chunks:
             return "（索引為空：doc/ 下無可索引之支援檔案，或檔案讀取失敗。）"
 
         top_k = kwargs.get("top_k")
         if top_k is not None and isinstance(top_k, int) and top_k >= 1:
-            k = min(top_k, 30)
+            k = top_k
         else:
             k = 8
 
         q_tokens = tokenize(query)
         ranked: List[Tuple[float, Dict[str, Any]]] = []
-        for row in self._chunks:
+        for row in self.chunks:
             txt = row.get("text") or ""
             if not isinstance(txt, str):
                 txt = str(txt)
@@ -769,8 +771,8 @@ class FileParserTool(BaseTool):
         self.ensure_index()
         parts: List[str] = []
         missing: List[str] = []
-        for cid in ids[:40]:
-            row = self._chunk_by_id.get(cid)
+        for cid in ids:
+            row = self.chunk_by_id.get(cid)
             if not row:
                 missing.append(cid)
                 continue
@@ -784,7 +786,7 @@ class FileParserTool(BaseTool):
         if not parts and missing:
             return (
                 "錯誤：找不到任何有效的 chunk_id。請先 search_chunks 取得正確 id，"
-                f"無效範例：{missing[:3]}"
+                f"無效 id：{missing}"
             )
 
         header = (
@@ -792,5 +794,5 @@ class FileParserTool(BaseTool):
         )
         body = "".join(parts)
         if missing:
-            body += f"\n（以下 id 不存在或索引已更新：{missing[:5]}）\n"
+            body += f"\n（以下 id 不存在或索引已更新：{missing}）\n"
         return header + body

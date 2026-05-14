@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import BaseTool
+from agents.profile.analyst.requirements import requirement_discussion_pool
+from storage.artifact import load_artifact as load_split_artifact
 
 
 class ArtifactQueryTool(BaseTool):
@@ -101,10 +103,14 @@ class ArtifactQueryTool(BaseTool):
     def load_artifact(self) -> Optional[Dict[str, Any]]:
         if not self.artifact_path.exists():
             return None
+        if self.artifact_path.is_dir():
+            return load_split_artifact(self.artifact_path)
         with open(self.artifact_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
+        if section == "requirements" and not artifact.get("requirements"):
+            return requirement_discussion_pool(artifact)
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
@@ -116,10 +122,10 @@ class ArtifactQueryTool(BaseTool):
 
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
-            "requirements": ["id", "text", "type", "priority", "source_stakeholders", "source", "rationale", "acceptance_criteria", "verification_method", "status"],
+            "requirements": ["id", "text", "type", "priority", "source_stakeholders", "source", "acceptance_criteria"],
             "conflicts": ["id", "label", "description", "requirement_ids", "conflict_type", "status"],
             "decisions": ["id", "decision", "summary", "status"],
-            "open_questions": ["from_agent", "to_agent", "question", "status", "topic_id"],
+            "open_questions": ["from_agent", "to_agent", "question", "status", "issue_id"],
             "issue_proposals": ["issue_id", "title", "category", "priority_hint", "proposed_by", "round"],
         }
         fields = presets.get(section)
@@ -141,7 +147,7 @@ class ArtifactQueryTool(BaseTool):
         ids = filters.get("ids")
         if isinstance(ids, list) and ids and item_id not in {str(x) for x in ids}:
             return False
-        for key in ("status", "label", "type", "owner", "round", "topic_id"):
+        for key in ("status", "label", "type", "owner", "round", "issue_id"):
             expected = filters.get(key)
             if expected is None:
                 continue

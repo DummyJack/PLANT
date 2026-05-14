@@ -1,7 +1,7 @@
 ---
 name: uml-modeling
 description: Requirement-level and UML diagram generation including context, use case, activity, data flow, sequence, state, and tentative class/domain diagrams
-allowed-tools: Read, Glob, Grep, Write, Edit
+allowed-tools: plantuml_validate, artifact_query
 ---
 
 # UML Modeling Skill
@@ -11,20 +11,20 @@ allowed-tools: Read, Glob, Grep, Write, Edit
 Use this skill when:
 
 - **Uml Modeling tasks** - Working on diagram generation including context, use case, activity, data flow, sequence, state, and class/domain diagrams
-- **Planning or design** - Need guidance on Uml Modeling approaches
-- **Best practices** - Want to follow established patterns and standards
+- **Requirement modeling decisions** - Need guidance on choosing requirement-level diagrams without inventing design details
+- **Modeling conventions** - Want consistent PlantUML notation for requirements analysis
 
 ## Overview
 
 Create requirement-level and UML diagrams using PlantUML and Mermaid notation. In early requirements work, prefer requirement models over detailed design models.
 
-## MANDATORY: Documentation-First Approach
+## MANDATORY: Evidence-First Approach
 
 Before creating UML diagrams:
 
-1. **Invoke `docs-management` skill** for UML standards guidance
+1. **Ground the diagram in accepted requirements, decisions, and explicit project context**
 2. **Verify diagram syntax** using appropriate notation (PlantUML/Mermaid)
-3. **Base all guidance on UML 2.5 specification**
+3. **Base all guidance on UML 2.5 concepts without inventing design details**
 
 ## UML Diagram Types
 
@@ -32,11 +32,11 @@ Before creating UML diagrams:
 
 | Diagram | Purpose | When to Use |
 |---------|---------|-------------|
-| Class | Show classes, attributes, methods, relationships | Domain modeling, design |
-| Component | Show components and dependencies | Architecture documentation |
-| Deployment | Show physical deployment | Infrastructure planning |
-| Object | Show object instances | Specific scenarios |
-| Package | Show namespaces/modules | Code organization |
+| Class | Show domain concepts, attributes, and relationships | Tentative domain modeling only |
+| Component | Show components and dependencies | Architecture documentation; avoid during requirements work unless explicitly requested |
+| Deployment | Show physical deployment | Infrastructure planning; avoid during requirements work unless explicitly requested |
+| Object | Show object instances | Specific scenarios; avoid unless needed to clarify requirements |
+| Package | Show namespaces/modules | Code organization; avoid during requirements work |
 
 ### Behavioral Diagrams
 
@@ -61,7 +61,7 @@ Before creating UML diagrams:
 
 For early requirements modeling:
 
-- Required baseline: Context, Use Case, Activity, Data Flow
+- Common baseline candidates: Context, Use Case, Activity, Data Flow; create them only when they help requirements understanding, validation, or traceability
 - Optional: Sequence when interaction order matters; State Machine when lifecycle states are explicit
 - Tentative only: Class/Domain model; do not treat it as implementation design
 - Open questions, pending candidates, or external research should become `to_confirm` or assumptions unless accepted into requirements

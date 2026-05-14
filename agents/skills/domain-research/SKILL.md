@@ -1,28 +1,18 @@
 ---
-name: research
-description: Research domain knowledge using MCP servers (perplexity, context7, firecrawl). Gathers best practices, regulatory requirements, and competitive insights.
-argument-hint: <topic> [--domain <domain-name>] [--depth <research-depth>] [--focus <focus-area>]
-allowed-tools: Read, Write, Skill, mcp__perplexity__search, mcp__perplexity__reason, mcp__context7__resolve-library-id, mcp__context7__query-docs, mcp__firecrawl__firecrawl_search, mcp__firecrawl__firecrawl_scrape
+name: domain-research
+description: Research domain knowledge for requirements engineering. Gathers best practices, regulatory requirements, and competitive insights.
+allowed-tools: artifact_query, file_parser, web_search
 ---
 
-# Research Command
+# Domain Research Skill
 
-Research domain knowledge using MCP servers to enrich requirements elicitation.
-
-## Usage
-
-```bash
-/requirements-elicitation:research "e-commerce checkout best practices"
-/requirements-elicitation:research "GDPR compliance" --domain "user-data" --depth deep
-/requirements-elicitation:research "authentication patterns" --focus regulatory
-/requirements-elicitation:research "competitor features" --focus competitive
-```
+Research domain knowledge to enrich requirements elicitation.
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| topic | Yes | The topic to research |
+| issue | Yes | The issue to research |
 | --domain | No | Domain name for organizing output |
 | --depth | No | Research depth: `shallow`, `moderate`, `deep` (default: `moderate`) |
 | --focus | No | Research focus: `best-practices`, `regulatory`, `competitive`, `technical`, `all` |
@@ -63,7 +53,7 @@ Research domain knowledge using MCP servers to enrich requirements elicitation.
 
 ```yaml
 research_request:
-  topic: "{from argument}"
+  issue: "{from argument}"
   domain: "{from --domain}"
   depth: shallow|moderate|deep
   focus: "{from --focus or all}"
@@ -71,9 +61,9 @@ research_request:
 
 ### Step 2: Load Domain Research Skill
 
-Invoke the `requirements-elicitation:domain-research` skill to load MCP patterns.
+Use this skill to load domain research patterns.
 
-### Step 3: Execute MCP Queries
+### Step 3: Gather Evidence
 
 Based on focus area:
 
@@ -81,29 +71,29 @@ Based on focus area:
 
 ```yaml
 queries:
-  - server: perplexity
-    query: "{topic} best practices 2025"
-  - server: perplexity
-    query: "{topic} common patterns recommendations"
+  - source: external research
+    query: "{issue} best practices 2025"
+  - source: external research
+    query: "{issue} common patterns recommendations"
 ```
 
 **Regulatory:**
 
 ```yaml
 queries:
-  - server: perplexity
+  - source: external research
     query: "{regulation} requirements {industry}"
-  - server: firecrawl
-    action: scrape regulatory documentation
+  - source: official documentation
+    action: review regulatory documentation
 ```
 
 **Competitive:**
 
 ```yaml
 queries:
-  - server: firecrawl
+  - source: public product information
     action: search competitor features
-  - server: perplexity
+  - source: external research
     query: "{industry} market leaders features"
 ```
 
@@ -111,9 +101,9 @@ queries:
 
 ```yaml
 queries:
-  - server: context7
-    action: resolve library, get docs
-  - server: perplexity
+  - source: official documentation
+    action: review library or framework documentation
+  - source: external research
     query: "{technology} integration requirements"
 ```
 
@@ -135,20 +125,16 @@ Display summary of findings.
 
 ### Best Practices Research
 
-```bash
-/requirements-elicitation:research "e-commerce checkout optimization"
-```
-
-Output:
+Example output:
 
 ```text
 Researching: e-commerce checkout optimization
 Depth: moderate
 Focus: best-practices
 
-Querying MCP servers...
-  [perplexity] e-commerce checkout best practices 2025
-  [perplexity] cart abandonment reduction techniques
+Gathering evidence...
+  [external research] e-commerce checkout best practices
+  [external research] cart abandonment reduction techniques
 
 Key Findings:
 
@@ -181,21 +167,17 @@ Saved to: .requirements/checkout/research/RES-20251225-170000.yaml
 
 ### Regulatory Research
 
-```bash
-/requirements-elicitation:research "PCI-DSS" --focus regulatory --depth deep
-```
-
-Output:
+Example output:
 
 ```text
 Researching: PCI-DSS compliance
 Depth: deep
 Focus: regulatory
 
-Querying MCP servers...
-  [perplexity] PCI-DSS requirements payment processing
-  [perplexity] PCI-DSS 4.0 changes requirements
-  [firecrawl] scraping PCI Security Standards Council
+Gathering evidence...
+  [external research] PCI-DSS requirements payment processing
+  [external research] PCI-DSS version-specific changes
+  [official documentation] PCI Security Standards Council
 
 Key Findings:
 
@@ -232,20 +214,16 @@ Saved to: .requirements/payment/research/RES-20251225-171500.yaml
 
 ### Competitive Research
 
-```bash
-/requirements-elicitation:research "inventory management software" --focus competitive
-```
-
-Output:
+Example output:
 
 ```text
 Researching: inventory management software competitors
 Depth: moderate
 Focus: competitive
 
-Querying MCP servers...
-  [firecrawl] searching inventory management software features
-  [perplexity] inventory management market leaders 2025
+Gathering evidence...
+  [public product information] inventory management software features
+  [external research] inventory management market leaders
 
 Competitors Analyzed:
 
@@ -288,21 +266,17 @@ Saved to: .requirements/inventory/research/RES-20251225-173000.yaml
 
 ### Technical Research
 
-```bash
-/requirements-elicitation:research "React state management" --focus technical
-```
-
-Output:
+Example output:
 
 ```text
 Researching: React state management
 Depth: moderate
 Focus: technical
 
-Querying MCP servers...
-  [context7] resolving react library
-  [context7] getting docs: state management
-  [perplexity] React state management patterns 2025
+Gathering evidence...
+  [official documentation] React library documentation
+  [official documentation] state management documentation
+  [external research] React state management patterns
 
 Key Findings:
 
@@ -345,20 +319,19 @@ Saved to: .requirements/frontend/research/RES-20251225-174500.yaml
 ```yaml
 research_session:
   id: "RES-{timestamp}"
-  topic: "{topic}"
+  issue: "{issue}"
   domain: "{domain}"
   depth: shallow|moderate|deep
   focus: "{focus area}"
   timestamp: "{ISO-8601}"
 
   queries:
-    - server: perplexity
+    - source: external research
       query: "{query text}"
       success: true
 
-    - server: context7
-      library: "{library}"
-      topic: "{topic}"
+    - source: official documentation
+      issue: "{issue}"
       success: true
 
   findings:
@@ -383,23 +356,14 @@ research_session:
     - "{recommendation 2}"
 
   gaps_for_further_research:
-    - "{topic needing more research}"
+    - "{issue needing more research}"
 ```
 
 ## Integration
 
-### Follow-Up Commands
+### Follow-Up Work
 
-```bash
-# Validate research with stakeholders
-/requirements-elicitation:interview "Technical Lead" --context "validate React findings"
-
-# Check if research fills gaps
-/requirements-elicitation:gaps
-
-# More research on specific topic
-/requirements-elicitation:research "Zustand vs Redux" --focus technical --depth deep
-
-# Consolidate all sources
-/requirements-elicitation:discover "{domain}"
-```
+- Validate research with stakeholders.
+- Check whether research fills known gaps.
+- Run deeper research on specific uncertain issues.
+- Consolidate all source findings into requirements, constraints, risks, or open questions.

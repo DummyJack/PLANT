@@ -1,6 +1,7 @@
 ---
 name: conflict-detection
 description: Conflict identification and resolution patterns for requirements, decisions, and plans
+allowed-tools: artifact_query
 triggers:
   - conflict
   - contradiction
@@ -41,7 +42,7 @@ A new decision contradicts an earlier decision.
 **Example**: "Earlier said 'no database', now requesting PostgreSQL"
 
 **Indicators**:
-- Opposite stance on same topic
+- Opposite stance on same issue
 - Changed constraints
 - Reversed priorities
 
