@@ -12,7 +12,11 @@ from .artifact import (
     save_draft as artifact_save_draft,
 )
 from .json import load_json_file, save_json_file
-from .markdown import markdown_target_dir, save_markdown as markdown_save_markdown
+from .markdown import (
+    load_markdown as markdown_load_markdown,
+    markdown_target_dir,
+    save_markdown as markdown_save_markdown,
+)
 from .plantuml import (
     save_plantuml_files as plantuml_save_plantuml_files,
     write_one_plantuml as plantuml_write_one_plantuml,
@@ -102,6 +106,9 @@ class Store:
 
     def save_markdown(self, content: str, filename: str):
         markdown_save_markdown(self.artifact_dir, self.output_dir, content, filename)
+
+    def load_markdown(self, filename: str) -> str:
+        return markdown_load_markdown(self.artifact_dir, self.output_dir, filename)
 
     # PlantUML
 

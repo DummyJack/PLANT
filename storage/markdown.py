@@ -18,6 +18,12 @@ def markdown_target_dir(artifact_dir: Path, output_dir: Path, filename: str) -> 
     """指定輸出檔案放置目錄。"""
     if filename in {"srs.md", "design_rationale.md"}:
         return output_dir
+    if filename.startswith("R") and filename.endswith(".md"):
+        return artifact_dir / "MoM"
+    if filename == "conflict_report.md" or (
+        filename.startswith("conflict_report_v") and filename.endswith(".md")
+    ):
+        return artifact_dir / "MoM"
     return artifact_dir
 
 
@@ -28,6 +34,16 @@ def save_markdown(
     filename: str,
 ) -> None:
     target_dir = markdown_target_dir(artifact_dir, output_dir, filename)
+    target_dir.mkdir(parents=True, exist_ok=True)
     filepath = target_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def load_markdown(artifact_dir: Path, output_dir: Path, filename: str) -> str:
+    target_dir = markdown_target_dir(artifact_dir, output_dir, filename)
+    filepath = target_dir / filename
+    if not filepath.exists():
+        return ""
+    with open(filepath, "r", encoding="utf-8") as f:
+        return f.read()

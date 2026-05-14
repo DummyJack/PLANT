@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Union
 
 
-_SCI_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
+SCI_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
 
 
 def json_dumps_no_scientific(
@@ -25,7 +25,7 @@ def json_dumps_no_scientific(
         s = format(v, ".15f").rstrip("0").rstrip(".")
         return s if s else "0"
 
-    return _SCI_JSON_NUMBER.sub(repl, text)
+    return SCI_JSON_NUMBER.sub(repl, text)
 
 
 def json_dump_no_scientific(

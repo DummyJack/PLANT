@@ -16,7 +16,9 @@ def write_one_plantuml(artifact_dir: Path, model: Dict[str, Any]) -> Optional[st
     if not safe_name:
         safe_name = "unnamed"
     filename = f"{safe_name}.plantuml"
-    filepath = artifact_dir / filename
+    models_dir = artifact_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    filepath = models_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(plantuml_code)
     return filename
@@ -26,7 +28,9 @@ def save_plantuml_files(artifact_dir: Path, model_data: Dict[str, Any]) -> None:
     models = [m for m in model_data.get("models", []) if m.get("plantuml")]
     if not models:
         return
-    for old in artifact_dir.glob("*.plantuml"):
+    models_dir = artifact_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    for old in models_dir.glob("*.plantuml"):
         old.unlink(missing_ok=True)
     max_workers = min(len(models), 8)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
