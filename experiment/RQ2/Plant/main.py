@@ -9,17 +9,13 @@ from flow.setup import Flow
 from .config import build_flow, build_plant_cost_payload, load_rq2_config
 from .utils import (
     build_type_rough_idea,
-    build_type_stakeholders,
     build_pair_changed_flags,
+    build_pair_review_details,
     default_csv_path,
+    extract_conflict_review_details,
     extract_pair_preds_with_missing,
-    extract_pair_review_preds_with_missing,
-    extract_pre_meeting_details,
-    incorrect_label_for,
-    inject_supplemented_conflicts,
     load_rq2_dataset,
     print_multi_run_summary,
-    supplement_missing_pair_predictions,
     sync_config_language,
 )
 from .records import (
@@ -42,8 +38,9 @@ def run_type_group_batch(
     type_name: str,
     results_by_idx: Dict[int, Tuple[Optional[str], Dict[str, Any]]],
     meetings_by_type: Dict[str, Any],
+    reqt_pairs_by_type: Dict[str, List[Dict[str, Any]]],
 ) -> None:
-    """同一 type 內：一次 pairwise 辨識 → 會前衝突複核。
+    """同一 type 內：一次 pairwise 辨識 → 衝突複核。
 
     會議紀錄只會寫入 ``meetings_by_type[type_name]`` 一次；各資料列的 record 僅含 pairs。
     """
@@ -51,20 +48,15 @@ def run_type_group_batch(
     if n == 0:
         return
     pair_id_prefix = "PAIR"
-    max_stakeholders = int(flow.config.get("max_stakeholders", 5) or 5)
-    stakeholders = build_type_stakeholders(type_name, max_stakeholders)
 
     requirements: List[Dict[str, Any]] = []
     for k in range(n):
         _, row = items[k]
-        sh_a = stakeholders[(2 * k) % len(stakeholders)]["name"]
-        sh_b = stakeholders[(2 * k + 1) % len(stakeholders)]["name"]
         requirements.append(
             {
                 "id": f"{pair_id_prefix}-P{k}-a",
                 "text": str(row.get("Text1") or ""),
                 "proposed_by": "benchmark",
-                "source_stakeholder": sh_a,
             }
         )
         requirements.append(
@@ -72,99 +64,56 @@ def run_type_group_batch(
                 "id": f"{pair_id_prefix}-P{k}-b",
                 "text": str(row.get("Text2") or ""),
                 "proposed_by": "benchmark",
-                "source_stakeholder": sh_b,
             }
         )
 
     artifact: Dict[str, Any] = {
         "rough_idea": build_type_rough_idea(type_name),
-        "stakeholders": stakeholders,
-        "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
-        "requirements": requirements,
+        "reqt_candidates": requirements,
         "conflicts": [],
-        "feedback": {},
-        "system_models": {},
-        "open_questions": [],
-        "decisions": [],
-        "discussions": [],
-        "meta": {
-            "pairwise_only": True,
-            "pair_count": n,
-            "pair_id_prefix": pair_id_prefix,
-            "enable_all_conflict_check": False,
-            "requirements_proposed_by": "benchmark",
-            "requirement_owner_type": type_name,
-        },
     }
-    sync_config_language(artifact)
+    sync_config_language(artifact, write_artifact_meta=False)
 
-    updated = flow.analyst_agent.run_conflict_detection(artifact)
+    updated = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
     if not isinstance(updated, dict):
         raise TypeError(
-            "flow.analyst_agent.run_conflict_detection 必須回傳 dict，"
+            "flow.analyst_agent.run_pairwise_conflict_detection 必須回傳 dict，"
             f"實得 {type(updated).__name__}"
         )
-    analyst_preds, missing_before_supplement = extract_pair_preds_with_missing(updated, n)
-    supplemented_labels: Dict[int, str] = {}
-    unresolved_missing: List[int] = []
-    if missing_before_supplement:
-        supplemented_labels, unresolved_missing = supplement_missing_pair_predictions(
-            flow, items, missing_before_supplement
+    analyst_preds, missing_before_review = extract_pair_preds_with_missing(updated, n)
+    if missing_before_review:
+        raise RuntimeError(
+            f"RQ2 conflict detection 仍缺少 pair_index: {missing_before_review}"
         )
-        for k, lb in supplemented_labels.items():
-            if 0 <= k < n:
-                analyst_preds[k] = lb
-        inject_supplemented_conflicts(
-            updated,
-            pair_id_prefix=pair_id_prefix,
-            supplemented_labels=supplemented_labels,
-        )
-        print(
-            "Analyst: 漏判補判 "
-            f"(missing={len(missing_before_supplement)}, "
-            f"supplemented={len(supplemented_labels)}, "
-            f"unresolved={len(unresolved_missing)})",
-            flush=True,
-        )
-        if unresolved_missing:
-            for k in unresolved_missing:
-                if 0 <= k < n:
-                    analyst_preds[k] = incorrect_label_for(items[k][1].get("Class"))
     analyst_conflict = sum(1 for p in analyst_preds if p == "Conflict")
     analyst_neutral = sum(1 for p in analyst_preds if p == "Neutral")
     print(
         f"Analyst: 衝突辨識（Conflict={analyst_conflict}, Neutral={analyst_neutral}）",
         flush=True,
     )
-    updated = flow.meeting.run_pre_meeting_conflict_review(updated, round_num=1)
+    updated = flow.meeting.run_conflict_review(updated, round_num=1)
     if not isinstance(updated, dict):
         raise TypeError(
-            "flow.meeting.run_pre_meeting_conflict_review 必須回傳 dict，"
+            "flow.meeting.run_conflict_review 必須回傳 dict，"
             f"實得 {type(updated).__name__}"
         )
 
-    preds, missing_pair_reviews, pair_reviews_by_index = extract_pair_review_preds_with_missing(updated, n)
-    if missing_pair_reviews:
-        fallback_preds, _ = extract_pair_preds_with_missing(updated, n)
-        for k in missing_pair_reviews:
-            if 0 <= k < n:
-                preds[k] = fallback_preds[k]
-    for k in unresolved_missing:
+    preds, missing_after_review = extract_pair_preds_with_missing(updated, n)
+    for k in missing_after_review:
         if 0 <= k < n:
-            preds[k] = incorrect_label_for(items[k][1].get("Class"))
-            pair_reviews_by_index[k] = {
-                "error": "unresolved_after_supplement",
-                "forced_wrong_prediction": True,
-                "final_label": preds[k],
-            }
+            preds[k] = analyst_preds[k]
+    details_by_index = build_pair_review_details(updated, n, preds)
+    for k in range(n):
+        details = details_by_index.get(k)
+        if 0 <= k < len(preds) and isinstance(details, dict):
+            final_label = str(details.get("final_label") or "").strip()
+            if final_label in {"Conflict", "Neutral"}:
+                preds[k] = final_label
     changed_flags = build_pair_changed_flags(updated, n, preds)
-    meeting_details = extract_pre_meeting_details(updated, round_num=1)
-    if missing_before_supplement:
-        meeting_details["missing_before_supplement"] = list(missing_before_supplement)
-        meeting_details["supplemented_pair_indices"] = sorted(supplemented_labels.keys())
-        meeting_details["supplement_unresolved_pair_indices"] = sorted(unresolved_missing)
+    meeting_details = extract_conflict_review_details(updated, round_num=1)
     meetings_by_type[type_name] = meeting_details
-    print("會前衝突再審查會議：", flush=True)
+    reqt_pairs_by_type[type_name] = []
+    print("衝突再審查會議：", flush=True)
     decisions = meeting_details.get("decisions") or []
     if isinstance(decisions, list) and decisions:
         print("  會議決定：", flush=True)
@@ -186,6 +135,37 @@ def run_type_group_batch(
     for k in range(n):
         gi, row = items[k]
         tkey = str(row.get("types") or type_name)
+        pair_details = details_by_index.get(k, {})
+        review_details = (
+            pair_details.get("meeting_conflict_review")
+            if isinstance(pair_details, dict)
+            else {}
+        )
+        reqt_pairs_by_type[type_name].append(
+            {
+                "id": f"PAIR-{k + 1}",
+                "round": 1,
+                "req_a": f"PAIR-P{k}-a",
+                "req_b": f"PAIR-P{k}-b",
+                "initial_label": (
+                    str(pair_details.get("initial_label") or "").strip()
+                    if isinstance(pair_details, dict)
+                    else ""
+                ),
+                "final_label": preds[k],
+                "description": (
+                    str(pair_details.get("description") or "").strip()
+                    if isinstance(pair_details, dict)
+                    else ""
+                ),
+                "status": (
+                    str(pair_details.get("status") or "").strip()
+                    if isinstance(pair_details, dict)
+                    else ""
+                ),
+                "conflict_meeting": review_details if isinstance(review_details, dict) else {},
+            }
+        )
         results_by_idx[gi] = (
             preds[k],
             {
@@ -197,7 +177,7 @@ def run_type_group_batch(
                             "is_changed": changed_flags[k],
                             "true": row["Class"],
                             "pred": preds[k],
-                            "details": pair_reviews_by_index.get(k, {}),
+                            "details": pair_details,
                         }
                     ],
                 },
@@ -210,15 +190,15 @@ def run_conflict(
     count: int = 0,
     *,
     data_path: Optional[Path] = None,
+    scenario: Optional[str] = None,
 ):
     """執行衝突辨識實驗。
 
-    - 依 CSV/JSON 的 types 分組；**同一 type 內**整批做一次 pairwise 辨識，再全組一次會前衝突複核。
+    - 依 CSV/JSON 的 types 分組；**同一 type 內**整批做一次 pairwise 辨識，再全組一次衝突複核。
     - data_path 為 None：使用預設 cn_100.csv（或 cn_pairs.csv）；亦可傳入 .json 陣列。
     - count > 0：只取前 count 筆。
     - record 輸出為 **陣列**：每個元素為 ``{ "<type 名稱>": { …, "pairs": [ … ] } }``，同一 type 僅一筆；
-      會議欄位保留 round / changed_count / discussion_mode / participants / conversation，
-      pair 決策理由整理到 pairs[].description 與 details。
+      pair 決策理由整理到每筆 pair 的 conflict_meeting。
     """
     try:
         if data_path is not None:
@@ -233,6 +213,19 @@ def run_conflict(
         print(f"錯誤：無法載入資料：{e}")
         return None
 
+    selected_scenario = str(scenario or "").strip()
+    if selected_scenario:
+        data = [
+            row
+            for row in data
+            if (str(row.get("types") or "Unknown").strip() or "Unknown")
+            == selected_scenario
+        ]
+        if not data:
+            print(f"錯誤：找不到情境/type：{selected_scenario}")
+            return None
+        data_file_label = f"{data_file_label}::{selected_scenario}"
+
     if count > 0:
         data = data[:count]
 
@@ -245,6 +238,7 @@ def run_conflict(
         grouped.setdefault(g, []).append((i, row))
 
     meetings_by_type: Dict[str, Any] = {}
+    reqt_pairs_by_type: Dict[str, List[Dict[str, Any]]] = {}
     for g, items in grouped.items():
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
@@ -257,6 +251,7 @@ def run_conflict(
                 type_name=str(g),
                 results_by_idx=results_by_idx,
                 meetings_by_type=meetings_by_type,
+                reqt_pairs_by_type=reqt_pairs_by_type,
             )
         except Exception as e:
             print(f"\n✗ 類型「{g}」整批失敗: {e}", flush=True)
@@ -267,11 +262,11 @@ def run_conflict(
                 "changed_count": 0,
                 "discussion_mode": "",
                 "participants": [],
-                "conversation": [],
                 "decisions": [],
                 "error": str(e),
             }
             meetings_by_type.setdefault(str(g), fail_meeting)
+            reqt_pairs_by_type.setdefault(str(g), [])
             for i, row in items:
                 results_by_idx[i] = (
                     None,
@@ -299,6 +294,10 @@ def run_conflict(
     record_by_type = build_rq2_record_by_type(
         grouped, meetings_by_type, results_by_idx
     )
+    reqt_pairs_output = [
+        {str(type_name): pairs}
+        for type_name, pairs in reqt_pairs_by_type.items()
+    ]
 
     result = build_rq2_result_payload(
         model_name=str(model_name),
@@ -316,7 +315,7 @@ def run_conflict(
         else {}
     )
 
-    def _m(v: Any) -> float:
+    def m(v: Any) -> float:
         try:
             return float(v or 0.0)
         except (TypeError, ValueError):
@@ -329,6 +328,7 @@ def run_conflict(
         result=result,
         record=record_by_type,
         cost=cost_payload,
+        reqt_pairs=reqt_pairs_output,
     )
 
     print("\n=== 執行結果 ===")
@@ -336,15 +336,15 @@ def run_conflict(
     print(f"  總資料量: {total}")
     print(
         "  Overall : "
-        f"P={_m(overall.get('precision')):.4f}, "
-        f"R={_m(overall.get('recall')):.4f}, "
-        f"F1={_m(overall.get('f1')):.4f}"
+        f"P={m(overall.get('precision')):.4f}, "
+        f"R={m(overall.get('recall')):.4f}, "
+        f"F1={m(overall.get('f1')):.4f}"
     )
     print(
         "  Conflict: "
-        f"P={_m(conflict_class.get('precision')):.4f}, "
-        f"R={_m(conflict_class.get('recall')):.4f}, "
-        f"F1={_m(conflict_class.get('f1')):.4f}"
+        f"P={m(conflict_class.get('precision')):.4f}, "
+        f"R={m(conflict_class.get('recall')):.4f}, "
+        f"F1={m(conflict_class.get('f1')):.4f}"
     )
     print("")
     print("【各 type 表現】")
@@ -360,20 +360,21 @@ def run_conflict(
         )
         print(
             "    Overall : "
-            f"P={_m(o.get('precision')):.4f}, "
-            f"R={_m(o.get('recall')):.4f}, "
-            f"F1={_m(o.get('f1')):.4f}"
+            f"P={m(o.get('precision')):.4f}, "
+            f"R={m(o.get('recall')):.4f}, "
+            f"F1={m(o.get('f1')):.4f}"
         )
         print(
             "    Conflict: "
-            f"P={_m(c.get('precision')):.4f}, "
-            f"R={_m(c.get('recall')):.4f}, "
-            f"F1={_m(c.get('f1')):.4f}"
+            f"P={m(c.get('precision')):.4f}, "
+            f"R={m(c.get('recall')):.4f}, "
+            f"F1={m(c.get('f1')):.4f}"
         )
     print("輸出檔案：")
     print(f"- result: {paths['result']}")
     print(f"- record: {paths['record']}")
     print(f"- cost:   {paths['cost']}")
+    print(f"- reqt_pairs: {paths['reqt_pairs']}")
     return {
         "result": result,
         "cost": cost_payload,
@@ -385,6 +386,7 @@ def run_experiments(
     count: int,
     runs: int,
     data_path: Optional[Path] = None,
+    scenario: Optional[str] = None,
 ) -> None:
     try:
         rq2_config = load_rq2_config()
@@ -402,7 +404,13 @@ def run_experiments(
         print(f"\n=== Run {run_idx + 1}/{runs} ===")
         flow = build_flow(config=deepcopy(rq2_config))
         model_name = getattr(flow.agent_models.get("analyst"), "model_name", "unknown")
-        run_output = run_conflict(flow, model_name, count=count, data_path=data_path)
+        run_output = run_conflict(
+            flow,
+            model_name,
+            count=count,
+            data_path=data_path,
+            scenario=scenario,
+        )
         result = run_output.get("result", {}) if isinstance(run_output, dict) else {}
         cost_payload = run_output.get("cost", {}) if isinstance(run_output, dict) else {}
         run_scalar_metrics.append(scalar_metrics_for_summary(result))

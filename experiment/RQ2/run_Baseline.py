@@ -96,9 +96,9 @@ class BaselineModel:
                 print("錯誤：未找到 OPENAI_API_KEY 環境變數")
                 sys.exit(1)
             self.client: Optional[OpenAI] = OpenAI(api_key=api_key)
-            self._genai_client = None
-            self._genai_types = None
-            self._gemini_lock = None
+            self.genai_client = None
+            self.genai_types = None
+            self.gemini_lock = None
         elif p == "gemini":
             self.model_name = model_name or BASELINE_MODEL
             api_key = os.getenv("GEMINI_API_KEY")
@@ -111,10 +111,10 @@ class BaselineModel:
             except ImportError as e:
                 print("錯誤：使用 Gemini 請先安裝 google-genai")
                 raise SystemExit(1) from e
-            self._genai_client = genai.Client(api_key=api_key)
-            self._genai_types = genai_types
+            self.genai_client = genai.Client(api_key=api_key)
+            self.genai_types = genai_types
             self.client = None
-            self._gemini_lock = threading.Lock()
+            self.gemini_lock = threading.Lock()
         else:
             print(f"錯誤：不支援的 provider: {provider}（請用 openai 或 gemini）")
             sys.exit(1)
@@ -168,15 +168,15 @@ class BaselineModel:
 
     # 使用 Gemini 生成內容 API 做衝突判斷，並累加成本。
     def detect_gemini(self, user_prompt: str) -> str:
-        assert self._genai_client is not None and self._genai_types is not None
-        assert self._gemini_lock is not None
+        assert self.genai_client is not None and self.genai_types is not None
+        assert self.gemini_lock is not None
 
-        cfg = self._genai_types.GenerateContentConfig(temperature=self.temperature)
+        cfg = self.genai_types.GenerateContentConfig(temperature=self.temperature)
         self.cost_tracker.start()
         response = None
         try:
-            with self._gemini_lock:
-                response = self._genai_client.models.generate_content(
+            with self.gemini_lock:
+                response = self.genai_client.models.generate_content(
                     model=self.model_name,
                     contents=user_prompt,
                     config=cfg,

@@ -122,14 +122,6 @@ Ask your next question to better understand the user's requirements, or finish t
             )
             return response_text if response_text else ""
     
-    def get_config(self) -> Dict[str, Any]:
-        """
-        Get the model configuration dictionary.
-        
-        Returns:
-            Model configuration dictionary
-        """
-        return self.model_config.copy()
     
     def __repr__(self) -> str:
         """String representation of the Interviewer."""

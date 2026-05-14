@@ -239,7 +239,7 @@ class ReqElicitGym(gym.Env):
         }
         
         if self.config.verbose:
-            print(f"🎯 New Episode Started")
+            print("🎯 New Episode Started")
             print(f"Task ID: {info['task_id']}")
             print(f"Task Index: {self.current_task_index - 1}/{len(self.tasks)}")
             print(f"Total Requirements: {observation['total_requirements']}")
@@ -599,26 +599,14 @@ class ReqElicitGym(gym.Env):
             print(f"   ORA: {ora:.4f}")
             print(f"   Rounds: {self.step_count} (Optimal: {task_stats['optimal_rounds']})")
             print(f"   Token Cost: {self.current_task_token_cost}")
-            print(f"   Action Type Effectiveness:")
+            print("   Action Type Effectiveness:")
             for action_type, stats in action_effectiveness.items():
                 print(f"     {action_type}: {stats['effective']}/{stats['total']} = {stats['effectiveness_ratio']:.2%}")
-            print(f"   Aspect Type Elicitation:")
+            print("   Aspect Type Elicitation:")
             for aspect, stats in aspect_elicitation.items():
                 if stats['total'] > 0:  # Only print if there are requirements of this type
                     print(f"     {aspect}: {stats['elicited']}/{stats['total']} = {stats['elicitation_ratio']:.2%}")
             print(f"   Total Steps: {len(self.current_task_step_records)}")
-    
-    def calculate_metrics(self) -> Dict[str, Any]:
-        """Calculate evaluation metrics for the current conversation."""
-        total_elicited = len(self.elicited_requirements)
-        total_requirements = len(self.remaining_requirements) + total_elicited
-        
-        return {
-            "total_requirements": total_requirements,
-            "elicited_requirements": total_elicited,
-            "elicitation_ratio": self.calculate_elicitation_ratio(),
-            "remaining_requirements": len(self.remaining_requirements),
-        }
     
     def evaluate_all_tasks(self) -> Dict[str, Any]:
         """
@@ -646,46 +634,6 @@ class ReqElicitGym(gym.Env):
             }
         
         return compute_overall_metrics(self.global_stats["task_results"])
-
-    def get_step_records(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Get step-by-step records for a specific task or all tasks.
-        
-        Args:
-            task_id: If provided, return records for that specific task. 
-                     If None, return all task records.
-        
-        Returns:
-            List of step records. If task_id is provided, returns records for that task.
-            If task_id is None, returns all task records with task_id included.
-        """
-        if task_id is not None:
-            # Find records for specific task
-            for task_record in self.global_stats["task_step_records"]:
-                if task_record["task_id"] == task_id:
-                    return task_record["step_records"]
-            return []
-        else:
-            # Return all task records
-            return self.global_stats["task_step_records"]
-    
-    def save_step_records(self, file_path: str):
-        """
-        Save step-by-step records to a JSON file.
-        
-        Args:
-            file_path: Path to save the JSON file
-        """
-        records_data = {
-            "total_tasks": len(self.global_stats["task_step_records"]),
-            "task_records": self.global_stats["task_step_records"],
-        }
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(records_data, f, indent=2, ensure_ascii=False)
-        
-        if self.config.verbose:
-            print(f"💾 Step records saved to {file_path}")
 
     def run_all_tasks(self, interviewer: "Interviewer") -> Dict[str, Any]:
         """
@@ -721,7 +669,7 @@ class ReqElicitGym(gym.Env):
             # Check if all tasks are completed
             if info.get("all_tasks_completed", False):
                 if self.config.verbose:
-                    print(f"\n所有任務已完成！")
+                    print("\n所有任務已完成！")
                 break
             
             task_id = info.get("task_id", f"task_{task_num}")
@@ -735,7 +683,7 @@ class ReqElicitGym(gym.Env):
                 print(f"應用類型：{task_data.get('application_type', 'N/A')}")
                 print(f"初始需求：{task_data.get('initial_requirements', 'N/A')[:100]}...")
                 print(f"總需求數：{observation.get('total_requirements', 0)}")
-                print(f"\n開始對話...\n")
+                print("\n開始對話...\n")
             
             # Run conversation for current task
             step = 0
@@ -791,7 +739,7 @@ class ReqElicitGym(gym.Env):
                 if terminated or truncated:
                     if terminated:
                         if self.config.verbose:
-                            print(f"\n對話已終止（interviewer 完成）。")
+                            print("\n對話已終止（interviewer 完成）。")
                     else:
                         if self.config.verbose:
                             print(f"\n對話已截斷（達到最大步數：{self.config.max_steps}）。")
@@ -818,27 +766,27 @@ class ReqElicitGym(gym.Env):
         overall_metrics = self.evaluate_all_tasks()
         
         if self.config.verbose:
-            print(f"\n總體評估結果：")
+            print("\n總體評估結果：")
             print(f"  總測試樣本數：{overall_metrics['total_tasks']}")
             print(f"  總隱式需求數：{overall_metrics['total_requirements_all_tasks']}")
             print(f"  總取得數：{overall_metrics['total_elicited_all_tasks']}")
-            print(f"\n平均比例（基於測試樣本平均）：")
+            print("\n平均比例（基於測試樣本平均）：")
             print(f"  平均取得比例：{overall_metrics['elicitation_ratio']:.2%}")
             print(f"  平均 TKQR：{overall_metrics['tkqr']:.4f}")
             print(f"  平均 ORA：{overall_metrics['ora']:.4f}")
-            print(f"\n變異數：")
+            print("\n變異數：")
             print(f"  取得比例變異數：{overall_metrics.get('variance_elicitation_ratio', 0.0):.6f}")
             print(f"  TKQR 變異數：{overall_metrics.get('variance_tkqr', 0.0):.6f}")
             print(f"  ORA 變異數：{overall_metrics.get('variance_ora', 0.0):.6f}")
-            print(f"\nToken 消耗：")
+            print("\nToken 消耗：")
             print(f"  平均 Token 消耗：{overall_metrics.get('average_token_cost', 0.0):.2f}")
             print(f"  Token 消耗變異數：{overall_metrics.get('variance_token_cost', 0.0):.6f}")
-            print(f"\n總體比例（基於總計數）：")
+            print("\n總體比例（基於總計數）：")
             print(f"  總取得比例：{overall_metrics['elicitation_ratio_from_totals']:.2%}")
             
             # Application type statistics
             if overall_metrics.get('application_type_statistics'):
-                print(f"\n依應用類型統計：")
+                print("\n依應用類型統計：")
                 for app_type, stats in overall_metrics['application_type_statistics'].items():
                     print(f"  {app_type}:")
                     print(f"    任務數：{stats['num_tasks']}")
@@ -848,13 +796,13 @@ class ReqElicitGym(gym.Env):
             
             # Action type effectiveness
             if overall_metrics.get('action_type_effectiveness'):
-                print(f"\n動作類型有效性：")
+                print("\n動作類型有效性：")
                 for action_type, stats in overall_metrics['action_type_effectiveness'].items():
                     print(f"  {action_type}: {stats['effective']}/{stats['total']} = {stats['effectiveness_ratio']:.2%}")
             
             # Aspect type elicitation
             if overall_metrics.get('aspect_type_elicitation'):
-                print(f"\n面向類型取得比例：")
+                print("\n面向類型取得比例：")
                 for aspect, stats in overall_metrics['aspect_type_elicitation'].items():
                     if stats['total'] > 0:
                         print(f"  {aspect}: {stats['elicited']}/{stats['total']} = {stats['elicitation_ratio']:.2%}")
@@ -975,6 +923,3 @@ class ReqElicitGym(gym.Env):
             print(f"對話過程已儲存至：{file_path}")
             print(f"  包含 {len(conversation_results)} 個任務的對話記錄")
     
-    def close(self):
-        """Clean up the environment."""
-        pass

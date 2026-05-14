@@ -3,13 +3,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-from agents.profile.analyst.requirements import (
-    build_requirement_candidates_from_requirements,
-    merge_requirement_candidates,
-    normalize_requirement_statuses,
-    review_requirement_candidates_before_merge,
-)
-
 
 def next_result_index(prefix: str, results_dir: Path) -> int:
     """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
@@ -65,6 +58,7 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         "rough_idea": task_initial_requirements(task),
         "stakeholders": [],
         "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
+        "reqt_candidates": [],
         "requirements": [],
         "conflicts": [],
         "feedback": {},
@@ -72,12 +66,16 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         "open_questions": [],
         "decisions": [],
         "discussions": [],
+        "elicitation": {
+            "plan": {},
+            "meeting": {},
+            "elicited_reqts": [],
+            "elicitation_stop_reason": "",
+        },
         "meta": {
             "elicitation_mode": "oracle",
-            "force_elicitation_discussion_mode": "simultaneous",
         },
-        "elicitation_candidates": [],
-        "initial_requirement_candidates": [],
+        "elicited_reqts": [],
     }
 
 
@@ -93,6 +91,112 @@ def trace_turn_no(trace: Dict[str, Any]) -> int:
     if turn_no <= 0:
         turn_no = safe_turn_no(trace.get("turn"))
     return turn_no
+
+
+def print_rq1_oracle_elicitation_trace(
+    logger: Any,
+    *,
+    artifact: Dict[str, Any],
+    oracle_user: Any,
+    task: Dict[str, Any],
+) -> None:
+    implicit_total = len(task_implicit_requirements(task))
+    trace_by_turn: Dict[int, Dict[str, Any]] = {}
+    for trace in getattr(oracle_user, "oracle_trace", []) or []:
+        if not isinstance(trace, dict):
+            continue
+        turn_no = trace_turn_no(trace)
+        if turn_no <= 0:
+            continue
+        row = trace_by_turn.setdefault(
+            turn_no,
+            {
+                "action_types": [],
+                "is_relevant": False,
+                "revealed_ids": set(),
+                "user_texts": [],
+            },
+        )
+        judge = trace.get("judge") if isinstance(trace.get("judge"), dict) else {}
+        action_type = str(judge.get("action_type") or "").strip()
+        if action_type:
+            row["action_types"].append(action_type)
+        if bool(judge.get("is_relevant_to_implied_requirements", False)):
+            row["is_relevant"] = True
+        user_text = str(trace.get("user_response") or "").strip()
+        if user_text:
+            row["user_texts"].append(user_text)
+        for rid in trace.get("revealed_ids", []) or []:
+            rid_s = str(rid).strip()
+            if rid_s:
+                row["revealed_ids"].add(rid_s)
+
+    revealed_seen: set[str] = set()
+    for turn_log in artifact.get("elicitation_trace", []) or []:
+        if not isinstance(turn_log, dict):
+            continue
+        turn_no = safe_turn_no(turn_log.get("turn"))
+        if turn_no <= 0:
+            continue
+        forced_finish = bool(turn_log.get("forced_finish", False) or turn_log.get("judge_finish", False))
+        trace_row = trace_by_turn.get(
+            turn_no,
+            {"action_types": [], "is_relevant": False, "revealed_ids": set(), "user_texts": []},
+        )
+        turn_revealed_ids = sorted(str(rid) for rid in trace_row.get("revealed_ids", set()) if rid)
+        for rid in turn_revealed_ids:
+            revealed_seen.add(rid)
+        remaining_total = max(0, implicit_total - len(revealed_seen))
+        ratio = (len(revealed_seen) / implicit_total) if implicit_total > 0 else 0.0
+
+        logger.info("[輪次 %s]", turn_no)
+        action_types = trace_row.get("action_types", []) or []
+        action_type = "finish" if forced_finish else (action_types[-1] if action_types else "unknown")
+        logger.info("  動作類型：%s", action_type)
+        logger.info("  與隱式需求相關：%s", bool(trace_row.get("is_relevant", False)))
+        logger.info("  已取得的需求：%s", turn_revealed_ids)
+
+        if forced_finish:
+            participants = str(turn_log.get("judged_action_agent") or "mediator").strip() or "mediator"
+            statement = str(turn_log.get("judged_action") or "").strip()
+            logger.info("  Plant: participants=%s | %s", participants, statement or "(no statement)")
+            logger.info("  停止：達到最後一輪，直接進入 finish 收尾（不再執行 user 對話）")
+        else:
+            mode = str(turn_log.get("discussion_mode") or "").strip()
+            participants = [
+                str(role).strip()
+                for role in turn_log.get("participants", []) or []
+                if str(role).strip() and str(role).strip() != "user"
+            ]
+            parts = []
+            if mode:
+                parts.append(f"mode={mode}")
+            parts.append("participants=%s" % (",".join(participants) or "-"))
+            speaking_order = [
+                str(role).strip()
+                for role in turn_log.get("speaking_order", []) or []
+                if str(role).strip()
+            ]
+            if mode != "simultaneous" and speaking_order:
+                parts.append("speaker_order=%s" % ",".join(speaking_order))
+            statement = str(turn_log.get("judged_action") or "").strip()
+            logger.info("  Plant: %s | %s", " | ".join(parts), statement or "(no statement)")
+            user_texts = [
+                str(text).strip()
+                for text in trace_row.get("user_texts", []) or []
+                if str(text).strip()
+            ]
+            if user_texts:
+                logger.info("  User: %s", "\n".join(user_texts))
+
+        logger.info(
+            "  觀察：總需求=%s，剩餘=%s，取得比例=%.2f%%",
+            implicit_total,
+            remaining_total,
+            ratio * 100.0,
+        )
+
+    logger.info("[需求擷取會議結束]")
 
 
 def run_one_task(
@@ -111,60 +215,23 @@ def run_one_task(
     )
     artifact["stakeholders"] = stakeholders
     flow.user_agent.stakeholders = stakeholders
-
-    analysis = flow.analyst_agent.run_requirements_analyst(
-        "analyze_requirements",
-        stakeholders=stakeholders,
-    )
-    analyzed_requirements = [
-        row for row in (analysis.get("requirements", []) if isinstance(analysis, dict) else [])
-        if isinstance(row, dict) and str(row.get("text") or "").strip()
-    ]
-    normalize_requirement_statuses(analyzed_requirements)
-    initial_candidates = build_requirement_candidates_from_requirements(
-        analyzed_requirements,
-        candidate_source="initial_requirement_analysis",
-    )
-    artifact["initial_requirement_candidates"] = initial_candidates
-    initial_review = review_requirement_candidates_before_merge(
-        artifact,
-        initial_candidates,
-        stage="initial_requirement_analysis",
-        round_num=0,
-        candidate_source="initial_requirement_analysis",
-    )
-    artifact["requirements"] = []
-    initial_merge_stats = merge_requirement_candidates(
-        artifact["requirements"],
-        initial_review["candidates"],
-        source_round=0,
-    )
-    artifact["initial_requirement_candidate_summary"] = {
-        "candidate_count": len(initial_candidates),
-        "absorbed_count": initial_merge_stats["added"],
-        "merge": initial_merge_stats,
-    }
-    initial_scope = flow.analyst_agent.run_requirements_analyst(
-        "generate_scope",
-        rough_idea=artifact["rough_idea"],
-        stakeholders=stakeholders,
-        artifact=artifact,
-    )
-    if isinstance(initial_scope, dict):
-        initial_scope = dict(initial_scope)
-        initial_scope["version"] = 1
-        initial_scope["status"] = "initial"
-        initial_scope["source"] = "initial_requirement_analysis"
-        artifact["scope"] = initial_scope
     req_before = len(artifact["requirements"])
 
-    artifact = flow.meeting.run_hidden_requirement_elicitation_meeting(
-        artifact,
-        round_num=0,
-    )
+    logger_verbose = getattr(flow.logger, "verbose", None)
+    if logger_verbose is not None:
+        flow.logger.verbose = False
+    try:
+        artifact = flow.meeting.run_requirement_elicitation_meeting(
+            artifact,
+            round_num=0,
+        )
+    finally:
+        if logger_verbose is not None:
+            flow.logger.verbose = logger_verbose
+    flow.logger.info("[需求擷取會議結束]")
 
     req_after = len(artifact["requirements"])
-    elicitation_log = artifact.get("elicitation_log", []) or []
+    elicitation_trace = artifact.get("elicitation_trace", []) or []
     oracle_revealed_ids = {
         str(rid)
         for tr in (oracle_user.oracle_trace or [])
@@ -179,14 +246,16 @@ def run_one_task(
         "initial_requirements": task_initial_requirements(task),
         "implicit_total": len(task_implicit_requirements(task)),
         "requirements_before_elicitation": req_before,
-        "elicitation_candidates": len(artifact.get("elicitation_candidates", []) or []),
+        "elicited_reqts": len((artifact.get("elicitation") or {}).get("elicited_reqts", []) or []),
         "requirements_after_elicitation": req_after,
-        "elicitation_turns": len(artifact.get("elicitation_log", []) or []),
-        "termination_reason": artifact.get("elicitation_termination_reason", ""),
+        "elicitation_turns": len(artifact.get("elicitation_trace", []) or []),
+        "termination_reason": (artifact.get("elicitation") or {}).get("elicitation_stop_reason", ""),
         "coverage": artifact.get("elicitation_coverage", {}),
         "oracle_remaining_implicit": len(oracle_user.remaining_requirements),
         "oracle_revealed_count": len(oracle_revealed_ids),
-        "elicitation_plan": artifact.get("elicitation_plan", {}),
-        "elicitation_log": elicitation_log,
+        "elicitation_plan": (artifact.get("elicitation") or {}).get("plan", {}),
+        "elicitation_meeting": (artifact.get("elicitation") or {}).get("meeting", {}),
+        "elicitation": artifact.get("elicitation", {}),
+        "elicitation_trace": elicitation_trace,
         "oracle_trace": list(oracle_user.oracle_trace),
     }

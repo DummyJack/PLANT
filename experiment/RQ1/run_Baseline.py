@@ -11,7 +11,7 @@ from typing import List
 
 from dotenv import load_dotenv
 
-# 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench_10.json、套件 Baseline/ 同在 RQ1 下
+# 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
 RQ1_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ1_DIR.parent.parent
 # 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
@@ -23,7 +23,7 @@ DEFAULT_CONFIG_PATH = RQ1_DIR / "Baseline" / "config.json"
 RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 # 預設資料檔、任務數與互動行為（固定於程式，不經 Baseline/config.json）
-DEFAULT_DATA_FILE = "ReqElicitBench_10.json"
+DEFAULT_DATA_FILE = "ReqElicitBench.json"
 # 未設定 max_tasks 且下方為 None 時，是否在終端機詢問要跑幾題
 PROMPT_FOR_MAX_TASKS = True
 # 未設定 runs 時，是否在終端機詢問要跑幾次
@@ -277,15 +277,15 @@ def main():
         )
         interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
         user_cost_tracker = CostTracker(model_name=gym_model)
-        _orig_ask_question = interviewer.ask_question
-        _orig_prompt_model_call = baseline_prompts.model_call
-        _orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
-        _orig_interviewer_model_call = baseline_interviewer_module.model_call
-        _orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
+        orig_ask_question = interviewer.ask_question
+        orig_prompt_model_call = baseline_prompts.model_call
+        orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
+        orig_interviewer_model_call = baseline_interviewer_module.model_call
+        orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
 
         def tracked_ask_question(conversation_history, return_usage=False):
             start = perf_counter()
-            out = _orig_ask_question(conversation_history, return_usage=return_usage)
+            out = orig_ask_question(conversation_history, return_usage=return_usage)
             elapsed = perf_counter() - start
             if return_usage:
                 question, usage_info = out
@@ -305,7 +305,7 @@ def main():
             return_usage=False,
         ):
             start = perf_counter()
-            response, usage_info = _orig_prompt_model_call(
+            response, usage_info = orig_prompt_model_call(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 model_config=model_config,
@@ -326,19 +326,19 @@ def main():
         interviewer.ask_question = tracked_ask_question
         baseline_prompts.model_call = tracked_model_call
         baseline_interviewer_module.model_call = tracked_model_call
-        baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
-        baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
+        baseline_prompts.model_call_with_thinking = orig_prompt_model_call_with_thinking
+        baseline_interviewer_module.model_call_with_thinking = orig_interviewer_model_call_with_thinking
         print(f"Interviewer 已建立：{interviewer}")
 
         print("\n" + "=" * 60)
         print("開始執行全量評估實驗...")
         print("=" * 60)
         results = env.run_all_tasks(interviewer)
-        interviewer.ask_question = _orig_ask_question
-        baseline_prompts.model_call = _orig_prompt_model_call
-        baseline_prompts.model_call_with_thinking = _orig_prompt_model_call_with_thinking
-        baseline_interviewer_module.model_call = _orig_interviewer_model_call
-        baseline_interviewer_module.model_call_with_thinking = _orig_interviewer_model_call_with_thinking
+        interviewer.ask_question = orig_ask_question
+        baseline_prompts.model_call = orig_prompt_model_call
+        baseline_prompts.model_call_with_thinking = orig_prompt_model_call_with_thinking
+        baseline_interviewer_module.model_call = orig_interviewer_model_call
+        baseline_interviewer_module.model_call_with_thinking = orig_interviewer_model_call_with_thinking
 
         try:
             env.save_evaluation_results(file_path=None, interviewer_model_name=interviewer.model_name)
@@ -414,24 +414,24 @@ def main():
 
     overall_metrics = results.get("overall_metrics", {})
     if overall_metrics:
-        print(f"\n評估指標總結：")
+        print("\n評估指標總結：")
         print(f"  總測試樣本數：{overall_metrics.get('total_tasks', 0)}")
         print(f"  總隱式需求數：{overall_metrics.get('total_requirements_all_tasks', 0)}")
         print(f"  總取得數：{overall_metrics.get('total_elicited_all_tasks', 0)}")
-        print(f"\n平均指標（基於測試樣本平均）：")
+        print("\n平均指標（基於測試樣本平均）：")
         print(f"  平均取得比例：{overall_metrics.get('elicitation_ratio', 0.0):.2%}")
         print(f"  平均 TKQR：{overall_metrics.get('tkqr', 0.0):.4f}")
         print(f"  平均 ORA：{overall_metrics.get('ora', 0.0):.4f}")
-        print(f"\n變異數：")
+        print("\n變異數：")
         print(f"  取得比例變異數：{overall_metrics.get('variance_elicitation_ratio', 0.0):.6f}")
         print(f"  TKQR 變異數：{overall_metrics.get('variance_tkqr', 0.0):.6f}")
         print(f"  ORA 變異數：{overall_metrics.get('variance_ora', 0.0):.6f}")
-        print(f"\n總體比例（基於總計數）：")
+        print("\n總體比例（基於總計數）：")
         print(f"  總取得比例：{overall_metrics.get('elicitation_ratio_from_totals', 0.0):.2%}")
 
         app_type_stats = overall_metrics.get("application_type_statistics", {})
         if app_type_stats:
-            print(f"\n依應用類型統計：")
+            print("\n依應用類型統計：")
             print(f"{'Application Type':<40} {'任務數':<10} {'平均取得比例':<15} {'平均TKQR':<12} {'平均ORA':<12}")
             print("-" * 100)
             for app_type in sorted(app_type_stats.keys()):

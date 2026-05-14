@@ -2,7 +2,7 @@
 import os
 import time
 from openai import OpenAI
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List
 from .utils import (
     build_history_into_prompt,
     parse_output_as_json,
@@ -12,15 +12,15 @@ from .utils import JUDGE_PROMPT_SYSTEM, JUDGE_PROMPT_USER
 from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 
 # Google Gemini「OpenAI 相容」Chat Completions 端點（與官方文件一致）
-_GEMINI_OPENAI_HOST = "generativelanguage.googleapis.com"
+GEMINI_OPENAI_HOST = "generativelanguage.googleapis.com"
 
-_gemini_thinking_notice_flag = [False]
+gemini_thinking_notice_flag = [False]
 
 
 def openai_endpoint_is_gemini_compat(model_config: Dict[str, Any]) -> bool:
     """是否為 Gemini 的 OpenAI 相容 API（依 base_url 判斷）。"""
     u = (model_config.get("base_url") or "").lower()
-    return _GEMINI_OPENAI_HOST in u
+    return GEMINI_OPENAI_HOST in u
 
 
 def use_max_completion_tokens(model_config: Dict[str, Any]) -> bool:
@@ -184,11 +184,11 @@ def model_call_with_thinking(
                 timeout=model_config["timeout"],
             )
             if openai_endpoint_is_gemini_compat(model_config):
-                if not _gemini_thinking_notice_flag[0]:
+                if not gemini_thinking_notice_flag[0]:
                     print(
                         "[ReqElicitGym] Gemini OpenAI 相容端點不支援 enable_thinking，已改為一般 completions 呼叫。"
                     )
-                    _gemini_thinking_notice_flag[0] = True
+                    gemini_thinking_notice_flag[0] = True
             else:
                 create_kw["extra_body"] = {"enable_thinking": True}
             apply_token_limit_to_create_kw(create_kw, model_config, max_val)

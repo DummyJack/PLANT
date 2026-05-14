@@ -16,22 +16,30 @@ for p in (BASE_DIR, RQ3_DIR):
     if ps not in sys.path:
         sys.path.insert(0, ps)
 
-from flow.main import Flow
-from flow.project_flow import (
-    _run_one_round,
-    _sync_project_output_language,
-    _write_pre_meeting_conflict_report,
-)
-from storage import Store
-from utils import Logger, json_dump_no_scientific
-
-
 RESULTS_DIR = RQ3_DIR / "results"
 RESULT_PREFIX = "Plant"
 BASE_CONFIG_PATH = BASE_DIR / "config.json"
 CONFIG_PATH = RQ3_DIR / "config_RQ3.json"
 SCENARIO_PATH = RQ3_DIR / "scenario.txt"
 PROJECT_ID = "rq3_plant"
+
+
+def next_result_index(prefix: str, results_dir: Path) -> int:
+    pattern = re.compile(rf"^(?:srs|cost)_{re.escape(prefix)}_(\d+)\.(?:md|json)$")
+    max_idx = 0
+    if not results_dir.is_dir():
+        return 1
+    for path in results_dir.iterdir():
+        if not path.is_file():
+            continue
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        try:
+            max_idx = max(max_idx, int(match.group(1)))
+        except ValueError:
+            continue
+    return max_idx + 1
 
 
 def load_scenario_text() -> str:
@@ -59,12 +67,12 @@ def sync_output_language(rough_idea: str) -> str:
     return lang
 
 
-def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
         base_value = merged.get(key)
         if isinstance(base_value, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge_dict(base_value, value)
+            merged[key] = deep_merge_dict(base_value, value)
         else:
             merged[key] = value
     return merged
@@ -78,7 +86,7 @@ def load_flow_config() -> Dict[str, Any]:
             rq3_override = json.load(f)
         if not isinstance(rq3_override, dict):
             raise ValueError("config_RQ3.json 內容必須是 JSON 物件")
-        config = _deep_merge_dict(config, rq3_override)
+        config = deep_merge_dict(config, rq3_override)
     config["rounds"] = int(config.get("rounds", 1) or 1)
     return config
 
@@ -127,12 +135,18 @@ def build_seeded_artifact(scenario: str, stakeholders: List[Dict[str, Any]], rou
     }
 
 
-def run_rq3_flow(flow: Flow, scenario: str, stakeholders: List[Dict[str, Any]]) -> Dict[str, Any]:
+def run_rq3_flow(flow: Any, scenario: str, stakeholders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    from flow.main import (
+        run_one_round,
+        sync_project_output_language,
+        write_conflict_report,
+    )
+
     rounds = int(flow.config.get("rounds", 1) or 1)
     artifact = build_seeded_artifact(scenario, stakeholders, rounds)
-    artifact = flow._ensure_artifact_contract(artifact)
-    _sync_project_output_language(artifact)
-    flow._touch_artifact_meta(
+    artifact = flow.ensure_artifact_contract(artifact)
+    sync_project_output_language(artifact)
+    flow.touch_artifact_meta(
         artifact,
         updated_by="rq3.plant.init",
         round_num=0,
@@ -142,10 +156,10 @@ def run_rq3_flow(flow: Flow, scenario: str, stakeholders: List[Dict[str, Any]]) 
     flow.logger.info("=== Phase 0: 初始草稿建立（RQ3 seeded stakeholders） ===")
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
-    _write_pre_meeting_conflict_report(flow, artifact, round_num=0)
+    write_conflict_report(flow, artifact, round_num=0)
 
     for round_num in range(1, rounds + 1):
-        artifact = _run_one_round(flow, artifact, round_num)
+        artifact = run_one_round(flow, artifact, round_num)
 
     flow.logger.info("=== 規格化 ===")
     flow.finalize(artifact)
@@ -154,6 +168,10 @@ def run_rq3_flow(flow: Flow, scenario: str, stakeholders: List[Dict[str, Any]]) 
 
 
 def main() -> None:
+    from flow.setup import Flow
+    from storage import Store
+    from utils import Logger, json_dump_no_scientific
+
     load_dotenv(dotenv_path=BASE_DIR / ".env")
 
     scenario = load_scenario_text()
@@ -174,15 +192,16 @@ def main() -> None:
     srs_src = store.output_dir / "srs.md"
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    srs_dst = RESULTS_DIR / f"srs_{RESULT_PREFIX}.md"
-    cost_dst = RESULTS_DIR / f"cost_{RESULT_PREFIX}.json"
+    result_idx = next_result_index(RESULT_PREFIX, RESULTS_DIR)
+    srs_dst = RESULTS_DIR / f"srs_{RESULT_PREFIX}_{result_idx}.md"
+    cost_dst = RESULTS_DIR / f"cost_{RESULT_PREFIX}_{result_idx}.json"
 
     if not srs_src.is_file():
         raise RuntimeError(f"Plant 未產出正式 SRS：{srs_src}")
 
     shutil.copyfile(srs_src, srs_dst)
 
-    cost_payload = flow._build_cost_summary() or {
+    cost_payload = flow.build_cost_summary() or {
         "project_id": store.project_id,
         "agents": {},
         "totals": {

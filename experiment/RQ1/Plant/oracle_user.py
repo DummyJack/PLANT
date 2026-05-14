@@ -50,11 +50,32 @@ class OracleUserAgent(UserAgent):
         self.conversation_history: List[Dict[str, str]] = []
         self.last_action_info: Dict[str, Any] = {}
         self.oracle_trace: List[Dict[str, Any]] = []
+        self.oracle_response_cache: Dict[tuple, Dict[str, Any]] = {}
         self.oracle_usage_total: Dict[str, Dict[str, int]] = {
             "judge": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "user": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
         self.oracle_runtime_total_s: Dict[str, float] = {"judge": 0.0, "user": 0.0}
+        self.rq1_logger: Any = None
+        self.rq1_last_logged_mediator_turn = 0
+        self.rq1_pending_turn_log: Dict[str, Any] = {}
+
+    def rq1_log(self, *args: Any) -> None:
+        logger = self.rq1_logger
+        if logger is not None and bool(getattr(logger, "verbose", True)):
+            logger.info(*args)
+            return
+        if not args:
+            print()
+            return
+        if len(args) == 1:
+            print(str(args[0]))
+            return
+        message = str(args[0])
+        try:
+            print(message % args[1:])
+        except Exception:
+            print(" ".join(str(x) for x in args))
 
     @staticmethod
     def merge_usage(dst: Dict[str, int], usage: Dict[str, Any]) -> None:
@@ -103,6 +124,9 @@ class OracleUserAgent(UserAgent):
         self.current_task = task
         self.conversation_history = []
         self.oracle_trace = []
+        self.rq1_last_logged_mediator_turn = 0
+        self.oracle_response_cache = {}
+        self.rq1_pending_turn_log = {}
         initial = task_initial_requirements(task)
         if initial:
             self.conversation_history.append({"role": "user", "content": initial})
@@ -247,15 +271,159 @@ class OracleUserAgent(UserAgent):
             return str(judgement.get("action_type") or "probe").strip().lower() or "probe"
         return "probe"
 
+    def log_rq1_turn_result(
+        self,
+        *,
+        issue: Dict[str, Any],
+        mediator_turn: int,
+        selected_role: str,
+        selected_action: str,
+        selected_judgement: Dict[str, Any],
+        user_response: str,
+        elicited_req_ids: List[str],
+    ) -> None:
+        logger = self.rq1_logger
+        if logger is None:
+            return
+        turn_no = max(1, int(mediator_turn or len(self.oracle_trace) + 1))
+        action_type = str(selected_judgement.get("action_type") or "unknown").strip() or "unknown"
+        is_relevant = bool(selected_judgement.get("is_relevant_to_implied_requirements", False))
+        expected_roles = self.rq1_expected_roles(issue)
+        pending_turn = self.rq1_pending_turn_log.get("turn")
+        if pending_turn and pending_turn != turn_no:
+            self.flush_rq1_turn_log()
+        if not self.rq1_pending_turn_log or self.rq1_pending_turn_log.get("turn") != turn_no:
+            self.rq1_pending_turn_log = {
+                "turn": turn_no,
+                "issue": issue,
+                "expected_roles": expected_roles,
+                "plant": {},
+                "users": [],
+                "action_types": [],
+                "is_relevant": False,
+                "elicited_req_ids": [],
+            }
+        role = str(selected_role or "merged").strip() or "merged"
+        self.rq1_pending_turn_log["plant"][role] = selected_action or "(no statement)"
+        if user_response:
+            self.rq1_pending_turn_log["users"].append(user_response)
+        if action_type:
+            self.rq1_pending_turn_log["action_types"].append(action_type)
+        if is_relevant:
+            self.rq1_pending_turn_log["is_relevant"] = True
+        for rid in elicited_req_ids or []:
+            if rid not in self.rq1_pending_turn_log["elicited_req_ids"]:
+                self.rq1_pending_turn_log["elicited_req_ids"].append(rid)
+        if not expected_roles or all(
+            role_name in self.rq1_pending_turn_log["plant"]
+            for role_name in expected_roles
+        ):
+            self.flush_rq1_turn_log()
+
+    def flush_rq1_turn_log(self) -> None:
+        pending = self.rq1_pending_turn_log
+        if not pending:
+            return
+        turn_no = int(pending.get("turn") or 0)
+        if turn_no <= 0:
+            self.rq1_pending_turn_log = {}
+            return
+        implicit_total = len(task_implicit_requirements(self.current_task))
+        remaining_total = len(self.remaining_requirements)
+        obtained_total = max(0, implicit_total - remaining_total)
+        ratio = (obtained_total / implicit_total) if implicit_total > 0 else 0.0
+        action_types = [
+            str(value).strip()
+            for value in pending.get("action_types", [])
+            if str(value).strip()
+        ]
+        action_type = action_types[0] if action_types else "unknown"
+        plant_rows = pending.get("plant") if isinstance(pending.get("plant"), dict) else {}
+        expected_roles = pending.get("expected_roles") or list(plant_rows.keys())
+        plant_parts = []
+        for role in expected_roles:
+            statement = str(plant_rows.get(role) or "").strip()
+            if statement:
+                plant_parts.append(f"{role}: {statement}")
+        for role, statement in plant_rows.items():
+            if role in expected_roles:
+                continue
+            statement = str(statement or "").strip()
+            if statement:
+                plant_parts.append(f"{role}: {statement}")
+        user_text = "\n".join(
+            str(value).strip()
+            for value in (pending.get("users") or [])
+            if str(value).strip()
+        )
+        self.rq1_log("[輪次 %s]", turn_no)
+        self.log_rq1_mediator_plan(pending.get("issue") or {})
+        self.rq1_log("  動作類型：%s", action_type)
+        self.rq1_log("  與隱式需求相關：%s", bool(pending.get("is_relevant", False)))
+        self.rq1_log("  已取得的需求：%s", list(pending.get("elicited_req_ids") or []))
+        if plant_parts:
+            self.rq1_log("  Plant: %s", " | ".join(plant_parts))
+        if user_text:
+            self.rq1_log("  User: %s", user_text)
+        self.rq1_log(
+            "  觀察：總需求=%s，剩餘=%s，取得比例=%.2f%%",
+            implicit_total,
+            remaining_total,
+            ratio * 100.0,
+        )
+        self.rq1_pending_turn_log = {}
+
+    @staticmethod
+    def rq1_expected_roles(issue: Dict[str, Any]) -> List[str]:
+        if not isinstance(issue, dict):
+            return []
+        agent_actions = (
+            issue.get("agent_actions")
+            if isinstance(issue.get("agent_actions"), dict)
+            else {}
+        )
+        roles: List[str] = []
+        for agent, action_info in agent_actions.items():
+            if not isinstance(action_info, dict):
+                continue
+            action = str(action_info.get("action") or "").strip()
+            if action in {"ask_user", "supplement_question"}:
+                roles.append(str(agent).strip())
+        return [role for role in roles if role]
+
+    def log_rq1_mediator_plan(self, issue: Dict[str, Any]) -> None:
+        if not isinstance(issue, dict):
+            return
+        goal = str(issue.get("meeting_goal") or "").strip()
+        agent_actions = (
+            issue.get("agent_actions")
+            if isinstance(issue.get("agent_actions"), dict)
+            else {}
+        )
+        sequence_parts: List[str] = []
+        for agent, action_info in agent_actions.items():
+            if not isinstance(action_info, dict):
+                continue
+            action = str(action_info.get("action") or "").strip()
+            if action in {"ask_user", "supplement_question"}:
+                sequence_parts.append(f"{agent} → user")
+        if not goal and not sequence_parts:
+            return
+        self.rq1_log("  mediator plan：")
+        if goal:
+            self.rq1_log("    goal: %s", goal)
+        if sequence_parts:
+            self.rq1_log("    sequence: %s", "; ".join(sequence_parts))
+
     def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
-        if mode == "topic_response":
-            topic = kwargs["topic"]
+        if mode in {"issue_response", "topic_response"}:
+            issue = kwargs.get("issue") or kwargs.get("topic") or {}
             previous_responses = kwargs.get("previous_responses") or []
             artifact_snapshot = kwargs.get("artifact_snapshot") or {}
             return {
-                "topic": topic,
-                "topic_id": str(topic.get("id") or ""),
-                "topic_category": str(topic.get("category") or ""),
+                "issue": issue,
+                "issue_id": str(issue.get("id") or ""),
+                "issue_category": str(issue.get("category") or ""),
                 "previous_response_count": len(previous_responses),
                 "has_artifact_snapshot": bool(artifact_snapshot),
                 "iteration": kwargs.get("iteration", 0) + 1,
@@ -271,7 +439,7 @@ class OracleUserAgent(UserAgent):
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        if mode == "topic_response":
+        if mode in {"issue_response", "topic_response"}:
             return {
                 "action": "oracle_user_response",
                 "params": {},
@@ -284,10 +452,10 @@ class OracleUserAgent(UserAgent):
             **kwargs,
         )
 
-    def build_topic_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.build_observation(mode="topic_response", **kwargs)
+    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.build_observation(mode="issue_response", **kwargs)
 
-    def decide_topic_response_action(
+    def decide_issue_response_action(
         self,
         *,
         observation: Dict[str, Any],
@@ -295,21 +463,21 @@ class OracleUserAgent(UserAgent):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         return self.decide_action(
-            mode="topic_response",
+            mode="issue_response",
             observation=observation,
             last_result=last_result,
             **kwargs,
         )
 
-    def execute_topic_response_action(
+    def execute_issue_response_action(
         self,
         *,
         decision: Dict[str, Any],
         observation: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        response = self.oracle_topic_response(
-            kwargs["topic"],
+        response = self.oracle_issue_response(
+            kwargs["issue"],
             previous_responses=kwargs.get("previous_responses"),
             artifact_snapshot=kwargs.get("artifact_snapshot"),
         )
@@ -321,15 +489,15 @@ class OracleUserAgent(UserAgent):
             "oracle_action_type": response.get("oracle_action_type", ""),
             "oracle_is_relevant": bool(response.get("oracle_is_relevant", False)),
             "oracle_revealed_ids": response.get("oracle_revealed_ids", []) or [],
-            "summary": "完成 oracle user topic_response",
+            "summary": "完成 oracle user issue_response",
         }
 
-    def oracle_topic_response(self, topic, previous_responses=None, artifact_snapshot=None):
+    def oracle_issue_response(self, issue, previous_responses=None, artifact_snapshot=None):
         interviewer_actions, merged_action = self.latest_interviewer_inputs(
-            topic, previous_responses
+            issue, previous_responses
         )
-        topic_id = str((topic or {}).get("id") or "")
-        mediator_turn = parse_mediator_turn(topic_id)
+        issue_id = str((issue or {}).get("id") or "")
+        mediator_turn = parse_mediator_turn(issue_id)
         judge_details: List[Dict[str, Any]] = []
         selected_role = ""
         selected_action = merged_action
@@ -362,7 +530,7 @@ class OracleUserAgent(UserAgent):
                         "judgement": judgement or {},
                     }
                 )
-            if bool((topic or {}).get("answer_all_interviewer_questions")) and judge_details:
+            if bool((issue or {}).get("answer_all_interviewer_questions")) and judge_details:
                 selected_role = "all"
                 selected_action = merged_action
                 selected_judgement = self.aggregate_judgements(judge_details)
@@ -385,6 +553,15 @@ class OracleUserAgent(UserAgent):
             self.oracle_runtime_total_s["judge"] += max(0.0, time.perf_counter() - judge_t0)
             self.merge_usage(self.oracle_usage_total["judge"], judge_usage or {})
             selected_judgement = judgement or selected_judgement
+
+        cache_key = (
+            mediator_turn,
+            selected_role,
+            re.sub(r"\s+", " ", str(selected_action or "").strip()),
+        )
+        cached = self.oracle_response_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
 
         user_response = ""
         user_usage: Dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -420,10 +597,20 @@ class OracleUserAgent(UserAgent):
         self.conversation_history.append({"role": "interviewer", "content": selected_action})
         self.conversation_history.append({"role": "user", "content": user_response})
         self.last_action_info = selected_judgement or {}
+        self.log_rq1_turn_result(
+            issue=issue,
+            mediator_turn=mediator_turn,
+            selected_role=selected_role,
+            selected_action=selected_action,
+            selected_judgement=self.last_action_info,
+            user_response=user_response,
+            elicited_req_ids=elicited_req_ids,
+        )
         self.oracle_trace.append(
             {
                 "turn": len(self.oracle_trace) + 1,
-                "topic_id": topic_id,
+                "issue_id": issue_id,
+                "topic_id": issue_id,
                 "mediator_turn": mediator_turn,
                 "interviewer_action": selected_action,
                 "interviewer_action_merged": merged_action,
@@ -439,7 +626,7 @@ class OracleUserAgent(UserAgent):
                 },
             }
         )
-        return {
+        result = {
             "agent": self.name,
             "statement": user_response,
             "open_questions": [],
@@ -449,3 +636,5 @@ class OracleUserAgent(UserAgent):
             ),
             "oracle_revealed_ids": elicited_req_ids,
         }
+        self.oracle_response_cache[cache_key] = dict(result)
+        return result

@@ -57,7 +57,7 @@ def build_plant_interviewer_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
 
 def resolve_interviewer_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]) -> str:
     participants: List[str] = []
-    for tlog in (per_task.get("elicitation_log", []) or []):
+    for tlog in (per_task.get("elicitation_trace", []) or []):
         if not isinstance(tlog, dict):
             continue
         for row in (tlog.get("contributions", []) or []):
@@ -297,11 +297,9 @@ def format_mediator_record_statement(tlog: Dict[str, Any]) -> str:
     discussion_mode = str(tlog.get("discussion_mode") or "").strip()
     is_finish = bool(tlog.get("judge_finish", False)) or bool(tlog.get("forced_finish", False))
     if is_finish:
-        finish_agent = str(tlog.get("judged_action_agent") or "").strip()
-        if not finish_agent:
-            closure_vote = tlog.get("closure_vote") if isinstance(tlog.get("closure_vote"), dict) else {}
-            finish_agent = str((closure_vote or {}).get("proposer_role") or "").strip()
-        return f"participants={finish_agent}" if finish_agent else ""
+        if bool(tlog.get("forced_finish", False)):
+            return str(tlog.get("judged_action") or "This meeting is over.").strip()
+        return ""
 
     participants = [
         str(role).strip()
@@ -333,7 +331,7 @@ def build_task_record(
     token_cost: int,
 ) -> Dict[str, Any]:
     implicit_total = int(per_task.get("implicit_total", 0) or 0)
-    turn_logs = per_task.get("elicitation_log", []) or []
+    turn_logs = per_task.get("elicitation_trace", []) or []
     # 與 run_one_task 的 oracle_revealed_count 同口徑：以 oracle_trace 的 revealed_ids 去重後計算。
     oracle_revealed_ids = {
         str(rid)
@@ -382,14 +380,12 @@ def build_task_record(
         contributions = tlog.get("contributions", []) or []
 
         role_parts: Dict[str, List[str]] = {"analyst": [], "expert": [], "modeler": []}
-        role_actions: Dict[str, str] = {"analyst": "", "expert": "", "modeler": ""}
         user_parts: List[str] = []
         for row in contributions:
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()
             stmt = str(row.get("statement") or "").strip()
-            agent_action = str(row.get("action") or "").strip()
             if not agent or not stmt:
                 continue
             if agent == "user":
@@ -400,8 +396,6 @@ def build_task_record(
                 stmt = keep_interviewer_record_statement(stmt)
                 if stmt:
                     role_parts[agent].append(stmt)
-                if agent_action and not role_actions.get(agent):
-                    role_actions[agent] = agent_action
             else:
                 # 其他角色目前不列為 interviewer 三角色欄位。
                 pass
@@ -430,20 +424,26 @@ def build_task_record(
             ]
             user_text = "\n".join(user_parts) if user_parts else "\n".join(fallback_user_texts)
 
-        turn_entry = {
-            "turn": turn_no,
-            "mediator": format_mediator_record_statement(tlog),
-            "analyst": "\n\n".join(role_parts["analyst"]),
-            "expert": "\n\n".join(role_parts["expert"]),
-            "modeler": "\n\n".join(role_parts["modeler"]),
-            "user": user_text,
-            "action_type": action_type,
-            "is_relevant_to_implicit_requirements": hit,
-            "elicited_requirements": turn_revealed_ids,
-            "elicitation_ratio": (
-                len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
-            ),
-        }
+        turn_entry = {"turn": turn_no}
+        mediator_statement = format_mediator_record_statement(tlog)
+        if mediator_statement:
+            turn_entry["mediator"] = mediator_statement
+        for role in ("analyst", "expert", "modeler"):
+            role_text = "\n\n".join(role_parts[role]).strip()
+            if role_text:
+                turn_entry[role] = role_text
+        if user_text:
+            turn_entry["user"] = user_text
+        turn_entry.update(
+            {
+                "action_type": action_type,
+                "is_relevant_to_implicit_requirements": hit,
+                "elicited_requirements": turn_revealed_ids,
+                "elicitation_ratio": (
+                    len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
+                ),
+            }
+        )
         conversation.append(turn_entry)
 
     if not conversation:
@@ -455,26 +455,23 @@ def build_task_record(
             hit = bool(agg.get("is_hit", False))
             hit_sequence.append(1 if hit else 0)
             action_types = agg.get("action_types", []) or []
-            conversation.append(
-                {
-                    "turn": turn_no,
-                    "mediator": "",
-                    "analyst": "",
-                    "expert": "",
-                    "modeler": "",
-                    "user": "\n".join(
-                        keep_user_record_statement(text)
-                        for text in (agg.get("user_texts", []) or [])
-                        if str(text or "").strip()
-                    ),
-                    "action_type": action_types[0] if action_types else "",
-                    "is_relevant_to_implicit_requirements": hit,
-                    "elicited_requirements": turn_revealed_ids,
-                    "elicitation_ratio": (
-                        len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
-                    ),
-                }
+            turn_entry = {
+                "turn": turn_no,
+                "action_type": action_types[0] if action_types else "",
+                "is_relevant_to_implicit_requirements": hit,
+                "elicited_requirements": turn_revealed_ids,
+                "elicitation_ratio": (
+                    len(revealed_seen) / implicit_total if implicit_total > 0 else 0.0
+                ),
+            }
+            user_text = "\n".join(
+                keep_user_record_statement(text)
+                for text in (agg.get("user_texts", []) or [])
+                if str(text or "").strip()
             )
+            if user_text:
+                turn_entry["user"] = user_text
+            conversation.append(turn_entry)
     num_rounds = len(conversation)
     tkqr = compute_tkqr(hit_sequence, implicit_total)
     ora = compute_ora(num_rounds, implicit_total)

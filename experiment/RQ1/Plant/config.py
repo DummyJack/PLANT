@@ -38,7 +38,7 @@ class ExperimentLogger:
 
 
 class ExperimentStore:
-    """實驗用 no-op store，避免建立完整專案輸出。"""
+    """RQ1 experiment store: keep regular project artifacts out of experiment results."""
 
     def __init__(self, results_dir: Path) -> None:
         self.project_id = "rq1_plant_elicitation"
@@ -121,10 +121,10 @@ def build_flow(flow_cfg: Dict[str, Any], *, verbose: bool, results_dir: Path) ->
 def disable_rq1_candidate_extraction(flow: Flow) -> None:
     """RQ1 metric 只依 oracle_trace.revealed_ids 計分，不需要每輪 LLM candidate extraction。"""
 
-    def _skip_extract_elicitation_candidates(*args, **kwargs):
+    def skip_extract_elicited_requirement_candidates(*args, **kwargs):
         return {"requirements": [], "candidates": [], "requirement_candidates": []}
 
-    flow.analyst_agent.extract_elicitation_candidates = _skip_extract_elicitation_candidates
+    flow.analyst_agent.extract_elicited_requirement_candidates = skip_extract_elicited_requirement_candidates
 
 
 def build_oracle_configs(exp_cfg: Dict[str, Any], api_key: str, base_url: str) -> OracleConfigs:

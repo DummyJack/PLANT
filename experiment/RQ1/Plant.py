@@ -16,41 +16,42 @@ if str(BASE_DIR) not in sys.path:
 if str(RQ1_DIR) not in sys.path:
     sys.path.insert(0, str(RQ1_DIR))
 
+OUTPUT_PREFIX = "Plant"
 RESULTS_DIR = RQ1_DIR / "results"
+PLANT_ARTIFACT_DIR = RESULTS_DIR / OUTPUT_PREFIX
 DEFAULT_CONFIG_PATH = RQ1_DIR / "Plant" / "config.json"
 FLOW_CONFIG_PATH = (RQ1_DIR / "../../config.json").resolve()
-DEFAULT_DATA_PATH = (RQ1_DIR / "ReqElicitBench_10.json").resolve()
-OUTPUT_PREFIX = "Plant"
+DEFAULT_DATA_PATH = (RQ1_DIR / "ReqElicitBench.json").resolve()
 PROMPT_FOR_MAX_TASKS = True
 PROMPT_FOR_RUNS = True
 
 load_dotenv(BASE_DIR / ".env")
 
-from Plant.config import (  # noqa: E402
-    apply_rq1_flow_overrides,
-    assert_models_have_pricing,
-    build_flow,
-    build_oracle_configs,
-    load_json,
-)
-from Plant.oracle_user import OracleUserAgent  
-from Plant.records import (  
-    build_cost_payload,
-    build_result_payload,
-    build_task_record,
-    print_final_summary,
-    resolve_interviewer_model_label,
-)
-from Plant.utils import (  
-    next_result_index,
-    run_one_task,
-    task_implicit_requirements,
-    task_initial_requirements,
-)
-from utils import json_dump_no_scientific  
-
 
 def main() -> None:
+    from Plant.config import (
+        apply_rq1_flow_overrides,
+        assert_models_have_pricing,
+        build_flow,
+        build_oracle_configs,
+        load_json,
+    )
+    from Plant.oracle_user import OracleUserAgent
+    from Plant.records import (
+        build_cost_payload,
+        build_result_payload,
+        build_task_record,
+        print_final_summary,
+        resolve_interviewer_model_label,
+    )
+    from Plant.utils import (
+        next_result_index,
+        run_one_task,
+        task_implicit_requirements,
+        task_initial_requirements,
+    )
+    from utils import json_dump_no_scientific
+
     cfg_path = DEFAULT_CONFIG_PATH.resolve()
     exp_cfg = load_json(cfg_path)
 
@@ -106,6 +107,7 @@ def main() -> None:
 
     verbose = bool(exp_cfg.get("verbose", True))
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    PLANT_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
     run_results: List[Dict[str, Any]] = []
     run_metrics: List[Dict[str, Any]] = []
@@ -120,7 +122,7 @@ def main() -> None:
 
         print(f"\n=== Run {run_i + 1}/{runs}（run_id={run_id}）===")
         print("\n正在建立環境...")
-        flow = build_flow(flow_cfg, verbose=verbose, results_dir=RESULTS_DIR)
+        flow = build_flow(flow_cfg, verbose=verbose, results_dir=PLANT_ARTIFACT_DIR)
         oracle_cfg = build_oracle_configs(exp_cfg, api_key, base_url)
         oracle_user = OracleUserAgent(
             model=flow.agent_models["user"],
@@ -130,12 +132,14 @@ def main() -> None:
         )
         flow.user_agent = oracle_user
         flow.registry.register("user", oracle_user)
+        oracle_user.rq1_logger = flow.logger
         print("\n" + "=" * 60)
         print("開始執行全量評估實驗...")
         print("=" * 60)
 
         records: List[Dict[str, Any]] = []
         task_result_rows: List[Dict[str, Any]] = []
+        elicitation_meeting_payload: Dict[str, Any] = {}
         t0 = time.perf_counter()
         for i, task in enumerate(tasks, start=1):
             print()
@@ -144,12 +148,13 @@ def main() -> None:
             print(f"應用類型：{task.get('application_type', 'N/A')}")
             print(f"初始需求：{task_initial_requirements(task)[:100]}...")
             print(f"總需求數：{len(task_implicit_requirements(task))}")
-            print("\n開始對話...\n")
+            print("\n開始需求擷取會議...\n")
             token_before = 0
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):
                     token_before += int(m.costTracker.export_summary_dict().get("total_tokens", 0) or 0)
             one = run_one_task(flow, oracle_user, task)
+            elicitation_meeting_payload = one.get("elicitation", {}) or {}
             token_after = 0
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):
@@ -182,6 +187,7 @@ def main() -> None:
         result_path = RESULTS_DIR / f"result_{prefix}_{run_id}.json"
         record_path = RESULTS_DIR / f"record_{prefix}_{run_id}.json"
         cost_path = RESULTS_DIR / f"cost_{prefix}_{run_id}.json"
+        elicitation_meeting_path = PLANT_ARTIFACT_DIR / f"elicitation_meeting_{run_id}.json"
 
         with result_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -206,6 +212,8 @@ def main() -> None:
         cost_payload = build_cost_payload(flow, oracle_user)
         with cost_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
+        with elicitation_meeting_path.open("w", encoding="utf-8") as f:
+            json_dump_no_scientific(elicitation_meeting_payload, f, indent=2, ensure_ascii=False)
 
         print_final_summary(result, task_result_rows)
 

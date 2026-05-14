@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from metric import Metric
 from utils import json_dump_no_scientific
@@ -19,33 +19,46 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
     source.pop("topic_id", None)
     source.pop("req_a", None)
     source.pop("req_b", None)
-    source.pop("confidence", None)
     source.pop("requirement_ids", None)
 
     source.pop("reason", None)
     source.pop("rationale", None)
 
-    round_value = source.pop("round", None)
-    if round_value is not None:
-        cleaned["round"] = round_value
+    source.pop("round", None)
+    if "from_label" in source and "initial_label" not in source:
+        source["initial_label"] = source.pop("from_label")
+    else:
+        source.pop("from_label", None)
+    source.pop("to_label", None)
+
+    def cleaned_review_rows(rows: Any) -> List[Any]:
+        review_rows = []
+        if not isinstance(rows, list):
+            return review_rows
+        for review in rows:
+            if not isinstance(review, dict):
+                review_rows.append(review)
+                continue
+            item = dict(review)
+            item.pop("id", None)
+            item.pop("independent_label", None)
+            if "rationale" in item and "reason" not in item:
+                item["reason"] = item.pop("rationale")
+            else:
+                item.pop("rationale", None)
+            review_rows.append(item)
+        return review_rows
 
     for key, value in source.items():
-        if key == "meeting_conflict_review" and isinstance(value, list):
-            review_rows = []
-            for review in value:
-                if not isinstance(review, dict):
-                    review_rows.append(review)
-                    continue
-                item = dict(review)
-                item.pop("id", None)
-                item.pop("confidence", None)
-                item.pop("independent_label", None)
-                if "rationale" in item and "reason" not in item:
-                    item["reason"] = item.pop("rationale")
-                else:
-                    item.pop("rationale", None)
-                review_rows.append(item)
-            cleaned["meeting_conflict_review"] = review_rows
+        if key == "meeting_conflict_review" and isinstance(value, dict):
+            grouped_reviews: Dict[str, List[Any]] = {}
+            for round_key, rows in value.items():
+                cleaned_rows = cleaned_review_rows(rows)
+                if cleaned_rows:
+                    grouped_reviews[str(round_key)] = cleaned_rows
+            cleaned["meeting_conflict_review"] = grouped_reviews
+        elif key == "meeting_conflict_review" and isinstance(value, list):
+            cleaned["meeting_conflict_review"] = cleaned_review_rows(value)
         else:
             cleaned[key] = value
 
@@ -70,10 +83,7 @@ def build_rq2_record_by_type(
     meetings_by_type: Dict[str, Any],
     results_by_idx: Dict[int, Tuple[Any, Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
-    """組裝寫入 record 的「每 type 一筆」列表（每筆為單一 type key 的物件）。
-
-    每個 pair 保留實驗所需欄位，不輸出資料列索引。
-    """
+    """組裝寫入 record 的「每 type 一筆」列表（每筆為單一 type key 的 pair 列表）。"""
     out: List[Dict[str, Any]] = []
     for g, items in grouped.items():
         meeting = meetings_by_type.get(g)
@@ -116,24 +126,26 @@ def build_rq2_record_by_type(
                 base["is_changed"] = base.pop("changed_after_review")
             else:
                 base.pop("changed_after_review", None)
-            base.pop("description", None)
             description = description_by_pair_index.get(local_pair_index, "")
             details = normalize_pair_details(base.pop("details", {}))
             base.pop("id", None)
             base = {"id": record_pair_id_from_index(local_pair_index), **base}
-            reordered: Dict[str, Any] = {}
-            for key, value in base.items():
-                reordered[key] = value
-                if key == "pred":
-                    reordered["description"] = description
-            base = reordered
-            base["details"] = details
+            review_details = details.get("meeting_conflict_review")
+            if not isinstance(review_details, dict):
+                review_details = {}
+            final_label = str(details.get("final_label") or base.get("pred") or "").strip()
+            if final_label:
+                base["pred"] = final_label
+            conflict_meeting = {
+                "description": description or str(details.get("description") or "").strip(),
+                "status": str(details.get("status") or "").strip(),
+                "initial_label": str(details.get("initial_label") or "").strip(),
+                "final_label": final_label,
+                "details": review_details,
+            }
+            base["conflict_meeting"] = [conflict_meeting]
             pairs_out.append(base)
-        block.pop("pair_reviews", None)
-        block.pop("topic_id", None)
-        block.pop("decisions", None)
-        block["pairs"] = pairs_out
-        out.append({str(g): block})
+        out.append({str(g): pairs_out})
     return out
 
 def build_rq2_result_payload(
@@ -188,13 +200,17 @@ def write_rq2_outputs(
     result: Dict[str, Any],
     record: List[Dict[str, Any]],
     cost: Dict[str, Any],
+    reqt_pairs: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Path]:
-    """寫入 RQ2 result / record / cost 三個輸出檔案。"""
+    """寫入 RQ2 result / record / cost 與 reqt_pairs 輸出檔案。"""
     results_dir.mkdir(parents=True, exist_ok=True)
     run_idx = next_result_index(prefix, results_dir)
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
     record_path = results_dir / f"record_{prefix}_{run_idx}.json"
     cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"
+    plant_dir = results_dir / prefix
+    plant_dir.mkdir(parents=True, exist_ok=True)
+    reqt_pairs_path = plant_dir / f"reqt_pairs_{run_idx}.json"
 
     with result_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -202,11 +218,14 @@ def write_rq2_outputs(
         json_dump_no_scientific(record, f, indent=2, ensure_ascii=False)
     with cost_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(cost, f, indent=2, ensure_ascii=False)
+    with reqt_pairs_path.open("w", encoding="utf-8") as f:
+        json_dump_no_scientific(reqt_pairs or [], f, indent=2, ensure_ascii=False)
 
     return {
         "result": result_path,
         "record": record_path,
         "cost": cost_path,
+        "reqt_pairs": reqt_pairs_path,
     }
 
 def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:

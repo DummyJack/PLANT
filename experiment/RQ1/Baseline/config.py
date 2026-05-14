@@ -2,8 +2,8 @@
 Configuration management for ReqElicitGym environments.
 """
 
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from dataclasses import dataclass
+from typing import Optional
 import os
 
 @dataclass
@@ -79,18 +79,6 @@ class ReqElicitGymConfig:
         # 檢查資料檔案是否存在
         if not os.path.exists(self.data_path):
             raise FileNotFoundError(f"Data file not found: {self.data_path}")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary."""
-        return {
-            field.name: getattr(self, field.name)
-            for field in self.__dataclass_fields__.values()
-        }
-    
-    @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> 'ReqElicitGymConfig':
-        """Create configuration from dictionary."""
-        return cls(**config_dict)
 
 def get_default_config() -> ReqElicitGymConfig:
     """Get the default ReqElicitGym configuration."""
