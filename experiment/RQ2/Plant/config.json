@@ -1,6 +1,7 @@
 {
   "enable_human_escalation": false,
   "enable_agents": {
+    "user": false,
     "documentor": false
   },
   "agent_models": {

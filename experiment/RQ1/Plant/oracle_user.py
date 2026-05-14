@@ -400,34 +400,34 @@ class OracleUserAgent(UserAgent):
             if isinstance(issue.get("agent_actions"), dict)
             else {}
         )
-        sequence_parts: List[str] = []
+        speaking_order_parts: List[str] = []
         for agent, action_info in agent_actions.items():
             if not isinstance(action_info, dict):
                 continue
             action = str(action_info.get("action") or "").strip()
             if action in {"ask_user", "supplement_question"}:
-                sequence_parts.append(f"{agent} → user")
-        if not goal and not sequence_parts:
+                speaking_order_parts.append(f"{agent} → user")
+        if not goal and not speaking_order_parts:
             return
         self.rq1_log("  mediator plan：")
         if goal:
             self.rq1_log("    goal: %s", goal)
-        if sequence_parts:
-            self.rq1_log("    sequence: %s", "; ".join(sequence_parts))
+        if speaking_order_parts:
+            self.rq1_log("    speaking_order: %s", "; ".join(speaking_order_parts))
 
     def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
         if mode in {"issue_response", "topic_response"}:
             issue = kwargs.get("issue") or kwargs.get("topic") or {}
             previous_responses = kwargs.get("previous_responses") or []
-            artifact_snapshot = kwargs.get("artifact_snapshot") or {}
+            artifact_context = kwargs.get("artifact_context") or self.load_artifact_context_from_files()
             return {
                 "issue": issue,
                 "issue_id": str(issue.get("id") or ""),
                 "issue_category": str(issue.get("category") or ""),
                 "previous_response_count": len(previous_responses),
-                "has_artifact_snapshot": bool(artifact_snapshot),
+                "has_artifact_context": bool(artifact_context),
                 "iteration": kwargs.get("iteration", 0) + 1,
-                "max_iterations": kwargs.get("max_iterations", 1),
+                "max_iterations": kwargs["max_iterations"],
             }
         return super().build_observation(mode=mode, **kwargs)
 
@@ -479,7 +479,7 @@ class OracleUserAgent(UserAgent):
         response = self.oracle_issue_response(
             kwargs["issue"],
             previous_responses=kwargs.get("previous_responses"),
-            artifact_snapshot=kwargs.get("artifact_snapshot"),
+            artifact_context=observation.get("artifact_context"),
         )
         return {
             "action": decision.get("action", ""),
@@ -492,7 +492,7 @@ class OracleUserAgent(UserAgent):
             "summary": "完成 oracle user issue_response",
         }
 
-    def oracle_issue_response(self, issue, previous_responses=None, artifact_snapshot=None):
+    def oracle_issue_response(self, issue, previous_responses=None, artifact_context=None):
         interviewer_actions, merged_action = self.latest_interviewer_inputs(
             issue, previous_responses
         )

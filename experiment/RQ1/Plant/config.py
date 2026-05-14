@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from flow.setup import Flow
+from storage.artifact import save_artifact as save_split_artifact
 from utils import model_has_token_pricing
 
 from .oracle_user import OracleConfigs
@@ -38,15 +39,17 @@ class ExperimentLogger:
 
 
 class ExperimentStore:
-    """RQ1 experiment store: keep regular project artifacts out of experiment results."""
+    """RQ1 experiment store: write temp artifact files for artifact_query context."""
 
     def __init__(self, results_dir: Path) -> None:
         self.project_id = "rq1_plant_elicitation"
         self.output_dir = results_dir
         self.project_dir = results_dir
+        self.artifact_dir = self.project_dir / "artifact"
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     def save_artifact(self, data: Dict[str, Any]):
-        pass
+        save_split_artifact(self.project_dir, self.artifact_dir, data)
 
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
         pass
@@ -121,10 +124,10 @@ def build_flow(flow_cfg: Dict[str, Any], *, verbose: bool, results_dir: Path) ->
 def disable_rq1_candidate_extraction(flow: Flow) -> None:
     """RQ1 metric 只依 oracle_trace.revealed_ids 計分，不需要每輪 LLM candidate extraction。"""
 
-    def skip_extract_elicited_requirement_candidates(*args, **kwargs):
-        return {"requirements": [], "candidates": [], "requirement_candidates": []}
+    def skip_extract_elicited_reqts(*args, **kwargs):
+        return []
 
-    flow.analyst_agent.extract_elicited_requirement_candidates = skip_extract_elicited_requirement_candidates
+    flow.analyst_agent.extract_elicited_reqts = skip_extract_elicited_reqts
 
 
 def build_oracle_configs(exp_cfg: Dict[str, Any], api_key: str, base_url: str) -> OracleConfigs:

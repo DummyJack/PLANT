@@ -39,7 +39,6 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
                 continue
             item = dict(review)
             item.pop("id", None)
-            item.pop("confidence", None)
             item.pop("independent_label", None)
             if "rationale" in item and "reason" not in item:
                 item["reason"] = item.pop("rationale")
@@ -208,10 +207,8 @@ def write_rq2_outputs(
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
     record_path = results_dir / f"record_{prefix}_{run_idx}.json"
     cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"
-    plant_dir = results_dir / prefix
-    plant_dir.mkdir(parents=True, exist_ok=True)
-    conflict_path = plant_dir / f"conflict_{run_idx}.json"
-    requirements_path = plant_dir / f"requirements_{run_idx}.json"
+    conflict_path = results_dir / f"conflict_{run_idx}.json"
+    requirements_path = results_dir / f"requirements_{run_idx}.json"
 
     with result_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)

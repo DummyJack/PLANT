@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from flow.setup import Flow
+from storage.artifact import save_artifact as save_split_artifact
 from utils import model_has_token_pricing
 
 class ExperimentLogger:
@@ -20,7 +21,7 @@ class ExperimentLogger:
         pass
 
 class ExperimentStore:
-    """實驗用無 I/O store（不產生 project id 與 artifacts）。"""
+    """實驗用暫存 store；artifact_query 需要 artifact/ 分檔作為唯讀上下文。"""
 
     def __init__(self) -> None:
         self.project_id = "rq2_experiment"
@@ -28,9 +29,11 @@ class ExperimentStore:
         self.output_dir = Path(tempfile.gettempdir()) / "plant_rq2_experiment_store"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.project_dir = self.output_dir
+        self.artifact_dir = self.project_dir / "artifact"
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     def save_artifact(self, data: Dict[str, Any]):
-        pass
+        save_split_artifact(self.project_dir, self.artifact_dir, data)
 
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
         pass

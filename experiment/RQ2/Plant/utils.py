@@ -180,7 +180,7 @@ def extract_pair_preds_with_missing(
             if cid.startswith("PAIR-"):
                 suf = cid.split("-", 1)[-1].strip()
                 try:
-                    pi = int(suf)
+                    pi = int(suf) - 1
                 except ValueError:
                     continue
         try:
@@ -207,7 +207,7 @@ def extract_conflict_review_details(
         "participants": [],
         "decisions": [],
     }
-    log = artifact.get("conflict_review_log", artifact.get("conflict_recheck_log"))
+    log = artifact.get("conflict_review_log")
     if not isinstance(log, list) or not log:
         return details
     entry = None
@@ -250,13 +250,7 @@ def extract_conflict_review_details(
             nl = str(d.get("new_label") or "").strip()
             rs = str(d.get("reason") or "").strip()
             cf = conflicts_by_id.get(cid, {})
-            pm = (
-                cf.get("conflict_review")
-                if isinstance(cf.get("conflict_review"), dict)
-                else cf.get("pre_meeting_review")
-                if isinstance(cf.get("pre_meeting_review"), dict)
-                else {}
-            )
+            pm = cf.get("conflict_review") if isinstance(cf.get("conflict_review"), dict) else {}
             decision_rows.append(
                 {
                     "id": cid,
@@ -290,7 +284,7 @@ def build_pair_changed_flags(
             if cid.startswith("PAIR-"):
                 suf = cid.split("-", 1)[-1].strip()
                 try:
-                    pi = int(suf)
+                    pi = int(suf) - 1
                 except ValueError:
                     continue
         try:
@@ -304,13 +298,7 @@ def build_pair_changed_flags(
         if final_label not in {"Conflict", "Neutral"}:
             final_label = preds[ik] if ik < len(preds) else "Neutral"
 
-        pm = (
-            c.get("conflict_review")
-            if isinstance(c.get("conflict_review"), dict)
-            else c.get("pre_meeting_review")
-            if isinstance(c.get("pre_meeting_review"), dict)
-            else {}
-        )
+        pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
         from_label = str(pm.get("from_label") or final_label).strip() or final_label
         to_label = str(pm.get("to_label") or final_label).strip() or final_label
         changed = bool(pm.get("result") == "modify" or from_label != to_label)
@@ -351,7 +339,7 @@ def build_pair_review_details(
             if cid.startswith("PAIR-"):
                 suf = cid.split("-", 1)[-1].strip()
                 try:
-                    pi = int(suf)
+                    pi = int(suf) - 1
                 except ValueError:
                     continue
         try:
@@ -361,13 +349,7 @@ def build_pair_review_details(
         if ik < 0 or ik >= n_pairs:
             continue
 
-        pm = (
-            c.get("conflict_review")
-            if isinstance(c.get("conflict_review"), dict)
-            else c.get("pre_meeting_review")
-            if isinstance(c.get("pre_meeting_review"), dict)
-            else {}
-        )
+        pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
         final_label = str(c.get("label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
             final_label = preds[ik] if ik < len(preds) else "Neutral"
@@ -380,7 +362,7 @@ def build_pair_review_details(
             "final_label": final_label,
             "reason": str(pm.get("reason") or "").strip(),
             "requirement_ids": list(c.get("requirement_ids") or []),
-            "description": str(c.get("description") or "").strip(),
+            "description": str(pm.get("reason") or "").strip(),
             "meeting_conflict_review": review_row.get("meeting_conflict_review") or {},
         }
     return details_by_k
