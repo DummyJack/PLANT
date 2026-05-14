@@ -42,7 +42,6 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         "stakeholders": [],
         "scope": {"in_scope": [], "out_of_scope": []},
         "requirements": [],
-        "conflicts": [],
         "feedback": {},
         "system_models": {},
         "discussions": [],
@@ -66,7 +65,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     artifact.setdefault("meta", {})["session_end_round"] = int(rounds)
     flow.store.save_artifact(artifact)
 
-    flow.logger.info("=== Phase 0: 初始草稿建立 ===")
+    flow.logger.info("=== 初始階段 ===")
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
 

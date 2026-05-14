@@ -91,7 +91,6 @@ def save_meeting_preparation_outputs(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
         previous_draft=previous_draft,
-        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.logger.info(
@@ -179,7 +178,7 @@ def collect_issue_proposals(
                     else:
                         invalid_count += 1
         except Exception as e:
-            coordinator.flow.logger.warning("%s 提案階段失敗，略過: %s", role, e)
+            raise RuntimeError(f"{role} 提案階段失敗") from e
     coordinator.flow.logger.info("Issue Proposal：%s 筆有效，%s 筆淘汰", len(proposals), invalid_count)
     return proposals
 
@@ -369,8 +368,6 @@ def apply_mediator_updates(
             continue
         if orig.get("requirement_ids") is not None:
             c.setdefault("requirement_ids", orig["requirement_ids"])
-        if orig.get("conflict_type") and c.get("label") == "Conflict":
-            c.setdefault("conflict_type", orig["conflict_type"])
         if orig.get("resolved_by_decision_id") and c.get("label") == "Neutral":
             c.setdefault("resolved_by_decision_id", orig["resolved_by_decision_id"])
     set_conflict_entries(artifact, new_conflicts)
@@ -389,8 +386,8 @@ def post_round_pipeline(
 ) -> Dict[str, Any]:
     from .subflows import build_queue_round_summary
     from .conflict_review import (
-        append_requirement_change_candidates,
-        apply_requirement_change_candidates,
+        append_change_record,
+        apply_change_record,
     )
 
     round_discussions = runner.get_round_discussions()
@@ -468,17 +465,17 @@ def post_round_pipeline(
             artifact=artifact,
         )
         artifact["requirements"] = draft["requirements"]
-        change_candidates = draft.get("requirement_change_candidates", [])
+        change_candidates = draft.get("change_record", [])
         if isinstance(change_candidates, list) and change_candidates:
-            append_requirement_change_candidates(artifact, change_candidates)
-        artifact = apply_requirement_change_candidates(coordinator, artifact)
+            append_change_record(artifact, change_candidates)
+        artifact = apply_change_record(coordinator, artifact)
     elif artifact.get("requirements"):
         draft = coordinator.flow.analyst_agent.run_requirements_analyst("update_draft", artifact=artifact)
         artifact["requirements"] = draft["requirements"]
-        change_candidates = draft.get("requirement_change_candidates", [])
+        change_candidates = draft.get("change_record", [])
         if isinstance(change_candidates, list) and change_candidates:
-            append_requirement_change_candidates(artifact, change_candidates)
-        artifact = apply_requirement_change_candidates(coordinator, artifact)
+            append_change_record(artifact, change_candidates)
+        artifact = apply_change_record(coordinator, artifact)
     candidate_pool_changed = bool(artifact.pop("_candidate_pool_changed", False))
     requirements_changed = (
         previous_requirements_snapshot != stable_json(artifact.get("requirements", []) or [])
@@ -508,13 +505,11 @@ def post_round_pipeline(
         )
         model_data = coordinator.flow.modeler_agent.generate_requirement_models(
             artifact,
-            max_iterations=3,
             revision_context=revision_context,
         )
     else:
         model_data = coordinator.flow.modeler_agent.generate_requirement_models(
             artifact,
-            max_iterations=3,
         )
     artifact["system_models"] = model_data
     draft_version = round_num
@@ -527,7 +522,6 @@ def post_round_pipeline(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
         previous_draft=previous_draft,
-        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.touch_artifact_meta(artifact, updated_by="flow.run_meeting_round", round_num=round_num)

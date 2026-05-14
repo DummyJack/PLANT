@@ -10,6 +10,82 @@ ELICITATION_PHASES = [
 ]
 QUESTION_AGENT_ACTIONS = {"ask_user", "supplement_question"}
 FINISH_AGENT_ACTION = "propose_finish"
+
+
+def run_closure_vote_loop(
+    agent: Any,
+    *,
+    role: str,
+    prompt: str,
+) -> Dict[str, Any]:
+    def build_observation(**kwargs: Any) -> Dict[str, Any]:
+        return {
+            "action": "elicitation_closure_vote",
+            "role": role,
+            "iteration": kwargs.get("iteration", 0) + 1,
+            "max_iterations": kwargs["max_iterations"],
+        }
+
+    def decide_action(
+        *,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if isinstance(last_result, dict) and not last_result.get("error"):
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "上一輪 elicitation closure vote 已完成，結束本次投票。",
+            }
+        return {
+            "action": "elicitation_closure_vote",
+            "params": {},
+            "reasoning": "判斷需求擷取會議是否可以收束。",
+        }
+
+    def execute_action(*, decision: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
+        try:
+            data = agent.chat_json(
+                agent.build_direct_messages(prompt),
+                action="elicitation_closure_vote",
+            )
+            if not isinstance(data, dict):
+                raise ValueError("closure vote must return a JSON object")
+            vote = str(data.get("vote") or "").strip().lower()
+            if vote not in {"close", "continue"}:
+                raise ValueError("closure vote must be close or continue")
+            return {
+                "action": decision.get("action", ""),
+                "status": "success",
+                "vote": vote,
+                "reason": str(data.get("reason") or "").strip(),
+                "missing_question": str(data.get("missing_question") or "").strip(),
+                "summary": f"{role} closure vote: {vote}",
+            }
+        except Exception as e:
+            return {
+                "action": decision.get("action", ""),
+                "status": "failed",
+                "error": "closure_vote_invalid",
+                "format_error": str(e),
+                "summary": f"{role} closure vote failed",
+            }
+
+    opa = agent.run_action_loop(
+        name="elicitation_closure_vote",
+        context={},
+        build_observation=build_observation,
+        decide_action=decide_action,
+        execute_action=execute_action,
+    )
+    trace = opa.get("opa_trace") or []
+    result = dict((trace[-1].get("result") if trace else {}) or {})
+    if result.get("error"):
+        raise RuntimeError(result.get("format_error") or result.get("error"))
+    return result
+
+
 def compact_text(text: str) -> str:
     value = " ".join(str(text or "").split())
     return value
@@ -56,7 +132,7 @@ def elicitation_phase_for_turn(turn: int, max_turns: int) -> str:
         return "initial_requirement"
     return "requirement_discussion"
 
-def collect_user_response_summary(contributions: List[Dict[str, Any]]) -> str:
+def collect_user_summary(contributions: List[Dict[str, Any]]) -> str:
     parts: List[str] = []
     for c in contributions or []:
         if not isinstance(c, dict) or c.get("agent") != "user":
@@ -132,42 +208,6 @@ def build_recent_ask_history(
     rows.reverse()
     return rows
 
-def initialize_requirement_elicitation_session(
-    artifact: Dict[str, Any],
-    *,
-    round_num: int,
-    max_turns: int,
-    participants: List[str],
-) -> Dict[str, Any]:
-    state = {
-        "round": round_num,
-        "standard": "practical_requirement_elicitation_meeting",
-        "goal": (
-            "Align the current requirement understanding, validate gaps with the user, "
-            "and turn validated answers into concrete requirement updates."
-        ),
-        "phase_order": list(ELICITATION_PHASES),
-        "phases": [
-            {
-                "id": "initial_requirement",
-                "purpose": "Align product goal, scope, current requirement understanding, and the most important gaps.",
-            },
-            {
-                "id": "requirement_discussion",
-                "purpose": "Let the selected agents ask stakeholder-focused validation questions and convert answers into requirement updates.",
-            },
-            {
-                "id": "conclusion",
-                "purpose": "Stop only when the current requirement understanding is clear enough, or record remaining open items.",
-            },
-        ],
-        "participants": list(participants or []),
-        "max_turns": max_turns,
-        "turns": [],
-        "conclusion": {},
-    }
-    return state
-
 def find_finish_proposal(
     contributions: List[Dict[str, Any]],
     stop_phrase: str,
@@ -194,7 +234,7 @@ def extract_first_question(text: str) -> str:
             return p
     return parts[0] if parts else ""
 
-def elicited_requirement_candidates(
+def clean_elicited_reqts(
     candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     seen_texts: set = set()
@@ -218,7 +258,7 @@ def turn_participants(values: List[str]) -> List[str]:
             participants.append(name)
     return participants
 
-def question_contributions_for_user(contributions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def user_questions(contributions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     questions: List[Dict[str, Any]] = []
     for c in contributions or []:
         if not isinstance(c, dict) or c.get("agent") == "user":
@@ -234,7 +274,7 @@ def append_unique(target: List[str], value: str) -> None:
     if item and item not in target:
         target.append(item)
 
-def derive_turn_memory(interviewer_question: str, user_response: str) -> Dict[str, List[str]]:
+def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[str, List[str]]:
     text = f"{interviewer_question}\n{user_response}".lower()
     user = str(user_response or "").lower()
     confirmed: List[str] = []
@@ -363,7 +403,7 @@ def get_contribution_statement(contribution: Dict[str, Any]) -> str:
     resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
     return str(resp.get("statement") or "").strip()
 
-def select_judged_action(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
+def select_question(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
     for c in contributions or []:
         if not isinstance(c, dict):
             continue
@@ -377,7 +417,7 @@ def select_judged_action(contributions: List[Dict[str, Any]]) -> tuple[str, str]
             return agent, statement
     return "", ""
 
-def merge_elicitation_memory(
+def merge_turn_summary(
     previous: Optional[Dict[str, Any]],
     current: Dict[str, List[str]],
 ) -> Dict[str, List[str]]:
@@ -394,7 +434,7 @@ def merge_elicitation_memory(
             append_unique(merged[key], str(value))
     return merged
 
-def collect_elicitation_closure_votes(
+def collect_closure_votes(
     coordinator: Any,
     artifact: Dict[str, Any],
     *,
@@ -419,32 +459,18 @@ def collect_elicitation_closure_votes(
     for role in roles:
         agent = coordinator.flow.registry.get(role)
         if not agent:
-            votes.append(
-                {
-                    "role": role,
-                    "vote": "continue",
-                    "reason": "agent 未註冊，保守判定不收束。",
-                    "missing_question": "",
-                }
-            )
-            continue
+            raise RuntimeError(f"elicitation closure vote agent 未註冊: {role}")
         prompt = coordinator.flow.mediator_agent.closure_vote_prompt(
             role=role,
             proposer_role=proposer_role,
             role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
-            rough_idea=str(artifact.get("rough_idea") or "").strip(),
+            scenario=artifact.get("scenario", {}),
             requirements=requirements,
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history or [],
         )
-        try:
-            data = agent.chat_json(agent.build_direct_messages(prompt), action="elicitation_closure_vote")
-        except Exception as e:
-            coordinator.flow.logger.warning("elicitation 收束投票失敗（%s）: %s", role, e)
-            data = {}
-        vote = str((data or {}).get("vote") or "").strip().lower()
-        if vote not in {"close", "continue"}:
-            vote = "continue"
+        data = run_closure_vote_loop(agent, role=role, prompt=prompt)
+        vote = str(data.get("vote") or "").strip().lower()
         votes.append(
             {
                 "role": role,
@@ -470,7 +496,7 @@ def collect_elicitation_closure_votes(
     artifact.setdefault("elicitation_closure_votes", []).append(summary)
     return summary
 
-def extract_elicited_requirement_candidates(
+def extract_candidates(
     coordinator: Any,
     contributions: List[Dict[str, Any]],
     artifact: Dict[str, Any],
@@ -519,29 +545,25 @@ def extract_elicited_requirement_candidates(
         if isinstance(row, dict) and str(row.get("name") or "").strip()
     ]
 
-    try:
-        raw = coordinator.flow.analyst_agent.extract_elicited_requirement_candidates(
-            discussion_text=discussion_text,
-            existing_ids=sorted(existing_ids),
-            mode=mode,
-            rough_idea=str(artifact.get("rough_idea") or ""),
-            valid_source_stakeholders=valid_source_stakeholders,
-        )
-        if not isinstance(raw, list):
-            return []
+    raw = coordinator.flow.analyst_agent.extract_elicited_reqts(
+        discussion_text=discussion_text,
+        existing_ids=sorted(existing_ids),
+        mode=mode,
+        scenario=artifact.get("scenario", {}),
+        valid_source_stakeholders=valid_source_stakeholders,
+    )
+    if not isinstance(raw, list):
+        raise RuntimeError("elicited requirement extraction did not return a list")
 
-        results: List[Dict[str, Any]] = []
-        for cand in raw:
-            if not isinstance(cand, dict):
-                continue
-            text = str(cand.get("text") or "").strip()
-            if not text or text.lower() in existing_texts:
-                continue
-            from agents.profile.analyst import AnalystAgent
-            normalized = AnalystAgent.requirement_record(cand)
-            normalized = requirement_candidate(normalized)
-            results.append(normalized)
-        return results
-    except Exception as e:
-        coordinator.flow.logger.warning("挖掘需求提取失敗: %s", e)
-        return []
+    results: List[Dict[str, Any]] = []
+    for cand in raw:
+        if not isinstance(cand, dict):
+            continue
+        text = str(cand.get("text") or "").strip()
+        if not text or text.lower() in existing_texts:
+            continue
+        from agents.profile.analyst import AnalystAgent
+        normalized = AnalystAgent.requirement_record(cand)
+        normalized = requirement_candidate(normalized)
+        results.append(normalized)
+    return results

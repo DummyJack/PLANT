@@ -7,17 +7,17 @@ from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_c
 
 from .record import build_pair_review_records
 from .support import (
-    analyst_signoff_conflict_recheck,
+    analyst_signoff,
     analyst_changed_label_ids,
-    analyst_finalize_conflict_review_reasons,
-    collect_discussion_rows_and_pair_reviews,
-    consensus_decisions_from_pair_reviews,
-    ensure_conflict_review_participant_contributions,
-    normalize_conflict_review_statement_for_record,
+    finalize_review_reasons,
+    collect_reviews,
+    consensus_decisions,
+    collect_missing_reviews,
+    normalize_review_statement,
 )
 # ---------- 衝突再審查主流程 ----------
 
-def save_conflict_report_from_conflict_payload(
+def save_conflict_report(
     coordinator: Any,
     artifact: Dict[str, Any],
     *,
@@ -71,7 +71,7 @@ def run_conflict_review_round(
         contributions, _ = coordinator.flow.mediator_agent.moderate_sequential(
             issue, coordinator.flow.registry, artifact=artifact
         )
-    contributions = ensure_conflict_review_participant_contributions(
+    contributions = collect_missing_reviews(
         coordinator,
         issue,
         artifact,
@@ -106,12 +106,23 @@ def run_conflict_review_round(
                 },
                 ensure_ascii=False,
             )
-        normalized_statement = normalize_conflict_review_statement_for_record(
+        normalized_statement = normalize_review_statement(
             statement,
             known_pair_ids=known_pair_ids,
             current_labels_by_id=current_labels_by_id,
         )
         resp["statement"] = normalized_statement
+        if not isinstance(resp.get("pair_reviews"), list) or not resp.get("pair_reviews"):
+            parsed_reviews = collect_reviews(
+                [{"agent": agent_name, "response": {"statement": normalized_statement}}],
+                known_pair_ids=known_pair_ids,
+                current_labels_by_id=current_labels_by_id,
+            )[1]
+            if parsed_reviews:
+                resp["pair_reviews"] = [
+                    {k: v for k, v in row.items() if k != "agent"}
+                    for row in parsed_reviews
+                ]
         c["response"] = resp
         conversation_rows.append(f"{agent_name}: {normalized_statement}")
     return contributions, conversation_rows, contribution_agents
@@ -145,7 +156,6 @@ def conflict_review(
     pair_cards = []
     for cid, conflict in conflicts_by_id.items():
         label = str(conflict.get("label") or "").strip()
-        desc = (conflict.get("description") or "").strip()
         req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
         is_multiple = len(req_ids) >= 3 or cid.startswith("MULTIPLE-")
         review_focus = (
@@ -154,7 +164,7 @@ def conflict_review(
             else ""
         )
         focus_line = f"  判斷焦點: {review_focus}" if review_focus else ""
-        conflict_summaries.append(f"- [{cid}] 標籤={label}  需求={req_ids}  描述: {desc}{focus_line}")
+        conflict_summaries.append(f"- [{cid}] 標籤={label}  需求={req_ids}{focus_line}")
         req_rows = [
             {
                 "id": rid,
@@ -165,8 +175,6 @@ def conflict_review(
         pair_cards.append({
             "id": cid,
             "current_label": label,
-            "current_description": desc,
-            "current_conflict_type": str(conflict.get("conflict_type") or "").strip(),
             "requirement_ids": req_ids,
             "requirements": req_rows,
         })
@@ -185,7 +193,9 @@ def conflict_review(
         if str(p).strip() and str(p).strip() != "user"
     ]
     if len(participants) < 2:
-        raise RuntimeError("需求衝突再審查 plan 未產生至少兩位有效 participants")
+        raise RuntimeError(
+            f"需求衝突再審查 participants 至少需要兩位有效 agent，目前為 {participants}"
+        )
     discussion_mode = str(plan.get("discussion_mode") or "").strip().lower()
     if discussion_mode not in {"sequential", "simultaneous"}:
         raise RuntimeError(f"需求衝突再審查 plan discussion_mode 不合法: {discussion_mode}")
@@ -203,9 +213,10 @@ def conflict_review(
         "pair_cards": pair_cards,
     }
     coordinator.flow.logger.info(
-        "需求衝突再審查：mode=%s，participants=%s",
+        "需求衝突再審查：mode=%s | participants=%s | speaking_order: %s",
         discussion_mode,
         ", ".join(participants),
+        " → ".join(participants),
     )
 
     contributions, conversation_rows, contribution_agents = run_conflict_review_round(
@@ -216,7 +227,7 @@ def conflict_review(
         discussion_mode,
         conflicts_by_id,
     )
-    _, first_round_pair_reviews = collect_discussion_rows_and_pair_reviews(
+    _, first_round_pair_reviews = collect_reviews(
         contributions,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
@@ -278,7 +289,7 @@ def conflict_review(
             discussion_mode,
             second_conflicts_by_id,
         )
-        _, second_round_pair_reviews = collect_discussion_rows_and_pair_reviews(
+        _, second_round_pair_reviews = collect_reviews(
             second_contributions,
             known_pair_ids=list(second_conflicts_by_id.keys()),
             current_labels_by_id={
@@ -290,8 +301,8 @@ def conflict_review(
         for review in second_round_pair_reviews:
             if isinstance(review, dict):
                 review["review_round"] = 2
-        consensus_decisions, unresolved_second_conflicts, consensus_debug = (
-            consensus_decisions_from_pair_reviews(
+        consensus_rows, unresolved_second_conflicts, consensus_debug = (
+            consensus_decisions(
                 second_conflicts_by_id,
                 second_round_pair_reviews,
             )
@@ -306,17 +317,17 @@ def conflict_review(
             cid: conflict for cid, conflict in conflicts_by_id.items()
             if cid not in second_conflicts_by_id
         }
-        remaining_decisions, remaining_debug = analyst_signoff_conflict_recheck(
+        remaining_decisions, remaining_debug = analyst_signoff(
             coordinator,
             contributions,
             remaining_conflicts_by_id,
         ) if remaining_conflicts_by_id else ([], {"signoff_status": "skipped_no_remaining_pairs"})
-        unresolved_decisions, unresolved_debug = analyst_signoff_conflict_recheck(
+        unresolved_decisions, unresolved_debug = analyst_signoff(
             coordinator,
             second_contributions,
             unresolved_second_conflicts,
-        ) if unresolved_second_conflicts else ([], {"signoff_status": "skipped_second_round_consensus"})
-        decisions = remaining_decisions + consensus_decisions + unresolved_decisions
+        ) if unresolved_second_conflicts else ([], {"signoff_status": "skipped_consensus"})
+        decisions = remaining_decisions + consensus_rows + unresolved_decisions
         extracted_pair_reviews = first_round_pair_reviews + second_round_pair_reviews
         final_reason_contributions = contributions + second_contributions
         signoff_debug = {
@@ -329,13 +340,13 @@ def conflict_review(
         conversation_rows.extend(second_conversation_rows)
         contribution_agents.extend(second_agents)
     else:
-        decisions, signoff_debug = analyst_signoff_conflict_recheck(
+        decisions, signoff_debug = analyst_signoff(
             coordinator, contributions, conflicts_by_id
         )
         extracted_pair_reviews = signoff_debug.get("extracted_pair_reviews", [])
         final_reason_contributions = contributions
 
-    final_reason_debug = analyst_finalize_conflict_review_reasons(
+    final_reason_debug = finalize_review_reasons(
         coordinator,
         decisions,
         conflicts_by_id,
@@ -401,5 +412,5 @@ def conflict_review(
     )
 
     coordinator.flow.logger.info("需求衝突再審查完成：%s 筆，改判 %s 筆", len(conflicts_by_id), changed)
-    save_conflict_report_from_conflict_payload(coordinator, artifact, round_num=round_num)
+    save_conflict_report(coordinator, artifact, round_num=round_num)
     return artifact

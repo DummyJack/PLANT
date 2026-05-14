@@ -25,7 +25,7 @@ from .main import (
 )
 from .final import final_round_num, run_final
 from .conflict_review import conflict_review
-from .requirement_elicitation import run_requirement_elicitation_meeting_block
+from .requirement_elicitation import run_elicitation_meeting
 
 
 class MeetingCoordinator:
@@ -281,7 +281,7 @@ class MeetingCoordinator:
             stage="requirement_elicitation",
             round_num=round_num,
             artifact=artifact,
-            action_fn=run_requirement_elicitation_meeting_block,
+            action_fn=run_elicitation_meeting,
             action_kwargs={
                 "coordinator": self,
                 "artifact": artifact,

@@ -225,7 +225,7 @@ def ingest_round_resolution_effects(
                 )
                 seen_pending_decisions.add(decision_id)
             continue
-        for candidate in resolution.get("requirement_change_candidates", []) or []:
+        for candidate in resolution.get("change_record", []) or []:
             if not isinstance(candidate, dict):
                 continue
             candidate.setdefault("source_issue_id", issue.get("id"))
@@ -233,8 +233,8 @@ def ingest_round_resolution_effects(
     artifact["open_questions"] = oq_pool
     artifact["issue_resolution_effects"] = resolution_effects
     artifact["pending_decisions"] = pending_decisions
-    from .conflict_review import append_requirement_change_candidates
-    append_requirement_change_candidates(artifact, new_candidates)
+    from .conflict_review import append_change_record
+    append_change_record(artifact, new_candidates)
 
 
 # ---------- queue issue record ----------
@@ -293,7 +293,7 @@ def execute_clarification_queue(
     queue = artifact.get("clarification_queue", []) or []
     if not queue:
         return
-    snapshot = coordinator.flow.mediator_agent.build_artifact_snapshot(artifact)
+    coordinator.flow.store.save_artifact(artifact)
     oq_pool = artifact.get("open_questions", []) or []
     execution_log = artifact.get("queue_execution_log", []) or []
     for idx, row in enumerate(queue, 1):
@@ -315,34 +315,19 @@ def execute_clarification_queue(
         target_name = (target_candidates[0] if target_candidates else "")
         agent = coordinator.flow.registry.get(target_name) if coordinator.flow.registry else None
         if not agent:
-            record_queue_item_trace(
-                artifact,
-                queue_name="clarification_queue",
-                issue=issue,
-                substep="clarification.defer_no_agent",
-                observation={"target_name": target_name},
-                decision={"action": "defer", "params": {}, "reasoning": "找不到對應 agent，暫時遞延。"},
-                result={"status": "deferred_no_agent"},
-            )
-            row["status"] = "deferred"
-            row["queue_processed_round"] = round_num
-            execution_log.append(
-                {"round": round_num, "queue": "clarification_queue", "issue_id": row.get("issue_id"), "status": "deferred_no_agent"}
-            )
-            continue
+            raise RuntimeError(f"clarification_queue 目標 agent 未註冊: {target_name}")
         try:
             response = coordinator.flow.mediator_agent.collect_issue_response(
                 agent,
                 issue,
                 previous_responses=None,
-                artifact_snapshot=snapshot,
             )
             record_queue_item_trace(
                 artifact,
                 queue_name="clarification_queue",
                 issue=issue,
                 substep="clarification.collect_response",
-                observation={"target_name": target_name, "has_snapshot": bool(snapshot)},
+                observation={"target_name": target_name, "artifact_context_source": "artifact_folder"},
                 decision={"action": "collect_issue_response", "params": {"target_name": target_name}, "reasoning": "收集定向釐清回答。"},
                 result={"statement_present": bool((response.get("statement") or "").strip()), "open_questions_count": len(response.get("open_questions", []) or [])},
             )
@@ -374,7 +359,7 @@ def execute_clarification_queue(
                     sid for sid in (issue.get("source_ids") or [])
                     if isinstance(sid, str) and sid.startswith("CF-")
                 ],
-                requirement_change_candidates=(
+                change_record=(
                     [
                         {
                             "id": f"RC-CQ-{round_num}-{idx}",
@@ -415,7 +400,9 @@ def execute_clarification_queue(
                             "trace": row,
                         }
                     )
-            row["status"] = "answered" if statement else "deferred"
+            if not statement:
+                raise RuntimeError("clarification_queue agent 回答缺少 statement")
+            row["status"] = "answered"
             row["queue_processed_round"] = round_num
             record_queue_item_trace(
                 artifact,
@@ -430,18 +417,7 @@ def execute_clarification_queue(
                 {"round": round_num, "queue": "clarification_queue", "issue_id": row.get("issue_id"), "status": row["status"], "handled_by": target_name}
             )
         except Exception as e:
-            coordinator.flow.logger.warning("clarification_queue 執行失敗: %s", e)
-            record_queue_item_trace(
-                artifact,
-                queue_name="clarification_queue",
-                issue=issue,
-                substep="clarification.error",
-                observation={"target_name": target_name},
-                decision={"action": "collect_issue_response", "params": {"target_name": target_name}, "reasoning": "嘗試收集定向釐清回答。"},
-                result={"error": str(e)},
-            )
-            row["status"] = "deferred"
-            row["queue_processed_round"] = round_num
+            raise RuntimeError("clarification_queue 執行失敗") from e
     artifact["open_questions"] = oq_pool
     artifact["queue_execution_log"] = execution_log
 
@@ -528,7 +504,7 @@ def execute_human_decision_queue(
                 sid for sid in (issue.get("source_ids") or [])
                 if isinstance(sid, str) and sid.startswith("CF-")
             ],
-            requirement_change_candidates=(
+            change_record=(
                 [
                     {
                         "id": f"RC-HQ-{round_num}-{idx}",
@@ -603,7 +579,7 @@ def execute_direct_apply_queue(
         return
     execution_log = artifact.get("queue_execution_log", []) or []
     candidates: List[Dict[str, Any]] = []
-    next_idx = len(artifact.get("requirement_change_candidates", []) or []) + 1
+    next_idx = len(artifact.get("change_record", []) or []) + 1
     for row in queue:
         if not isinstance(row, dict):
             continue
@@ -666,8 +642,8 @@ def execute_direct_apply_queue(
         execution_log.append(
             {"round": round_num, "queue": "direct_apply_queue", "issue_id": row.get("issue_id"), "status": row["status"]}
         )
-    from .conflict_review import append_requirement_change_candidates
-    append_requirement_change_candidates(artifact, candidates)
+    from .conflict_review import append_change_record
+    append_change_record(artifact, candidates)
     artifact["queue_execution_log"] = execution_log
 
 

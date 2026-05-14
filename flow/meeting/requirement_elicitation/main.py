@@ -6,35 +6,32 @@ from agents.profile.analyst.requirements import requirement_discussion_pool
 from utils import meeting_setting
 from utils.language import current_output_language
 
-from .record import summarize_requirement_elicitation_conclusion
 from .support import (
     ELICITATION_PHASES,
     FINISH_AGENT_ACTION,
     build_phase_guidance,
     build_recent_ask_history,
     build_sequential_order,
-    collect_elicitation_closure_votes,
-    collect_user_response_summary,
-    derive_turn_memory,
+    collect_closure_votes,
+    collect_user_summary,
+    derive_turn_summary,
     elicitation_phase_for_turn,
-    extract_elicited_requirement_candidates,
+    extract_candidates,
     find_finish_proposal,
-    initialize_requirement_elicitation_session,
-    merge_elicitation_memory,
-    elicited_requirement_candidates,
+    merge_turn_summary,
+    clean_elicited_reqts,
     turn_participants as normalized_turn_participants,
-    question_contributions_for_user,
-    select_judged_action,
+    user_questions,
+    select_question,
     without_finish_proposals,
 )
 
 # ---------- 主流程 ----------
 
-def requirement_elicitation_rows(
+def meeting_rows(
     elicitation_trace: List[Dict[str, Any]],
     *,
     round_num: int,
-    allow_user_fallback: bool = True,
 ) -> Dict[str, List[Dict[str, str]]]:
     """Convert internal elicitation turn logs into compact meeting records."""
     try:
@@ -53,7 +50,7 @@ def requirement_elicitation_rows(
     def row_id(turn_no: int, row_no: int = 1) -> str:
         return f"elicit-{turn_no}-{row_no}"
 
-    def answer_fields(row: Dict[str, Any], fallback_key: str = "user") -> Dict[str, str]:
+    def answer_fields(row: Dict[str, Any]) -> Dict[str, str]:
         statement = str(row.get("statement") or "").strip()
         if not statement:
             return {}
@@ -62,9 +59,7 @@ def requirement_elicitation_rows(
             speaking_as = [speaking_as]
         keys = [str(name).strip() for name in speaking_as if str(name).strip()]
         if not keys:
-            if not allow_user_fallback:
-                return {}
-            keys = [fallback_key]
+            return {}
         return {key: statement for key in keys}
 
     for index, turn in enumerate(elicitation_trace or [], 1):
@@ -144,11 +139,10 @@ def valid_stakeholder_names(artifact: Dict[str, Any]) -> set[str]:
         if isinstance(row, dict) and str(row.get("name") or "").strip()
     }
 
-def valid_target_stakeholders(
+def valid_targets(
     values: Any,
     *,
     allowed_names: set[str],
-    fallback: List[str],
 ) -> List[str]:
     if isinstance(values, str):
         raw_values = [values]
@@ -161,13 +155,7 @@ def valid_target_stakeholders(
         name = str(value or "").strip()
         if name and name in allowed_names and name not in out:
             out.append(name)
-    if out:
-        return out
-    return [
-        name
-        for name in fallback
-        if name in allowed_names
-    ]
+    return out
 
 
 def log_elicitation_turn(
@@ -180,7 +168,6 @@ def log_elicitation_turn(
     new_candidates: List[Dict[str, Any]],
     cumulative_candidates: int,
 ) -> None:
-    logger.info("[輪次 %s]", turn)
     pending_question: Optional[Dict[str, Any]] = None
     for row in contribution_rows:
         agent = str(row.get("agent") or "").strip()
@@ -205,7 +192,8 @@ def log_elicitation_turn(
         if not speaking_as and pending_question:
             speaking_as = list(pending_question.get("targets") or [])
         if not speaking_as:
-            speaking_as = ["user"]
+            pending_question = None
+            continue
         logger.info("  %s：%s", "、".join(speaking_as), statement)
         pending_question = None
     logger.info("  候選需求：本輪 %s 筆，累計 %s 筆", len(new_candidates), cumulative_candidates)
@@ -214,27 +202,14 @@ def log_elicitation_turn(
         for c in new_candidates
         if isinstance(c, dict) and str(c.get("text") or "").strip()
     ]
-    if preview:
-        logger.info("  新候選需求：%s", preview)
+    logger.info("  候選需求：%s", preview)
 
 
-def log_requirement_elicitation_plan(
+def log_turn_plan(
     logger: Any,
     *,
-    plan: Dict[str, Any],
-    max_turns: int,
-) -> None:
-    logger.info("round_limit: %s", max_turns)
-
-
-def log_requirement_elicitation_turn_plan(
-    logger: Any,
-    *,
-    round_num: int,
     turn: int,
     turn_strategy: Dict[str, Any],
-    meeting_phase: str,
-    target_stakeholders: List[str],
 ) -> None:
     participants = [
         str(name).strip()
@@ -242,29 +217,26 @@ def log_requirement_elicitation_turn_plan(
         if str(name).strip()
     ]
     agent_actions = turn_strategy.get("agent_actions") or {}
-    logger.info("elicit plan：")
-    logger.info("  participants: %s", ", ".join(participants) if participants else "無")
-    goal = str(turn_strategy.get("goal") or "").strip()
-    if goal:
-        logger.info("  goal: %s", goal)
+    logger.info("[輪次 %s]", turn)
+    goal = str(turn_strategy.get("goal") or "").strip() or "釐清本輪最重要且尚未充分探索的方向"
+    speaking_order_parts = []
     if isinstance(agent_actions, dict) and agent_actions:
-        sequence_parts = []
         for agent, action_info in agent_actions.items():
             if isinstance(action_info, dict):
                 action = str(action_info.get("action") or "").strip()
             else:
                 action = str(action_info or "").strip()
             if action in {"ask_user", "supplement_question"}:
-                sequence_parts.append(f"{agent} → user")
-        if sequence_parts:
-            logger.info("  sequence: %s", "; ".join(sequence_parts))
+                speaking_order_parts.append(f"{agent} → user")
+    logger.info(
+        "  elicit plan：participants: %s | speaking_order: %s | goal: %s",
+        ", ".join(participants) if participants else "無",
+        "; ".join(speaking_order_parts) if speaking_order_parts else "無",
+        goal,
+    )
 
 
-def build_default_requirement_elicitation_plan(
-    coordinator: Any,
-    *,
-    max_turns: int,
-) -> Dict[str, Any]:
+def default_plan(coordinator: Any) -> Dict[str, Any]:
     registry = getattr(coordinator.flow, "registry", None)
     exclude = {"mediator", "documentor", "user"}
     if registry:
@@ -275,12 +247,10 @@ def build_default_requirement_elicitation_plan(
     return {
         "participants": participants,
         "interviewers": interviewers,
-        "discussion_mode": "simultaneous",
-        "max_turns": max_turns,
     }
 
 
-def run_requirement_elicitation_meeting_block(
+def run_elicitation_meeting(
     coordinator: Any,
     artifact: Dict[str, Any],
     round_num: int,
@@ -293,33 +263,18 @@ def run_requirement_elicitation_meeting_block(
     if cfg_max is None:
         cfg_max = 10
     max_turns = max(1, int(cfg_max))
-    plan = build_default_requirement_elicitation_plan(
-        coordinator,
-        max_turns=max_turns,
-    )
+    plan = default_plan(coordinator)
     artifact.setdefault("elicitation", {})["plan"] = {
         "round_limit": max_turns,
         "participants": plan.get("participants", []) or [],
         "mode": "simultaneous",
     }
-    log_requirement_elicitation_plan(
-        coordinator.flow.logger,
-        plan=plan,
-        max_turns=max_turns,
-    )
-
     participants = plan.get("participants") or []
     if not participants or "user" not in participants:
         raise RuntimeError("Requirement elicitation plan 未產生有效 participants，或未包含 user")
     interviewers = plan.get("interviewers") or []
     if not interviewers:
         raise RuntimeError("Requirement elicitation plan 未產生有效 interviewers")
-    meeting_session = initialize_requirement_elicitation_session(
-        artifact,
-        round_num=round_num,
-        max_turns=max_turns,
-        participants=participants,
-    )
     allowed_stakeholders = valid_stakeholder_names(artifact)
     previous_turn_summary: Optional[Dict[str, Any]] = None
 
@@ -350,19 +305,15 @@ def run_requirement_elicitation_meeting_block(
             "turn": final_turn,
             "meeting_phase": "conclusion",
             "issue_id": f"ELICIT-R{round_num}-T{final_turn}",
-            "contributions_count": len(final_contributions),
             "contributions": [{"agent": final_agent, "statement": final_statement, "action": FINISH_AGENT_ACTION}],
             "discussion_mode": "sequential",
             "participants": [final_agent],
             "speaking_order": [final_agent],
-            "mode_strategy": "forced_finish",
-            "target_stakeholders": [],
             "judged_action_agent": final_agent,
             "judged_action": final_statement,
             "recent_ask_history": final_recent_ask_history,
             "new_candidates_count": 0,
             "new_candidate_texts": [],
-            "post_meeting_analysis": "Finish turn closes requirement elicitation; elicited_requirement_candidates(all_candidates) runs next for deduplication and cleanup.",
             "forced_finish": True,
         }
         elicitation_trace.append(final_turn_log)
@@ -371,18 +322,11 @@ def run_requirement_elicitation_meeting_block(
         meeting_phase = elicitation_phase_for_turn(turn, max_turns)
         phase_guidance = build_phase_guidance(meeting_phase)
         recent_ask_history = build_recent_ask_history(elicitation_trace, max_items=3)
-        elicitation_memory = {
-            "confirmed_issues": (previous_turn_summary or {}).get("confirmed_issues", []),
-            "closed_issues": (previous_turn_summary or {}).get("closed_issues", []),
-            "do_not_repeat": (previous_turn_summary or {}).get("do_not_repeat", []),
-        }
-        turn_strategy = coordinator.flow.mediator_agent.plan_requirement_elicitation_meeting(
+        turn_strategy = coordinator.flow.mediator_agent.plan_elicitation(
             artifact=artifact,
             turn=turn,
             max_turns=max_turns,
             default_participants=participants,
-            default_speaking_order=interviewers + ["user"],
-            default_mode="simultaneous",
             previous_turn_summary=previous_turn_summary,
             recent_ask_history=recent_ask_history,
         )
@@ -392,20 +336,15 @@ def run_requirement_elicitation_meeting_block(
         if not turn_participants or "user" not in turn_participants:
             raise RuntimeError("Requirement elicitation turn strategy 未產生有效 participants，或未包含 user")
         turn_mode = "simultaneous"
-        if turn_mode not in {"sequential", "simultaneous"}:
-            raise RuntimeError(f"Requirement elicitation turn strategy discussion_mode 不合法: {turn_mode}")
         meeting_phase = str(turn_strategy.get("meeting_phase") or meeting_phase).strip() or meeting_phase
         if meeting_phase not in set(ELICITATION_PHASES):
             meeting_phase = elicitation_phase_for_turn(turn, max_turns)
         phase_guidance = build_phase_guidance(meeting_phase)
         turn_goal = str(turn_strategy.get("goal") or "").strip()
-        log_requirement_elicitation_turn_plan(
+        log_turn_plan(
             coordinator.flow.logger,
-            round_num=round_num,
             turn=turn,
             turn_strategy=turn_strategy,
-            meeting_phase=meeting_phase,
-            target_stakeholders=[],
         )
 
         req_summary = json.dumps(
@@ -428,7 +367,7 @@ def run_requirement_elicitation_meeting_block(
             "id": f"ELICIT-R{round_num}-T{turn}",
             "title": "待命名需求擷取會議",
             "description": (
-                f"原始產品概念：{str(artifact.get('rough_idea') or '').strip()}\n\n"
+                f"產品情境：{json.dumps(artifact.get('scenario') or {}, ensure_ascii=False)}\n\n"
                 f"本輪會議階段：{meeting_phase}\n"
                 f"階段指引：{phase_guidance}\n\n"
                 f"本輪發言模式：{turn_mode}\n"
@@ -438,7 +377,7 @@ def run_requirement_elicitation_meeting_block(
                 "這是一場實務需求訪談，不是單純訪談或自由閒聊。\n"
                 "請依本輪缺口類型找出最值得確認的一個問題。\n"
                 "你的目標是從 User 的回答中驗證、修正或補充尚未被明確記錄的需求。\n"
-                "所有追問與候選需求都必須直接服務於原始產品概念；不得泛化成無關的企業資料管理、內部審批或需求工程流程。\n"
+                "所有追問與候選需求都必須直接服務於產品情境；不得泛化成無關的企業資料管理、內部審批或需求工程流程。\n"
                 "每輪問題都應先基於目前理解定位缺口，再向 User 確認一個最重要的不確定點。\n"
                 "不要把會議變成閒聊或泛問；每個問題都必須能支援產生或修正一條 requirement。\n"
                 "\n"
@@ -446,23 +385,19 @@ def run_requirement_elicitation_meeting_block(
                 "\n"
                 f"目前已有需求：\n{req_summary}\n"
                 f"{prev_text}\n\n"
-                f"本輪避免重複的訪談記憶：\n{json.dumps(elicitation_memory, ensure_ascii=False)}\n\n"
                 "請不要重複已有需求，專注驗證目前需求理解並擷取新的需求候選。\n"
                 "若本輪是逐一發言，User 必須最後回答；若本輪是同時發言，User 會逐題回答各 agent 的問題。"
             ),
             "category": "open_question",
             "participants": turn_participants,
             "discussion_mode": turn_mode,
-            "speaking_order": [],
             "source_ids": [],
-            "rough_idea": artifact.get("rough_idea", ""),
+            "scenario": artifact.get("scenario", {}),
             "meeting_phase": meeting_phase,
             "phase_guidance": phase_guidance,
             "meeting_goal": turn_goal,
-            "target_stakeholders": [],
             "allowed_stakeholders": sorted(allowed_stakeholders),
             "agent_actions": turn_strategy.get("agent_actions") or {},
-            "elicitation_memory": elicitation_memory,
             "recent_ask_history": recent_ask_history,
         }
         mediator_title = coordinator.flow.mediator_agent.name_meeting_issue(
@@ -471,14 +406,13 @@ def run_requirement_elicitation_meeting_block(
         )
         issue["title"] = mediator_title
         contributions: List[Dict[str, Any]] = []
-        snapshot = coordinator.flow.mediator_agent.build_artifact_snapshot(artifact)
+        coordinator.flow.store.save_artifact(artifact)
         user_agent = coordinator.flow.registry.get("user")
         if turn_mode == "simultaneous":
             interviewer_participants = [p for p in turn_participants if p != "user"]
             interviewer_issue = {
                 **issue,
                 "participants": interviewer_participants,
-                "speaking_order": [],
                 "answer_all_interviewer_questions": False,
                 "agent_actions": turn_strategy.get("agent_actions") or {},
             }
@@ -511,7 +445,7 @@ def run_requirement_elicitation_meeting_block(
         )
         effective_contributions = list(interviewer_contributions)
         if finish_statement:
-            closure_vote = collect_elicitation_closure_votes(
+            closure_vote = collect_closure_votes(
                 coordinator,
                 artifact,
                 round_num=round_num,
@@ -552,8 +486,8 @@ def run_requirement_elicitation_meeting_block(
                     stop_phrase,
                 )
 
-        user_question_contributions = question_contributions_for_user(effective_contributions)
-        judged_action_agent, judged_statement = select_judged_action(user_question_contributions)
+        user_question_contributions = user_questions(effective_contributions)
+        judged_action_agent, judged_statement = select_question(user_question_contributions)
         judge_action_type = ""
         if interviewer_finish:
             if not finish_proposer:
@@ -568,7 +502,7 @@ def run_requirement_elicitation_meeting_block(
                     user_agent.judge_interviewer_action_type(judged_statement)
                 ).strip().lower()
             except Exception as e:
-                coordinator.flow.logger.warning("  finish 判定失敗（interviewer）: %s", e)
+                raise RuntimeError("Requirement elicitation action type 判定失敗") from e
         if stop_phrase in judged_statement:
             interviewer_finish = True
             judge_action_type = "finish"
@@ -587,10 +521,9 @@ def run_requirement_elicitation_meeting_block(
                         if isinstance(question_contribution.get("response"), dict)
                         else {}
                     )
-                    question_targets = valid_target_stakeholders(
+                    question_targets = valid_targets(
                         question_response.get("target_stakeholders"),
                         allowed_names=allowed_stakeholders,
-                        fallback=[],
                     )
                     if not question_targets:
                         raise RuntimeError("Requirement elicitation question 缺少合法 target_stakeholders")
@@ -602,56 +535,9 @@ def run_requirement_elicitation_meeting_block(
                             "response": question_response,
                         }
                     paired_contributions.append(question_contribution)
-                    try:
-                        user_issue = {
-                            **issue,
-                            "id": f"{issue['id']}-USER-{q_index}",
-                            "title": "待命名會議",
-                            "participants": ["user"],
-                            "speaking_order": ["user"],
-                            "discussion_mode": "sequential",
-                            "answer_all_interviewer_questions": False,
-                            "target_stakeholders": question_targets,
-                        }
-                        user_issue_title = coordinator.flow.mediator_agent.name_meeting_issue(
-                            user_issue,
-                            context_label="需求擷取 User 回答回合",
-                        )
-                        user_issue["title"] = user_issue_title
-                        user_response = coordinator.flow.mediator_agent.collect_issue_response(
-                            user_agent,
-                            user_issue,
-                            previous_responses=[question_contribution],
-                            artifact_snapshot=snapshot,
-                        )
-                        paired_contributions.append(
-                            {
-                                "agent": "user",
-                                "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
-                            }
-                        )
-                    except Exception as e:
-                        coordinator.flow.logger.warning("User 回答失敗: %s", e)
-                        paired_contributions.append({"agent": "user", "response": {"content": f"（回答失敗: {e}）"}})
-                contributions = paired_contributions
-            else:
-                try:
-                    question_response = (
-                        user_question_contributions[-1].get("response")
-                        if user_question_contributions
-                        and isinstance(user_question_contributions[-1].get("response"), dict)
-                        else {}
-                    )
-                    question_targets = valid_target_stakeholders(
-                        question_response.get("target_stakeholders"),
-                        allowed_names=allowed_stakeholders,
-                        fallback=[],
-                    )
-                    if not question_targets:
-                        raise RuntimeError("Requirement elicitation question 缺少合法 target_stakeholders")
                     user_issue = {
                         **issue,
-                        "id": f"{issue['id']}-USER",
+                        "id": f"{issue['id']}-USER-{q_index}",
                         "title": "待命名會議",
                         "participants": ["user"],
                         "speaking_order": ["user"],
@@ -667,34 +553,61 @@ def run_requirement_elicitation_meeting_block(
                     user_response = coordinator.flow.mediator_agent.collect_issue_response(
                         user_agent,
                         user_issue,
-                        previous_responses=user_question_contributions,
-                        artifact_snapshot=snapshot,
+                        previous_responses=[question_contribution],
                     )
-                    contributions.append(
+                    paired_contributions.append(
                         {
                             "agent": "user",
                             "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
                         }
                     )
-                except Exception as e:
-                    coordinator.flow.logger.warning("User 回答失敗: %s", e)
-                    contributions.append({"agent": "user", "response": {"content": f"（回答失敗: {e}）"}})
+                contributions = paired_contributions
+            else:
+                question_response = (
+                    user_question_contributions[-1].get("response")
+                    if user_question_contributions
+                    and isinstance(user_question_contributions[-1].get("response"), dict)
+                    else {}
+                )
+                question_targets = valid_targets(
+                    question_response.get("target_stakeholders"),
+                    allowed_names=allowed_stakeholders,
+                )
+                if not question_targets:
+                    raise RuntimeError("Requirement elicitation question 缺少合法 target_stakeholders")
+                user_issue = {
+                    **issue,
+                    "id": f"{issue['id']}-USER",
+                    "title": "待命名會議",
+                    "participants": ["user"],
+                    "speaking_order": ["user"],
+                    "discussion_mode": "sequential",
+                    "answer_all_interviewer_questions": False,
+                    "target_stakeholders": question_targets,
+                }
+                user_issue_title = coordinator.flow.mediator_agent.name_meeting_issue(
+                    user_issue,
+                    context_label="需求擷取 User 回答回合",
+                )
+                user_issue["title"] = user_issue_title
+                user_response = coordinator.flow.mediator_agent.collect_issue_response(
+                    user_agent,
+                    user_issue,
+                    previous_responses=user_question_contributions,
+                )
+                contributions.append(
+                    {
+                        "agent": "user",
+                        "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
+                    }
+                )
         elif finish_statement and not interviewer_finish and not judged_statement:
             judge_action_type = "finish_rejected_by_vote"
 
         record_contributions = list(contributions)
-        new_candidates = extract_elicited_requirement_candidates(
+        new_candidates = extract_candidates(
             coordinator, contributions, artifact, round_num=round_num, turn=turn
         )
-        revealed_ids = {
-            str(rid)
-            for c in contributions
-            if isinstance(c, dict)
-            and c.get("agent") == "user"
-            and isinstance(c.get("response"), dict)
-            for rid in (c.get("response", {}).get("oracle_revealed_ids") or [])
-            if rid
-        }
         contribution_rows: List[Dict[str, Any]] = []
         for c in record_contributions:
             if not isinstance(c, dict):
@@ -740,16 +653,12 @@ def run_requirement_elicitation_meeting_block(
             "meeting_phase": meeting_phase,
             "phase_guidance": phase_guidance,
             "issue_id": issue["id"],
-            "contributions_count": len(contribution_rows),
             "contributions": contribution_rows,
             "discussion_mode": turn_mode,
             "participants": turn_participants,
             "speaking_order": record_speaking_order,
-            "mode_strategy": "mediator",
-            "target_stakeholders": [],
             "agent_actions": turn_strategy.get("agent_actions") or {},
             "goal": turn_goal,
-            "elicitation_memory_before_turn": elicitation_memory,
             "judged_action_agent": judged_action_agent,
             "judged_action": judged_statement,
             "judge_action_type": judge_action_type,
@@ -762,48 +671,24 @@ def run_requirement_elicitation_meeting_block(
                 for c in new_candidates
                 if isinstance(c, dict) and str(c.get("text") or "").strip()
             ],
-            "post_meeting_analysis": (
-                f"Turn summary: extracted {len(new_candidates)} new candidate(s); "
-                f"revealed {len(revealed_ids)} requirement signal id(s)."
-            ),
         }
         elicitation_trace.append(turn_log)
-        meeting_session.setdefault("turns", []).append(
-            {
-                "turn": turn,
-                "phase": meeting_phase,
-                "discussion_mode": turn_mode,
-                "participants": list(turn_participants),
-                "speaking_order": list(record_speaking_order),
-                "target_stakeholders": [],
-                "agent_actions": dict(turn_strategy.get("agent_actions") or {}),
-                "judged_action_agent": judged_action_agent,
-                "new_candidates_count": len(new_candidates),
-                "revealed_ids_count": len(revealed_ids),
-                "judge_finish": interviewer_finish,
-                "closure_vote": closure_vote,
-            }
-        )
-
         if new_candidates:
             all_candidates.extend(new_candidates)
 
-        user_response_for_memory = collect_user_response_summary(contributions)
-        current_memory = derive_turn_memory(judged_statement, user_response_for_memory)
-        merged_memory = merge_elicitation_memory(previous_turn_summary, current_memory)
-        turn_log["elicitation_memory_after_turn"] = merged_memory
+        user_response_for_memory = collect_user_summary(contributions)
+        current_memory = derive_turn_summary(judged_statement, user_response_for_memory)
+        merged_memory = merge_turn_summary(previous_turn_summary, current_memory)
 
         previous_turn_summary = {
             "turn": turn,
             "meeting_phase": meeting_phase,
             "discussion_mode": turn_mode,
             "participants": list(turn_participants),
-            "target_stakeholders": [],
             "agent_actions": dict(turn_strategy.get("agent_actions") or {}),
             "judged_action_agent": judged_action_agent,
             "judged_action": judged_statement,
             "new_candidates_count": len(new_candidates),
-            "revealed_ids_count": len(revealed_ids),
             "speaking_order": list(record_speaking_order),
             "closure_vote": closure_vote,
             **merged_memory,
@@ -836,32 +721,25 @@ def run_requirement_elicitation_meeting_block(
         append_finish_turn(final_turn, final_agent, forced_finish_phrase)
         coordinator.flow.logger.info("[輪次 %s]", final_turn)
         coordinator.flow.logger.info("  Mediator：%s", forced_finish_phrase)
-        coordinator.flow.logger.info("  收束原因：達到輪次上限，進入收尾")
         termination_reason = "max_turn"
 
-    raw_candidate_count = len(all_candidates)
-    all_candidates = elicited_requirement_candidates(all_candidates)
-    meeting_rows = requirement_elicitation_rows(
+    all_candidates = clean_elicited_reqts(all_candidates)
+    rows_by_round = meeting_rows(
         elicitation_trace,
         round_num=round_num,
-        allow_user_fallback=len(allowed_stakeholders) <= 1,
     )
-    coordinator.flow.logger.info("[需求擷取會議結束]")
-    coordinator.flow.logger.info("reason=%s", termination_reason)
-    coordinator.flow.logger.info("提取的需求：原始 %s 筆，清理後 %s 筆", raw_candidate_count, len(all_candidates))
-    meeting_session["conclusion"] = summarize_requirement_elicitation_conclusion(
-        elicitation_trace=elicitation_trace,
-        candidates=all_candidates,
-        termination_reason=termination_reason,
+    coordinator.flow.logger.info(
+        "  reason=%s | 提取的需求：%s 筆",
+        termination_reason,
+        len(all_candidates),
     )
-
     elicitation = artifact.setdefault("elicitation", {})
     elicitation["plan"] = {
         "round_limit": max_turns,
         "participants": plan.get("participants", []) or [],
         "mode": "simultaneous",
     }
-    elicitation["meeting"] = meeting_rows
+    elicitation["meeting"] = rows_by_round
     elicitation["elicited_reqts"] = list(elicitation.get("elicited_reqts", []) or []) + list(all_candidates)
     elicitation["elicitation_stop_reason"] = termination_reason
     artifact.setdefault("elicitation_trace", []).extend(elicitation_trace)

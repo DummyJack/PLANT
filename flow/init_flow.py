@@ -15,24 +15,24 @@ STAKEHOLDER_CATEGORIES = {
 }
 
 
-def selected_stakeholder_records(selected: List[Any]) -> List[Dict[str, Any]]:
+def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for item in selected or []:
         if isinstance(item, dict):
             name = str(item.get("name") or "").strip()
-            category = str(item.get("category") or "").strip()
+            stakeholder_type = str(item.get("type") or "").strip()
         else:
             name = str(item or "").strip()
-            category = ""
+            stakeholder_type = ""
         if not name:
             continue
-        if category not in STAKEHOLDER_CATEGORIES:
-            category = "Primary Users"
-        records.append({"name": name, "category": category, "text": []})
+        if stakeholder_type not in STAKEHOLDER_CATEGORIES:
+            stakeholder_type = "Primary Users"
+        records.append({"name": name, "type": stakeholder_type, "text": []})
     return records
 
 
-def merge_stakeholder_texts(
+def merge_stakeholder_inputs(
     selected_records: List[Dict[str, Any]],
     generated_rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -64,22 +64,46 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     if stakeholders:
         flow.logger.info(f"✓ 使用 artifact 中預載的 {len(stakeholders)} 位利害關係人")
     else:
-        proposed = flow.user_agent.propose_stakeholders(rough_idea)
+        scenarios = flow.analyst_agent.run_requirements_analyst(
+            "analyze_scenario", rough_idea=rough_idea,
+        )
+        selected_scenario = Collect.scenario_selection(scenarios)
+        scenario_title = str(selected_scenario.get("title") or "").strip()
+        if selected_scenario.get("custom"):
+            completed = flow.analyst_agent.analyze_scenario(
+                rough_idea, scenario_name=scenario_title,
+            )
+            selected_scenario = completed[0]
+        else:
+            selected_scenario = dict(selected_scenario)
+        artifact["scenario"] = {
+            "name": str(selected_scenario.get("title") or scenario_title).strip(),
+            "application_type": str(selected_scenario.get("application_type") or "").strip(),
+            "Category": selected_scenario.get("Category") or {
+                "primary_category": "",
+                "subcategories": [],
+            },
+        }
+        flow.store.save_artifact(artifact)
+        flow.logger.info("✓ 已選擇情境：%s", artifact["scenario"].get("name", ""))
+
+        scenario_idea = artifact["scenario"]
+        proposed = flow.user_agent.propose_stakeholders(scenario_idea)
 
         max_sh = flow.config.get("max_stakeholders", 5)
         selected_indices = Collect.user_selection(proposed, max_select=max_sh)
         selected = [proposed[i] for i in selected_indices]
-        stakeholders = selected_stakeholder_records(selected)
+        stakeholders = selected_stakeholders(selected)
         artifact["stakeholders"] = stakeholders
         flow.user_agent.stakeholders = stakeholders
         flow.store.save_artifact(artifact)
         flow.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
 
         generated_stakeholders = flow.user_agent.generate_stakeholder_requirements(
-            rough_idea,
+            scenario_idea,
             [row["name"] for row in stakeholders],
         )
-        stakeholders = merge_stakeholder_texts(stakeholders, generated_stakeholders)
+        stakeholders = merge_stakeholder_inputs(stakeholders, generated_stakeholders)
     artifact["stakeholders"] = stakeholders
     flow.user_agent.stakeholders = stakeholders
     flow.store.save_artifact(artifact)
@@ -101,6 +125,17 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact["requirements"] = []
     flow.store.save_artifact(artifact)
 
+    initial_scope = flow.analyst_agent.run_requirements_analyst(
+        "generate_scope",
+        artifact=artifact,
+    )
+    if isinstance(initial_scope, dict):
+        artifact["scope"] = {
+            "in_scope": initial_scope.get("in_scope", []) or [],
+            "out_of_scope": initial_scope.get("out_of_scope", []) or [],
+        }
+    flow.store.save_artifact(artifact)
+
     if meeting_setting(flow.config, "elicitation", True):
         flow.logger.info("=== 需求擷取會議 ===")
         artifact = flow.meeting.run_requirement_elicitation_meeting(
@@ -112,18 +147,19 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 list(artifact.get("reqt_candidates", []) or []) + list(elicited_reqts)
             )
             flow.logger.info(
-                "✓ 需求擷取會議結束，加入候選需求池 %s 筆（目前候選 %s 筆）",
+                "需求擷取會議結束 | + 候選需求池 %s 筆（目前候選 %s 筆）",
                 len(elicited_reqts),
                 len(artifact.get("reqt_candidates", []) or []),
             )
             flow.store.save_artifact(artifact)
 
-    flow.logger.info("Analyst: Conflict 辨識")
-    artifact = flow.analyst_agent.run_conflict_detection(artifact)
+    flow.logger.info("=== 需求衝突辨識 ===")
+    artifact = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
+    artifact = flow.analyst_agent.execute_group_conflict_detection(artifact)
     conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
     conflict_items = list(conflict_state.get("pairs") or []) + list(conflict_state.get("multiple") or [])
     if conflict_items and meeting_setting(flow.config, "conflict_review", True):
-        artifact = flow.meeting.run_conflict_review(artifact, round_num=0)
+        artifact = flow.meeting.run_conflict_review(artifact, round_num=1)
     flow.store.save_artifact(artifact)
 
     flow.logger.info("Expert: 領域研究")
@@ -132,28 +168,15 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     )
     flow.store.save_artifact(artifact)
     review_actions = review.get("actions_taken", [])
-    review_issues = review.get("pending_issues", [])
     dr = artifact.get("feedback", {}).get("domain_research") or {}
     if dr and isinstance(dr, dict) and dr:
         flow.logger.info(f"✓ 領域研究完成（{len(review_actions)} 步驟）")
     else:
         flow.logger.info("領域研究完成，無結果寫入")
-    if review_issues:
-        for issue in review_issues:
-            artifact.setdefault("open_questions", []).append(
-                {
-                    "from_agent": "expert",
-                    "question": issue.get("description", ""),
-                    "status": "pending",
-                    "type": issue.get("type", "compliance_risk"),
-                }
-            )
-        flow.logger.info(f"  Expert 標記 {len(review_issues)} 個合規風險")
 
     flow.logger.info("Modeler: generate System Model")
     model_data = flow.modeler_agent.generate_requirement_models(
         artifact,
-        max_iterations=3,
     )
     artifact["system_models"] = model_data
     flow.store.save_artifact(artifact)
@@ -161,9 +184,9 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.logger.info(f"  ✓ 產生 {model_count} 張需求工程模型")
     flow.store.save_plantuml_files(model_data)
 
-    flow.logger.info("Analyst: generate scope")
+    flow.logger.info("Analyst: refine scope")
     refined_scope = flow.analyst_agent.run_requirements_analyst(
-        "generate_scope", rough_idea=rough_idea, stakeholders=stakeholders,
+        "refine_scope",
         artifact=artifact,
     )
     if isinstance(refined_scope, dict):
@@ -178,7 +201,6 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         "create_draft",
         artifact=artifact,
         draft_version=0,
-        recent_decisions_limit=flow.config.get("agenda_items", 5),
     )
     flow.store.save_draft(draft_md, version=0)
     flow.logger.info(

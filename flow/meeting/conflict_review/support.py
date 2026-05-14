@@ -6,19 +6,6 @@ from typing import Any, Dict, List, Optional
 from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
 from agents.profile.analyst.requirements import next_requirement_id, requirement_discussion_pool
 
-CONFLICT_ITEM_ID_RE = re.compile(
-    r"\[((?:PAIR|MULTIPLE)[^\]]+)\]|\"id\"\s*:\s*\"((?:PAIR|MULTIPLE)[^\"]+)\"|\b((?:PAIR|MULTIPLE)-\d+)\b",
-    re.IGNORECASE,
-)
-LABEL_RE = re.compile(r"\b(Conflict|Neutral)\b", re.IGNORECASE)
-PROPOSED_LABEL_RE = re.compile(
-    r"\bproposed_label\s*[:：]\s*(Conflict|Neutral)\b",
-    re.IGNORECASE,
-)
-CONFIDENCE_FIELD_RE = re.compile(r"\bconfidence\s*[:：]\s*(high|medium|low)\b", re.IGNORECASE)
-REASON_FIELD_RE = re.compile(r"\breason\s*[:：]\s*(.+)$", re.IGNORECASE)
-
-
 def mark_conflicts_resolved_by_ids(
     artifact: Dict[str, Any],
     conflict_ids: List[str],
@@ -50,11 +37,8 @@ def pair_review_record(
         return None
     proposed_label = str(review.get("proposed_label") or "").strip()
     reason = str(review.get("reason") or "").strip()
-    confidence = str(review.get("confidence") or "").strip().lower()
     if proposed_label not in {"Conflict", "Neutral"}:
         proposed_label = ""
-    if confidence not in {"high", "medium", "low"}:
-        confidence = ""
     current_label = ""
     if current_labels_by_id:
         current_label = str(current_labels_by_id.get(pair_id) or "").strip()
@@ -65,21 +49,16 @@ def pair_review_record(
         "id": pair_id,
         "decision": decision,
         "proposed_label": proposed_label,
-        "confidence": confidence,
         "reason": reason,
     }
 
-def extract_pair_reviews_from_statement(
+def extract_reviews_from_json(
     statement: str,
     *,
     known_pair_ids: List[str],
     current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """從 agent statement 提取逐筆 pair review。
-
-    舊版行為：優先解析 JSON；若 agent 輸出漂移成自然語言或行文字，仍盡量從文字抽出 pair id、
-    label 與 reason，避免格式問題直接中斷審查。
-    """
+    """只從合法 JSON statement 的 pair_reviews 欄位提取逐筆 review。"""
     text = str(statement or "").strip()
     if not text:
         return []
@@ -103,56 +82,6 @@ def extract_pair_reviews_from_statement(
                 )
                 if normalized:
                     reviews.append(normalized)
-    if reviews:
-        return reviews
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        pair_match = CONFLICT_ITEM_ID_RE.search(line)
-        if not pair_match:
-            continue
-        pair_id = (
-            pair_match.group(1)
-            or pair_match.group(2)
-            or pair_match.group(3)
-            or ""
-        ).strip()
-        if not pair_id or pair_id not in pair_id_set:
-            continue
-        proposed_label_match = PROPOSED_LABEL_RE.search(line)
-        confidence_match = CONFIDENCE_FIELD_RE.search(line)
-        labels = [m.group(1) for m in LABEL_RE.finditer(line)]
-        reason = line
-        reason_match = REASON_FIELD_RE.search(line)
-        if reason_match:
-            reason = reason_match.group(1).strip() or line
-        elif "理由" in line:
-            reason = line.split("理由", 1)[-1].lstrip(":： ").strip() or line
-
-        proposed_label = (
-            proposed_label_match.group(1)
-            if proposed_label_match
-            else (labels[0] if labels else "")
-        )
-        normalized = pair_review_record(
-            {
-                "id": pair_id,
-                "proposed_label": proposed_label,
-                "confidence": (
-                    confidence_match.group(1).lower()
-                    if confidence_match
-                    else ""
-                ),
-                "reason": reason,
-            },
-            pair_id_set=pair_id_set,
-            current_labels_by_id=current_labels_by_id,
-        )
-        if normalized:
-            reviews.append(normalized)
-
     seen = set()
     deduped: List[Dict[str, Any]] = []
     for review in reviews:
@@ -164,7 +93,7 @@ def extract_pair_reviews_from_statement(
     return deduped
 
 
-def normalize_conflict_review_statement_for_record(
+def normalize_review_statement(
     statement: str,
     *,
     known_pair_ids: List[str],
@@ -175,7 +104,7 @@ def normalize_conflict_review_statement_for_record(
     if not text:
         return ""
 
-    reviews = extract_pair_reviews_from_statement(
+    reviews = extract_reviews_from_json(
         text,
         known_pair_ids=known_pair_ids,
         current_labels_by_id=current_labels_by_id,
@@ -191,16 +120,6 @@ def normalize_conflict_review_statement_for_record(
     if isinstance(parsed, dict):
         review_summary = str(
             parsed.get("review_summary") or parsed.get("overall_assessment") or ""
-        ).strip()
-
-    if not review_summary:
-        first_pair = CONFLICT_ITEM_ID_RE.search(text)
-        prefix = text[: first_pair.start()].strip() if first_pair else ""
-        review_summary = re.sub(
-            r"^(overall\s*[:,]?\s*)",
-            "",
-            prefix,
-            flags=re.IGNORECASE,
         ).strip()
 
     return json.dumps(
@@ -237,13 +156,13 @@ def close_related_open_questions(
         q["status"] = "answered"
         q["answered_round"] = round_num
 
-def append_requirement_change_candidates(
+def append_change_record(
     artifact: Dict[str, Any],
     change_candidates: List[Dict[str, Any]],
 ) -> None:
     if not isinstance(change_candidates, list) or not change_candidates:
         return
-    existing = artifact.get("requirement_change_candidates", []) or []
+    existing = artifact.get("change_record", []) or []
     seen = {
         (
             item.get("change_type"),
@@ -270,7 +189,7 @@ def append_requirement_change_candidates(
         candidate.setdefault("created_round", cur_round)
         existing.append(candidate)
         seen.add(key)
-    artifact["requirement_change_candidates"] = existing
+    artifact["change_record"] = existing
 
 def requirement_text_key(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
@@ -292,7 +211,7 @@ def collect_discussion_rows(contributions: List[Dict[str, Any]]) -> list[dict]:
             discussion_rows.append({"agent": agent_name, "statement": statement})
     return discussion_rows
 
-def collect_discussion_rows_and_pair_reviews(
+def collect_reviews(
     contributions: List[Dict[str, Any]],
     *,
     known_pair_ids: List[str],
@@ -305,11 +224,18 @@ def collect_discussion_rows_and_pair_reviews(
             continue
         agent_name = str(c.get("agent") or "").strip()
         resp = c.get("response") or {}
-        if isinstance(resp, dict):
-            statement = (resp.get("statement") or resp.get("content") or "").strip()
-        else:
-            statement = str(resp).strip()
         raw_reviews = resp.get("pair_reviews") if isinstance(resp, dict) else None
+        if not isinstance(raw_reviews, list):
+            statement = ""
+            if isinstance(resp, dict):
+                statement = str(resp.get("statement") or resp.get("content") or "").strip()
+            parsed_reviews = extract_reviews_from_json(
+                statement,
+                known_pair_ids=known_pair_ids,
+                current_labels_by_id=current_labels_by_id,
+            )
+            if parsed_reviews:
+                raw_reviews = parsed_reviews
         if isinstance(raw_reviews, list) and raw_reviews:
             pair_id_set = {str(x).strip() for x in known_pair_ids if str(x).strip()}
             for raw_review in raw_reviews:
@@ -321,15 +247,9 @@ def collect_discussion_rows_and_pair_reviews(
                 if normalized:
                     extracted_pair_reviews.append({"agent": agent_name, **normalized})
             continue
-        for review in extract_pair_reviews_from_statement(
-            statement,
-            known_pair_ids=known_pair_ids,
-            current_labels_by_id=current_labels_by_id,
-        ):
-            extracted_pair_reviews.append({"agent": agent_name, **review})
     return discussion_rows, extracted_pair_reviews
 
-def apply_requirement_change_candidates(
+def apply_change_record(
     coordinator: Any,
     artifact: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -338,30 +258,22 @@ def apply_requirement_change_candidates(
         if isinstance(req, dict)
     ]
     by_id = {req.get("id"): req for req in requirements if req.get("id")}
-    applied_ids: List[str] = []
-    pending_ids: List[str] = []
-    skipped_duplicate_ids: List[str] = []
-    candidates = artifact.get("requirement_change_candidates", []) or []
+    candidates = artifact.get("change_record", []) or []
 
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        cid = candidate.get("id")
         change_type = candidate.get("change_type")
         field = candidate.get("field")
         req_id = candidate.get("requirement_id")
         status = (candidate.get("status") or "").strip()
         if status == "applied":
-            if cid:
-                applied_ids.append(cid)
             continue
 
         if change_type == "add":
             after = candidate.get("after")
             if not isinstance(after, dict):
                 candidate["status"] = "pending_review"
-                if cid:
-                    pending_ids.append(cid)
                 continue
 
             from agents.profile.analyst import AnalystAgent
@@ -375,13 +287,9 @@ def apply_requirement_change_candidates(
             }
             if not text_key:
                 candidate["status"] = "pending_review"
-                if cid:
-                    pending_ids.append(cid)
                 continue
             if text_key in existing_texts:
                 candidate["status"] = "skipped_duplicate"
-                if cid:
-                    skipped_duplicate_ids.append(cid)
                 continue
 
             if not req_id or req_id in by_id:
@@ -393,8 +301,6 @@ def apply_requirement_change_candidates(
             by_id[req_id] = new_req
             candidate["requirement_id"] = req_id
             candidate["status"] = "applied"
-            if cid:
-                applied_ids.append(cid)
             continue
 
         if change_type == "update" and req_id in by_id:
@@ -403,29 +309,18 @@ def apply_requirement_change_candidates(
                 proposed_req[field] = candidate.get("after")
                 by_id[req_id][field] = candidate.get("after")
                 candidate["status"] = "applied"
-                if cid:
-                    applied_ids.append(cid)
                 continue
             if field == "source_stakeholders":
                 after = candidate.get("after")
                 if isinstance(after, list):
                     by_id[req_id][field] = after
                     candidate["status"] = "applied"
-                    if cid:
-                        applied_ids.append(cid)
                     continue
 
         candidate["status"] = "pending_review"
-        if cid:
-            pending_ids.append(cid)
 
     artifact["requirements"] = requirements
-    artifact["requirement_change_candidates"] = candidates
-    artifact["requirement_change_apply_result"] = {
-        "applied_ids": applied_ids,
-        "pending_ids": pending_ids,
-        "skipped_duplicate_ids": skipped_duplicate_ids,
-    }
+    artifact["change_record"] = candidates
     return artifact
 
 def get_contribution_statement(contribution: Dict[str, Any]) -> str:
@@ -435,7 +330,7 @@ def get_contribution_statement(contribution: Dict[str, Any]) -> str:
     return str(resp.get("statement") or resp.get("content") or "").strip()
 
 
-def build_programmatic_merge_decisions(
+def merge_review_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     extracted_pair_reviews: List[Dict[str, Any]],
     *,
@@ -499,7 +394,6 @@ def build_programmatic_merge_decisions(
                 {
                     "id": cid,
                     "current_label": current_label,
-                    "description": (conflict.get("description") or "").strip(),
                     "requirement_ids": [
                         str(r)
                         for r in (conflict.get("requirement_ids") or [])
@@ -556,7 +450,7 @@ def analyst_changed_label_ids(
     return changed
 
 
-def consensus_decisions_from_pair_reviews(
+def consensus_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     extracted_pair_reviews: List[Dict[str, Any]],
     *,
@@ -603,8 +497,8 @@ def consensus_decisions_from_pair_reviews(
                 {
                     "id": cid,
                     "new_label": unique_labels[0],
-                    "reason": reasons[0] if reasons else "second_round_proposed_label_consensus",
-                    "decided_by": "second_round_consensus",
+                    "reason": reasons[0] if reasons else "consensus_keep_current_label",
+                    "decided_by": "consensus",
                 }
             )
             debug["consensus_count"] += 1
@@ -614,7 +508,7 @@ def consensus_decisions_from_pair_reviews(
     debug["unresolved_ids_preview"] = list(unresolved.keys())[:5]
     return decisions, unresolved, debug
 
-def analyst_finalize_conflict_review_reasons(
+def finalize_review_reasons(
     coordinator: Any,
     decisions: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
@@ -623,7 +517,7 @@ def analyst_finalize_conflict_review_reasons(
 ) -> Dict[str, Any]:
     if not decisions:
         return {"final_reason_status": "skipped_no_decisions"}
-    discussion_rows, extracted_from_contributions = collect_discussion_rows_and_pair_reviews(
+    discussion_rows, extracted_from_contributions = collect_reviews(
         contributions,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
@@ -645,18 +539,21 @@ def analyst_finalize_conflict_review_reasons(
         if not cid or cid not in conflicts_by_id:
             continue
         conflict = conflicts_by_id[cid]
+        req_rows = [
+            {
+                "id": str(req.get("id") or "").strip(),
+                "text": str(req.get("text") or "").strip(),
+            }
+            for req in (conflict.get("requirements") or [])
+            if isinstance(req, dict)
+            and str(req.get("id") or "").strip()
+            and str(req.get("text") or "").strip()
+        ]
         decision_items.append(
             {
                 "id": cid,
-                "current_label": str(conflict.get("label") or "").strip(),
                 "final_label": str(decision.get("new_label") or "").strip(),
-                "decided_by": str(decision.get("decided_by") or "").strip(),
-                "existing_reason": str(decision.get("reason") or "").strip(),
-                "description": str(conflict.get("description") or "").strip(),
-                "requirement_ids": list(conflict.get("requirement_ids") or []),
-                "requirements": list(conflict.get("requirements") or []),
-                "requirement_a": dict(conflict.get("requirement_a") or {}),
-                "requirement_b": dict(conflict.get("requirement_b") or {}),
+                "requirements": req_rows,
             }
         )
     def reviews_for_ids(pair_ids: set[str]) -> List[Dict[str, Any]]:
@@ -736,7 +633,7 @@ def analyst_finalize_conflict_review_reasons(
         "raw_final_reason_output": raw_outputs,
     }
 
-def ensure_conflict_review_participant_contributions(
+def collect_missing_reviews(
     coordinator: Any,
     issue: Dict[str, Any],
     artifact: Dict[str, Any],
@@ -759,7 +656,7 @@ def ensure_conflict_review_participant_contributions(
     if not missing:
         return contributions
 
-    snapshot = coordinator.flow.mediator_agent.build_artifact_snapshot(artifact)
+    coordinator.flow.store.save_artifact(artifact)
     out = list(contributions or [])
     retry_issue = {
         **issue,
@@ -775,14 +672,12 @@ def ensure_conflict_review_participant_contributions(
     for agent_name in missing:
         agent = coordinator.flow.registry.get(agent_name)
         if not agent:
-            coordinator.flow.logger.warning("Conflict review 補審：Agent '%s' 未註冊，跳過", agent_name)
-            continue
+            raise RuntimeError(f"Conflict review 補審 Agent 未註冊: {agent_name}")
         try:
             response = coordinator.flow.mediator_agent.collect_issue_response(
                 agent,
                 retry_issue,
                 previous_responses=None,
-                artifact_snapshot=snapshot,
             )
             out.append(
                 {
@@ -791,18 +686,16 @@ def ensure_conflict_review_participant_contributions(
                 }
             )
         except Exception as e:
-            if isinstance(issue.get("response_contract"), dict):
-                raise
-            coordinator.flow.logger.warning("Conflict review 補審：%s 發言失敗: %s", agent_name, e)
+            raise RuntimeError(f"Conflict review 補審：{agent_name} 發言失敗") from e
     return out
 
-def analyst_signoff_conflict_recheck(
+def analyst_signoff(
     coordinator: Any,
     contributions: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """由 Analyst 根據 pair 原文與各 agent 逐筆裁定做最終判定。"""
-    discussion_rows, extracted_pair_reviews = collect_discussion_rows_and_pair_reviews(
+    discussion_rows, extracted_pair_reviews = collect_reviews(
         contributions,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
@@ -828,7 +721,7 @@ def analyst_signoff_conflict_recheck(
             "需求衝突再審查裁定：未解析出 pair_reviews"
         )
 
-    auto_decisions, proposal_list, merge_debug = build_programmatic_merge_decisions(
+    auto_decisions, proposal_list, merge_debug = merge_review_decisions(
         conflicts_by_id,
         extracted_pair_reviews,
     )

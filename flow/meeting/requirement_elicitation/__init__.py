@@ -1,3 +1,3 @@
-from .main import run_requirement_elicitation_meeting_block
+from .main import run_elicitation_meeting
 
-__all__ = ["run_requirement_elicitation_meeting_block"]
+__all__ = ["run_elicitation_meeting"]

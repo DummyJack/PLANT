@@ -61,9 +61,11 @@ class Flow:
         mediator_tools = self.tool_registry.build_tools_for_agent("mediator")
         modeler_tools = self.tool_registry.build_tools_for_agent("modeler")
         documentor_tools = self.tool_registry.build_tools_for_agent("documentor")
+        user_tools = self.tool_registry.build_tools_for_agent("user")
 
         self.user_agent = UserAgent(
             self.agent_models["user"],
+            tools=user_tools,
             registry=self.registry,
             project_config=self.config,
         )
@@ -152,7 +154,7 @@ class Flow:
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """集中初始化 artifact 目前需要的最小欄位。"""
         artifact.setdefault("reqt_candidates", [])
-        artifact.setdefault("change_record", artifact.get("requirement_change_candidates", []))
+        artifact.setdefault("change_record", artifact.get("change_record", []))
         elicitation = artifact.setdefault("elicitation", {})
         elicitation.setdefault("plan", {})
         elicitation.setdefault("meeting", {})

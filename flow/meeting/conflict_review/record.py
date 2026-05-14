@@ -45,7 +45,7 @@ def build_pair_review_records(
             "id": pair_id,
             "round": round_num,
             "initial_label": str(
-                (conflict.get("conflict_review") or conflict.get("pre_meeting_review") or {}).get("from_label")
+                (conflict.get("conflict_review") or {}).get("from_label")
                 or conflict.get("label")
                 or ""
             ).strip(),
