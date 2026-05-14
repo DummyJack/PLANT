@@ -28,8 +28,6 @@ class ExpertIssues:
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="expert_issue_proposal",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "artifact": artifact,
                 "round_num": round_num,
@@ -59,7 +57,7 @@ class ExpertIssues:
         ]
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
             "requirements": requirements,
@@ -278,7 +276,7 @@ class ExpertIssues:
         *,
         issue: Dict[str, Any],
         previous_responses: Optional[List[Dict[str, Any]]],
-        artifact_snapshot: Optional[Dict[str, Any]],
+        artifact_context: Optional[Dict[str, Any]],
     ) -> str:
         issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
         issue_id = str(issue.get("id") or "")
@@ -291,9 +289,9 @@ class ExpertIssues:
             ]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
 
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+        context_text = ""
+        if artifact_context:
+            context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
 
         recent_ask_history_text = ""
         recent_ask_history = issue.get("recent_ask_history") or []
@@ -301,13 +299,6 @@ class ExpertIssues:
             recent_ask_history_text = (
                 "\n# 最近幾輪正式提問摘要\n"
                 + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
-            )
-        elicitation_memory_text = ""
-        elicitation_memory = issue.get("elicitation_memory") or {}
-        if elicitation_memory:
-            elicitation_memory_text = (
-                "\n# 訪談記憶（避免重複）\n"
-                + json.dumps(elicitation_memory, ensure_ascii=False, indent=2)
             )
         my_action_text = ""
         agent_actions = issue.get("agent_actions") if isinstance(issue.get("agent_actions"), dict) else {}
@@ -319,7 +310,7 @@ class ExpertIssues:
             )
 
         skill_section = ""
-        skill_context = self.get_optional_skill_context(issue, artifact_snapshot)
+        skill_context = self.get_optional_skill_context(issue, artifact_context)
         if skill_context:
             skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
         category = (issue.get("category") or "").strip()
@@ -391,9 +382,8 @@ class ExpertIssues:
             rules_block = expert_elicitation_action_rules(stop_phrase)
         return f"""{issue_text}
     {prev_text}
-    {snapshot_text}
+    {context_text}
     {recent_ask_history_text}
-    {elicitation_memory_text}
     {my_action_text}
     {skill_section}
     {category_hint}

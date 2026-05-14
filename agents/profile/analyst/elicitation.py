@@ -2,53 +2,53 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from .validation import elicited_requirement_candidates
+from .validation import validate_elicited_reqts
 
 
 class AnalystElicitation:
-    def extract_elicited_requirement_candidates(
+    def extract_elicited_reqts(
         self,
         discussion_text: str,
         existing_ids: List[str],
         *,
         mode: str = "oracle",
-        rough_idea: str = "",
+        scenario: Any = None,
         valid_source_stakeholders: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
-            name="elicited_requirement_extraction",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
+            name="elicitation_extraction",
             context={
-                "requirement_extraction_action": "extract_elicited_requirement_candidates",
+                "elicitation_action": "extract_elicited_reqts",
                 "discussion_text": discussion_text,
                 "existing_ids": existing_ids,
                 "mode": mode,
-                "rough_idea": rough_idea,
+                "scenario": scenario or {},
                 "valid_source_stakeholders": valid_source_stakeholders or [],
             },
-            build_observation=self.build_elicited_requirement_extraction_observation,
-            decide_action=self.decide_elicited_requirement_extraction_action,
-            execute_action=self.execute_elicited_requirement_extraction_action,
+            build_observation=self.build_elicitation_observation,
+            decide_action=self.decide_elicitation_action,
+            execute_action=self.execute_elicitation_action,
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
         if result.get("error"):
             raise RuntimeError(result.get("error"))
         output = result.get("output")
-        return output if isinstance(output, list) else []
+        if not isinstance(output, list):
+            raise RuntimeError("elicited requirement extraction output must be a list")
+        return output
 
-    def build_elicited_requirement_extraction_observation(self, **kwargs: Any) -> Dict[str, Any]:
+    def build_elicitation_observation(self, **kwargs: Any) -> Dict[str, Any]:
         return {
-            "action": kwargs.get("requirement_extraction_action", ""),
+            "action": kwargs.get("elicitation_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "discussion_length": len(str(kwargs.get("discussion_text") or "")),
             "existing_id_count": len(kwargs.get("existing_ids") or []),
             "mode": kwargs.get("mode", "oracle"),
         }
 
-    def decide_elicited_requirement_extraction_action(
+    def decide_elicitation_action(
         self,
         *,
         observation: Dict[str, Any],
@@ -59,7 +59,7 @@ class AnalystElicitation:
             return {
                 "action": "done",
                 "params": {},
-                "reasoning": "上一輪 elicited requirement extraction 已完成，結束本次候選需求抽取。",
+                "reasoning": "上一輪 elicitation extraction 已完成，結束本次候選需求抽取。",
             }
         return {
             "action": str(observation.get("action") or ""),
@@ -67,7 +67,7 @@ class AnalystElicitation:
             "reasoning": "從 requirement elicitation 討論中抽取可追蹤、可驗收的需求候選。",
         }
 
-    def execute_elicited_requirement_extraction_action(
+    def execute_elicitation_action(
         self,
         *,
         decision: Dict[str, Any],
@@ -75,35 +75,35 @@ class AnalystElicitation:
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
         try:
-            if action != "extract_elicited_requirement_candidates":
-                raise ValueError(f"未知 requirement extraction action: {action}")
-            output = self.parse_elicited_requirement_candidates(
+            if action != "extract_elicited_reqts":
+                raise ValueError(f"未知 elicitation action: {action}")
+            output = self.parse_elicited_reqts(
                 kwargs.get("discussion_text") or "",
                 kwargs.get("existing_ids") or [],
                 mode=kwargs.get("mode", "oracle"),
-                rough_idea=kwargs.get("rough_idea", ""),
+                scenario=kwargs.get("scenario") or {},
                 valid_source_stakeholders=kwargs.get("valid_source_stakeholders") or [],
             )
         except Exception as e:
             return {
                 "action": action,
                 "error": str(e),
-                "summary": f"elicited requirement extraction failed: {action}",
+                "summary": f"elicitation extraction failed: {action}",
             }
         return {
             "action": action,
             "status": "success",
             "output": output,
-            "summary": "完成 elicited requirement extraction",
+            "summary": "完成 elicitation extraction",
         }
 
-    def parse_elicited_requirement_candidates(
+    def parse_elicited_reqts(
         self,
         discussion_text: str,
         existing_ids: List[str],
         *,
         mode: str = "oracle",
-        rough_idea: str = "",
+        scenario: Any = None,
         valid_source_stakeholders: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """從需求擷取討論中提取候選需求（原始 JSON）。"""
@@ -121,6 +121,7 @@ class AnalystElicitation:
             "- 不可填 user、analyst、expert、modeler、system 或任何不在合法名單中的名稱。\n"
             "- 如果無法判斷需求來源對應到哪個合法利害關係人，該 candidate 不要輸出。\n\n"
         )
+        scenario_text = json.dumps(scenario or {}, ensure_ascii=False, indent=2)
         if mode_name == "main_flow":
             rules = (
                 "# 規則\n"
@@ -138,7 +139,7 @@ class AnalystElicitation:
         else:
             rules = (
                 "# 規則\n"
-                "- 只提取討論中明確提及、尚未被記錄，且與原始產品概念直接相關的新需求\n"
+                "- 只提取討論中明確提及、尚未被記錄，且與產品情境直接相關的新需求\n"
                 "- 每筆需含：text, type (FR/NFR/constraint), priority (must/should/could), "
                 "source_stakeholders, source（討論中的原話引述，作為來源憑證）, "
                 "acceptance_criteria\n"
@@ -150,16 +151,16 @@ class AnalystElicitation:
             )
         prompt = (
             "請從以下需求擷取會議中提取尚未被記錄的新需求候選。\n\n"
-            f"# 原始產品概念（不可偏離）\n{rough_idea or '（未提供）'}\n\n"
+            f"# 產品情境（不可偏離）\n{scenario_text}\n\n"
             f"# 討論內容\n{discussion_text}\n\n"
             f"# 目前已有的需求 ID\n{json.dumps(sorted(existing_ids), ensure_ascii=False)}\n\n"
             f"# 模式\n{mode_name}\n\n"
             f"{source_stakeholder_rule}"
             f"{rules}"
-            "- 候選需求的 text 與 acceptance_criteria 必須能看出和原始產品概念的關聯；看不出關聯就不要輸出。\n"
+            "- 候選需求的 text 與 acceptance_criteria 必須能看出和產品情境的關聯；看不出關聯就不要輸出。\n"
             '# 輸出 JSON\n{"candidates": [...]}'
         )
         messages = self.build_direct_messages(prompt)
         data = self.chat_json(messages, action="elicited_requirement_extract")
         raw = data.get("candidates", []) if isinstance(data, dict) else []
-        return elicited_requirement_candidates(raw)
+        return validate_elicited_reqts(raw)

@@ -1,12 +1,17 @@
 # User stakeholder helpers: derive stakeholder voices and initial requirements.
-from typing import Dict, List, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 class UserStakeholder:
-    def propose_stakeholders(self, rough_idea: str) -> List[Dict]:
+    @staticmethod
+    def scenario_context_text(value: Any) -> str:
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return str(value or "").strip()
+
+    def propose_stakeholders(self, rough_idea: Any) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_elicitation",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "stakeholder_action": "propose_stakeholders",
                 "rough_idea": rough_idea,
@@ -22,12 +27,10 @@ class UserStakeholder:
         return result.get("output", [])
 
     def generate_stakeholder_requirements(
-        self, rough_idea: str, selected_stakeholders: List
+        self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_elicitation",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "stakeholder_action": "generate_stakeholder_requirements",
                 "rough_idea": rough_idea,
@@ -48,7 +51,7 @@ class UserStakeholder:
         return {
             "action": kwargs.get("stakeholder_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "has_rough_idea": bool(str(kwargs.get("rough_idea") or "").strip()),
             "selected_stakeholder_count": len(selected),
         }
@@ -104,9 +107,13 @@ class UserStakeholder:
             "summary": f"完成 stakeholder elicitation: {action}",
         }
 
-    def propose_stakeholders_via_llm(self, rough_idea: str) -> List[Dict]:
+    def propose_stakeholders_via_llm(self, rough_idea: Any) -> List[Dict]:
+        scenario_context = self.scenario_context_text(rough_idea)
         user_prompt = f"""# 任務
-根據初始想法: {rough_idea}，建議 7-9 位可能相關的利害關係人。
+根據以下產品情境，建議 7-9 位可能相關的利害關係人。
+
+# 產品情境
+{scenario_context}
 
 # 利害關係人分類
 - Primary Users：每天直接操作系統、輸入資料、接收通知或完成任務的人。
@@ -128,14 +135,14 @@ class UserStakeholder:
 - 每位利害關係人必須直接存在於初始想法描述的產品情境中；不要加入和此產品無關的泛用企業角色
 - 避免使用情境重疊
 - name 只填名稱，不要用括號補充說明
-- category 只能是 Primary Users、System Owners & Management、External Parties
+- type 只能是 Primary Users、System Owners & Management、External Parties
 - reason 選擇理由用一句話即可
 - 每位利害關係人需包含名稱、分類與理由。
 
 # 輸出 JSON
 {{{{
     "proposed_stakeholders": [
-        {{{{"name": "利害關係人名稱", "category": "Primary Users", "reason": "一句話選擇理由"}}}}
+        {{{{"name": "利害關係人名稱", "type": "Primary Users | System Owners & Management | External Parties", "reason": "一句話選擇理由"}}}}
     ]
 }}}}"""
 
@@ -156,19 +163,19 @@ class UserStakeholder:
             if not isinstance(row, dict):
                 raise ValueError("each proposed stakeholder must be an object")
             name = str(row.get("name") or "").strip()
-            category = str(row.get("category") or "").strip()
+            stakeholder_type = str(row.get("type") or "").strip()
             reason = str(row.get("reason") or "").strip()
             if not name or not reason:
                 raise ValueError(
                     "each proposed stakeholder must include name and reason"
                 )
-            if category not in counts:
-                raise ValueError(f"invalid stakeholder category: {category}")
-            order = categories.index(category)
+            if stakeholder_type not in counts:
+                raise ValueError(f"invalid stakeholder type: {stakeholder_type}")
+            order = categories.index(stakeholder_type)
             if order < current_order:
-                raise ValueError("stakeholders must be ordered by category priority")
+                raise ValueError("stakeholders must be ordered by type priority")
             current_order = order
-            counts[category] += 1
+            counts[stakeholder_type] += 1
 
         if len(proposed) < 7 or len(proposed) > 9:
             raise ValueError("propose_stakeholders must return 7-9 stakeholders")
@@ -183,12 +190,13 @@ class UserStakeholder:
         if counts["External Parties"] >= min(
             counts["Primary Users"], counts["System Owners & Management"]
         ):
-            raise ValueError("External Parties must be the smallest stakeholder category")
+            raise ValueError("External Parties must be the smallest stakeholder type")
         return proposed
 
     def generate_stakeholder_requirements_via_llm(
-        self, rough_idea: str, selected_stakeholders: List
+        self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
+        scenario_context = self.scenario_context_text(rough_idea)
         stakeholder_rows = []
         for i, sh in enumerate(selected_stakeholders, 1):
             if isinstance(sh, dict):
@@ -207,7 +215,7 @@ class UserStakeholder:
 {stakeholder_list}
 
 # 背景
-{rough_idea}
+{scenario_context}
 
 # 發言面向
 1. 日常使用情境

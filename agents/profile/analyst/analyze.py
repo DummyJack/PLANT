@@ -25,18 +25,21 @@ class AnalystRequirements:
         draft_version: Optional[int] = None,
         previous_draft: Optional[str] = None,
         round_num: Optional[int] = None,
-        recent_decisions_limit: Optional[int] = None,
     ):
         """requirements-analyst skill 統一入口。
 
         action:
+            "analyze_scenario"        -> 回傳 List[Dict] (scenario options)
             "generate_scope"          -> 回傳 Dict (scope)
+            "refine_scope"            -> 回傳 Dict (scope)
             "analyze_requirements"    -> 回傳 Dict (requirements list)
             "create_draft"            -> 回傳 str  (Markdown)
             "update_draft"            -> 回傳 Dict (requirements + change_candidates)
         """
         allowed_actions = {
+            "analyze_scenario",
             "generate_scope",
+            "refine_scope",
             "analyze_requirements",
             "create_draft",
             "update_draft",
@@ -46,8 +49,6 @@ class AnalystRequirements:
             raise ValueError(f"未知 requirements action: {action}")
         opa = self.run_action_loop(
             name="requirements_analysis",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "requirements_action": action,
                 "rough_idea": rough_idea,
@@ -56,7 +57,6 @@ class AnalystRequirements:
                 "draft_version": draft_version,
                 "previous_draft": previous_draft,
                 "round_num": round_num,
-                "recent_decisions_limit": recent_decisions_limit,
             },
             build_observation=self.build_requirements_analysis_observation,
             decide_action=self.decide_requirements_analysis_action,
@@ -74,7 +74,7 @@ class AnalystRequirements:
         return {
             "action": kwargs.get("requirements_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "stakeholder_count": len(stakeholders),
             "requirements_count": len(requirement_discussion_pool(artifact)),
             "decisions_count": len(artifact.get("decisions", []) or []),
@@ -110,7 +110,9 @@ class AnalystRequirements:
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
         try:
-            if action == "generate_scope":
+            if action == "analyze_scenario":
+                output = self.analyze_scenario(kwargs.get("rough_idea", ""))
+            elif action in {"generate_scope", "refine_scope"}:
                 output = self.generate_scope(
                     kwargs.get("rough_idea", ""),
                     kwargs.get("stakeholders") or [],
@@ -124,7 +126,6 @@ class AnalystRequirements:
                     draft_version=kwargs.get("draft_version"),
                     previous_draft=kwargs.get("previous_draft"),
                     round_num=kwargs.get("round_num"),
-                    recent_decisions_limit=kwargs.get("recent_decisions_limit"),
                 )
             elif action == "update_draft":
                 output = self.update_draft(kwargs.get("artifact") or {})
@@ -156,29 +157,115 @@ class AnalystRequirements:
     ) -> Dict[str, Any]:
         return analyst_requirement_record(req)
 
+    def analyze_scenario(
+        self, rough_idea: str, scenario_name: str = "",
+    ) -> List[Dict[str, Any]]:
+        scenario_name = str(scenario_name or "").strip()
+        context = {"rough_idea": rough_idea, "scenario_name": scenario_name}
+        mode_line = (
+            "- scenario_name 已提供時，只回傳 1 個 scenario，title 必須等於 scenario_name。"
+            if scenario_name
+            else "- scenario_name 未提供時，回傳 2-4 個可供使用者選擇的 scenario。"
+        )
+        task = """# 任務
+根據 rough_idea，產生 2-4 個可供使用者選擇的系統情境。
+
+每個情境代表一個「可以實際開發的系統方向」。
+
+# 判斷重點
+- 將 rough_idea 轉成清楚的系統名稱。
+- 若 rough_idea 模糊，請提出不同產品邊界的選項。
+- 若 rough_idea 已明確，仍提出 2-3 個合理變體。
+- 每個選項都要能支撐後續需求工程流程。
+""" + mode_line + """
+
+# 欄位規則
+- title：
+  把 rough_idea 轉成一個可以做的系統名稱。
+- application_type：
+  系統型態。
+- Category.primary_category：
+  主要領域分類。
+- Category.subcategories：
+  1-3 個更細的業務分類。
+
+# 輸出 JSON
+{
+  "scenarios": [
+    {
+      "title": "可以做的系統名稱",
+      "application_type": "",
+      "Category": {
+        "primary_category": "",
+        "subcategories": []
+      }
+    }
+  ]
+}"""
+        try:
+            data = self.invoke_requirements_analyst_json(task, context)
+        except Exception as e:
+            raise RuntimeError(f"scenario 分析失敗: {e}") from e
+        rows = data.get("scenarios", [])
+        if not isinstance(rows, list):
+            raise ValueError("scenarios must be a list")
+        scenarios: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            application_type = str(row.get("application_type") or "").strip()
+            category = row.get("Category") if isinstance(row.get("Category"), dict) else {}
+            primary_category = str(category.get("primary_category") or "").strip()
+            subcategories = category.get("subcategories") or []
+            if isinstance(subcategories, str):
+                subcategories = [subcategories]
+            subcategories = [
+                str(item).strip()
+                for item in subcategories
+                if str(item).strip()
+            ]
+            if title:
+                scenarios.append({
+                    "title": title,
+                    "application_type": application_type,
+                    "Category": {
+                        "primary_category": primary_category,
+                        "subcategories": subcategories,
+                    },
+                })
+        if not scenarios:
+            raise ValueError("scenario 分析未產生有效選項")
+        return scenarios
+
     def generate_scope(
         self, rough_idea: str, stakeholders: List[Dict],
         *, artifact: Optional[Dict[str, Any]] = None,
     ) -> Dict:
-        context: Dict[str, Any] = {"rough_idea": rough_idea, "stakeholders": stakeholders}
+        context: Dict[str, Any] = {}
         if artifact:
+            if artifact.get("scenario"):
+                context["scenario"] = artifact["scenario"]
+            elif rough_idea:
+                context["rough_idea"] = rough_idea
             if artifact.get("scope"):
                 context["current_scope"] = artifact["scope"]
             req_pool = requirement_discussion_pool(artifact)
             if req_pool:
                 context["requirements"] = req_pool
-            conflict_entries = all_conflict_rows(artifact)
-            if conflict_entries:
-                context["conflicts"] = conflict_entries
+            feedback = artifact.get("feedback")
+            if feedback:
+                context["feedback"] = feedback
+            system_models = artifact.get("system_models")
+            if system_models:
+                context["system_models"] = system_models
         task = """# 任務
-根據 rough_idea、stakeholder text、reqt_candidates 與目前會議結果，界定本專案需求範圍。
+根據情境、需求與目前可用的分析結果，界定或修正本專案需求範圍。
 
 # 判斷規則
-- in_scope 只放目前有 stakeholder 發言或 reqt_candidates 支持的產品能力、使用情境或需求主題。
-- out_of_scope 只放明確超出產品目標、利害關係人情境或已被排除的內容。
-- 不要加入 assumptions、unknowns、description、status、source。
-- 若已有 current_scope，請修正與補充，不要整份重寫。
-- 勿輸出 Markdown。
+- in_scope 只放目前有需求、模型或回饋支持的產品能力、使用情境或需求主題。
+- out_of_scope 只放明確超出產品情境、需求目標或已被排除的內容。
+- 若 context 已有 current_scope，請在既有範圍上修正與補充。
 
 # 輸出
 {
@@ -251,14 +338,12 @@ class AnalystRequirements:
         draft_version: Optional[int] = None,
         previous_draft: Optional[str] = None,
         round_num: Optional[int] = None,
-        recent_decisions_limit: Optional[int] = None,
     ) -> str:
         requirements = requirement_discussion_pool(artifact)
         for req in requirements:
             req_norm = self.requirement_record(req)
             req.update(req_norm)
 
-        _ = recent_decisions_limit
         decisions = artifact.get("decisions", [])
         scope = artifact.get("scope", {}) or {}
         stakeholder_names = [
@@ -341,8 +426,7 @@ class AnalystRequirements:
         try:
             raw = self.invoke_requirements_analyst_text(task, context)
         except Exception as e:
-            self.logger.warning("draft 生成失敗: %s", e)
-            return f"# Requirements Draft\n\n（生成失敗: {e}）"
+            raise RuntimeError(f"draft 生成失敗: {e}") from e
         md = clean_llm_output(raw)
         expected_ids = {
             str(req.get("id") or "").strip()
@@ -385,12 +469,7 @@ class AnalystRequirements:
         try:
             data = self.invoke_requirements_analyst_json(task, context)
         except Exception as e:
-            self.logger.warning(f"draft 更新失敗: {e}")
-            return {
-                "requirements": artifact.get("requirements", []),
-                "conflicts": all_conflict_rows(artifact),
-                "requirement_change_candidates": [],
-            }
+            raise RuntimeError(f"draft 更新失敗: {e}") from e
         requirements = data.get("requirements", artifact.get("requirements", []))
         if not isinstance(requirements, list):
             requirements = artifact.get("requirements", [])
@@ -405,7 +484,7 @@ class AnalystRequirements:
         for req in requirements:
             normalized = self.requirement_record(req)
             req.update(normalized)
-        change_candidates = self.build_requirement_change_candidates(
+        change_candidates = self.build_change_record(
             artifact.get("requirements", []),
             requirements,
             artifact=artifact,
@@ -413,7 +492,7 @@ class AnalystRequirements:
         return {
             "requirements": requirements,
             "conflicts": all_conflict_rows(artifact),
-            "requirement_change_candidates": change_candidates,
+            "change_record": change_candidates,
         }
 
     def finalize_requirements(self, artifact: Dict) -> Dict:
@@ -469,10 +548,10 @@ class AnalystRequirements:
         return {
             "requirements": normalized,
             "conflicts": all_conflict_rows(artifact),
-            "requirement_change_candidates": [],
+            "change_record": [],
         }
 
-    def build_requirement_change_candidates(
+    def build_change_record(
         self,
         previous_requirements: List[Dict[str, Any]],
         updated_requirements: List[Dict[str, Any]],

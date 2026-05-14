@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from agents.profile.agent_loop import AgentLoop
 from agents.profile.issue_response import IssueResponseSupport
 from agents.skills.base import SkillSupport
+from storage.artifact import save_artifact as save_split_artifact
 from utils.language import current_output_language
 
 if TYPE_CHECKING:
@@ -190,6 +191,35 @@ class ToolCallingSupport:
                     reset()
                 except Exception as e:
                     self.logger.debug("tool reset_session: %s", e)
+
+    def artifact_query_tool(self) -> Optional["BaseTool"]:
+        tool = (self.tools or {}).get("artifact_query")
+        return tool
+
+    def load_artifact_context_from_files(self) -> Dict[str, Any]:
+        tool = self.artifact_query_tool()
+        load_artifact = getattr(tool, "load_artifact", None)
+        if not callable(load_artifact):
+            return {}
+        try:
+            artifact = load_artifact()
+        except Exception as e:
+            self.logger.debug("artifact_query load_artifact failed: %s", e)
+            return {}
+        return artifact if isinstance(artifact, dict) else {}
+
+    def sync_artifact_context_files(self, artifact: Optional[Dict[str, Any]]) -> None:
+        if not isinstance(artifact, dict):
+            return
+        tool = self.artifact_query_tool()
+        artifact_path = getattr(tool, "artifact_path", None)
+        if artifact_path is None:
+            return
+        try:
+            if artifact_path.is_dir():
+                save_split_artifact(artifact_path.parent, artifact_path, artifact)
+        except Exception as e:
+            self.logger.debug("artifact_query sync artifact files failed: %s", e)
 
     def tool_loop_action(self, active_skill: Optional[str] = None) -> str:
         return self.usage_action(
@@ -399,10 +429,6 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
         self.policy = None
         self.project_config: Dict[str, Any] = dict(project_config or {})
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
-
-    def agent_loop_round_cap(self) -> int:
-        """Agent action loop 上限。"""
-        return 3
 
     def parse_issue_response_json(self, raw: str) -> Dict[str, Any]:
         """解析工具迴圈輸出中的 JSON。"""

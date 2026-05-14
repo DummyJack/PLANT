@@ -98,17 +98,13 @@ class ModelerAgent(
             decision.get("action", "done"),
             decision.get("params") or {},
             kwargs["artifact"],
-            kwargs["pending_issues"],
             kwargs.get("last_result"),
         )
 
-    def run_model_loop(self, artifact, recent_discussions=None, *, max_iterations):
+    def run_model_loop(self, artifact, recent_discussions=None):
         """Modeler 子 OODA：最多三輪，由 done 判斷是否提前結束。"""
-        loop_cap = self.agent_loop_round_cap()
         return self.run_action_loop(
             name="model",
-            max_iterations=3,
-            loop_cap=loop_cap,
             context={
                 "artifact": artifact,
                 "recent_discussions": recent_discussions,
@@ -186,14 +182,13 @@ class ModelerAgent(
         }
 
     def execute_model_action(
-        self, action, params, artifact, pending_issues, last_observation=None,
+        self, action, params, artifact, last_observation=None,
     ):
         obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
 
         if action == "build_full_model":
             records = self.execute_full_modeling(
                 artifact,
-                pending_issues,
                 last_observation=last_observation,
             )
             obs["result"] = {"records": records}
@@ -401,7 +396,6 @@ class ModelerAgent(
     def execute_full_modeling(
         self,
         artifact: Dict[str, Any],
-        pending_issues: List[Dict[str, Any]],
         *,
         last_observation: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
@@ -413,7 +407,6 @@ class ModelerAgent(
             "assess_impact",
             {},
             artifact,
-            pending_issues,
             last_observation,
         )
         records.append(
@@ -443,7 +436,6 @@ class ModelerAgent(
                 "update_diagram",
                 update_params,
                 artifact,
-                pending_issues,
                 last_obs,
             )
             records.append(
@@ -461,7 +453,6 @@ class ModelerAgent(
                 "validate_diagram",
                 update_params,
                 artifact,
-                pending_issues,
                 last_obs,
             )
             records.append(
@@ -484,7 +475,6 @@ class ModelerAgent(
                 "fix_diagram",
                 update_params,
                 artifact,
-                pending_issues,
                 last_obs,
             )
             records.append(
@@ -500,7 +490,6 @@ class ModelerAgent(
                 "validate_diagram",
                 update_params,
                 artifact,
-                pending_issues,
                 last_obs,
             )
             records.append(
@@ -604,7 +593,7 @@ class ModelerAgent(
         user_prompt = self.build_issue_response_prompt(
             issue=kwargs["issue"],
             previous_responses=kwargs.get("previous_responses"),
-            artifact_snapshot=kwargs.get("artifact_snapshot"),
+            artifact_context=(kwargs.get("observation") or {}).get("artifact_context"),
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)

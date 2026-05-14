@@ -16,10 +16,6 @@ def requirement_ids(row: Dict[str, Any]) -> List[str]:
         if value not in ids:
             ids.append(value)
         idx += 1
-    for key in ("req_a", "req_b"):
-        value = str(row.get(key) or "").strip()
-        if value and value not in ids:
-            ids.append(value)
     return ids
 
 

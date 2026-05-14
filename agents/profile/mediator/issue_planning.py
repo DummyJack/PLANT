@@ -8,7 +8,7 @@ from agents.profile.analyst.requirements import requirement_discussion_pool
 from .prompts import (
     meeting_action_prompt,
     decision_issues_prompt,
-    requirement_elicitation_plan_prompt,
+    elicitation_plan_prompt,
     meeting_title_batch_prompt,
     meeting_title_prompt,
     conflict_review_prompt,
@@ -18,7 +18,7 @@ from .validation import (
     ISSUE_TYPES,
     meeting_action_decision,
     decision_issue,
-    requirement_elicitation_plan,
+    elicitation_plan,
     issue_proposal,
     meeting_title,
     meeting_title_batch,
@@ -135,8 +135,6 @@ class MediatorIssuePlanning:
     def run_meeting_planning_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="meeting_planning",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "meeting_planning_action": action,
                 **context,
@@ -157,7 +155,7 @@ class MediatorIssuePlanning:
         return {
             "action": kwargs.get("meeting_planning_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "requirements_count": len(requirement_discussion_pool(artifact)),
             "conflicts_count": conflict_entries_count(artifact),
             "open_questions_count": len(artifact.get("open_questions", []) or []),
@@ -201,14 +199,12 @@ class MediatorIssuePlanning:
                     draft_markdown=kwargs.get("draft_markdown"),
                     issue_pool=kwargs.get("issue_pool"),
                 )
-            elif action == "plan_requirement_elicitation_meeting":
-                output = self.plan_requirement_elicitation_meeting_internal(
+            elif action == "plan_elicitation":
+                output = self.run_elicitation_planning(
                     artifact=kwargs.get("artifact") or {},
                     turn=kwargs.get("turn", 1),
                     max_turns=kwargs.get("max_turns", 1),
                     default_participants=kwargs.get("default_participants") or [],
-                    default_speaking_order=kwargs.get("default_speaking_order") or [],
-                    default_mode=kwargs.get("default_mode", "sequential"),
                     previous_turn_summary=kwargs.get("previous_turn_summary"),
                     recent_ask_history=kwargs.get("recent_ask_history"),
                 )
@@ -253,31 +249,27 @@ class MediatorIssuePlanning:
             issue_pool=issue_pool,
         ) or []
 
-    def plan_requirement_elicitation_meeting(
+    def plan_elicitation(
         self,
         *,
         artifact: Dict[str, Any],
         turn: int,
         max_turns: int,
         default_participants: List[str],
-        default_speaking_order: List[str],
-        default_mode: str,
         previous_turn_summary: Optional[Dict[str, Any]] = None,
         recent_ask_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         output = self.run_meeting_planning_loop(
-            "plan_requirement_elicitation_meeting",
+            "plan_elicitation",
             artifact=artifact,
             turn=turn,
             max_turns=max_turns,
             default_participants=default_participants,
-            default_speaking_order=default_speaking_order,
-            default_mode=default_mode,
             previous_turn_summary=previous_turn_summary,
             recent_ask_history=recent_ask_history,
         )
         if not isinstance(output, dict):
-            raise RuntimeError("plan_requirement_elicitation_meeting 在 agent loop 後未產生有效計畫")
+            raise RuntimeError("plan_elicitation 在 agent loop 後未產生有效計畫")
         return output
 
     def plan_conflict_review(
@@ -614,8 +606,7 @@ class MediatorIssuePlanning:
             try:
                 response = self.chat_json(messages)
             except Exception as e:
-                self.logger.warning(f"決策議題生成 LLM 失敗: {e}")
-                return []
+                raise RuntimeError(f"決策議題生成 LLM 失敗: {e}") from e
             raw_items = response.get("items", [])
 
         if not raw_items:
@@ -744,8 +735,7 @@ class MediatorIssuePlanning:
             data = self.chat_json(messages)
             return meeting_title(data)
         except Exception as e:
-            self.logger.warning("議題結束後標題命名失敗: %s", e)
-        return ""
+            raise RuntimeError(f"議題結束後標題命名失敗: {e}") from e
 
     def build_issue_context(
         self,
@@ -955,30 +945,24 @@ class MediatorIssuePlanning:
 
         return meeting_action_decision(response)
 
-    def plan_requirement_elicitation_meeting_internal(
+    def run_elicitation_planning(
         self,
         *,
         artifact: Dict[str, Any],
         turn: int,
         max_turns: int,
         default_participants: List[str],
-        default_speaking_order: List[str],
-        default_mode: str,
         previous_turn_summary: Optional[Dict[str, Any]] = None,
         recent_ask_history: Optional[List[Dict[str, Any]]] = None,
         ) -> Dict[str, Any]:
         """由 Mediator 逐輪決定需求擷取會議階段、發言模式、參與者與訪談對象。"""
         prev = previous_turn_summary or {}
         default_interviewers = [p for p in default_participants if p != "user"]
-        stakeholder_rows = [
-            {
-                "name": str(row.get("name") or "").strip(),
-                "text": row.get("text") or [],
-            }
+        stakeholder_names = [
+            str(row.get("name") or "").strip()
             for row in (artifact.get("stakeholders", []) or [])
             if isinstance(row, dict) and str(row.get("name") or "").strip()
         ]
-        stakeholder_names = [row["name"] for row in stakeholder_rows]
         if not stakeholder_names:
             stakeholder_names = ["user"]
         current_requirements = [
@@ -990,20 +974,13 @@ class MediatorIssuePlanning:
             for req in requirement_discussion_pool(artifact)
             if isinstance(req, dict) and str(req.get("text") or "").strip()
         ]
-        default_sequence = [p for p in default_interviewers if p in {"analyst", "modeler", "expert"}]
-        if not default_sequence:
-            default_sequence = list(default_interviewers)
-        if "user" in default_participants:
-            default_sequence = default_sequence + ["user"]
-        prompt = requirement_elicitation_plan_prompt(
+        prompt = elicitation_plan_prompt(
             turn=turn,
             max_turns=max_turns,
             default_participants=default_participants,
-            default_mode=default_mode,
-            default_sequence=default_sequence,
-            stakeholder_rows=stakeholder_rows,
             stakeholder_names=stakeholder_names,
-            rough_idea=str(artifact.get("rough_idea") or "").strip(),
+            scenario=artifact.get("scenario", {}),
+            scope=artifact.get("scope", {}),
             current_requirements=current_requirements,
             previous_turn_summary=prev,
             recent_ask_history=recent_ask_history,
@@ -1014,7 +991,7 @@ class MediatorIssuePlanning:
             data = self.chat_json(messages)
         except Exception as e:
             raise RuntimeError(f"逐輪策略決策輸出格式不合格: {e}") from e
-        return requirement_elicitation_plan(
+        return elicitation_plan(
             data,
             default_participants=default_participants,
             stakeholder_names=stakeholder_names,

@@ -45,7 +45,6 @@ class ModelerModeling:
     def generate_requirement_models(
         self,
         artifact: Dict[str, Any],
-        max_iterations: Optional[int] = None,
         revision_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """根據目前 artifact 產生 System Model。"""
@@ -53,8 +52,7 @@ class ModelerModeling:
             artifact,
             revision_context=revision_context,
         )
-        n = 15 if max_iterations is None else max_iterations
-        self.run_model_loop(model_artifact, max_iterations=n)
+        self.run_model_loop(model_artifact)
         model_data = self.ensure_model_format(model_artifact.get("system_models", {}))
         model_data.setdefault("model_stage", "generate_system_model")
         model_data.setdefault("maturity", "requirement_level")

@@ -22,8 +22,6 @@ class MediatorDecision:
     ) -> Dict[str, Any]:
         opa = self.run_action_loop(
             name="decision",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "decision_action": action,
                 "issue": issue,
@@ -48,7 +46,7 @@ class MediatorDecision:
             "issue_id": issue.get("id", ""),
             "issue_category": issue.get("category", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "contribution_count": len(contributions),
             "main_contribution_count": len(main_contribs),
         }
@@ -155,8 +153,7 @@ class MediatorDecision:
             data = self.chat_json(messages)
             return convergence_result(data)
         except Exception as e:
-            self.logger.warning("收斂判斷失敗: %s", e)
-            return {"converged": False, "reason": str(e)}
+            raise RuntimeError(f"收斂判斷失敗: {e}") from e
 
     def build_converged_resolution(
         self,
@@ -212,8 +209,7 @@ class MediatorDecision:
         try:
             response = self.chat_json(messages)
         except Exception as e:
-            self.logger.warning("決策選項分析失敗: %s", e)
-            response = {}
+            raise RuntimeError(f"決策選項分析失敗: {e}") from e
 
         source_req_ids = [
             sid for sid in (issue.get("source_ids") or [])

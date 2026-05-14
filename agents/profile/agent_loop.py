@@ -3,6 +3,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 class AgentLoop:
+    ACTION_LOOP_MAX_ITERATIONS = 3
+
     def action_plan_payload(self, raw_plan: Any) -> Dict[str, Any]:
         if not isinstance(raw_plan, dict):
             return {"goal": "", "steps": []}
@@ -98,8 +100,6 @@ class AgentLoop:
         self,
         *,
         name: str,
-        max_iterations: int,
-        loop_cap: int,
         context: Optional[Dict[str, Any]] = None,
         build_observation: Callable[..., Dict[str, Any]],
         decide_action: Callable[..., Dict[str, Any]],
@@ -108,12 +108,9 @@ class AgentLoop:
     ) -> Dict[str, Any]:
         context = dict(context or {})
         actions_taken = []
-        pending_issues = context.setdefault("pending_issues", [])
-        action_plan = self.action_plan_payload(
-            context.get("action_plan") or context.get("task_plan")
-        )
+        action_plan = self.action_plan_payload(context.get("action_plan"))
         context["action_plan"] = action_plan
-        effective_max = min(max_iterations, loop_cap)
+        effective_max = self.ACTION_LOOP_MAX_ITERATIONS
         extra_format_retry_used = False
         i = 0
 
@@ -292,7 +289,6 @@ class AgentLoop:
         return {
             "agent": self.name,
             "actions_taken": actions_taken,
-            "pending_issues": pending_issues,
             "action_plan": action_plan,
             "opa_trace": context.get("opa_trace", []),
         }

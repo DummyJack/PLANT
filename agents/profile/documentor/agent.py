@@ -16,7 +16,7 @@ class DocumentorAgent(
     system_prompt = """你是 SRS 撰寫專家，負責把 Final meeting 後的需求資料編寫成正式、可交付的軟體需求規格書。
 
 規則：
-1. requirement_change_candidates、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
+1. change_record、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
 2. 你只根據 Final meeting 後的正式 context 編寫，不自行補決策，不把討論過程寫入正式文件。
 3. SRS skill 是 IEEE 830 寫作指引；其中 FR/NFR ID、RTM、stakeholder sign-off 是範例或可選項，不得覆蓋本專案資料契約。
 4. 本專案需求 ID 必須保留 Context.requirements 內既有 REQ-*，不得改名成 FR-* 或 NFR-*。
@@ -43,8 +43,6 @@ class DocumentorAgent(
     def generate_srs(self, artifact: Optional[Dict[str, Any]] = None) -> str:
         opa = self.run_action_loop(
             name="document_output",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={"artifact": artifact or {}},
             build_observation=self.build_document_output_observation,
             decide_action=self.decide_document_output_action,
@@ -64,7 +62,7 @@ class DocumentorAgent(
             "decisions_count": len(artifact.get("decisions", []) or []),
             "conflicts_count": conflict_entries_count(artifact),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 1),
+            "max_iterations": kwargs["max_iterations"],
         }
 
     def decide_document_output_action(

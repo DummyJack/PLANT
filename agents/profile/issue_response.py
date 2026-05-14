@@ -92,18 +92,18 @@ class IssueResponseSupport:
     ) -> Dict[str, Any]:
         issue = kwargs["issue"]
         previous_responses = kwargs.get("previous_responses") or []
-        artifact_snapshot = kwargs.get("artifact_snapshot") or {}
+        artifact_context = kwargs.get("artifact_context") or self.load_artifact_context_from_files()
         return {
             "issue": issue,
             "issue_id": str(issue.get("id") or ""),
             "issue_category": str(issue.get("category") or ""),
             "previous_responses": previous_responses,
             "previous_response_count": len(previous_responses),
-            "artifact_snapshot": artifact_snapshot,
-            "has_artifact_snapshot": bool(artifact_snapshot),
+            "artifact_context": artifact_context,
+            "has_artifact_context": bool(artifact_context),
             "recent_ask_history": issue.get("recent_ask_history") or [],
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 1),
+            "max_iterations": kwargs["max_iterations"],
         }
 
     def issue_response_decision(

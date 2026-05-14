@@ -68,7 +68,7 @@ class UserAgent(
         user_prompt = self.build_issue_response_prompt(
             issue=issue,
             previous_responses=kwargs.get("previous_responses"),
-            artifact_snapshot=kwargs.get("artifact_snapshot"),
+            artifact_context=(kwargs.get("observation") or {}).get("artifact_context"),
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages, temperature=1)

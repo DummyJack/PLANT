@@ -199,7 +199,7 @@ class SkillSupport:
         return self.run_skill_messages(skill_name, messages)
 
     def get_optional_skill_context(
-        self, issue: Dict, artifact_snapshot: Optional[Dict]
+        self, issue: Dict, artifact_context: Optional[Dict]
     ) -> Optional[str]:
         """討論階段由 agent 自行判斷是否需要使用自己已掛載的 skill。"""
         if not self.skill_names:
@@ -267,7 +267,7 @@ class SkillSupport:
 
         context = {
             "issue": issue,
-            "artifact_snapshot": artifact_snapshot or {},
+            "artifact_context": artifact_context or {},
             "usage_reason": decision.get("reason", ""),
         }
         task = (

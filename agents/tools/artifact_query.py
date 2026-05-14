@@ -123,7 +123,7 @@ class ArtifactQueryTool(BaseTool):
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
             "requirements": ["id", "text", "type", "priority", "source_stakeholders", "source", "acceptance_criteria"],
-            "conflicts": ["id", "label", "description", "requirement_ids", "conflict_type", "status"],
+            "conflicts": ["id", "label", "description", "requirement_ids", "status"],
             "decisions": ["id", "decision", "summary", "status"],
             "open_questions": ["from_agent", "to_agent", "question", "status", "issue_id"],
             "issue_proposals": ["issue_id", "title", "category", "priority_hint", "proposed_by", "round"],

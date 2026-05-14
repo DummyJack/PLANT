@@ -34,8 +34,6 @@ class MediatorRecords:
     def run_meeting_record_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="meeting_record",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "meeting_record_action": action,
                 **context,
@@ -57,7 +55,7 @@ class MediatorRecords:
         return {
             "action": kwargs.get("meeting_record_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "round_discussion_count": len(round_discussions),
             "conflicts_count": conflict_entries_count(artifact),
             "issue_id": (issue_context.get("issue") or {}).get("id", ""),
@@ -129,20 +127,20 @@ class MediatorRecords:
             "update_decisions",
             artifact=artifact,
             round_discussions=round_discussions,
-        ) or {"new_decisions": [], "conflicts": [], "new_conflicts": []}
+        )
 
     def generate_design_rationale(self, issue_context: Dict[str, Any]) -> str:
         return self.run_meeting_record_loop(
             "generate_design_rationale",
             issue_context=issue_context,
-        ) or ""
+        )
 
     def update_design_rationale(self, existing_md: str, issue_context: Dict[str, Any]) -> str:
         return self.run_meeting_record_loop(
             "update_design_rationale",
             existing_md=existing_md,
             issue_context=issue_context,
-        ) or ""
+        )
 
     def update_decisions_record(
         self, artifact: Dict[str, Any], round_discussions: List[Dict]
@@ -154,16 +152,18 @@ class MediatorRecords:
 
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_json(messages)
+        if not isinstance(response, dict):
+            raise ValueError("update_decisions must return a JSON object")
 
-        def dict_rows(value: Any) -> List[Dict[str, Any]]:
+        def dict_rows(field: str, value: Any) -> List[Dict[str, Any]]:
             if not isinstance(value, list):
-                return []
+                raise ValueError(f"update_decisions.{field} must be a list")
             return [row for row in value if isinstance(row, dict)]
 
         return {
-            "new_decisions": dict_rows(response.get("new_decisions", [])),
-            "conflicts": dict_rows(response.get("conflicts", all_conflict_rows(artifact))),
-            "new_conflicts": dict_rows(response.get("new_conflicts", [])),
+            "new_decisions": dict_rows("new_decisions", response.get("new_decisions")),
+            "conflicts": dict_rows("conflicts", response.get("conflicts")),
+            "new_conflicts": dict_rows("new_conflicts", response.get("new_conflicts")),
         }
 
     def generate_meeting_markdown(
@@ -358,7 +358,7 @@ class MediatorRecords:
                 "affected_conflict_ids": resolution.get("affected_conflict_ids", []),
                 "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
                 "requirement_impact": resolution.get("requirement_impact", {}),
-                "requirement_change_candidates": resolution.get("requirement_change_candidates", []),
+                "change_record": resolution.get("change_record", []),
                 "needs_human": resolution.get("needs_human", False),
                 "options": resolution.get("options", []),
                 "recommendation": resolution.get("recommendation", {}),

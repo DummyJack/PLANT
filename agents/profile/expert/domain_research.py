@@ -18,22 +18,18 @@ EXPERT_DOMAIN_RESEARCH_ACTIONS = [
 
 class ExpertDomainResearch:
     def get_optional_skill_context(
-        self, issue: Dict, artifact_snapshot: Optional[Dict]
+        self, issue: Dict, artifact_context: Optional[Dict]
     ) -> Optional[str]:
-        return super().get_optional_skill_context(issue, artifact_snapshot)
+        return super().get_optional_skill_context(issue, artifact_context)
 
     def run_domain_research_loop(self, artifact, recent_discussions=None):
         """Expert domain research 走共用 OPA loop；研究結果透過 context 傳遞，必要時在單輪內保證寫回 findings。"""
-        loop_cap = self.agent_loop_round_cap()
         result = self.run_action_loop(
             name="domain_research",
-            max_iterations=3,
-            loop_cap=loop_cap,
             context={
                 "artifact": artifact,
                 "recent_discussions": recent_discussions,
                 "research_results": [],
-                "pending_issues": [],
                 "force_update_after_research": False,
             },
             build_observation=self.build_domain_research_observation,
@@ -141,7 +137,7 @@ class ExpertDomainResearch:
         }
 
     def execute_domain_research_action(
-        self, action, params, artifact, pending_issues, research_results,
+        self, action, params, artifact, research_results,
     ):
         obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
 
@@ -240,11 +236,14 @@ class ExpertDomainResearch:
             if not desc:
                 obs["error"] = "description 為空"
                 return obs
-            pending_issues.append({
-                "type": "compliance_risk",
-                "description": desc,
-                "source": "expert",
-            })
+            artifact.setdefault("open_questions", []).append(
+                {
+                    "from_agent": "expert",
+                    "question": desc,
+                    "status": "pending",
+                    "type": "compliance_risk",
+                }
+            )
             obs["summary"] = f"已標記合規風險: {desc}"
             return obs
 

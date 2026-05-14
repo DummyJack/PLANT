@@ -23,7 +23,7 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
             observation=observation,
         )
         if result.get("error"):
-            coordinator.flow.logger.warning(f"  執行失敗: {result['error']}")
+            raise RuntimeError(f"會議步驟執行失敗: {result['error']}")
         elif action == "save_issue":
             latest = runner.get_round_discussions()
             if latest:
@@ -41,7 +41,7 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
 def run_meeting_loop(coordinator: Any, runner: Any) -> None:
     obs = runner.run("generate_decision_issues", None)
     if obs.get("error"):
-        coordinator.flow.logger.warning(f"  issue 生成失敗: {obs['error']}")
+        raise RuntimeError(f"issue 生成失敗: {obs['error']}")
     drain = coordinator.is_last_meeting_round(runner.artifact, runner.round_num)
 
     from flow.meeting.subflows import run_routed_queues
@@ -117,7 +117,7 @@ class MeetingRunner:
             self.store.save_markdown(dr_md, "design_rationale.md")
             self.logger.info(f"  ✓ 已更新 design_rationale.md（{issue_id}）")
         except Exception as e:
-            self.logger.warning(f"  更新 design_rationale.md 失敗: {e}")
+            raise RuntimeError("更新 design_rationale.md 失敗") from e
 
     def observe_action(self, action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
@@ -342,14 +342,14 @@ class MeetingRunner:
                 "level": "none",
                 "notes": "",
             }
-        has_changes = bool(resolution.get("requirement_change_candidates"))
+        has_changes = bool(resolution.get("change_record"))
         has_affected = bool(resolution.get("affected_requirement_ids"))
         if resolution.get("needs_human") or resolution.get("needs_user_confirmation"):
             resolution["needs_approval"] = False
         else:
             resolution["needs_approval"] = has_affected or has_changes
         resolution["suggested_next_actions"] = suggested_next_actions
-        for rc in (resolution.get("requirement_change_candidates") or []):
+        for rc in (resolution.get("change_record") or []):
             if isinstance(rc, dict):
                 rc.setdefault("source_issue_id", issue.get("id"))
         self.record_action_substep_trace(
@@ -365,7 +365,7 @@ class MeetingRunner:
                 "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
                 "needs_approval": resolution.get("needs_approval", False),
                 "change_candidates_count": len(
-                    resolution.get("requirement_change_candidates") or []
+                    resolution.get("change_record") or []
                 ),
             },
         )
@@ -456,7 +456,7 @@ class MeetingRunner:
             unresolved_points=[],
             new_open_questions=[],
             affected_conflict_ids=[],
-            requirement_change_candidates=[],
+            change_record=[],
             needs_human=True,
         )
         wrapped["human_decision_raw"] = resolution

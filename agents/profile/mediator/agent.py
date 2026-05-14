@@ -2,8 +2,6 @@
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
-from agents.profile.analyst.conflict_store import all_conflict_rows
-from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import closure_vote_prompt as build_closure_vote_prompt
 from .issue_planning import MediatorIssuePlanning
@@ -22,9 +20,8 @@ class MediatorAgentSupport:
             "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
             "2) 逐筆檢視：每個 [PAIR-xxx] 或 [MULTIPLE-xxx] 都必須明確寫出：\n"
             "   - proposed_label: 你重判後建議採用的標籤（Conflict 或 Neutral）\n"
-            "   - confidence: high / medium / low\n"
             "   - reason: 一句到兩句審查理由，需說明你的獨立判斷依據\n"
-            "reason 只能填純理由文字，不要包含 id、proposed_label、confidence 或欄位名稱。\n"
+            "reason 只能填純理由文字，不要包含 id、proposed_label 或欄位名稱。\n"
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
 
@@ -55,7 +52,7 @@ class MediatorAgentSupport:
         affected_requirement_ids: Optional[List[str]] = None,
         requirement_impact: Optional[Dict[str, Any]] = None,
         needs_approval: bool = False,
-        requirement_change_candidates: Optional[List[Dict[str, Any]]] = None,
+        change_record: Optional[List[Dict[str, Any]]] = None,
         suggested_next_actions: Optional[List[Dict[str, Any]]] = None,
         needs_human: bool = False,
         options: Optional[List[Dict[str, Any]]] = None,
@@ -93,8 +90,8 @@ class MediatorAgentSupport:
             "level": str(requirement_impact.get("level") or "none").strip() or "none",
             "notes": str(requirement_impact.get("notes") or "").strip(),
         }
-        requirement_change_candidates = [
-            row for row in (requirement_change_candidates or []) if isinstance(row, dict)
+        change_record = [
+            row for row in (change_record or []) if isinstance(row, dict)
         ]
         suggested_next_actions = [
             row for row in (suggested_next_actions or []) if isinstance(row, dict)
@@ -123,7 +120,7 @@ class MediatorAgentSupport:
             "affected_conflict_ids": affected_conflict_ids,
             "affected_requirement_ids": affected_requirement_ids,
             "requirement_impact": requirement_impact,
-            "requirement_change_candidates": requirement_change_candidates,
+            "change_record": change_record,
             "suggested_next_actions": suggested_next_actions,
             "needs_human": bool(needs_human),
             "options": options,
@@ -137,55 +134,6 @@ class MediatorAgentSupport:
         if needs_approval:
             result["needs_approval"] = True
         return result
-
-    @staticmethod
-    def build_artifact_snapshot(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """產出專案狀態摘要，供 agent response 的 artifact_snapshot 使用"""
-        if not artifact:
-            return {}
-        reqs = requirement_discussion_pool(artifact)
-        summary_reqs = [
-            {"id": r.get("id"), "type": r.get("type"), "text": (r.get("text") or "")}
-            for r in reqs
-        ]
-        conflicts = [
-            {
-                "id": c.get("id"),
-                "label": c.get("label"),
-                "description": (c.get("description") or ""),
-            }
-            for c in all_conflict_rows(artifact)
-        ]
-        oqs = [
-            {"from_agent": q.get("from_agent"), "question": (q.get("question") or "")}
-            for q in artifact.get("open_questions", [])
-            if q.get("status") != "answered"
-        ]
-        out = {
-            "rough_idea": artifact.get("rough_idea", ""),
-            "scope": artifact.get("scope", {}),
-            "stakeholders": [
-                {
-                    "name": s.get("name"),
-                    "text": s.get("text", []),
-                }
-                for s in (artifact.get("stakeholders", []) or [])
-                if isinstance(s, dict)
-            ],
-            "requirements": summary_reqs,
-            "conflicts": conflicts,
-            "open_questions": oqs,
-        }
-        feedback = artifact.get("feedback", {})
-        if feedback:
-            out["feedback"] = feedback
-        models = artifact.get("system_models", {}).get("models", [])
-        if models:
-            out["system_models"] = [
-                {"name": m.get("name"), "type": m.get("type")}
-                for m in models
-            ]
-        return out
 
 class MediatorAgent(
     MediatorAgentSupport,
@@ -255,7 +203,7 @@ class MediatorAgent(
             "queue_pending_count": int(state_summary.get("queue_pending_count") or 0),
             "can_expand_decision_issues": bool(state_summary.get("can_expand_decision_issues")),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 1),
+            "max_iterations": kwargs["max_iterations"],
         }
 
     def decide_meeting_action(
@@ -300,8 +248,6 @@ class MediatorAgent(
     ) -> Dict[str, Any]:
         opa = self.run_action_loop(
             name="meeting_action",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "state_summary": state_summary,
                 "last_result": last_observation,

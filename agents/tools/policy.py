@@ -18,7 +18,7 @@ DEFAULT_AGENT_TOOL_MAPPING: Dict[str, List[str]] = {
     "modeler": ["plantuml_validate", "artifact_query"],
     "documentor": [],
     "mediator": ["artifact_query"],
-    "user": [],
+    "user": ["artifact_query"],
 }
 
 DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {

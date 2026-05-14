@@ -61,8 +61,6 @@ class AnalystIssues:
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="analyst_issue_proposal",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "artifact": artifact,
                 "round_num": round_num,
@@ -139,7 +137,7 @@ class AnalystIssues:
                     }
                 )
 
-        for rc in artifact.get("requirement_change_candidates", []) or []:
+        for rc in artifact.get("change_record", []) or []:
             if not isinstance(rc, dict):
                 continue
             status = str(rc.get("status") or "proposed").strip()
@@ -165,14 +163,14 @@ class AnalystIssues:
         artifact = kwargs["artifact"]
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 3),
             "scope": artifact.get("scope", {}),
             "requirements": requirement_discussion_pool(artifact),
             "open_questions": artifact.get("open_questions", []),
             "conflicts": all_conflict_rows(artifact),
-            "requirement_change_candidates": artifact.get("requirement_change_candidates", []),
+            "change_record": artifact.get("change_record", []),
             "recent_discussions": artifact.get("recent_discussions", []),
             "existing_issue_proposals": artifact.get("issue_proposals", []),
             "decisions": artifact.get("decisions", []),
@@ -221,7 +219,7 @@ class AnalystIssues:
             "requirements": observation.get("requirements", []),
             "open_questions": observation.get("open_questions", []),
             "conflicts": observation.get("conflicts", []),
-            "requirement_change_candidates": observation.get("requirement_change_candidates", []),
+            "change_record": observation.get("change_record", []),
             "requirement_issue_signals": observation.get("requirement_issue_signals", []),
             "recent_discussions": observation.get("recent_discussions", []),
             "existing_issue_proposals": observation.get("existing_issue_proposals", []),
@@ -437,8 +435,7 @@ class AnalystIssues:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
             data = self.parse_issue_response_json(raw)
         except Exception as e:
-            self.logger.warning("resolution_options 生成失敗: %s", e)
-            return None
+            raise RuntimeError(f"resolution_options 生成失敗: {e}") from e
         return resolution_options_payload(data)
 
     def build_issue_response_prompt(
@@ -446,7 +443,7 @@ class AnalystIssues:
         *,
         issue: Dict[str, Any],
         previous_responses: Optional[List[Dict[str, Any]]],
-        artifact_snapshot: Optional[Dict[str, Any]],
+        artifact_context: Optional[Dict[str, Any]],
     ) -> str:
         issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
         issue_id = str(issue.get("id") or "")
@@ -459,9 +456,9 @@ class AnalystIssues:
             ]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
 
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+        context_text = ""
+        if artifact_context:
+            context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
 
         recent_ask_history_text = ""
         recent_ask_history = issue.get("recent_ask_history") or []
@@ -469,13 +466,6 @@ class AnalystIssues:
             recent_ask_history_text = (
                 "\n# 最近幾輪正式提問摘要\n"
                 + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
-            )
-        elicitation_memory_text = ""
-        elicitation_memory = issue.get("elicitation_memory") or {}
-        if elicitation_memory:
-            elicitation_memory_text = (
-                "\n# 訪談記憶（避免重複）\n"
-                + json.dumps(elicitation_memory, ensure_ascii=False, indent=2)
             )
         my_action_text = ""
         agent_actions = issue.get("agent_actions") if isinstance(issue.get("agent_actions"), dict) else {}
@@ -487,7 +477,7 @@ class AnalystIssues:
             )
 
         skill_section = ""
-        skill_context = self.get_optional_skill_context(issue, artifact_snapshot)
+        skill_context = self.get_optional_skill_context(issue, artifact_context)
         if skill_context:
             skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
         allow_suggested_next_action = (
@@ -536,9 +526,8 @@ class AnalystIssues:
             )
         return f"""{issue_text}
 {prev_text}
-{snapshot_text}
+{context_text}
 {recent_ask_history_text}
-    {elicitation_memory_text}
     {my_action_text}
     {skill_section}
     {elicitation_hint}

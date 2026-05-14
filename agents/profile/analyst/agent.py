@@ -17,7 +17,7 @@ ANALYST_PROJECT_SYSTEM_PROMPT = """你是需求分析師，負責把 stakeholder
 3. 可修正文句、結構與欄位，使需求更清楚、可驗證、可測試、可追蹤，但不得改變需求實質語意。
 4. 發現資料結構、狀態轉移、互動流程、法規或外部義務疑慮時，只整理為需求風險、限制或 open question，不自行定案。
 5. 不自行解除 trade-off、裁定有爭議衝突、擴張 scope 或刪除有爭議需求。
-6. 重大變更優先產生 requirement_change_candidates；只有低風險且有明確依據的文字修正可自動落地。
+6. 重大變更優先產生 change_record；只有低風險且有明確依據的文字修正可自動落地。
 
 核心輸出：
 - requirement text：清楚描述誰在什麼情境下需要什麼能力或結果。
@@ -63,9 +63,9 @@ class AnalystAgent(
         self.system_prompt = "\n\n---\n\n".join([b for b in blocks if b])
 
     def get_optional_skill_context(
-        self, issue: Dict, artifact_snapshot: Optional[Dict]
+        self, issue: Dict, artifact_context: Optional[Dict]
     ) -> Optional[str]:
-        return super().get_optional_skill_context(issue, artifact_snapshot)
+        return super().get_optional_skill_context(issue, artifact_context)
 
     def skill_usage_policy(self) -> str:
         return """requirements-analyst：
@@ -110,7 +110,7 @@ conflict-analyzer：
         user_prompt = self.build_issue_response_prompt(
             issue=kwargs["issue"],
             previous_responses=kwargs.get("previous_responses"),
-            artifact_snapshot=kwargs.get("artifact_snapshot"),
+            artifact_context=(kwargs.get("observation") or {}).get("artifact_context"),
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)

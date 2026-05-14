@@ -218,7 +218,7 @@ def meeting_action_decision(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def requirement_elicitation_plan(
+def elicitation_plan(
     data: Dict[str, Any],
     *,
     default_participants: Sequence[str],
@@ -241,29 +241,12 @@ def requirement_elicitation_plan(
     participants = list(dict.fromkeys(participants))
     if not participants:
         raise ValueError("逐輪策略 participants 未包含有效參與者")
-
-    participants_set = set(participants)
-    mode = str(data.get("discussion_mode") or "").strip().lower()
-    if mode not in VALID_DISCUSSION_MODES:
-        raise ValueError(f"逐輪策略 discussion_mode 不合法: {mode or '<empty>'}")
+    if "user" not in participants:
+        raise ValueError("逐輪策略 participants 必須包含 user")
 
     phase = str(data.get("meeting_phase") or "").strip()
     if phase not in VALID_ELICITATION_PHASES:
         raise ValueError(f"逐輪策略 meeting_phase 不合法: {phase or '<empty>'}")
-
-    speaking: List[str] = []
-    if mode == "sequential":
-        raw_order = data.get("speaking_order")
-        if not isinstance(raw_order, list):
-            raise ValueError("逐輪策略 speaking_order 必須是 list")
-        for item in raw_order:
-            role = str(item or "").strip()
-            if role in participants_set and role != "user" and role not in speaking:
-                speaking.append(role)
-        if not speaking:
-            raise ValueError("逐輪策略 speaking_order 未包含有效非 user agent")
-        if "user" in participants_set:
-            speaking.append("user")
 
     raw_agent_actions = data.get("agent_actions") if isinstance(data.get("agent_actions"), dict) else {}
     if not isinstance(raw_agent_actions, dict):
@@ -294,8 +277,6 @@ def requirement_elicitation_plan(
     return {
         "participants": participants,
         "meeting_phase": phase,
-        "discussion_mode": mode,
-        "speaking_order": speaking,
         "goal": goal,
         "agent_actions": agent_actions,
     }
@@ -314,16 +295,14 @@ def conflict_review_plan(
         raise ValueError(f"plan_conflict_review discussion_mode 不合法: {mode or '<empty>'}")
 
     allowed_set = {str(x).strip() for x in allowed_participants if str(x).strip()}
-    raw_parts = data.get("participants")
-    if not isinstance(raw_parts, list):
-        raise ValueError("plan_conflict_review participants 必須是 list")
-    participants: List[str] = []
-    for n in raw_parts:
-        s = str(n).strip()
-        if s in allowed_set and s not in participants:
-            participants.append(s)
+    participants = [
+        str(x).strip()
+        for x in (data.get("participants") or [])
+        if str(x).strip() in allowed_set and str(x).strip() != "user"
+    ]
+    participants = list(dict.fromkeys(participants))
     if len(participants) < 2:
-        raise ValueError("plan_conflict_review participants 至少需要 2 位有效參與者")
+        raise ValueError("plan_conflict_review participants 至少需要兩位有效 agent")
     return {"discussion_mode": mode, "participants": participants}
 
 
@@ -387,10 +366,10 @@ def decision_option_analysis(
 ) -> Dict[str, Any]:
     """驗證並正規化未收斂議題的人類裁決選項。"""
     if not isinstance(data, dict):
-        data = {}
+        raise ValueError("decision option analysis 必須輸出 JSON object")
     options = data.get("options", [])
     if not isinstance(options, list):
-        options = []
+        raise ValueError("decision option analysis options 必須是 list")
     clean_options = []
     for idx, option in enumerate(options, 1):
         if not isinstance(option, dict):
@@ -413,32 +392,15 @@ def decision_option_analysis(
             }
         )
     if not clean_options:
-        clean_options = [
-            {
-                "id": "A",
-                "summary": "採用目前討論中最小可行需求範圍，並將細節留待人類裁決。",
-                "pros": ["可讓 SRS 繼續收斂"],
-                "cons": ["仍需要人類裁決具體邊界"],
-                "impact": ["需求內容可能需後續調整"],
-                "risk": "medium",
-            },
-            {
-                "id": "B",
-                "summary": "暫緩納入正式需求，列為待確認事項。",
-                "pros": ["避免未確認內容進入正式 SRS"],
-                "cons": ["SRS 會保留未決問題"],
-                "impact": ["相關需求暫不 baseline"],
-                "risk": "low",
-            },
-        ]
+        raise ValueError("decision option analysis 必須至少輸出一個有效 option")
 
     recommendation = data.get("recommendation", {})
     if not isinstance(recommendation, dict):
-        recommendation = {}
+        raise ValueError("decision option analysis recommendation 必須是 object")
     option_ids = {row["id"] for row in clean_options}
-    rec_option = str(recommendation.get("option_id") or clean_options[0]["id"]).strip()
+    rec_option = str(recommendation.get("option_id") or "").strip()
     if rec_option not in option_ids:
-        rec_option = clean_options[0]["id"]
+        raise ValueError("decision option analysis recommendation.option_id 不合法")
     affected_requirement_ids = data.get("affected_requirement_ids", [])
     if not isinstance(affected_requirement_ids, list) or not affected_requirement_ids:
         affected_requirement_ids = list(source_requirement_ids)
@@ -446,8 +408,11 @@ def decision_option_analysis(
     if not isinstance(unresolved_points, list):
         unresolved_points = []
 
+    summary = str(data.get("summary") or "").strip()
+    if not summary:
+        raise ValueError("decision option analysis summary 不可為空")
     return {
-        "summary": str(data.get("summary") or "此議題需要人類裁決後才能成為正式需求決策。").strip(),
+        "summary": summary,
         "options": clean_options,
         "recommendation": {
             "option_id": rec_option,

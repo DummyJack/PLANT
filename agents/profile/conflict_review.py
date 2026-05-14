@@ -3,7 +3,7 @@
 CONFLICT_REVIEW_RESPONSE_CONTRACT = """- statement 必須是單一合法 JSON object 字串；不可輸出 JSON 以外的前後文。
 - statement JSON 結構必須為：{"overall_assessment":"...","pair_reviews":[...]}。
 - overall_assessment 用 1-3 句說明整批標註品質是否有系統性偏誤。
-- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx] 或 [MULTIPLE-xxx]；每筆都要有：id、proposed_label、confidence、reason。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx] 或 [MULTIPLE-xxx]；每筆都要有：id、proposed_label、reason。
 - 此會議不提出 open_questions；open_questions 必須輸出空陣列。
 - 不可用類 JSON 條列或文字摘要取代合法 JSON。"""
 
@@ -23,6 +23,5 @@ def conflict_review_statement_hint() -> str:
         '"statement": "{\\"overall_assessment\\":\\"整批標註品質判斷\\",'
         '\\"pair_reviews\\":[{\\"id\\":\\"PAIR-1 或 MULTIPLE-1\\",'
         '\\"proposed_label\\":\\"Conflict | Neutral\\",'
-        '\\"confidence\\":\\"high | medium | low\\",'
         '\\"reason\\":\\"完整審查理由\\"}]}"'
     )

@@ -1,6 +1,5 @@
 # Analyst conflict logic: detect, recheck, sign off, and report requirement conflicts.
 import json
-import re
 from typing import Any, Dict, List, Optional
 
 from storage.markdown import clean_llm_output
@@ -18,8 +17,6 @@ class AnalystConflicts:
     def run_conflict_analysis_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="conflict_analysis",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "conflict_action": action,
                 **context,
@@ -39,7 +36,7 @@ class AnalystConflicts:
         return {
             "action": kwargs.get("conflict_action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "requirements_count": len(requirement_discussion_pool(artifact)),
             "conflicts_count": conflict_entries_count(artifact),
             "discussion_rows_count": len(kwargs.get("discussion_rows") or []),
@@ -74,15 +71,19 @@ class AnalystConflicts:
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
         try:
-            if action == "run_conflict_detection":
-                output = self.execute_conflict_detection(kwargs.get("artifact") or {})
-            elif action == "run_pairwise_conflict_detection":
+            if action == "run_pairwise_conflict_detection":
                 output = self.execute_pairwise_conflict_detection(kwargs.get("artifact") or {})
             elif action == "run_group_conflict_detection":
                 output = self.execute_group_conflict_detection(kwargs.get("artifact") or {})
             elif action == "signoff_conflict_recheck":
                 output = self.execute_signoff_conflict_recheck(
                     kwargs.get("proposal_list") or [],
+                    kwargs.get("discussion_rows") or [],
+                    kwargs.get("extracted_pair_reviews"),
+                )
+            elif action == "finalize_conflict_review_reasons":
+                output = self.execute_finalize_conflict_review_reasons(
+                    kwargs.get("decision_list") or [],
                     kwargs.get("discussion_rows") or [],
                     kwargs.get("extracted_pair_reviews"),
                 )
@@ -115,9 +116,6 @@ class AnalystConflicts:
             "summary": f"完成 conflict analysis: {action}",
         }
 
-    def run_conflict_detection(self, artifact: Dict) -> Dict:
-        return self.execute_conflict_detection(artifact)
-
     def run_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
         return self.execute_pairwise_conflict_detection(artifact)
 
@@ -127,9 +125,10 @@ class AnalystConflicts:
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, Any]], str]:
-        return self.execute_signoff_conflict_recheck(
-            proposal_list,
-            discussion_rows,
+        return self.run_conflict_analysis_loop(
+            "signoff_conflict_recheck",
+            proposal_list=proposal_list,
+            discussion_rows=discussion_rows,
             extracted_pair_reviews=extracted_pair_reviews,
         )
 
@@ -146,7 +145,7 @@ class AnalystConflicts:
             round_num=round_num,
             recent_decisions_limit=recent_decisions_limit,
             previous_report=previous_report,
-        ) or ""
+        )
 
     def run_pair_conflict_detection(
         self,
@@ -212,15 +211,14 @@ Conflict 判準：
 - 需求必須處於同一主體與可比較範圍。
 - 只有在無法同時滿足，或一方成立會直接違反另一方時，才標為 Conflict。
 - 資訊不足、尚待澄清、一般取捨、範圍未明、角色不同或流程階段不同，不可直接升級為 Conflict。
-- conflict_type 只是描述結果，不是產生 Conflict 的理由。
 
 Neutral 判準：
 - 只有在可明確判定兩項需求不衝突、不重複，且沒有直接語義關係時，才標為 Neutral。
 - 若兩項需求是重述、細化、依賴、範圍重疊、同一流程相鄰步驟或同一輸出行為，不要標為 Neutral。
 
 輸出要求：
-- Conflict：需包含 description、requirement_ids 或 related_requirements；description 說明涉及哪些需求、互斥點與為何不能同時成立。
-- Neutral：需包含 description；可選填 requirement_ids；description 說明為何無衝突、無重複且無直接語義關係。
+- Conflict：需包含 requirement_ids 或 related_requirements。
+- Neutral：可選填 requirement_ids。
 - requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。
 """
 
@@ -233,7 +231,7 @@ Neutral 判準：
             and str(req.get("text") or "").strip()
         ]
         if len(requirements) < 2:
-            return {**artifact, "conflicts": []}
+            return set_pair_conflicts({**artifact}, [])
 
         context = self.conflict_detection_context(artifact, requirements)
         base_task = self.conflict_detection_base_task()
@@ -338,7 +336,7 @@ Neutral 判準：
         """用 reqt_candidates 做 3+ 需求群組衝突判斷，並附加到既有兩兩結果。"""
         requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 3:
-            self.logger.info("整體衝突判斷：0 筆 3+ 需求衝突")
+            self.logger.info("整體衝突判斷")
             return artifact
         context = self.conflict_detection_context(artifact, requirements)
         base_task = self.conflict_detection_base_task()
@@ -364,7 +362,7 @@ Neutral 判準：
             if row.get("label") == "Conflict"
             and len(row.get("requirement_ids") or []) >= 3
         ]
-        self.logger.info("整體衝突判斷：%s 筆 3+ 需求衝突", len(holistic_conflicts))
+        self.logger.info("整體衝突判斷")
 
         multiple_rows: List[Dict[str, Any]] = []
         for idx, row in enumerate(holistic_conflicts, 1):
@@ -372,13 +370,6 @@ Neutral 判準：
             item["id"] = f"MULTIPLE-{idx}"
             multiple_rows.append(item)
         return set_multiple_conflicts({**artifact}, multiple_rows)
-
-    def execute_conflict_detection(self, artifact: Dict) -> Dict:
-        """相容入口：先做兩兩判斷，再做 3+ 需求整體衝突判斷。"""
-        updated = self.execute_pairwise_conflict_detection(artifact)
-        if bool((artifact.get("meta") or {}).get("enable_group_conflict_check", True)):
-            updated = self.execute_group_conflict_detection(updated)
-        return updated
 
     def execute_signoff_conflict_recheck(
         self,
@@ -425,18 +416,26 @@ Neutral 判準：
             text = text[:-3].strip()
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r"(\[[\s\S]*\])", text)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    data = None
-            else:
-                data = None
+        except json.JSONDecodeError as e:
+            raise ValueError("conflict signoff must return a JSON array") from e
+        if not isinstance(data, list):
+            raise ValueError("conflict signoff must return a JSON array")
         return signoff_decisions(data), raw
 
     def finalize_conflict_review_reasons(
+        self,
+        decision_list: List[Dict[str, Any]],
+        discussion_rows: List[Dict[str, Any]],
+        extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
+    ) -> tuple[List[Dict[str, str]], str]:
+        return self.run_conflict_analysis_loop(
+            "finalize_conflict_review_reasons",
+            decision_list=decision_list,
+            discussion_rows=discussion_rows,
+            extracted_pair_reviews=extracted_pair_reviews,
+        )
+
+    def execute_finalize_conflict_review_reasons(
         self,
         decision_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
@@ -446,18 +445,12 @@ Neutral 判準：
         if not decision_list:
             return [], ""
         prompt = (
-            "以下每筆 Conflict/Neutral 項目的 final_label 已經決定。"
-            "請在不改變 final_label 的前提下，整理一段可放入紀錄的最終理由。\n\n"
-            f"# 已決定的項目\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
-            f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
-            f"# 補充會議內容\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
-            "# 規則\n"
-            "- 不可新增、刪除或改變任何項目的 final_label/new_label。\n"
-            "- reason 必須根據需求原文、各 agent 的 pair_reviews 與最終裁定整理。\n"
-            "- reason 要清楚說明為什麼最後維持或改成該標籤。\n"
-            "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n\n"
+            f"# 已定案項目\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
+            f"# 各 agent 逐筆理由\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
+            "# 任務\n"
+            "請根據 final_label 與各 agent 逐筆理由，整理 description。\n\n"
             "# 輸出 JSON array\n"
-            '[{"id": "衝突ID", "reason": "最終裁定理由"}]'
+            '[{"id": "衝突ID", "description": "精簡裁定描述"}]'
         )
         messages = self.build_direct_messages(prompt)
         raw = (self.model.chat(messages, action="conflict_recheck_final_reason") or "").strip()
@@ -470,17 +463,10 @@ Neutral 判準：
             text = text[:-3].strip()
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r"(\[[\s\S]*\])", text)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    data = None
-            else:
-                data = None
+        except json.JSONDecodeError as e:
+            raise ValueError("conflict final reason must return a JSON array") from e
         if not isinstance(data, list):
-            return [], raw
+            raise ValueError("conflict final reason must return a JSON array")
         out: List[Dict[str, str]] = []
         valid_ids = {
             str(row.get("id") or "").strip()
@@ -491,9 +477,9 @@ Neutral 判準：
             if not isinstance(row, dict):
                 continue
             pair_id = str(row.get("id") or "").strip()
-            reason = str(row.get("reason") or "").strip()
-            if pair_id in valid_ids and reason:
-                out.append({"id": pair_id, "reason": reason})
+            description = str(row.get("description") or "").strip()
+            if pair_id in valid_ids and description:
+                out.append({"id": pair_id, "reason": description})
         return out, raw
 
     def build_conflict_analysis_report(
@@ -554,10 +540,8 @@ Neutral 判準：
         try:
             raw = self.invoke_skill("conflict-analyzer", task, context=context)
         except Exception as e:
-            self.logger.warning("conflict report 生成失敗: %s", e)
-            return f"# 需求 Conflict 分析報告\n\n（報告生成失敗: {e}）"
+            raise RuntimeError(f"conflict report 生成失敗: {e}") from e
         out = clean_llm_output(raw)
         if not out:
-            self.logger.warning("conflict report 無內容")
-            return "# 需求 Conflict 分析報告\n\n（報告無內容）"
+            raise RuntimeError("conflict report 無內容")
         return out

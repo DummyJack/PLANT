@@ -86,7 +86,7 @@ def scope_payload(scope: Any) -> Dict[str, Any]:
     }
 
 
-def elicited_requirement_candidates(rows: Any) -> List[Dict[str, Any]]:
+def validate_elicited_reqts(rows: Any) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     seen_texts = set()
     for row in requirement_records(rows):
@@ -133,11 +133,8 @@ def conflict_records(
                 "id": f"PAIR-{pair_index + 1}",
                 "label": label,
                 "pair_index": pair_index,
-                "description": clean_text(row.get("description")),
                 "requirement_ids": rel_ids,
             }
-            if label == "Conflict":
-                entry["conflict_type"] = clean_text(row.get("conflict_type"))
             by_pair[pair_index] = entry
         return [by_pair[i] for i in range(pair_count) if i in by_pair]
 
@@ -155,7 +152,6 @@ def conflict_records(
                 {
                     "id": f"NF-{neutral_count}",
                     "label": "Neutral",
-                    "description": clean_text(row.get("description")),
                     "requirement_ids": clean_list(row.get("requirement_ids") or row.get("related_requirements")),
                 }
             )
@@ -163,15 +159,12 @@ def conflict_records(
         if label != "Conflict":
             continue
         conflict_count += 1
-        ctype = clean_text(row.get("conflict_type"))
         rel_ids = clean_list(row.get("requirement_ids") or row.get("related_requirements"))
         stakeholders = clean_list(row.get("stakeholder_names"))
         if rel_ids or stakeholders:
             entry: Dict[str, Any] = {
                 "id": f"CF-{conflict_count}",
                 "label": "Conflict",
-                "description": clean_text(row.get("description")),
-                "conflict_type": ctype,
             }
             if rel_ids:
                 entry["requirement_ids"] = rel_ids
@@ -182,7 +175,6 @@ def conflict_records(
             entry = {
                 "id": f"CF-D{design_count}",
                 "label": "Conflict",
-                "description": clean_text(row.get("description")),
                 "requirement_ids": [],
             }
         conflicts.append(entry)

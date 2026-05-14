@@ -54,7 +54,7 @@ class ExpertAgent(
             kwargs.get("actions_taken", []),
             kwargs.get("research_results", []),
             kwargs.get("iteration", 0),
-            kwargs.get("max_iterations", 1),
+            kwargs["max_iterations"],
         )
 
     def decide_domain_research_action(
@@ -84,7 +84,6 @@ class ExpertAgent(
             decision.get("action", "done"),
             decision.get("params") or {},
             kwargs["artifact"],
-            kwargs.get("pending_issues", []),
             kwargs.get("research_results", []),
         )
 
@@ -128,7 +127,7 @@ class ExpertAgent(
         user_prompt = self.build_issue_response_prompt(
             issue=issue,
             previous_responses=kwargs.get("previous_responses"),
-            artifact_snapshot=kwargs.get("artifact_snapshot"),
+            artifact_context=(kwargs.get("observation") or {}).get("artifact_context"),
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)

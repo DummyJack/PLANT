@@ -8,11 +8,11 @@ from agents.profile.analyst.requirements import requirement_discussion_pool
 class UserIssues:
     def build_stakeholder_contract(
         self,
-        artifact_snapshot: Optional[Dict[str, Any]],
+        artifact_context: Optional[Dict[str, Any]],
     ) -> str:
         rough_idea = ""
-        if isinstance(artifact_snapshot, dict):
-            rough_idea = str(artifact_snapshot.get("rough_idea") or "").strip()
+        if isinstance(artifact_context, dict):
+            rough_idea = str(artifact_context.get("rough_idea") or "").strip()
         role_parts = []
         allowed_names: List[str] = []
         for sh in self.stakeholders or []:
@@ -49,8 +49,6 @@ class UserIssues:
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="user_issue_proposal",
-            max_iterations=3,
-            loop_cap=self.agent_loop_round_cap(),
             context={
                 "artifact": artifact,
                 "round_num": round_num,
@@ -81,7 +79,7 @@ class UserIssues:
                 user_open_questions.append(row)
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs.get("max_iterations", 3),
+            "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
             "rough_idea": artifact.get("rough_idea", ""),
@@ -303,11 +301,11 @@ class UserIssues:
         *,
         issue: Dict[str, Any],
         previous_responses: Optional[List[Dict[str, Any]]],
-        artifact_snapshot: Optional[Dict[str, Any]],
+        artifact_context: Optional[Dict[str, Any]],
     ) -> str:
         issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
         issue_category = (issue.get("category") or "").strip()
-        stakeholder_contract = self.build_stakeholder_contract(artifact_snapshot)
+        stakeholder_contract = self.build_stakeholder_contract(artifact_context)
         target_stakeholders = [
             str(x).strip()
             for x in (issue.get("target_stakeholders") or [])
@@ -360,9 +358,9 @@ class UserIssues:
             previous_responses, title="前面的發言"
         )
 
-        snapshot_text = ""
-        if artifact_snapshot:
-            snapshot_text = f"\n# 當前專案狀態（供參考）\n{json.dumps(artifact_snapshot, ensure_ascii=False, indent=2)}"
+        context_text = ""
+        if artifact_context:
+            context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
         allow_suggested_next_action = (
             issue_category != "conflict_discussion"
             and not str(issue.get("id") or "").startswith("ELICIT-")
@@ -428,7 +426,7 @@ class UserIssues:
 
 {issue_text}
 {prev_text}
-{snapshot_text}
+{context_text}
 {category_hint}
 
 # 任務
