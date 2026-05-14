@@ -46,7 +46,7 @@ class GeminiModel(BaseLLM):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment")
-        self._client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
 
     def gemini_response_text(self, response: Any) -> str:
         """取得 Gemini 文字；部分情況下 .text 會拋錯（例如安全阻擋）。"""
@@ -131,7 +131,7 @@ class GeminiModel(BaseLLM):
         }
         if gen_cfg is not None:
             call_kw["config"] = gen_cfg
-        return self._client.models.generate_content(**call_kw)
+        return self.client.models.generate_content(**call_kw)
 
     def add_usage_from_response(
         self,
@@ -282,7 +282,7 @@ class GeminiModel(BaseLLM):
             )
             self.costTracker.start()
             try:
-                response = self._client.models.generate_content(
+                response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=contents_genai,
                     config=cfg,
@@ -351,7 +351,7 @@ class GeminiModel(BaseLLM):
                     ]
                     for fut in as_completed(futs):
                         try:
-                            i, _fn, _fid, out = fut.result()
+                            i, fn, fid, out = fut.result()
                             by_index[i] = out
                         except Exception as e:
                             log.warning("並行工具 future 例外: %s", e)
@@ -387,7 +387,7 @@ class GeminiModel(BaseLLM):
         )
         self.costTracker.start()
         try:
-            final_resp = self._client.models.generate_content(
+            final_resp = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents_genai,
                 config=final_cfg,
