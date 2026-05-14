@@ -1,47 +1,40 @@
 # Modeler modeling helpers: generate, refine, validate, and repair UML models.
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from agents.base import (
-    modeler_models_array_name_line,
-    modeler_name_field_language,
-)
 from agents.skills.base import get_skill
-
-MODEL_SELECTION_RULES = """- 所有 diagram type 都不是必產生；只在模型能幫助需求理解、驗證或追溯時才建立、保留或更新。
-- 不從模型反推新增需求，也不可把 open_questions / pending candidates 畫成正式模型內容。
-- 資訊不足時不要畫死，改在 to_confirm 或 assumptions 說明。
-- Context / Use Case / Activity / Data Flow 可用於呈現系統邊界、角色互動、流程或資料流。
-- Sequence Diagram 只在互動順序會影響需求理解時建立。
-- State Machine Diagram 只在需求已有明確生命週期或狀態轉換時建立。
-- Class Diagram 若建立，只能作為 tentative domain model，不可當成設計模型。"""
+from agents.profile.analyst.requirements import requirement_discussion_pool
+from .validation import (
+    ALLOWED_DIAGRAM_TYPES,
+    diagram_payload,
+    model_artifact_payload,
+    plantuml_fix_payload,
+)
 
 
 class ModelerModeling:
-    AVAILABLE_MODEL_TYPES = [
-        "context_diagram",
-        "use_case_diagram",
-        "activity_diagram",
-        "data_flow_diagram",
-        "sequence_diagram",
-        "state_machine_diagram",
-        "class_diagram",
-    ]
+    AVAILABLE_MODEL_TYPES = sorted(ALLOWED_DIAGRAM_TYPES)
 
-    def build_requirement_model_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    def build_requirement_model_artifact(
+        self,
+        artifact: Dict[str, Any],
+        *,
+        revision_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """保留建模需要的 artifact 欄位，避免把 pending 內容畫成正式模型。"""
         feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         return {
-            "requirements": artifact.get("requirements", []) or [],
+            "requirements": requirement_discussion_pool(artifact),
             "stakeholders": artifact.get("stakeholders", []) or [],
             "scope": artifact.get("scope", {}) or {},
             "conflicts": artifact.get("conflicts", []) or [],
             "open_questions": artifact.get("open_questions", []) or [],
             "feedback": {"domain_research": feedback.get("domain_research", {}) or {}},
-            "elicitation_meeting": artifact.get("elicitation_meeting", []) or [],
+            "elicitation": artifact.get("elicitation", {}) or {},
             "workflow_sketch": artifact.get("workflow_sketch", {}) or {},
             "system_models": artifact.get("system_models", {"models": []}) or {"models": []},
+            "model_revision_context": revision_context or artifact.get("model_revision_context", {}) or {},
             "meta": {
                 **(artifact.get("meta", {}) if isinstance(artifact.get("meta"), dict) else {}),
                 "model_stage": "generate_system_model",
@@ -52,94 +45,41 @@ class ModelerModeling:
         self,
         artifact: Dict[str, Any],
         max_iterations: Optional[int] = None,
+        revision_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """根據目前 artifact 產生 System Model。"""
-        model_artifact = self.build_requirement_model_artifact(artifact)
+        model_artifact = self.build_requirement_model_artifact(
+            artifact,
+            revision_context=revision_context,
+        )
         n = 15 if max_iterations is None else max_iterations
         self.run_model_loop(model_artifact, max_iterations=n)
         model_data = self.ensure_model_format(model_artifact.get("system_models", {}))
         model_data.setdefault("model_stage", "generate_system_model")
         model_data.setdefault("maturity", "requirement_level")
         model_data.setdefault("source", "requirements_for_system_model")
+        if revision_context:
+            model_data["model_revision_mode"] = "revise_existing_models"
+            history = list(model_data.get("revision_history") or [])
+            history.append(
+                {
+                    "mode": "revise_existing_models",
+                    "round": revision_context.get("round_num"),
+                    "changed_requirement_ids": revision_context.get("changed_requirement_ids", []),
+                    "change_candidate_ids": revision_context.get("change_candidate_ids", []),
+                    "decision_ids": revision_context.get("decision_ids", []),
+                }
+            )
+            model_data["revision_history"] = history
+        else:
+            model_data.setdefault("model_revision_mode", "initial_or_full_refresh")
         model_data.setdefault("model_summary", "")
         model_data.setdefault("to_confirm", [])
         model_data.setdefault("assumptions", [])
         for model in model_data.get("models", []) or []:
-            if not isinstance(model, dict):
-                continue
             model.setdefault("model_stage", "generate_system_model")
             model.setdefault("source", "requirements_for_system_model")
-            if str(model.get("type") or "").strip() == "class_diagram":
-                model["maturity"] = "tentative"
-            else:
-                model.setdefault("maturity", "requirement_level")
         return self.validate_models(model_data)
-
-    def generate_system_model(
-        self,
-        requirements: List[Dict],
-        stakeholders: List[Dict],
-        max_iterations: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """向後相容入口；新流程請改用 generate_requirement_models(artifact)。"""
-        artifact = {
-            "requirements": requirements,
-            "stakeholders": stakeholders or [],
-            "system_models": {"models": []},
-            "conflicts": [],
-        }
-        return self.generate_requirement_models(artifact, max_iterations=max_iterations)
-
-    def refine_model(
-        self,
-        requirements: List[Dict],
-        prev_models: List[Dict] = None,
-        stakeholders: Optional[List[Dict]] = None,
-    ) -> Dict[str, Any]:
-        """根據更新的需求精煉系統模型；可選傳入 stakeholders 以對應角色與需求來源。"""
-        current_model = {"models": prev_models or []}
-        current_model_json = json.dumps(current_model, ensure_ascii=False, indent=2)
-        requirements_text = json.dumps(requirements, ensure_ascii=False, indent=2)
-        sh_block = ""
-        if stakeholders:
-            sh_text = json.dumps(stakeholders, ensure_ascii=False, indent=2)
-            sh_block = f"\n# 利害關係人（供對應需求來源與角色）\n{sh_text}\n\n"
-
-        task = f"""# 任務
-    根據更新後的需求，評估並更新現有系統模型。
-    {sh_block}# 當前系統模型
-    ```json
-    {current_model_json}
-    ```
-
-    # 更新後的需求
-    {requirements_text}
-
-    # 規則
-    - 比較新需求與當前模型，識別差異。
-    - 只修改受影響的部分，保留未變動元素。
-    {MODEL_SELECTION_RULES}
-    - {modeler_models_array_name_line()}
-    - {modeler_name_field_language()}
-    - 資訊不足時請在 to_confirm 列出待確認事項。
-
-    # 輸出格式
-    {{
-    "model_summary": "模型整體摘要",
-    "to_confirm": ["跨模型待確認事項"],
-    "assumptions": ["建模假設"],
-    "models": [{{"name": "...", "type": "context_diagram|use_case_diagram|activity_diagram|data_flow_diagram|sequence_diagram|state_machine_diagram|class_diagram", "plantuml": "@startuml\\n...\\n@enduml", "to_confirm": ["待確認事項"], "maturity": "requirement_level|tentative"}}]
-    }}"""
-
-        try:
-            skill = get_skill("UML")
-            messages = self.build_skill_messages(skill, "UML", task)
-            result = self.chat_json(messages)
-            model_data = self.ensure_model_format(result)
-            return self.validate_models(model_data)
-        except Exception as e:
-            self.logger.warning(f"模型精煉失敗: {e}")
-            return {"models": prev_models or []}
 
     def update_single_diagram(
         self, diagram_type, requirements, stakeholders=None,
@@ -173,6 +113,7 @@ class ModelerModeling:
             "open_questions": artifact_context.get("open_questions", []) or [],
             "domain_research": (artifact_context.get("feedback") or {}).get("domain_research", {}),
             "workflow_sketch": artifact_context.get("workflow_sketch", {}) or {},
+            "model_revision_context": artifact_context.get("model_revision_context", {}) or {},
         }
         context_text = json.dumps(context_payload, ensure_ascii=False, indent=2)
         diagram_layout_hint = ""
@@ -212,7 +153,9 @@ class ModelerModeling:
     {context_text}
     {diagram_layout_hint}
 
-    - {modeler_name_field_language()}
+    - 這是 revision-aware 模型迭代：以上一版 PlantUML 為基礎，只修訂受 model_revision_context / requirements / decisions 影響的元素。
+    - 未受影響的 actor、use case、流程、資料流、狀態或概念必須保留；不得因重畫而改名或刪除仍有效元素。
+    - 上一版 to_confirm 若尚未被最新決策或需求解決，必須保留或改寫為仍待確認事項。
     - PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
     - 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
     - 此為 requirement-level model，不是 design/architecture model；不可擴張需求。
@@ -232,7 +175,6 @@ class ModelerModeling:
     {context_text}
     {diagram_layout_hint}
 
-    - {modeler_name_field_language()}
     - PlantUML elements（actor/use case/class/message/lifeline/relation label）一律英文，不可混用中文元素名。
     - 若資訊不足，不可臆測；請在 to_confirm 列出待確認事項（可為空陣列）。
     - 此為 requirement-level model，不是 design/architecture model；不可擴張需求。
@@ -241,13 +183,11 @@ class ModelerModeling:
 
         skill = get_skill("UML")
         messages = self.build_skill_messages(skill, "UML", task)
-        return self.chat_json(messages)
+        result = self.chat_json(messages)
+        return diagram_payload(result, expected_type=diagram_type)
 
     def ensure_model_format(self, result) -> Dict[str, Any]:
-        if not isinstance(result, dict):
-            return {"models": []}
-        result.setdefault("models", [])
-        return result
+        return model_artifact_payload(result)
 
     def validate_models(self, model_data: Dict[str, Any]) -> Dict[str, Any]:
         """用 plantuml_validate 工具驗證每個模型的 PlantUML 語法，有錯則自動修正"""
@@ -315,22 +255,20 @@ class ModelerModeling:
     # 驗證錯誤
     {error_msg}
 
+    - 只修正 PlantUML 語法，不得改變圖的需求語意、範圍、角色、流程或資料關係。
     - PlantUML elements（actor/use case/class/message/lifeline/relation label）必須維持英文，不可改成中文。
-    - 若錯誤來自需求資訊不足，請不要臆測補齊；在 to_confirm 列出待確認事項（可為空陣列）。
+    - 不要新增或移除需求內容；如果資訊不足，維持原本抽象元素，不要臆測補齊。
 
     # 輸出 JSON
     {{{{
-    "plantuml": "@startuml\\n...修正後的完整程式碼...\\n@enduml",
-    "to_confirm": ["待確認事項"]
+    "plantuml": "@startuml\\n...修正後的完整程式碼...\\n@enduml"
     }}}}"""
 
         try:
             skill = get_skill("UML")
             messages = self.build_skill_messages(skill, "UML", user_prompt)
             response = self.chat_json(messages)
-            fixed = response.get("plantuml", "")
-            if "@startuml" in fixed and "@enduml" in fixed:
-                return fixed
+            return plantuml_fix_payload(response)["plantuml"]
         except Exception as e:
             self.logger.warning(f"  修正失敗: {e}")
         return None

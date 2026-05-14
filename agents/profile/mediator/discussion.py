@@ -4,67 +4,229 @@ from typing import Any, Dict, List, Optional
 
 
 class MediatorDiscussion:
-    def collect_topic_response(
+    def pair_review_record(
+        self,
+        raw: Dict[str, Any],
+        *,
+        pair_id_set: set[str],
+        current_labels_by_id: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        pair_id = str(raw.get("id") or "").strip()
+        if not pair_id or pair_id not in pair_id_set:
+            return None
+        proposed_label = str(raw.get("proposed_label") or "").strip()
+        if proposed_label not in {"Conflict", "Neutral"}:
+            return None
+        current_label = ""
+        if current_labels_by_id:
+            current_label = str(current_labels_by_id.get(pair_id) or "").strip()
+        decision = "keep"
+        if current_label in {"Conflict", "Neutral"} and proposed_label != current_label:
+            decision = "modify"
+        return {
+            "id": pair_id,
+            "decision": decision,
+            "proposed_label": proposed_label,
+            "reason": str(raw.get("reason") or "").strip(),
+        }
+
+    def validate_issue_response_contract(
+        self,
+        response: Dict[str, Any],
+        contract: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not isinstance(contract, dict) or not contract:
+            return response
+        if str(contract.get("type") or "").strip() != "pair_reviews":
+            return response
+
+        known_pair_ids = [
+            str(x).strip()
+            for x in (contract.get("known_pair_ids") or [])
+            if str(x).strip()
+        ]
+        pair_id_set = set(known_pair_ids)
+        current_labels_by_id = contract.get("current_labels_by_id") or {}
+        raw_reviews = response.get("pair_reviews") if isinstance(response, dict) else None
+        if not isinstance(raw_reviews, list):
+            raise ValueError("pair_reviews must be a list")
+
+        errors: List[str] = []
+        reviews: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for idx, raw in enumerate(raw_reviews, 1):
+            if not isinstance(raw, dict):
+                errors.append(f"pair_reviews[{idx}] must be an object")
+                continue
+            pair_id = str(raw.get("id") or "").strip()
+            proposed_label = str(raw.get("proposed_label") or "").strip()
+            reason = str(raw.get("reason") or "").strip()
+            if not pair_id:
+                errors.append(f"pair_reviews[{idx}] missing id")
+                continue
+            if pair_id not in pair_id_set:
+                errors.append(f"unknown pair id: {pair_id}")
+                continue
+            if pair_id in seen:
+                errors.append(f"duplicate pair id: {pair_id}")
+                continue
+            if proposed_label not in {"Conflict", "Neutral"}:
+                errors.append(f"{pair_id} invalid proposed_label: {proposed_label or '<empty>'}")
+            if not reason:
+                errors.append(f"{pair_id} missing reason")
+            normalized = self.pair_review_record(
+                raw,
+                pair_id_set=pair_id_set,
+                current_labels_by_id=current_labels_by_id,
+            )
+            if normalized:
+                reviews.append(normalized)
+                seen.add(pair_id)
+
+        missing = sorted(pair_id_set - seen)
+        if missing:
+            errors.append("missing pair ids: " + ", ".join(missing))
+        if errors:
+            raise ValueError("; ".join(errors))
+        response["pair_reviews"] = reviews
+        return response
+
+    def validate_requirement_elicitation_response(
+        self,
+        response: Dict[str, Any],
+        issue: Dict[str, Any],
+        agent_name: str,
+    ) -> Dict[str, Any]:
+        issue_id = str(issue.get("id") or "").strip()
+        if not issue_id.startswith("ELICIT-"):
+            return response
+        actions = issue.get("agent_actions") if isinstance(issue.get("agent_actions"), dict) else {}
+        action_info = actions.get(agent_name) if isinstance(actions.get(agent_name), dict) else {}
+        action = str(action_info.get("action") or "").strip()
+        if action not in {"ask_user", "supplement_question"}:
+            return response
+        raw_targets = response.get("target_stakeholders")
+        if isinstance(raw_targets, str):
+            raw_targets = [raw_targets]
+        if not isinstance(raw_targets, list):
+            raise ValueError("ELICIT agent response must include target_stakeholders as a list")
+        allowed = {
+            str(name).strip()
+            for name in (issue.get("allowed_stakeholders") or [])
+            if str(name).strip()
+        }
+        targets = []
+        for value in raw_targets:
+            name = str(value or "").strip()
+            if name and name in allowed and name not in targets:
+                targets.append(name)
+        if not targets:
+            raise ValueError("ELICIT target_stakeholders must contain at least one selected stakeholder")
+        response["target_stakeholders"] = targets
+        return response
+
+    def validate_agent_response(
+        self,
+        response: Dict[str, Any],
+        *,
+        contract: Optional[Dict[str, Any]],
+        issue: Dict[str, Any],
+        agent_name: str,
+    ) -> Dict[str, Any]:
+        response = self.validate_issue_response_contract(response, contract)
+        return self.validate_requirement_elicitation_response(response, issue, agent_name)
+
+    def run_agent_response_loop(
         self,
         agent: Any,
-        topic: Dict[str, Any],
+        issue: Dict[str, Any],
         *,
         previous_responses: Optional[List[Dict[str, Any]]] = None,
         artifact_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        agent_name = getattr(agent, "name", "")
+        contract = issue.get("response_contract") if isinstance(issue, dict) else None
         context = {
-            "topic": topic,
+            "issue": issue,
             "previous_responses": previous_responses,
             "artifact_snapshot": artifact_snapshot,
         }
-        required = (
-            "run_action_loop",
-            "build_topic_response_observation",
-            "decide_topic_response_action",
-            "execute_topic_response_action",
-        )
-        if not all(hasattr(agent, name) for name in required):
-            raise NotImplementedError(
-                f"Agent '{getattr(agent, 'name', type(agent).__name__)}' does not support topic_response loop"
-            )
         opa = agent.run_action_loop(
-            name="topic_response",
-            max_iterations=1,
-            loop_cap=1,
+            name="agent_response",
+            max_iterations=3,
+            loop_cap=agent.agent_loop_round_cap(),
             context=context,
-            build_observation=agent.build_topic_response_observation,
-            decide_action=agent.decide_topic_response_action,
-            execute_action=agent.execute_topic_response_action,
+            build_observation=agent.build_issue_response_observation,
+            decide_action=agent.decide_issue_response_action,
+            execute_action=agent.execute_issue_response_action,
+            validate_result=(
+                lambda result: self.validate_agent_response(
+                    result,
+                    contract=contract,
+                    issue=issue,
+                    agent_name=getattr(agent, "name", ""),
+                )
+            ),
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
+        if result.get("format_error"):
+            raise ValueError(
+                f"{getattr(agent, 'name', '')} agent response output contract invalid after agent loop: "
+                f"{result.get('format_error')}"
+            )
         return {
-            "agent": agent_name,
+            "agent": getattr(agent, "name", ""),
             "statement": result.get("statement", ""),
+            "pair_reviews": result.get("pair_reviews", []),
             "open_questions": result.get("open_questions", []),
             "oracle_action_type": result.get("oracle_action_type", ""),
             "oracle_is_relevant": bool(result.get("oracle_is_relevant", False)),
             "oracle_revealed_ids": result.get("oracle_revealed_ids", []),
             "suggested_next_action": result.get("suggested_next_action"),
+            "target_stakeholders": result.get("target_stakeholders", []),
             "opa_trace": opa.get("opa_trace", []),
         }
 
+    def collect_issue_response(
+        self,
+        agent: Any,
+        issue: Dict[str, Any],
+        *,
+        previous_responses: Optional[List[Dict[str, Any]]] = None,
+        artifact_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        required = (
+            "run_action_loop",
+            "build_issue_response_observation",
+            "decide_issue_response_action",
+            "execute_issue_response_action",
+        )
+        if not all(hasattr(agent, name) for name in required):
+            raise NotImplementedError(
+                f"Agent '{getattr(agent, 'name', type(agent).__name__)}' does not support agent response loop"
+            )
+        return self.run_agent_response_loop(
+            agent,
+            issue,
+            previous_responses=previous_responses,
+            artifact_snapshot=artifact_snapshot,
+        )
+
     def moderate_sequential(
-        self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
+        self, issue: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> tuple:
         """逐一發言；輪到某人前先讓他即時回答指向他的問題，再發言（可依問答調整立場）。回傳 (contributions, oq_records)。"""
         contributions = [
-            c for c in (topic.get("seed_previous_responses") or [])
+            c for c in (issue.get("seed_previous_responses") or [])
             if isinstance(c, dict)
         ]
         oq_records = []
-        speaking_order = topic.get("speaking_order") or topic.get("participants") or []
+        speaking_order = issue.get("speaking_order") or issue.get("participants") or []
         if not speaking_order:
-            self.logger.warning(f"[{topic['id']}] 無發言者")
+            self.logger.warning(f"[{issue['id']}] 無發言者")
             return (contributions, oq_records)
-        title = topic.get("title", "") or "（無標題）"
-        self.logger.info(f"[{topic['id']}] {title} — 逐一: {' → '.join(speaking_order)}")
+        title = issue.get("title", "") or "（無標題）"
+        self.logger.info(f"[{issue['id']}] {title} — 逐一: {' → '.join(speaking_order)}")
 
         snapshot = self.build_artifact_snapshot(artifact)
         for agent_name in speaking_order:
@@ -78,13 +240,13 @@ class MediatorDiscussion:
             contributions.extend(answer_contribs)
             oq_records.extend(answer_oq)
             try:
-                response = self.collect_topic_response(
+                response = self.collect_issue_response(
                     agent,
-                    topic,
+                    issue,
                     previous_responses=contributions,
                     artifact_snapshot=snapshot,
                 )
-                response = self.attach_agent_action(topic, agent_name, response)
+                response = self.attach_agent_action(issue, agent_name, response)
                 contributions.append(
                     {
                         "agent": agent_name,
@@ -96,6 +258,8 @@ class MediatorDiscussion:
                     }
                 )
             except Exception as e:
+                if isinstance(issue.get("response_contract"), dict):
+                    raise
                 self.logger.warning(f"  {agent_name} 發言失敗: {e}")
                 contributions.append(
                     {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
@@ -110,7 +274,7 @@ class MediatorDiscussion:
     def respond_one_simultaneous(
         self,
         agent_name: str,
-        topic: Dict,
+        issue: Dict,
         registry,
         artifact: Optional[Dict[str, Any]],
         snapshot: Dict[str, Any],
@@ -121,13 +285,13 @@ class MediatorDiscussion:
             self.logger.warning(f"Agent '{agent_name}' 未註冊，跳過")
             return {"agent": agent_name, "response": {"content": "（未註冊，跳過）"}}
         try:
-            response = self.collect_topic_response(
+            response = self.collect_issue_response(
                 agent,
-                topic,
+                issue,
                 previous_responses=None,
                 artifact_snapshot=snapshot,
             )
-            response = self.attach_agent_action(topic, agent_name, response)
+            response = self.attach_agent_action(issue, agent_name, response)
             return {
                 "agent": agent_name,
                 "response": (
@@ -137,31 +301,44 @@ class MediatorDiscussion:
                 ),
             }
         except Exception as e:
+            if isinstance(issue.get("response_contract"), dict):
+                raise
             self.logger.warning(f"  {agent_name} 發言失敗: {e}")
             return {"agent": agent_name, "response": {"content": f"（發言失敗: {e}）"}}
 
-    def attach_agent_action(self, topic: Dict, agent_name: str, response: Any) -> Dict[str, Any]:
+    def attach_agent_action(self, issue: Dict, agent_name: str, response: Any) -> Dict[str, Any]:
         payload = response if isinstance(response, dict) else {"content": str(response)}
         payload = dict(payload)
-        actions = topic.get("agent_actions") if isinstance(topic.get("agent_actions"), dict) else {}
+        actions = issue.get("agent_actions") if isinstance(issue.get("agent_actions"), dict) else {}
         action_info = actions.get(agent_name) if isinstance(actions.get(agent_name), dict) else {}
         action = str(action_info.get("action") or "").strip()
         focus = str(action_info.get("focus") or "").strip()
+        targets = payload.get("target_stakeholders")
         if action:
             payload["action"] = action
         if focus:
             payload["action_focus"] = focus
+        if not targets and not str(issue.get("id") or "").startswith("ELICIT-"):
+            targets = action_info.get("target_stakeholders")
+        if targets:
+            if isinstance(targets, str):
+                targets = [targets]
+            payload["target_stakeholders"] = [
+                str(name).strip()
+                for name in targets
+                if str(name).strip()
+            ]
         return payload
 
     def moderate_simultaneous(
-        self, topic: Dict, registry, artifact: Optional[Dict[str, Any]] = None
+        self, issue: Dict, registry, artifact: Optional[Dict[str, Any]] = None
     ) -> List[Dict]:
-        participants = topic.get("participants") or []
+        participants = issue.get("participants") or []
         if not participants:
-            self.logger.warning(f"[{topic.get('id', '?')}] 無發言者")
+            self.logger.warning(f"[{issue.get('id', '?')}] 無發言者")
             return []
-        title = topic.get("title", "") or "（無標題）"
-        self.logger.info(f"[{topic['id']}] {title} — 同時: {', '.join(participants)}")
+        title = issue.get("title", "") or "（無標題）"
+        self.logger.info(f"[{issue['id']}] {title} — 同時: {', '.join(participants)}")
 
         snapshot = self.build_artifact_snapshot(artifact)
         max_workers = min(len(participants), 6)
@@ -172,7 +349,7 @@ class MediatorDiscussion:
                 executor.submit(
                     self.respond_one_simultaneous,
                     agent_name,
-                    topic,
+                    issue,
                     registry,
                     artifact,
                     snapshot,
@@ -185,6 +362,8 @@ class MediatorDiscussion:
                     contrib = future.result()
                     contributions_by_agent[contrib["agent"]] = contrib
                 except Exception as e:
+                    if isinstance(issue.get("response_contract"), dict):
+                        raise
                     self.logger.warning(f"  {agent_name} 發言失敗: {e}")
                     contributions_by_agent[agent_name] = {
                         "agent": agent_name,
@@ -282,7 +461,7 @@ class MediatorDiscussion:
         current_contributions = list(contributions)
         for q_record in questions:
             try:
-                q_topic = self.build_reply_topic(
+                q_issue = self.build_reply_issue(
                     question=q_record["question"],
                     from_agent=q_record["from_agent"],
                     follow_up_hint=(
@@ -290,9 +469,9 @@ class MediatorDiscussion:
                         "回答後若尚未發言，可在輪到你發言時依此問答補充或微調立場。）"
                     ),
                 )
-                response = self.collect_topic_response(
+                response = self.collect_issue_response(
                     target_agent,
-                    q_topic,
+                    q_issue,
                     previous_responses=current_contributions,
                     artifact_snapshot=snapshot,
                 )
@@ -304,7 +483,7 @@ class MediatorDiscussion:
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
-                answer = resp.get("statement") or resp.get("content", "")
+                answer = resp.get("statement", "")
                 contrib = {
                     "agent": agent_name,
                     "response": resp,
@@ -335,7 +514,7 @@ class MediatorDiscussion:
             if not from_agent:
                 continue
             q = resp.get("reply_to_question", "")
-            ans = resp.get("statement") or resp.get("content", "")
+            ans = resp.get("statement", "")
             requester_qa.setdefault(from_agent, []).append((q, ans))
         result = []
         for requester_name, qa_list in requester_qa.items():
@@ -345,7 +524,7 @@ class MediatorDiscussion:
             desc_parts = [
                 f"你問：{q}\n對方回答：{a}" for q, a in qa_list
             ]
-            follow_topic = {
+            follow_issue = {
                 "id": "OQ-follow",
                 "title": "依回答補充或調整發言",
                 "description": (
@@ -354,9 +533,9 @@ class MediatorDiscussion:
                 ),
             }
             try:
-                response = self.collect_topic_response(
+                response = self.collect_issue_response(
                     agent,
-                    follow_topic,
+                    follow_issue,
                     previous_responses=contributions,
                     artifact_snapshot=snapshot,
                 )
@@ -422,20 +601,20 @@ class MediatorDiscussion:
                         **q_record,
                         "status": "deferred",
                         "deferred_count": int(q_record.get("deferred_count") or 0) + 1,
-                        "needs_agenda": False,
+                        "needs_issue": False,
                     },
                 )
             try:
-                q_topic = self.build_reply_topic(
+                q_issue = self.build_reply_issue(
                     question=q_record["question"],
                     from_agent=q_record["from_agent"],
                     follow_up_hint=(
                         "（請簡要針對此問題回答，若前面發言已涵蓋可寫「如前述」或只補充重點，勿整段重複相同內容。）"
                     ),
                 )
-                response = self.collect_topic_response(
+                response = self.collect_issue_response(
                     target_agent,
-                    q_topic,
+                    q_issue,
                     previous_responses=contributions,
                     artifact_snapshot=snapshot,
                 )
@@ -447,7 +626,7 @@ class MediatorDiscussion:
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
-                answer = resp.get("statement") or resp.get("content", "")
+                answer = resp.get("statement", "")
                 contrib = {
                     "agent": target_name,
                     "response": resp,
@@ -460,7 +639,7 @@ class MediatorDiscussion:
                         **q_record,
                         "status": "answered",
                         "answer": answer,
-                        "needs_agenda": False,
+                        "needs_issue": False,
                     },
                 )
             except Exception:
@@ -471,7 +650,7 @@ class MediatorDiscussion:
                         **q_record,
                         "status": "deferred",
                         "deferred_count": int(q_record.get("deferred_count") or 0) + 1,
-                        "needs_agenda": False,
+                        "needs_issue": False,
                     },
                 )
 
@@ -486,7 +665,7 @@ class MediatorDiscussion:
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    _q, contrib, oq = future.result()
+                    q, contrib, oq = future.result()
                     results_by_idx[idx] = (contrib, oq)
                 except Exception as e:
                     self.logger.warning(f"開放問題回答失敗: {e}")
@@ -496,7 +675,7 @@ class MediatorDiscussion:
                             **valid_questions[idx],
                             "status": "deferred",
                             "deferred_count": int(valid_questions[idx].get("deferred_count") or 0) + 1,
-                            "needs_agenda": False,
+                            "needs_issue": False,
                         },
                     )
 
@@ -509,15 +688,14 @@ class MediatorDiscussion:
                         **valid_questions[i],
                         "status": "deferred",
                         "deferred_count": int(valid_questions[i].get("deferred_count") or 0) + 1,
-                        "needs_agenda": False,
+                        "needs_issue": False,
                     },
                 ),
             )
-            q_text = (oq.get("question") or "").strip()
             if oq.get("status") != "answered":
-                oq["needs_agenda"] = self.should_escalate_open_question(oq)
-                if oq["needs_agenda"]:
-                    oq["status"] = "escalate_to_topic"
+                oq["needs_issue"] = self.should_escalate_open_question(oq)
+                if oq["needs_issue"]:
+                    oq["status"] = "escalate_to_issue"
             oq_records.append(oq)
             if contrib:
                 contributions.append(contrib)

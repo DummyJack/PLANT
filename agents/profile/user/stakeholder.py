@@ -1,74 +1,232 @@
-# User stakeholder helpers: derive stakeholder roles and initial requirements.
-from typing import Dict, List
-
-from agents.base import user_requirement_cards, user_stakeholder_name_reason
-
+# User stakeholder helpers: derive stakeholder voices and initial requirements.
+from typing import Dict, List, Optional
 
 class UserStakeholder:
-    def propose_stakeholders(self, rough_idea: str) -> List[str]:
+    def propose_stakeholders(self, rough_idea: str) -> List[Dict]:
+        opa = self.run_action_loop(
+            name="stakeholder_elicitation",
+            max_iterations=3,
+            loop_cap=self.agent_loop_round_cap(),
+            context={
+                "stakeholder_action": "propose_stakeholders",
+                "rough_idea": rough_idea,
+            },
+            build_observation=self.build_stakeholder_elicitation_observation,
+            decide_action=self.decide_stakeholder_elicitation_action,
+            execute_action=self.execute_stakeholder_elicitation_action,
+        )
+        trace = opa.get("opa_trace") or []
+        result = dict((trace[-1].get("result") if trace else {}) or {})
+        if result.get("error"):
+            raise RuntimeError(result.get("error"))
+        return result.get("output", [])
+
+    def generate_stakeholder_requirements(
+        self, rough_idea: str, selected_stakeholders: List
+    ) -> List[Dict]:
+        opa = self.run_action_loop(
+            name="stakeholder_elicitation",
+            max_iterations=3,
+            loop_cap=self.agent_loop_round_cap(),
+            context={
+                "stakeholder_action": "generate_stakeholder_requirements",
+                "rough_idea": rough_idea,
+                "selected_stakeholders": selected_stakeholders,
+            },
+            build_observation=self.build_stakeholder_elicitation_observation,
+            decide_action=self.decide_stakeholder_elicitation_action,
+            execute_action=self.execute_stakeholder_elicitation_action,
+        )
+        trace = opa.get("opa_trace") or []
+        result = dict((trace[-1].get("result") if trace else {}) or {})
+        if result.get("error"):
+            raise RuntimeError(result.get("error"))
+        return result.get("output", [])
+
+    def build_stakeholder_elicitation_observation(self, **kwargs) -> Dict:
+        selected = kwargs.get("selected_stakeholders") or []
+        return {
+            "action": kwargs.get("stakeholder_action", ""),
+            "iteration": kwargs.get("iteration", 0) + 1,
+            "max_iterations": kwargs.get("max_iterations", 3),
+            "has_rough_idea": bool(str(kwargs.get("rough_idea") or "").strip()),
+            "selected_stakeholder_count": len(selected),
+        }
+
+    def decide_stakeholder_elicitation_action(
+        self,
+        *,
+        observation: Dict,
+        last_result: Optional[Dict] = None,
+        **kwargs,
+    ) -> Dict:
+        if isinstance(last_result, dict) and not last_result.get("error"):
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "上一輪利害關係人需求擴展已完成，結束本次任務。",
+            }
+        action = str(observation.get("action") or "").strip()
+        return {
+            "action": action,
+            "params": {},
+            "reasoning": f"以 User agent 情境利害關係人視角執行：{action}。",
+        }
+
+    def execute_stakeholder_elicitation_action(
+        self,
+        *,
+        decision: Dict,
+        **kwargs,
+    ) -> Dict:
+        action = str(decision.get("action") or "").strip()
+        try:
+            if action == "propose_stakeholders":
+                output = self.propose_stakeholders_via_llm(kwargs.get("rough_idea", ""))
+            elif action == "generate_stakeholder_requirements":
+                output = self.generate_stakeholder_requirements_via_llm(
+                    kwargs.get("rough_idea", ""),
+                    kwargs.get("selected_stakeholders") or [],
+                )
+            else:
+                raise ValueError(f"未知 stakeholder action: {action}")
+        except Exception as e:
+            return {
+                "action": action,
+                "status": "failed",
+                "error": str(e),
+                "summary": f"stakeholder elicitation failed: {action}",
+            }
+        return {
+            "action": action,
+            "status": "success",
+            "output": output,
+            "summary": f"完成 stakeholder elicitation: {action}",
+        }
+
+    def propose_stakeholders_via_llm(self, rough_idea: str) -> List[Dict]:
         user_prompt = f"""# 任務
-根據初始想法: {rough_idea}，建議 5-8 位可能相關的利害關係人。
+根據初始想法: {rough_idea}，建議 7-9 位可能相關的利害關係人。
+
+# 利害關係人分類
+- Primary Users：每天直接操作系統、輸入資料、接收通知或完成任務的人。
+- System Owners & Management：負責派工、監督流程、營運決策、權限、資料品質、系統穩定性、安全或維護的人。
+- External Parties：外部會影響或受影響的單位，例如客戶、供應商、第三方服務、稽核、主管機關或合作單位。
 
 # 選擇優先順序
-1. 核心使用者（直接使用系統的人）
-2. 系統擁有者與管理者
-3. 外部相關單位
+1. Primary Users
+2. System Owners & Management
+3. External Parties
 
 # 約束
-- 每位利害關係人須有明確且不同的角色職責
+- 三類都必須出現。
+- Primary Users 至少 3 位。
+- System Owners & Management 至少 3 位。
+- External Parties 至少 1 位，但必須是三類中數量最少的類別。
+- 輸出順序必須先列 Primary Users，再列 System Owners & Management，最後列 External Parties。
+- 每位利害關係人須有明確且不同的使用情境與責任邊界
 - 每位利害關係人必須直接存在於初始想法描述的產品情境中；不要加入和此產品無關的泛用企業角色
-- 避免角色重疊
+- 避免使用情境重疊
 - name 只填名稱，不要用括號補充說明
+- category 只能是 Primary Users、System Owners & Management、External Parties
 - reason 選擇理由用一句話即可
-- {user_stakeholder_name_reason()}
+- 每位利害關係人需包含名稱、分類與理由。
 
 # 輸出 JSON
 {{{{
     "proposed_stakeholders": [
-        {{{{"name": "利害關係人名稱", "reason": "一句話選擇理由"}}}}
+        {{{{"name": "利害關係人名稱", "category": "Primary Users", "reason": "一句話選擇理由"}}}}
     ]
 }}}}"""
 
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_json(messages, temperature=1)
-        return response.get("proposed_stakeholders", [])
+        proposed = response.get("proposed_stakeholders", [])
+        if not isinstance(proposed, list):
+            raise ValueError("proposed_stakeholders must be a list")
 
-    def generate_stakeholder_requirements(
-        self, rough_idea: str, selected_stakeholders: List[str]
+        categories = [
+            "Primary Users",
+            "System Owners & Management",
+            "External Parties",
+        ]
+        counts = {category: 0 for category in categories}
+        current_order = 0
+        for row in proposed:
+            if not isinstance(row, dict):
+                raise ValueError("each proposed stakeholder must be an object")
+            name = str(row.get("name") or "").strip()
+            category = str(row.get("category") or "").strip()
+            reason = str(row.get("reason") or "").strip()
+            if not name or not reason:
+                raise ValueError(
+                    "each proposed stakeholder must include name and reason"
+                )
+            if category not in counts:
+                raise ValueError(f"invalid stakeholder category: {category}")
+            order = categories.index(category)
+            if order < current_order:
+                raise ValueError("stakeholders must be ordered by category priority")
+            current_order = order
+            counts[category] += 1
+
+        if len(proposed) < 7 or len(proposed) > 9:
+            raise ValueError("propose_stakeholders must return 7-9 stakeholders")
+        if counts["Primary Users"] < 3:
+            raise ValueError("Primary Users must include at least 3 stakeholders")
+        if counts["System Owners & Management"] < 3:
+            raise ValueError(
+                "System Owners & Management must include at least 3 stakeholders"
+            )
+        if counts["External Parties"] < 1:
+            raise ValueError("External Parties must include at least 1 stakeholder")
+        if counts["External Parties"] >= min(
+            counts["Primary Users"], counts["System Owners & Management"]
+        ):
+            raise ValueError("External Parties must be the smallest stakeholder category")
+        return proposed
+
+    def generate_stakeholder_requirements_via_llm(
+        self, rough_idea: str, selected_stakeholders: List
     ) -> List[Dict]:
-        stakeholder_list = ", ".join(
-            f"{i+1}. {sh}" for i, sh in enumerate(selected_stakeholders)
-        )
+        stakeholder_rows = []
+        for i, sh in enumerate(selected_stakeholders, 1):
+            if isinstance(sh, dict):
+                name = str(sh.get("name") or "").strip()
+            else:
+                name = str(sh).strip()
+            if not name:
+                continue
+            stakeholder_rows.append(f"{i}. {name}")
+        stakeholder_list = "\n".join(stakeholder_rows)
 
         user_prompt = f"""# 任務
-模擬以下利害關係人，以第一人稱、口語方式從各自的角度提出需求與期望。
+模擬以下利害關係人，以第一人稱、口語方式從各自角度提出需求。
 
 # 利害關係人
 {stakeholder_list}
 
-# 背景（僅供參考）
+# 背景
 {rough_idea}
 
-# 發言指引
-每位利害關係人請依以下面向發言：
-1. 日常使用情境 — 你平常怎麼使用這個系統
-2. 痛點與困擾 — 目前最讓你困擾的問題是什麼
-3. 期望功能 — 你最希望系統能做到什麼
-4. 擔心的事 — 你對這個系統有什麼顧慮
+# 發言面向
+1. 日常使用情境
+2. 痛點與困擾
+3. 期望功能
+4. 擔心的事
 
-# 約束
-- 每位利害關係人提出 3-5 條獨立需求（text 陣列）
-- 以該角色的日常經驗出發
-- 每條需求都必須直接扣回背景中的產品情境；不得把產品轉向其他系統或未列出的利害關係人場景
-- 不得替未被選中的角色發言，也不得新增不在「利害關係人」清單中的角色
-- {user_requirement_cards()}
+# 限制
+- 每位 stakeholder 產生 3-5 條 text
+- 只根據該 stakeholder 的日常經驗
+- 不替未選中的角色發言
+- 每條 text 都必須能回扣背景中的產品情境
 
 # 輸出 JSON
 {{{{
     "stakeholders": [
         {{{{
-            "name": "利害關係人名稱",
-            "text": ["發言1", "發言2", "發言3", ...]
+            "name": "...",
+            "text": ["...", "..."]
         }}}}
     ]
 }}}}"""

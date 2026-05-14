@@ -1,15 +1,15 @@
-# User agent: stakeholder voice, elicitation support, and topic response.
+# User agent: stakeholder voice, elicitation support, and issue response.
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
 
 from .stakeholder import UserStakeholder
-from .topics import UserTopics
+from .issues import UserIssues
 
 
 class UserAgent(
     UserStakeholder,
-    UserTopics,
+    UserIssues,
     BaseAgent,
 ):
     """利害關係人模擬 Agent — 從不同角度提出需求和期望"""
@@ -34,41 +34,55 @@ class UserAgent(
         )
         self.stakeholders: List[Dict] = []
 
-    def build_topic_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        payload = self.build_topic_response_observation_payload(**kwargs)
-        payload["stakeholder_count"] = len(self.stakeholders or [])
-        return payload
+    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
+        observation = self.issue_response_observation(**kwargs)
+        observation["stakeholder_count"] = len(self.stakeholders or [])
+        return observation
 
-    def decide_topic_response_action(
+    def decide_issue_response_action(
         self,
         *,
         observation: Dict[str, Any],
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        if isinstance(last_result, dict) and not last_result.get("error"):
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "上一輪利害關係人回應已完成，結束本次回應。",
+            }
         return {
             "action": "respond_as_stakeholder",
             "params": {},
             "reasoning": "以利害關係人視角回應議題。",
         }
 
-    def execute_topic_response_action(
+    def execute_issue_response_action(
         self,
         *,
         decision: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        topic = kwargs["topic"]
-        user_prompt = self.build_topic_response_prompt(
-            topic=topic,
+        issue = kwargs["issue"]
+        user_prompt = self.build_issue_response_prompt(
+            issue=issue,
             previous_responses=kwargs.get("previous_responses"),
             artifact_snapshot=kwargs.get("artifact_snapshot"),
         )
         messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages, temperature=1)
+        response = self.chat_for_issue_response(messages, temperature=1)
 
         statement = response.get("statement", "")
         open_questions = response.get("open_questions", [])
+        if response.get("error") or not str(statement or "").strip():
+            return {
+                "action": decision.get("action", ""),
+                "status": "failed",
+                "error": response.get("error") or "missing_statement",
+                "format_error": response.get("format_error") or "issue response must include statement",
+                "summary": "user issue_response 格式不合格",
+            }
 
         speaking_as = []
         need_speaking_as = len(self.stakeholders) > 1
@@ -84,8 +98,17 @@ class UserAgent(
                 raw = [raw]
             valid_names = {sh.get("name", "") for sh in self.stakeholders}
             speaking_as = [n for n in (raw or []) if n and n in valid_names]
-            if not speaking_as and self.stakeholders:
-                speaking_as = [self.stakeholders[0].get("name", "")]
+            if not speaking_as:
+                return {
+                    "action": decision.get("action", ""),
+                    "status": "failed",
+                    "error": "missing_valid_speaking_as",
+                    "format_error": (
+                        "multi-stakeholder user issue_response must include "
+                        "speaking_as with at least one valid stakeholder name"
+                    ),
+                    "summary": "user issue_response 缺少合法 speaking_as",
+                }
         elif len(speaking_as_list) == 1:
             speaking_as = [speaking_as_list[0].get("name", "")]
 
@@ -95,5 +118,5 @@ class UserAgent(
             "statement": statement,
             "open_questions": open_questions,
             "speaking_as": speaking_as,
-            "summary": "完成 user topic_response",
+            "summary": "完成 user issue_response",
         }

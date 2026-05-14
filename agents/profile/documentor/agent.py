@@ -12,14 +12,15 @@ class DocumentorAgent(
 ):
     name = "documentor"
 
-    system_prompt = """你是 SRS 撰寫專家，負責把 formal-ready 需求資料編寫成正式、可交付的軟體需求規格書。
+    system_prompt = """你是 SRS 撰寫專家，負責把 Final meeting 後的需求資料編寫成正式、可交付的軟體需求規格書。
 
 規則：
 1. requirement_change_candidates、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
-2. 你只根據 formal-only context 編寫，不自行補決策，不把討論過程寫入正式文件。
-3. 生成流程分兩階段：先依 annotated template 產出完整 SRS 草稿，再依 clean bare template 輸出正式稿。
-4. 最終正式稿不得保留 template 的說明文字、提示語、註解、emoji、placeholder 指示或其他 authoring residue。
-5. 文件語氣必須像基線規格文件，不得寫成會議摘要、工作紀錄、討論整理或建議書。"""
+2. 你只根據 Final meeting 後的正式 context 編寫，不自行補決策，不把討論過程寫入正式文件。
+3. SRS skill 是 IEEE 830 寫作指引；其中 FR/NFR ID、RTM、stakeholder sign-off 是範例或可選項，不得覆蓋本專案資料契約。
+4. 本專案需求 ID 必須保留 Context.requirements 內既有 REQ-*，不得改名成 FR-* 或 NFR-*。
+5. 最終正式稿不得保留 template 的說明文字、提示語、註解、emoji、placeholder 指示或其他 authoring residue。
+6. 文件語氣必須像基線規格文件，不得寫成會議摘要、工作紀錄、討論整理或建議書。"""
 
     def __init__(
         self,
@@ -41,8 +42,8 @@ class DocumentorAgent(
     def generate_srs(self, artifact: Optional[Dict[str, Any]] = None) -> str:
         opa = self.run_action_loop(
             name="document_output",
-            max_iterations=1,
-            loop_cap=1,
+            max_iterations=3,
+            loop_cap=self.agent_loop_round_cap(),
             context={"artifact": artifact or {}},
             build_observation=self.build_document_output_observation,
             decide_action=self.decide_document_output_action,
@@ -72,10 +73,16 @@ class DocumentorAgent(
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        if isinstance(last_result, dict) and not last_result.get("error"):
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "上一輪已完成 SRS 生成，結束本次輸出。",
+            }
         return {
             "action": "generate_srs",
             "params": {},
-            "reasoning": "formal-ready requirement 已齊備，生成正式 SRS。",
+            "reasoning": "Final meeting 已完成，生成正式 SRS。",
         }
 
     def execute_document_output_action(
@@ -84,7 +91,7 @@ class DocumentorAgent(
         decision: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        srs = self.generate_srs_impl(kwargs.get("artifact"))
+        srs = self.generate_srs_internal(kwargs.get("artifact"))
         return {
             "action": decision.get("action", ""),
             "status": "success",

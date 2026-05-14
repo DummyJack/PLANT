@@ -1,16 +1,16 @@
 # Mediator profile export.
 from .agent import MediatorAgent
 from .validation import (
-    AGENDA_ACTIONS,
-    AGENDA_CATEGORY_LABEL,
-    AGENDA_TYPE_IDS,
-    AGENDA_TYPES,
+    MEETING_ACTIONS,
+    ISSUE_CATEGORY_LABEL,
+    ISSUE_TYPE_IDS,
+    ISSUE_TYPES,
 )
 
 __all__ = [
-    "AGENDA_ACTIONS",
-    "AGENDA_CATEGORY_LABEL",
-    "AGENDA_TYPE_IDS",
-    "AGENDA_TYPES",
+    "MEETING_ACTIONS",
+    "ISSUE_CATEGORY_LABEL",
+    "ISSUE_TYPE_IDS",
+    "ISSUE_TYPES",
     "MediatorAgent",
 ]

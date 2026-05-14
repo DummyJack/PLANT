@@ -1,18 +1,21 @@
-# Modeler agent: UML model generation, model updates, and topic response.
+# Modeler agent: UML model generation, model updates, and issue response.
 import json
 from typing import Any, Dict, List, Optional
 
-from agents.base import BaseAgent, modeler_review_field_language, short_reasoning_line
+from agents.base import BaseAgent
+from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .modeling import ModelerModeling
-from .topics import ModelerTopics
+from .prompts import MODEL_SELECTION_RULES
+from .issues import ModelerIssues
+from .validation import ALLOWED_DIAGRAM_TYPES, diagram_types, impact_assessment_payload
 
 
 MODELER_ROLE_PROMPT = """你是 UML 系統建模專家，負責把需求轉成可驗證、可追溯的 UML 模型。
 
 規則：
 1. 精煉時只改受影響部分，保留未變動元素。
-2. 不直接改需求語意；發現不一致時只指出影響、缺口與待確認事項。
+2. 發現不一致時指出模型影響、缺口與待確認事項；不得直接改變已知需求語意。
 3. 資訊不足時用 to_confirm 標示，不可臆造。"""
 
 
@@ -26,30 +29,11 @@ MODELER_LOOP_ACTIONS = [
 ]
 
 
-AVAILABLE_MODEL_TYPES = [
-    "context_diagram",
-    "use_case_diagram",
-    "activity_diagram",
-    "data_flow_diagram",
-    "sequence_diagram",
-    "state_machine_diagram",
-    "class_diagram",
-]
-
-ALL_MODEL_TYPES = AVAILABLE_MODEL_TYPES
-
-MODEL_SELECTION_RULES = """- 所有 diagram type 都不是必產生；只在模型能幫助需求理解、驗證或追溯時才建立或更新。
-- 不從模型反推新增需求，也不可把 open_questions / pending candidates 畫成正式模型內容。
-- 資訊不足時不要畫死，改在 gaps、to_confirm 或 assumptions 說明。
-- Context / Use Case / Activity / Data Flow 可用於呈現系統邊界、角色互動、流程或資料流。
-- Sequence Diagram 只在互動順序會影響需求理解時建立。
-- State Machine Diagram 只在需求已有明確生命週期或狀態轉換時建立。
-- Class Diagram 若建立，只能作為 tentative domain model，不可當成設計模型。"""
-
+AVAILABLE_MODEL_TYPES = sorted(ALLOWED_DIAGRAM_TYPES)
 
 class ModelerAgent(
     ModelerModeling,
-    ModelerTopics,
+    ModelerIssues,
     BaseAgent,
 ):
     """系統建模 Agent — 產生 UML 系統模型（PlantUML 格式）+ 設計 Conflict 辨識"""
@@ -72,6 +56,18 @@ class ModelerAgent(
             skill_names=["UML"],
             project_config=project_config,
         )
+
+    def skill_usage_policy(self) -> str:
+        return """UML：
+- 用於議題涉及系統邊界、actor/use case、角色互動、流程、資料流、互動順序、狀態轉換或需求到模型元素追蹤。
+- 用於模型能幫助釐清需求一致性、可行性、缺口或影響範圍時。
+- 只在議題有互動、流程、資料、狀態或模型追蹤價值時使用；沒有模型影響時不要使用。
+- 若使用，只產生需求層級模型參考；不可從模型反推新增需求或把未確認內容畫成正式模型。"""
+
+    def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
+        return """- artifact_query 用於查詢 accepted requirements、decisions、conflicts、open_questions 與既有 models。
+- plantuml_validate 用於驗證或修正 PlantUML 語法；驗證通過不代表需求內容已被正式決策。
+- 模型必須以已知需求與決策為依據；資訊不足時標示 to_confirm，不可用圖反推新增需求。"""
 
     def build_model_observation(self, **kwargs: Any) -> Dict[str, Any]:
         return self.build_model_state(
@@ -106,11 +102,11 @@ class ModelerAgent(
         )
 
     def run_model_loop(self, artifact, recent_discussions=None, *, max_iterations):
-        """Modeler 子 OODA：輪數上限 min(caller, self_review_round_cap)；第一輪可縮短。"""
-        loop_cap = self.self_review_round_cap()
+        """Modeler 子 OODA：最多三輪，由 done 判斷是否提前結束。"""
+        loop_cap = self.agent_loop_round_cap()
         return self.run_action_loop(
             name="model",
-            max_iterations=max_iterations,
+            max_iterations=3,
             loop_cap=loop_cap,
             context={
                 "artifact": artifact,
@@ -131,7 +127,7 @@ class ModelerAgent(
              "has_plantuml": bool(m.get("plantuml"))}
             for m in models
         ]
-        reqs = artifact.get("requirements", [])
+        reqs = requirement_discussion_pool(artifact)
         summary_reqs = [
             {"id": r.get("id"), "type": r.get("type"),
              "text": (r.get("text") or "")}
@@ -139,11 +135,11 @@ class ModelerAgent(
         ]
         disc_summaries = []
         for disc in (recent_discussions or []):
-            topic = disc.get("topic", {})
+            issue = disc.get("issue", {})
             resolution = disc.get("resolution", {})
             disc_summaries.append({
-                "topic_id": topic.get("id"),
-                "title": topic.get("title"),
+                "issue_id": issue.get("id"),
+                "title": issue.get("title"),
                 "summary": (resolution.get("summary") or ""),
             })
         neutrals = [
@@ -164,6 +160,7 @@ class ModelerAgent(
         ]
         return {
             "current_models": model_summary,
+            "model_revision_context": artifact.get("model_revision_context", {}) or {},
             "requirements": summary_reqs,
             "stakeholders": artifact.get("stakeholders", []),
             "scope": artifact.get("scope", {}),
@@ -203,7 +200,7 @@ class ModelerAgent(
             return obs
 
         if action == "assess_impact":
-            reqs = artifact.get("requirements", [])
+            reqs = requirement_discussion_pool(artifact)
             models = artifact.get("system_models", {}).get("models", [])
             context = {
                 "requirements": [
@@ -227,9 +224,15 @@ class ModelerAgent(
                 "domain_research": (artifact.get("feedback") or {}).get("domain_research", {}),
                 "workflow_sketch": artifact.get("workflow_sketch", {}),
                 "current_models": [
-                    {"name": m.get("name"), "type": m.get("type")}
+                    {
+                        "name": m.get("name"),
+                        "type": m.get("type"),
+                        "to_confirm": m.get("to_confirm", []),
+                        "maturity": m.get("maturity", ""),
+                    }
                     for m in models
                 ],
+                "model_revision_context": artifact.get("model_revision_context", {}) or {},
             }
             ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
             task = f"""分析需求與現有模型，完成兩件事：(1) 判斷哪些圖表需要更新或新建；(2) 產出與需求的一致性說明與缺口報告。
@@ -241,10 +244,11 @@ class ModelerAgent(
     - models_to_update：需更新的 diagram type 列表（限 context_diagram, use_case_diagram, activity_diagram, data_flow_diagram, sequence_diagram, state_machine_diagram, class_diagram）
     - models_to_create：需新建的 diagram type 列表
     {MODEL_SELECTION_RULES}
-    - conflicts 已完成辨識，只可作為背景理解；不要重新判斷 conflict label。
+    - 若 Context.current_models 已有模型，這是 revision-aware 模型迭代；只標記受 model_revision_context、requirements、decisions 或 unresolved to_confirm 影響的圖表。
+    - 未受影響的既有圖表不得列入 models_to_update。
+    - 若上一版模型的 to_confirm 已由最新 decisions 或 requirements 解決，應將相關圖表列入 models_to_update；未解決則保留為 gap 或 to_confirm。
+    - conflicts 只作為模型影響背景；模型輸出不更新 conflict label。
     - domain_research 只作為限制/風險註記，不可擴張功能。
-    {modeler_review_field_language()}
-
     輸出 JSON:
     {{
     "models_to_update": ["需更新的 diagram type"],
@@ -256,7 +260,7 @@ class ModelerAgent(
     只輸出 JSON。"""
             messages = self.build_direct_messages(task)
             try:
-                result = self.chat_json(messages)
+                result = impact_assessment_payload(self.chat_json(messages))
                 obs["result"] = result
                 to_update = result.get("models_to_update", [])
                 to_create = result.get("models_to_create", [])
@@ -293,7 +297,7 @@ class ModelerAgent(
             existing = next(
                 (m for m in models if m.get("type") == diagram_type), None
             )
-            reqs = artifact.get("requirements", [])
+            reqs = requirement_discussion_pool(artifact)
             stakeholders = artifact.get("stakeholders", [])
             try:
                 result = self.update_single_diagram(
@@ -421,7 +425,7 @@ class ModelerAgent(
         last_obs = assess_obs
 
         refreshed_report = (artifact.get("system_models") or {}).get("last_consistency_report") or {}
-        refreshed_targets = self.normalize_diagram_types(
+        refreshed_targets = self.diagram_types(
             (refreshed_report.get("models_to_update") or [])
             + (refreshed_report.get("models_to_create") or [])
         )
@@ -509,14 +513,8 @@ class ModelerAgent(
 
         return records
 
-    def normalize_diagram_types(self, items: List[Any]) -> List[str]:
-        allowed = set(ALL_MODEL_TYPES)
-        out: List[str] = []
-        for item in items or []:
-            t = str(item or "").strip()
-            if t and t in allowed and t not in out:
-                out.append(t)
-        return out
+    def diagram_types(self, items: List[Any]) -> List[str]:
+        return diagram_types(items)
 
     def decide_next_model_action(self, state, last_observation=None):
         if not state.get("current_models") and not state.get("actions_taken"):
@@ -527,10 +525,8 @@ class ModelerAgent(
             }
         state_text = json.dumps(state, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
-        sr_current = int(state.get("max_iterations") or 1)
-
         user_prompt = f"""# 任務
-    你是系統建模專家。根據當前狀態與上一步結果，選下一個動作。
+    根據當前狀態與上一步結果，選下一個動作。
 
     # 動作
     - build_full_model：尚無模型時，一次建立完整 requirement-level models，並完成驗證/修正
@@ -547,77 +543,84 @@ class ModelerAgent(
     {obs_text}
 
     # 規則
-    - 第一輪可選填 max_iterations=1-{sr_current}；不填就沿用 {sr_current}
     - 先 assess_impact，再決定是否更新模型
     {MODEL_SELECTION_RULES}
-    - 需要 artifact 細節時先用 artifact_query
+    - 需要補專案事實或驗證模型語法時，遵守本輪 Tool Context
     - 每個需更新的圖表都走：update_diagram → validate_diagram →（若失敗）fix_diagram → validate_diagram
     - 所有受影響圖表處理完後選 done
-    - {short_reasoning_line()}
+    - reasoning 請使用一句繁體中文簡述。
 
     # 輸出 JSON
     {{
       "action": "動作名稱",
       "params": {{}},
-      "reasoning": "一句說明",
-      "max_iterations": "選填；僅第一輪有效，數字 1-{sr_current}"
+      "reasoning": "一句說明"
     }}"""
 
         messages = self.build_direct_messages(user_prompt)
         try:
             if "artifact_query" in self.tools:
-                raw = self.chat_with_tools(messages, max_rounds=self.tool_call_max_rounds)
-                response = self.parse_topic_response_json(raw)
+                raw = self.chat_with_tools(messages)
+                response = self.parse_issue_response_json(raw)
             else:
                 response = self.chat_json(messages)
         except Exception as e:
-            self.logger.warning(f"Modeler model loop 決策失敗: {e}")
-            return {"action": "done", "params": {}, "reasoning": f"fallback: {e}"}
+            raise RuntimeError(f"Modeler model loop 決策輸出格式不合格: {e}") from e
 
         action = (response.get("action") or "").strip()
         if action not in MODELER_LOOP_ACTIONS:
-            action = "done"
+            raise ValueError(f"Modeler model loop action 不合法: {action or '<empty>'}")
         out = {
             "action": action,
             "params": response.get("params") or {},
             "reasoning": response.get("reasoning", ""),
         }
-        if "max_iterations" in response:
-            out["max_iterations"] = response["max_iterations"]
         return out
 
-    def build_topic_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.build_topic_response_observation_payload(**kwargs)
+    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.issue_response_observation(**kwargs)
 
-    def decide_topic_response_action(
+    def decide_issue_response_action(
         self,
         *,
         observation: Dict[str, Any],
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self.decide_default_topic_response_action(
+        return self.issue_response_decision(
             observation,
-            reasoning="根據議題類型選擇對應的建模回應策略。",
+            done_reasoning="上一輪建模回應已符合格式契約，結束本次回應。",
+            active_reasoning="根據議題類型選擇對應的建模回應策略。",
+            last_result=last_result,
         )
 
-    def execute_topic_response_action(
+    def execute_issue_response_action(
         self,
         *,
         decision: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        user_prompt = self.build_topic_response_prompt(
-            topic=kwargs["topic"],
+        user_prompt = self.build_issue_response_prompt(
+            issue=kwargs["issue"],
             previous_responses=kwargs.get("previous_responses"),
             artifact_snapshot=kwargs.get("artifact_snapshot"),
         )
         messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
+        response = self.chat_for_issue_response(messages)
+        if response.get("error") or not str(response.get("statement") or "").strip():
+            return {
+                "action": decision.get("action", ""),
+                "status": "failed",
+                "error": response.get("error") or "missing_statement",
+                "format_error": response.get("format_error") or "issue response must include statement",
+                "summary": f"modeler issue_response 格式不合格: {decision.get('action', '')}",
+            }
         return {
             "action": decision.get("action", ""),
             "status": "success",
             "statement": response.get("statement", ""),
+            "pair_reviews": response.get("pair_reviews", []),
             "open_questions": response.get("open_questions", []),
-            "summary": f"完成 modeler topic_response: {decision.get('action', '')}",
+            "target_stakeholders": response.get("target_stakeholders", []),
+            "summary": f"完成 modeler issue_response: {decision.get('action', '')}",
         }

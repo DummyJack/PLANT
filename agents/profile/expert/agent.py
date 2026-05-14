@@ -1,17 +1,17 @@
-# Expert agent: domain research, constraints, compliance risks, and topic response.
+# Expert agent: domain research, constraints, compliance risks, and issue response.
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from agents.base import BaseAgent, expert_fallback_viewpoint
+from agents.base import BaseAgent
 
 from .domain_research import ExpertDomainResearch
 from .read_file import ExpertParsing, ExpertReadFile
-from .topics import ExpertTopics
+from .issues import ExpertIssues
 
 
 class ExpertAgent(
     ExpertDomainResearch,
-    ExpertTopics,
+    ExpertIssues,
     ExpertReadFile,
     ExpertParsing,
     BaseAgent,
@@ -23,9 +23,11 @@ class ExpertAgent(
     system_prompt = """你是領域專家，負責把外部法規、標準與安全約束轉成可用的限制與風險資訊。
 
 規則：
-1. 你提供的是證據、限制、風險與適用範圍，不負責決定產品 scope、優先級或最終需求 wording。
+1. 你提供證據、限制、風險與適用範圍；涉及 scope、優先級或需求 wording 時，只整理影響與依據，不直接定案。
 2. 強制義務、最佳實務與建議必須分開表達；證據不足時要明講。
-3. 只有在合規風險、證據缺口或標準衝突明確時，才主張升級討論。"""
+3. 只有在合規風險、證據缺口或標準衝突明確時，才主張升級討論。
+4. 涉及資料流、狀態或互動流程時，只指出限制、風險或待確認事項。
+5. 不把外部最佳實務或一般建議直接升格成正式需求，只能作為候選依據、風險或 open question。"""
 
     def __init__(
         self,
@@ -64,7 +66,7 @@ class ExpertAgent(
     ) -> Dict[str, Any]:
         if kwargs.get("force_update_after_research"):
             last = last_result or {}
-            if last.get("action") == "research_topic" and kwargs.get("research_results"):
+            if last.get("action") == "research_issue" and kwargs.get("research_results"):
                 return {
                     "action": "update_findings",
                     "params": {},
@@ -86,54 +88,65 @@ class ExpertAgent(
             kwargs.get("research_results", []),
         )
 
-    def build_topic_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.build_topic_response_observation_payload(**kwargs)
+    def skill_usage_policy(self) -> str:
+        return """domain-research：
+- 用於議題涉及外部法規、標準、安全、合規、領域最佳實務、domain risk 或 evidence gap。
+- 只有當外部資料會影響 requirement、constraint、risk 或 acceptance boundary 判斷時才使用。
+- 用於確認某項外部 obligation 是否真有約束力，或區分強制義務、最佳實務、風險提醒與待查證缺口。
+- 不用於一般功能需求討論、scope/priority/UX preference、純需求語意衝突，或 artifact 已有足夠 domain research 的情況。"""
 
-    def decide_topic_response_action(
+    def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
+        return """- artifact_query 用於先確認專案內部 requirements、conflicts、decisions、open_questions 與既有 domain research。
+- file_parser 用於查 doc/ 內專案參考文件；需要文件證據時先搜尋再讀相關片段。
+- web_search 只用於補外部法規、標準、官方文件、最佳實務或外部風險依據；不得覆蓋 artifact 內已知事實。
+- 區分強制義務、最佳實務、風險提醒與 evidence gap；外部研究結果預設只是候選依據。"""
+
+    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.issue_response_observation(**kwargs)
+
+    def decide_issue_response_action(
         self,
         *,
         observation: Dict[str, Any],
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self.decide_default_topic_response_action(
+        return self.issue_response_decision(
             observation,
-            reasoning="根據議題類型選擇對應的單輪專家回應策略。",
+            done_reasoning="上一輪領域專家回應已符合格式契約，結束本次回應。",
+            active_reasoning="根據議題類型選擇對應的單輪專家回應策略。",
+            last_result=last_result,
         )
 
-    def execute_topic_response_action(
+    def execute_issue_response_action(
         self,
         *,
         decision: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        topic = kwargs["topic"]
-        user_prompt = self.build_topic_response_prompt(
-            topic=topic,
+        issue = kwargs["issue"]
+        user_prompt = self.build_issue_response_prompt(
+            issue=issue,
             previous_responses=kwargs.get("previous_responses"),
             artifact_snapshot=kwargs.get("artifact_snapshot"),
         )
         messages = self.build_direct_messages(user_prompt)
-        response = self.chat_for_topic_response(messages)
+        response = self.chat_for_issue_response(messages)
         statement = (response.get("statement") or "").strip()
-        if not statement:
-            fallback_prompt = (
-                f"議題 [{topic.get('id', '')}]: {topic.get('title', '')}\n"
-                f"描述: {topic.get('description', '')}\n\n{expert_fallback_viewpoint()}"
-            )
-            fallback_messages = self.build_direct_messages(fallback_prompt)
-            try:
-                raw_fallback = self.model.chat(fallback_messages)
-                statement = (raw_fallback or "").strip()
-            except Exception as e:
-                self.logger.warning("expert 簡短重試失敗: %s", e)
-                statement = "（依目前資訊暫無法提供具體法規依據，建議會後再查證後補充分享。）"
-        if statement in {"{}", "[]", "```json\n{}\n```", "```json\n[]\n```", "```\n{}\n```", "```\n[]\n```"}:
-            statement = "（依目前資訊尚無足夠依據提出具體專業判斷，建議補充更多情境或約束後再審。）"
+        if response.get("error") or not statement:
+            return {
+                "action": decision.get("action", ""),
+                "status": "failed",
+                "error": response.get("error") or "missing_statement",
+                "format_error": response.get("format_error") or "issue response must include statement",
+                "summary": f"expert issue_response 格式不合格: {decision.get('action', '')}",
+            }
         return {
             "action": decision.get("action", ""),
             "status": "success",
             "statement": statement,
+            "pair_reviews": response.get("pair_reviews", []),
             "open_questions": response.get("open_questions", []),
-            "summary": f"完成 expert topic_response: {decision.get('action', '')}",
+            "target_stakeholders": response.get("target_stakeholders", []),
+            "summary": f"完成 expert issue_response: {decision.get('action', '')}",
         }
