@@ -1,9 +1,5 @@
-# Config helpers for model summaries, iteration limits, and human settings.
+# Config helpers for model summaries and human settings.
 from typing import Any, Dict
-
-MAX_ITERATIONS: int = 1
-TOOL_CALL_MAX_ROUNDS: int = 1
-MAX_WEB_SEARCH_RESULTS: int = 5
 
 
 def format_loaded_models_summary(config: dict) -> str:
@@ -23,22 +19,23 @@ def format_loaded_models_summary(config: dict) -> str:
     return "✓ 載入配置 — " + "；".join(parts)
 
 
-def read_max_iterations(
-    config: Dict[str, Any],
-    *,
-    default: int = 3,
-) -> int:
-    """回傳固定的 MAX_ITERATIONS；保留簽名以相容既有呼叫點。"""
-    _ = config, default
-    return MAX_ITERATIONS
-
-
 def human_setting(config: Dict[str, Any], key: str, default: Any) -> Any:
     """與人類互動／核准／挖掘流程相關設定。
 
-    優先讀 config["human"][key]；若無則讀頂層同名鍵（舊版或實驗腳本直接寫入 flow.config 時相容）；再否則 default。
+    優先讀 config["human"][key]；若無則讀頂層同名鍵；再否則 default。
     """
     block = config.get("human")
     if isinstance(block, dict) and key in block:
         return block[key]
     return config.get(key, default)
+
+
+def meeting_setting(config: Dict[str, Any], key: str, default: Any) -> Any:
+    """讀取會議開關設定。
+
+    優先讀 config["enable_meeting"][key]；若無則 default。
+    """
+    block = config.get("enable_meeting")
+    if isinstance(block, dict) and key in block:
+        return block[key]
+    return default

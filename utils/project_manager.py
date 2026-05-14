@@ -35,7 +35,7 @@ class ProjectManager:
                 try:
                     dt = datetime.fromisoformat(created_at)
                     created_at = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except:
+                except ValueError:
                     pass
             print(f"{i}. 專案 ID: {project['project_id']}")
             print(f"   創建時間: {created_at}")

@@ -2,12 +2,9 @@
 from storage import json_dump_no_scientific, json_dumps_no_scientific
 
 from .config import (
-    MAX_ITERATIONS,
-    MAX_WEB_SEARCH_RESULTS,
-    TOOL_CALL_MAX_ROUNDS,
     format_loaded_models_summary,
     human_setting,
-    read_max_iterations,
+    meeting_setting,
 )
 from .cost import CostTracker, model_has_token_pricing
 from .human_collect import Collect
@@ -16,9 +13,6 @@ from .log import Logger
 from .project_manager import ProjectManager, ProjectSession
 
 __all__ = [
-    "MAX_ITERATIONS",
-    "MAX_WEB_SEARCH_RESULTS",
-    "TOOL_CALL_MAX_ROUNDS",
     "Collect",
     "CostTracker",
     "Logger",
@@ -31,6 +25,6 @@ __all__ = [
     "json_dump_no_scientific",
     "json_dumps_no_scientific",
     "model_has_token_pricing",
-    "read_max_iterations",
+    "meeting_setting",
     "sync_output_language",
 ]

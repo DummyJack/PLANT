@@ -43,14 +43,6 @@ class CostTracker:
         with self.lock:
             self.startedAt = perf_counter()
 
-    def stop(self) -> float:
-        with self.lock:
-            if self.startedAt is None:
-                return self.elapsed_seconds
-            self.elapsed_seconds += perf_counter() - self.startedAt
-            self.startedAt = None
-            return self.elapsed_seconds
-
     def end_segment(self) -> float:
         """結束本段計時並回傳秒數。"""
         with self.lock:
