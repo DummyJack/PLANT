@@ -1,8 +1,7 @@
-# Support helpers for hidden requirement elicitation meetings.
-import json
+# Support helpers for requirement elicitation meetings.
 from typing import Any, Dict, List, Optional
 
-from agents.profile.analyst.requirements import normalize_requirement_candidate
+from agents.profile.analyst.requirements import requirement_candidate, requirement_discussion_pool
 
 ELICITATION_PHASES = [
     "initial_requirement",
@@ -70,8 +69,8 @@ def collect_user_response_summary(contributions: List[Dict[str, Any]]) -> str:
 def build_phase_guidance(phase: str) -> str:
     if phase == "initial_requirement":
         return (
-            "本階段是需求訪談開場：先依訪談階段了解背景或痛點脈絡，"
-            "不要直接跳到功能清單。"
+            "本階段是需求訪談開場：先找出最能形成候選需求的核心缺口，"
+            "不要停留在泛泛的背景、動機或痛點追問。"
         )
     if phase == "conclusion":
         return (
@@ -79,17 +78,17 @@ def build_phase_guidance(phase: str) -> str:
             "否則只能問一個會阻礙收斂的待補問題。"
         )
     return (
-        "本階段是深入需求訪談與即時更新：參與 agent 應依自身角色檢查目前需求理解中仍缺少的背景、痛點、流程、需求、限制或確認問題，"
-        "並向指定利害關係人提出可直接支援 requirement 更新的問題。"
+        "本階段是深入需求訪談與即時更新：參與 agent 應依自身角色檢查目前需求理解中仍缺少的目標、內容、流程、限制、例外或可接受標準，"
+        "並向指定利害關係人提出可直接支援 requirement candidate 更新的問題。"
     )
 
 def build_recent_ask_history(
-    elicitation_log: List[Dict[str, Any]],
+    elicitation_trace: List[Dict[str, Any]],
     *,
     max_items: int = 3,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for log in reversed(elicitation_log or []):
+    for log in reversed(elicitation_trace or []):
         if not isinstance(log, dict):
             continue
         turn = int(log.get("turn", 0) or 0)
@@ -133,7 +132,7 @@ def build_recent_ask_history(
     rows.reverse()
     return rows
 
-def initialize_elicitation_meeting_state(
+def initialize_requirement_elicitation_session(
     artifact: Dict[str, Any],
     *,
     round_num: int,
@@ -142,7 +141,7 @@ def initialize_elicitation_meeting_state(
 ) -> Dict[str, Any]:
     state = {
         "round": round_num,
-        "standard": "practical_requirements_elicitation_meeting",
+        "standard": "practical_requirement_elicitation_meeting",
         "goal": (
             "Align the current requirement understanding, validate gaps with the user, "
             "and turn validated answers into concrete requirement updates."
@@ -151,7 +150,7 @@ def initialize_elicitation_meeting_state(
         "phases": [
             {
                 "id": "initial_requirement",
-                "purpose": "Align product goal, scope, current requirement understanding, and the most important unknowns.",
+                "purpose": "Align product goal, scope, current requirement understanding, and the most important gaps.",
             },
             {
                 "id": "requirement_discussion",
@@ -167,7 +166,6 @@ def initialize_elicitation_meeting_state(
         "turns": [],
         "conclusion": {},
     }
-    artifact.setdefault("elicitation_meeting", []).append(state)
     return state
 
 def find_finish_proposal(
@@ -196,7 +194,7 @@ def extract_first_question(text: str) -> str:
             return p
     return parts[0] if parts else ""
 
-def normalize_elicitation_candidates(
+def elicited_requirement_candidates(
     candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     seen_texts: set = set()
@@ -208,31 +206,16 @@ def normalize_elicitation_candidates(
         if not text or text in seen_texts:
             continue
         seen_texts.add(text)
-        if str(cand.get("type") or "").strip() == "NFR":
-            ac = str(cand.get("acceptance_criteria") or "").strip()
-            if ac and not any(ch.isdigit() for ch in ac):
-                cand["acceptance_criteria"] = ac + "（待補可量測指標）"
-            if not cand.get("metric"):
-                cand["metric"] = ""
-            if not cand.get("target"):
-                cand["target"] = ""
-        cand.update(
-            normalize_requirement_candidate(
-                cand,
-                candidate_source=str(cand.get("candidate_source") or "elicitation"),
-            )
-        )
+        cand.update(requirement_candidate(cand))
         deduped.append(cand)
     return deduped
 
-def normalize_turn_participants(values: List[str], fallback: List[str]) -> List[str]:
+def turn_participants(values: List[str]) -> List[str]:
     participants: List[str] = []
-    for value in values or fallback or []:
+    for value in values or []:
         name = str(value or "").strip()
         if name and name not in participants:
             participants.append(name)
-    if "user" not in participants:
-        participants.append("user")
     return participants
 
 def question_contributions_for_user(contributions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -246,7 +229,7 @@ def question_contributions_for_user(contributions: List[Dict[str, Any]]) -> List
             questions.append(c)
     return questions
 
-def _append_unique(target: List[str], value: str) -> None:
+def append_unique(target: List[str], value: str) -> None:
     item = str(value or "").strip()
     if item and item not in target:
         target.append(item)
@@ -267,6 +250,8 @@ def derive_turn_memory(interviewer_question: str, user_response: str) -> Dict[st
     user_not_care = user_has_any(
         "i don't really care",
         "i don’t really care",
+        "doesn't matter",
+        "does not matter",
         "not a priority",
         "not required",
         "that's fine",
@@ -274,57 +259,101 @@ def derive_turn_memory(interviewer_question: str, user_response: str) -> Dict[st
         "already listed",
         "covered",
         "no need",
+        "not needed",
+        "not necessary",
+        "not important",
+        "not relevant",
+        "skip",
+        "ignore",
         "不用",
         "不在意",
+        "不重要",
+        "不需要",
+        "沒必要",
         "沒關係",
         "已經",
+        "已涵蓋",
+        "跳過",
     )
 
-    if has_any("metric", "data point", "financial", "ratio", "p/e", "revenue", "earnings", "debt"):
-        if user_has_any("overview", "price", "chart", "revenue", "earnings", "p/e", "debt", "volatility", "risk"):
-            _append_unique(confirmed, "basic report content and key metrics")
-        if user_not_care or user_has_any("don't add", "don’t add", "no additional", "nothing else", "already listed"):
-            _append_unique(closed, "additional report metrics")
-            _append_unique(do_not_repeat, "do not ask again whether more metrics/data points are needed")
+    confirmed_signal = user_has_any(
+        "yes",
+        "correct",
+        "that's right",
+        "that’s right",
+        "exactly",
+        "must",
+        "need",
+        "want",
+        "should",
+        "require",
+        "expect",
+        "可以",
+        "正確",
+        "沒錯",
+        "需要",
+        "希望",
+        "必須",
+        "要能",
+        "應該",
+    )
 
-    if has_any("side-by-side", "compare", "comparison"):
-        _append_unique(confirmed, "side-by-side report comparison")
-
-    if has_any("timestamp", "data as of", "source", "provider"):
-        if has_any("timestamp", "data as of") or user_has_any("data as of", "timestamp"):
-            _append_unique(confirmed, "data timestamp and source attribution")
-        if has_any("provider", "api", "data source") and user_not_care:
-            _append_unique(closed, "specific data provider/API preference")
-            _append_unique(do_not_repeat, "do not ask for specific data provider/API preference")
-
-    if has_any("real-time", "realtime", "delayed", "end-of-day", "update frequency"):
-        if user_has_any("delayed", "end-of-day", "not real-time", "not realtime"):
-            _append_unique(confirmed, "delayed or end-of-day data is acceptable")
-            _append_unique(closed, "real-time data requirement")
-            _append_unique(do_not_repeat, "do not re-ask real-time versus delayed data unless a contradiction appears")
-
-    if has_any("geographic", "country", "region", "global", "localization", "language", "exchange", "us stocks"):
-        if user_has_any("us stocks", "us markets", "english-only", "global", "not care", "don’t really care", "don't really care"):
-            _append_unique(confirmed, "initial stock coverage and localization preference")
+    if has_any("goal", "objective", "purpose", "why", "motivation", "目標", "目的", "動機", "原因"):
+        if confirmed_signal:
+            append_unique(confirmed, "user goal or requirement intent")
         if user_not_care:
-            _append_unique(closed, "geography/localization details")
-            _append_unique(do_not_repeat, "do not re-ask geography, localization, or country-specific features")
+            append_unique(closed, "general motivation discussion")
+            append_unique(do_not_repeat, "do not re-ask general motivation unless it changes scope or priority")
 
-    if has_any("tabs", "panels", "layout", "ui pattern", "exact ui", "exact layout"):
+    if has_any("content", "information", "field", "data", "output", "result", "report", "內容", "資訊", "欄位", "資料", "輸出", "結果"):
+        if confirmed_signal:
+            append_unique(confirmed, "required content, data, or output expectation")
         if user_not_care:
-            _append_unique(closed, "exact UI layout pattern")
-            _append_unique(do_not_repeat, "do not ask tabs/panels/exact UI pattern again")
+            append_unique(closed, "additional content or data details")
+            append_unique(do_not_repeat, "do not re-ask optional content or data details unless a requirement depends on them")
 
-    if has_any("workflow", "step", "search", "generate", "view", "previous", "session", "save", "history"):
-        if user_has_any("search", "generate", "view", "current session", "regenerate", "run another search"):
-            _append_unique(confirmed, "search-generate-view workflow")
-        if user_not_care and has_any("session", "save", "history", "previously generated"):
-            _append_unique(closed, "saved report history across sessions")
-            _append_unique(do_not_repeat, "do not re-ask saved report history unless persistence becomes a requirement")
+    if has_any("workflow", "flow", "step", "process", "task", "scenario", "interaction", "流程", "步驟", "情境", "操作", "互動", "任務"):
+        if confirmed_signal:
+            append_unique(confirmed, "main workflow or interaction expectation")
+        if user_not_care:
+            append_unique(closed, "workflow detail discussion")
+            append_unique(do_not_repeat, "do not re-ask workflow details already rejected or covered")
+
+    if has_any("exception", "error", "fallback", "manual", "edge case", "例外", "錯誤", "失敗", "人工", "特殊情況"):
+        if confirmed_signal:
+            append_unique(confirmed, "exception handling or fallback expectation")
+        if user_not_care:
+            append_unique(closed, "exception or fallback detail")
+            append_unique(do_not_repeat, "do not re-ask exception handling unless it blocks a requirement")
+
+    if has_any("constraint", "limit", "policy", "rule", "risk", "compliance", "quality", "限制", "規則", "風險", "合規", "品質", "條件"):
+        if confirmed_signal:
+            append_unique(confirmed, "constraint, risk, or quality boundary")
+        if user_not_care:
+            append_unique(closed, "constraint or risk detail")
+            append_unique(do_not_repeat, "do not re-ask constraints or risks the user has dismissed")
+
+    if has_any("priority", "must-have", "nice-to-have", "important", "重要", "優先", "必要", "可延後"):
+        if confirmed_signal:
+            append_unique(confirmed, "priority or must-have boundary")
+        if user_not_care:
+            append_unique(closed, "priority detail")
+            append_unique(do_not_repeat, "do not re-ask priority for already covered items")
+
+    if has_any("acceptance", "criteria", "success", "measure", "metric", "standard", "驗收", "標準", "成功", "量測", "指標"):
+        if confirmed_signal:
+            append_unique(confirmed, "acceptance criteria or success standard")
+        if user_not_care:
+            append_unique(closed, "acceptance detail")
+            append_unique(do_not_repeat, "do not re-ask acceptance details unless needed to make a requirement testable")
+
+    if user_not_care and not closed:
+        append_unique(closed, "rejected or low-priority discussion direction")
+        append_unique(do_not_repeat, "do not repeat the rejected discussion direction")
 
     return {
-        "confirmed_topics": confirmed,
-        "closed_topics": closed,
+        "confirmed_issues": confirmed,
+        "closed_issues": closed,
         "do_not_repeat": do_not_repeat,
     }
 
@@ -332,11 +361,9 @@ def get_contribution_statement(contribution: Dict[str, Any]) -> str:
     if not isinstance(contribution, dict):
         return ""
     resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
-    return str(resp.get("statement") or resp.get("content") or "").strip()
+    return str(resp.get("statement") or "").strip()
 
 def select_judged_action(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
-    fallback_agent = ""
-    fallback_statement = ""
     for c in contributions or []:
         if not isinstance(c, dict):
             continue
@@ -346,28 +373,25 @@ def select_judged_action(contributions: List[Dict[str, Any]]) -> tuple[str, str]
         statement = get_contribution_statement(c)
         if not statement:
             continue
-        if not fallback_statement:
-            fallback_agent = agent
-            fallback_statement = statement
         if "?" in statement or "？" in statement:
             return agent, statement
-    return fallback_agent, fallback_statement
+    return "", ""
 
 def merge_elicitation_memory(
     previous: Optional[Dict[str, Any]],
     current: Dict[str, List[str]],
 ) -> Dict[str, List[str]]:
     merged = {
-        "confirmed_topics": [],
-        "closed_topics": [],
+        "confirmed_issues": [],
+        "closed_issues": [],
         "do_not_repeat": [],
     }
     source = previous or {}
     for key in merged:
         for value in (source.get(key) or []):
-            _append_unique(merged[key], str(value))
+            append_unique(merged[key], str(value))
         for value in (current.get(key) or []):
-            _append_unique(merged[key], str(value))
+            append_unique(merged[key], str(value))
     return merged
 
 def collect_elicitation_closure_votes(
@@ -388,7 +412,7 @@ def collect_elicitation_closure_votes(
     }
     requirements = [
         {"id": r.get("id"), "text": str(r.get("text") or "").strip()}
-        for r in artifact.get("requirements", []) or []
+        for r in requirement_discussion_pool(artifact)
         if isinstance(r, dict) and str(r.get("text") or "").strip()
     ]
     votes: List[Dict[str, Any]] = []
@@ -404,35 +428,15 @@ def collect_elicitation_closure_votes(
                 }
             )
             continue
-        prompt = f"""你正在參與需求擷取會議的收束投票。本輪 {proposer_role} 已提議結束需求擷取，但必須由 Analyst / Expert / Modeler 三方投票決定是否真的收束。
-
-# 你的角色
-{role}
-
-# 你的判斷重點
-{role_focus.get(role, "需求理解是否足夠清楚")}
-
-# 原始產品概念
-{str(artifact.get("rough_idea") or "").strip()}
-
-# 目前正式需求
-{json.dumps(requirements, ensure_ascii=False, indent=2)}
-
-# 本次需求擷取已整理出的候選需求
-{json.dumps(candidate_texts, ensure_ascii=False, indent=2)}
-
-# 最近幾輪正式提問與 user 回答
-{json.dumps(recent_ask_history or [], ensure_ascii=False, indent=2)}
-
-# 投票規則
-- 如果依你的角色判斷，目前資訊已足夠讓 Analyst 整理下一版 requirement set，vote 填 close。
-- 如果仍有一個會明顯影響需求正確性的關鍵問題沒問，vote 填 continue。
-- 不要因為還可以問更多細節就反對收束；只有缺口會影響需求正確性或可用性時才 vote continue。
-- 若 vote continue，missing_question 必須是一個可直接問 user 的單一主問題。
-- 僅輸出 JSON，不要輸出 Markdown。
-
-# 輸出 JSON
-{{"vote":"close|continue","reason":"一句話理由","missing_question":"若 vote=continue，填一個建議追問；否則空字串"}}"""
+        prompt = coordinator.flow.mediator_agent.closure_vote_prompt(
+            role=role,
+            proposer_role=proposer_role,
+            role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
+            rough_idea=str(artifact.get("rough_idea") or "").strip(),
+            requirements=requirements,
+            candidate_texts=candidate_texts,
+            recent_ask_history=recent_ask_history or [],
+        )
         try:
             data = agent.chat_json(agent.build_direct_messages(prompt), action="elicitation_closure_vote")
         except Exception as e:
@@ -466,7 +470,7 @@ def collect_elicitation_closure_votes(
     artifact.setdefault("elicitation_closure_votes", []).append(summary)
     return summary
 
-def extract_elicitation_candidates(
+def extract_elicited_requirement_candidates(
     coordinator: Any,
     contributions: List[Dict[str, Any]],
     artifact: Dict[str, Any],
@@ -477,20 +481,18 @@ def extract_elicitation_candidates(
     mode = get_elicitation_mode(artifact)
     discussion_parts: List[str] = []
     interviewer_context_parts: List[str] = []
-    user_signal_count = 0
     for c in contributions:
         if not isinstance(c, dict):
             continue
         agent = c.get("agent", "?")
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-        statement = (resp.get("statement") or resp.get("content") or "").strip()
+        statement = (resp.get("statement") or "").strip()
         if not statement:
             continue
         if mode == "oracle":
             discussion_parts.append(f"\n【{agent}】\n{statement}\n")
             continue
         if agent == "user":
-            user_signal_count += 1
             discussion_parts.append(f"\n【user】\n{statement}\n")
         elif str(agent).strip() in {"analyst", "expert", "modeler"}:
             interviewer_context_parts.append(f"\n【{agent}_question】\n{statement}\n")
@@ -503,21 +505,27 @@ def extract_elicitation_candidates(
 
     existing_texts = {
         str(r.get("text") or "").strip().lower()
-        for r in artifact.get("requirements", [])
+        for r in requirement_discussion_pool(artifact)
         if isinstance(r, dict) and r.get("text")
     }
     existing_ids = {
         str(r.get("id") or "").strip()
-        for r in artifact.get("requirements", [])
+        for r in requirement_discussion_pool(artifact)
         if isinstance(r, dict) and r.get("id")
     }
+    valid_source_stakeholders = [
+        str(row.get("name") or "").strip()
+        for row in artifact.get("stakeholders", []) or []
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    ]
 
     try:
-        raw = coordinator.flow.analyst_agent.extract_elicitation_candidates(
+        raw = coordinator.flow.analyst_agent.extract_elicited_requirement_candidates(
             discussion_text=discussion_text,
             existing_ids=sorted(existing_ids),
             mode=mode,
             rough_idea=str(artifact.get("rough_idea") or ""),
+            valid_source_stakeholders=valid_source_stakeholders,
         )
         if not isinstance(raw, list):
             return []
@@ -530,16 +538,8 @@ def extract_elicitation_candidates(
             if not text or text.lower() in existing_texts:
                 continue
             from agents.profile.analyst import AnalystAgent
-            normalized = AnalystAgent.normalize_requirement_record(cand)
-            normalized["source"] = "elicitation"
-            normalized["elicitation_round"] = round_num
-            normalized["elicitation_turn"] = turn
-            normalized["elicitation_mode"] = mode
-            normalized["elicitation_user_signal_count"] = user_signal_count
-            normalized = normalize_requirement_candidate(
-                normalized,
-                candidate_source="elicitation",
-            )
+            normalized = AnalystAgent.requirement_record(cand)
+            normalized = requirement_candidate(normalized)
             results.append(normalized)
         return results
     except Exception as e:

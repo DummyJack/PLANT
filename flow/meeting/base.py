@@ -3,22 +3,28 @@
 
 所有實作已拆至子模組：
   - main               : 每輪主會議生命週期
-  - hidden_elicitation : 隱性需求挖掘
+  - requirement_elicitation : 需求擷取會議
   - conflict_review    : 衝突再審查 / 需求變更
-  - subflows           : agenda loop / queue 子流程
+  - subflows           : meeting loop / queue 子流程
 """
 from typing import Any, Dict, Optional
+
+from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.profile.mediator.meeting_runner import (
+    run_meeting_loop as run_mediator_meeting_loop,
+    run_round_opa_loop as run_mediator_round_opa_loop,
+)
 
 from .main import (
     apply_mediator_updates,
     collect_issue_proposals,
-    normalize_issue_proposal,
-    recent_topic_discussions,
+    issue_proposal,
+    recent_issue_discussions,
     run_meeting_round_block,
 )
+from .final import final_round_num, run_final
 from .conflict_review import conflict_review
-from .hidden_elicitation import run_hidden_requirement_elicitation_meeting_block
-from .subflows import run_agenda_loop_block
+from .requirement_elicitation import run_requirement_elicitation_meeting_block
 
 
 class MeetingCoordinator:
@@ -61,13 +67,13 @@ class MeetingCoordinator:
         return int(round_num) >= total
 
 
-    def plan_agenda_action(
+    def plan_meeting_action(
         self,
         *,
         state_summary: Dict[str, Any],
         last_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self.flow.mediator_agent.plan_agenda_action_via_opa(
+        return self.flow.mediator_agent.plan_meeting_action_via_opa(
             state_summary,
             last_observation,
         )
@@ -85,9 +91,9 @@ class MeetingCoordinator:
         artifact.setdefault("meeting_opa_trace", []).append(
             {
                 "stage": stage,
-                "topic_id": None,
-                "topic_title": None,
-                "topic_category": None,
+                "issue_id": None,
+                "issue_title": None,
+                "issue_category": None,
                 "agent": "meeting_coordinator",
                 "trace": {
                     "agent": "meeting_coordinator",
@@ -114,7 +120,7 @@ class MeetingCoordinator:
         observation = {
             "stage": stage,
             "round_num": round_num,
-            "requirements_count": len(artifact.get("requirements", []) or []),
+            "requirements_count": len(requirement_discussion_pool(artifact)),
             "conflicts_count": len(artifact.get("conflicts", []) or []),
             "open_questions_count": len(artifact.get("open_questions", []) or []),
         }
@@ -150,12 +156,12 @@ class MeetingCoordinator:
             "round_num": runner.round_num,
             "state_summary": state_summary,
             "last_action_result": last_action_result or {},
-            "topics_count": len(state_summary.get("topics") or []),
+            "issues_count": len(state_summary.get("issues") or []),
             "round_discussions_length": state_summary.get("round_discussions_length", 0),
             "has_pending_queue_items": bool(
                 ((state_summary.get("queue_status") or {}).get("has_pending_queue_items"))
             ),
-            "can_expand_decision_topics": bool(state_summary.get("can_expand_decision_topics")),
+            "can_expand_decision_issues": bool(state_summary.get("can_expand_decision_issues")),
         }
 
     def plan_round_step(
@@ -166,18 +172,18 @@ class MeetingCoordinator:
         state_summary = observation.get("state_summary") or {}
         queue_status = state_summary.get("queue_status") or {}
         if (
-            int(state_summary.get("topics_count") or 0) == 0
+            int(state_summary.get("issues_count") or 0) == 0
             and int(state_summary.get("issue_pool_count") or 0) == 0
             and not queue_status.get("has_pending_queue_items")
         ):
             return {
                 "action": "finish_round",
                 "params": {},
-                "reasoning": "本輪沒有可產生formal decision topic的 proposal，且沒有待處理 queue，直接結束本輪。",
+                "reasoning": "本輪沒有可產生formal decision issue的 proposal，且沒有待處理 queue，直接結束本輪。",
                 "opa_trace": [],
             }
         if (
-            state_summary.get("all_current_topics_saved")
+            state_summary.get("all_current_issues_saved")
             and int(state_summary.get("issue_pool_count") or 0) == 0
             and not queue_status.get("has_pending_queue_items")
         ):
@@ -188,7 +194,7 @@ class MeetingCoordinator:
                 "opa_trace": [],
             }
         last_observation = observation.get("last_action_result") or {}
-        decision = self.plan_agenda_action(
+        decision = self.plan_meeting_action(
             state_summary=state_summary,
             last_observation=last_observation,
         )
@@ -214,10 +220,10 @@ class MeetingCoordinator:
                 "iteration": 1,
                 "observation": {
                     "round_num": observation.get("round_num"),
-                    "topics_count": observation.get("topics_count"),
+                    "issues_count": observation.get("issues_count"),
                     "round_discussions_length": observation.get("round_discussions_length"),
                     "has_pending_queue_items": observation.get("has_pending_queue_items"),
-                    "can_expand_decision_topics": observation.get("can_expand_decision_topics"),
+                    "can_expand_decision_issues": observation.get("can_expand_decision_issues"),
                 },
                 "decision": {
                     "action": decision.get("action", "finish_round"),
@@ -234,9 +240,9 @@ class MeetingCoordinator:
         runner.artifact.setdefault("meeting_opa_trace", []).extend(
             {
                 "stage": "meeting_coordinator.round_step",
-                "topic_id": (decision.get("params") or {}).get("topic_id"),
-                "topic_title": None,
-                "topic_category": None,
+                "issue_id": (decision.get("params") or {}).get("issue_id"),
+                "issue_title": None,
+                "issue_category": None,
                 "agent": "meeting_coordinator",
                 "trace": row,
             }
@@ -246,43 +252,15 @@ class MeetingCoordinator:
         return result
 
     def run_round_opa_loop(self, runner: Any) -> None:
-        last_action_result: Optional[Dict[str, Any]] = None
-        while True:
-            observation = self.observe_round_state(
-                runner=runner,
-                last_action_result=last_action_result,
-            )
-            decision = self.plan_round_step(observation=observation)
-            action = decision.get("action", "finish_round")
-            self.flow.logger.info("  決策: %s — %s", action, decision.get("reasoning", ""))
-            if action == "finish_round":
-                break
-            result = self.act_round_step(
-                runner=runner,
-                decision=decision,
-                observation=observation,
-            )
-            if result.get("error"):
-                self.flow.logger.warning(f"  執行失敗: {result['error']}")
-            elif action == "save_topic":
-                latest = runner.get_round_discussions()
-                if latest:
-                    from .subflows import post_topic_processing
-                    post_topic_processing(
-                        self,
-                        runner.artifact,
-                        latest[-1],
-                        round_num=runner.round_num,
-                    )
-            last_action_result = result
+        run_mediator_round_opa_loop(self, runner)
 
     # ------ 委派：main ------
 
-    def recent_topic_discussions(self, artifact, *, rounds=1):
-        return recent_topic_discussions(artifact, rounds=rounds)
+    def recent_issue_discussions(self, artifact, *, rounds=1):
+        return recent_issue_discussions(artifact, rounds=rounds)
 
-    def normalize_issue_proposal(self, item, *, proposed_by, round_num, index):
-        return normalize_issue_proposal(item, proposed_by=proposed_by, round_num=round_num, index=index)
+    def issue_proposal(self, item, *, proposed_by, round_num, index):
+        return issue_proposal(item, proposed_by=proposed_by, round_num=round_num, index=index)
 
     def collect_issue_proposals(self, artifact, *, round_num):
         return collect_issue_proposals(self, artifact, round_num=round_num)
@@ -292,17 +270,17 @@ class MeetingCoordinator:
 
     # ------ 委派：subflows ------
 
-    def run_agenda_loop(self, runner):
-        run_agenda_loop_block(self, runner)
+    def run_meeting_loop(self, runner):
+        run_mediator_meeting_loop(self, runner)
 
     # ------ 委派：主流程入口 ------
 
-    def run_hidden_requirement_elicitation_meeting(self, artifact, round_num):
+    def run_requirement_elicitation_meeting(self, artifact, round_num):
         return self.run_round_pipeline_step(
-            stage="hidden_requirement_elicitation",
+            stage="requirement_elicitation",
             round_num=round_num,
             artifact=artifact,
-            action_fn=run_hidden_requirement_elicitation_meeting_block,
+            action_fn=run_requirement_elicitation_meeting_block,
             action_kwargs={
                 "coordinator": self,
                 "artifact": artifact,
@@ -310,9 +288,9 @@ class MeetingCoordinator:
             },
         )
 
-    def run_pre_meeting_conflict_review(self, artifact, round_num):
+    def run_conflict_review(self, artifact, round_num):
         return self.run_round_pipeline_step(
-            stage="pre_meeting_conflict_review",
+            stage="conflict_review",
             round_num=round_num,
             artifact=artifact,
             action_fn=conflict_review,
@@ -325,3 +303,17 @@ class MeetingCoordinator:
 
     def run_meeting_round(self, artifact, round_num):
         return run_meeting_round_block(self, artifact, round_num)
+
+    def run_final(self, artifact):
+        round_num = final_round_num(artifact)
+        return self.run_round_pipeline_step(
+            stage="final",
+            round_num=round_num,
+            artifact=artifact,
+            action_fn=run_final,
+            action_kwargs={
+                "coordinator": self,
+                "artifact": artifact,
+                "round_num": round_num,
+            },
+        )

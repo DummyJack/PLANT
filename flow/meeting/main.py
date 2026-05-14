@@ -1,37 +1,24 @@
-# Meeting round lifecycle: pre-round checks, agenda, post-round updates, and snapshots.
+# Meeting round lifecycle: pre-round checks, issue planning, post-round updates, and snapshots.
 import json
 from typing import Any, Dict, List, Optional
 
-from utils import Collect, read_max_iterations
-from agents.profile.mediator import AGENDA_CATEGORY_LABEL
-from agents.profile.mediator.agenda_runner import AgendaRunner
-from agents.profile.mediator.validation import normalize_issue_proposal as normalize_issue_proposal_schema
+from utils import Collect
+from agents.profile.mediator import ISSUE_CATEGORY_LABEL
+from agents.profile.mediator.meeting_runner import MeetingRunner
+from agents.profile.mediator.validation import issue_proposal as issue_proposal_schema
 from agents.profile.analyst.requirements import (
-    merge_requirement_candidates,
-    normalize_requirement_status,
-    normalize_requirement_statuses,
-    review_requirement_candidates_before_merge,
-    verify_requirements_for_final_round,
+    requirement_discussion_pool,
 )
 
 
-def normalize_requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str, int]:
+def requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str, int]:
     stats = {
-        "status_normalized": 0,
         "text_trimmed": 0,
         "source_stakeholders_normalized": 0,
     }
     for req in requirements or []:
         if not isinstance(req, dict):
             continue
-
-        raw_status = str(req.get("status") or "unverified").strip().lower()
-        normalized_status = normalize_requirement_status(raw_status)
-        if raw_status != normalized_status:
-            req["status"] = normalized_status
-            stats["status_normalized"] += 1
-        elif req.get("status") != raw_status:
-            req["status"] = raw_status
 
         text = str(req.get("text") or "")
         trimmed = text.strip()
@@ -48,32 +35,25 @@ def normalize_requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str
     return stats
 
 
-def requirement_status(req: Dict[str, Any]) -> str:
-    return normalize_requirement_status(req.get("status"))
-
-
 def build_round_status_summary(
     artifact: Dict[str, Any],
     *,
     round_num: int,
     normalization_stats: Optional[Dict[str, int]] = None,
-    promotion_stats: Optional[Dict[str, int]] = None,
+    final_meeting_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
-    requirements = [r for r in (artifact.get("requirements", []) or []) if isinstance(r, dict)]
+    requirements = [r for r in requirement_discussion_pool(artifact) if isinstance(r, dict)]
     open_questions = [q for q in (artifact.get("open_questions", []) or []) if isinstance(q, dict)]
     conflicts = [c for c in (artifact.get("conflicts", []) or []) if isinstance(c, dict)]
     pending_decisions = [r for r in (artifact.get("pending_decisions", []) or []) if isinstance(r, dict)]
     incomplete_requirements = [
         r for r in requirements
         if not str(r.get("acceptance_criteria") or "").strip()
-        or not str(r.get("verification_method") or "").strip()
     ]
 
     summary = {
         "round": round_num,
         "total_requirements": len(requirements),
-        "verified_count": sum(1 for r in requirements if requirement_status(r) == "verified"),
-        "unverified_count": sum(1 for r in requirements if requirement_status(r) == "unverified"),
         "unanswered_open_questions_count": sum(
             1 for q in open_questions if str(q.get("status") or "").strip() != "answered"
         ),
@@ -86,165 +66,51 @@ def build_round_status_summary(
         ),
         "incomplete_requirement_count": len(incomplete_requirements),
         "normalization": normalization_stats or {},
-        "verification": promotion_stats or {},
+        "final_meeting": final_meeting_stats or {},
     }
     return summary
 
 
-# ---------- reviews / pre-round ----------
-
-def should_run_round_hidden_elicitation(
-    artifact: Dict[str, Any],
-    *,
-    round_num: int,
-) -> bool:
-    if not artifact.get("elicitation_log") and not artifact.get("elicitation_candidates"):
-        return True
-    open_questions = [
-        q for q in (artifact.get("open_questions", []) or [])
-        if isinstance(q, dict) and str(q.get("status") or "").strip() != "answered"
-    ]
-    if open_questions:
-        return True
-    if round_num <= 1:
-        return False
-    return False
-
-
-def run_round_hidden_elicitation(
-    coordinator: Any,
-    artifact: Dict[str, Any],
-    *,
-    round_num: int,
-) -> Dict[str, Any]:
-    if not should_run_round_hidden_elicitation(artifact, round_num=round_num):
-        coordinator.flow.logger.info("隱性需求挖掘會議：本輪略過")
-        return artifact
-    coordinator.flow.logger.info("隱性需求挖掘會議：本輪執行")
-    before_count = len(artifact.get("elicitation_candidates", []) or [])
-    artifact = coordinator.run_hidden_requirement_elicitation_meeting(artifact, round_num)
-    new_candidates = (artifact.get("elicitation_candidates", []) or [])[before_count:]
-    if new_candidates:
-        candidate_review = review_requirement_candidates_before_merge(
-            artifact,
-            new_candidates,
-            stage="round_hidden_elicitation",
-            round_num=round_num,
-            candidate_source="elicitation",
-        )
-        stats = merge_requirement_candidates(
-            artifact.setdefault("requirements", []),
-            candidate_review["candidates"],
-            source_round=round_num,
-        )
-        artifact.setdefault("elicitation_requirement_merges", []).append(
-            {
-                "round": round_num,
-                **stats,
-            }
-        )
-        coordinator.flow.logger.info(
-            "隱性需求挖掘會議：併入 %s 筆 unverified requirements",
-            stats["added"],
-        )
-    return artifact
-
-
-def is_final_meeting_round(artifact: Dict[str, Any], round_num: int) -> bool:
-    try:
-        return int((artifact.get("meta") or {}).get("session_end_round") or 0) == int(round_num)
-    except Exception:
-        return False
-
-
-def append_final_verification_proposal(
-    proposals: List[Dict[str, Any]],
-    *,
-    round_num: int,
-    artifact: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    if not is_final_meeting_round(artifact, round_num):
-        return proposals
-    req_ids = [
-        str(req.get("id") or "").strip()
-        for req in (artifact.get("requirements", []) or [])
-        if isinstance(req, dict) and str(req.get("id") or "").strip()
-    ]
-    proposal = normalize_issue_proposal(
-        {
-            "issue_id": f"I-R{round_num:02d}-final-verification",
-            "title": "最終需求驗證",
-            "description": (
-                "請逐項確認目前 requirements 的需求文字、verification_method 與 "
-                "acceptance_criteria 是否足以作為正式 SRS 的驗證依據；若仍有衝突、"
-                "缺漏或不可驗收之處，請明確指出。"
-            ),
-            "category": "open_question",
-            "participants": ["analyst", "expert", "modeler", "user"],
-            "discussion_mode": "sequential",
-            "speaking_order": ["analyst", "expert", "modeler", "user"],
-            "source_ids": req_ids,
-            "priority_hint": "high",
-            "impact_level": "high",
-            "why_now": "這是最後一輪正式會議，必須完成需求驗證後才能產生正式 SRS。",
-            "routing_preference": "formal_meeting",
-            "requires_multi_party": True,
-            "blocks_decision": True,
-        },
-        proposed_by="system",
-        round_num=round_num,
-        index=len(proposals) + 1,
-    )
-    if proposal:
-        proposals.append(proposal)
-    return proposals
-
-def run_pre_round_review(
-    coordinator: Any,
-    artifact: Dict[str, Any],
-    *,
-    recent_discussions: Optional[List[Dict[str, Any]]] = None,
-    round_num: Optional[int] = None,
-) -> Dict[str, Any]:
-    coordinator.flow.logger.info("Pre-Round Review / Conflict Recheck")
-    has_conflict_pairs = any(
-        isinstance(c, dict) and str(c.get("label") or "").strip() in {"Conflict", "Neutral"}
-        for c in (artifact.get("conflicts", []) or [])
-    )
-    if round_num is not None and has_conflict_pairs:
-        artifact = coordinator.run_pre_meeting_conflict_review(artifact, round_num)
-    elif round_num is not None:
-        coordinator.flow.logger.info("會前衝突再審查略過：沒有 Conflict/Neutral pair")
-    return artifact
-
-
-def save_pre_meeting_updates(
+def save_meeting_preparation_outputs(
     coordinator: Any,
     artifact: Dict[str, Any],
     round_num: int,
 ) -> None:
     coordinator.flow.store.save_artifact(artifact)
     if artifact.get("conflicts"):
+        previous_report = (
+            coordinator.flow.store.load_markdown(f"conflict_report_v{round_num - 1}.md")
+            if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown")
+            else ""
+        )
         conflict_md = coordinator.flow.analyst_agent.generate_conflict_report(
             artifact, round_num=round_num,
-            recent_decisions_limit=coordinator.flow.config.get("agenda_items", 5),
+            recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
+            previous_report=previous_report,
         )
+        coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
         coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
     draft_version = round_num
+    previous_draft = (
+        coordinator.flow.store.load_draft(draft_version - 1)
+        if draft_version > 0
+        else None
+    )
     draft_md = coordinator.flow.analyst_agent.run_requirements_analyst(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
-        recent_decisions_limit=coordinator.flow.config.get("agenda_items", 5),
+        previous_draft=previous_draft,
+        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.logger.info(
-        "會前審查更新：artifact + conflict_report + draft_v%s", draft_version,
+        "會議準備輸出：artifact + conflict_report + draft_v%s", draft_version,
     )
 
 
 # ---------- issue proposals ----------
 
-def recent_topic_discussions(
+def recent_issue_discussions(
     artifact: Dict[str, Any],
     *,
     rounds: int = 1,
@@ -253,20 +119,20 @@ def recent_topic_discussions(
     recent_rounds = discussions[-max(1, rounds):]
     out: List[Dict[str, Any]] = []
     for rd in recent_rounds:
-        out.extend(rd.get("topics", []) or [])
+        out.extend(rd.get("issues", []) or [])
     return out
 
 
-def normalize_issue_proposal(
+def issue_proposal(
     item: Dict[str, Any],
     *,
     proposed_by: str,
     round_num: int,
     index: int,
 ) -> Optional[Dict[str, Any]]:
-    return normalize_issue_proposal_schema(
+    return issue_proposal_schema(
         item,
-        allowed_categories=list(AGENDA_CATEGORY_LABEL.keys()),
+        allowed_categories=list(ISSUE_CATEGORY_LABEL.keys()),
         default_participants=["analyst", "expert", "modeler", "user"],
         proposed_by=proposed_by,
         round_num=round_num,
@@ -289,7 +155,7 @@ def collect_issue_proposals(
             if not isinstance(row, dict):
                 invalid_count += 1
                 continue
-            normalized = normalize_issue_proposal(
+            normalized = issue_proposal(
                 row, proposed_by=(row.get("proposed_by") or "backlog"),
                 round_num=round_num, index=i,
             )
@@ -308,13 +174,13 @@ def collect_issue_proposals(
     for role, agent, default_cap in proposal_specs:
         if not enabled.get(role, True):
             continue
-        if not hasattr(agent, "propose_topics"):
+        if not hasattr(agent, "propose_issues"):
             continue
         try:
-            rows = agent.propose_topics(artifact, round_num=round_num, max_items=default_cap)
+            rows = agent.propose_issues(artifact, round_num=round_num, max_items=default_cap)
             if isinstance(rows, list):
                 for i, row in enumerate(rows, 1):
-                    normalized = normalize_issue_proposal(
+                    normalized = issue_proposal(
                         row, proposed_by=role, round_num=round_num, index=i,
                     )
                     if normalized:
@@ -333,14 +199,14 @@ def append_round_discussion_record(
     *,
     round_num: int,
     round_discussions: List[Dict[str, Any]],
-    agenda_snapshot: List[Dict[str, Any]],
+    issue_snapshot: List[Dict[str, Any]],
     queue_round_summary: Dict[str, Any],
 ) -> None:
     artifact.setdefault("discussions", []).append(
         {
             "round": round_num,
-            "topics": round_discussions,
-            "agenda_snapshot": agenda_snapshot or [],
+            "issues": round_discussions,
+            "issue_snapshot": issue_snapshot or [],
             "queue_summary": queue_round_summary,
         }
     )
@@ -404,6 +270,67 @@ def stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def build_model_revision_context(
+    artifact: Dict[str, Any],
+    *,
+    round_num: int,
+    previous_models: List[Dict[str, Any]],
+    change_candidates: List[Dict[str, Any]],
+    round_discussions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    changed_requirement_ids = []
+    change_candidate_ids = []
+    for row in change_candidates or []:
+        if not isinstance(row, dict):
+            continue
+        cid = str(row.get("id") or "").strip()
+        rid = str(row.get("requirement_id") or "").strip()
+        if cid:
+            change_candidate_ids.append(cid)
+        if rid:
+            changed_requirement_ids.append(rid)
+
+    decision_ids = []
+    for row in artifact.get("decisions", []) or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            decision_round = int(row.get("round") or -1)
+        except (TypeError, ValueError):
+            continue
+        decision_id = str(row.get("id") or "").strip()
+        if decision_round == int(round_num) and decision_id:
+            decision_ids.append(decision_id)
+    discussion_issue_ids = []
+    for row in round_discussions or []:
+        if not isinstance(row, dict):
+            continue
+        issue = row.get("issue") if isinstance(row.get("issue"), dict) else {}
+        issue_id = str(issue.get("id") or "").strip()
+        if issue_id:
+            discussion_issue_ids.append(issue_id)
+
+    previous_model_summary = [
+        {
+            "name": model.get("name"),
+            "type": model.get("type"),
+            "to_confirm": model.get("to_confirm", []),
+            "maturity": model.get("maturity", ""),
+        }
+        for model in previous_models or []
+        if isinstance(model, dict)
+    ]
+    return {
+        "round_num": round_num,
+        "mode": "revise_existing_models",
+        "changed_requirement_ids": list(dict.fromkeys(changed_requirement_ids)),
+        "change_candidate_ids": list(dict.fromkeys(change_candidate_ids)),
+        "decision_ids": list(dict.fromkeys(decision_ids)),
+        "discussion_issue_ids": list(dict.fromkeys(discussion_issue_ids)),
+        "previous_model_summary": previous_model_summary,
+    }
+
+
 # ---------- apply mediator updates ----------
 
 def apply_mediator_updates(
@@ -432,7 +359,7 @@ def apply_mediator_updates(
             continue
         candidate = dict(row)
         if not str(candidate.get("id") or "").strip():
-            candidate["id"] = f"CF-{next_conflict_num:02d}"
+            candidate["id"] = f"CF-{next_conflict_num}"
             next_conflict_num += 1
         new_conflicts.append(candidate)
     cf_to_decision = {}
@@ -464,40 +391,36 @@ def apply_mediator_updates(
 def post_round_pipeline(
     coordinator: Any,
     artifact: Dict[str, Any],
-    runner: AgendaRunner,
+    runner: MeetingRunner,
     *,
     round_num: int,
+    finalize_requirements: bool = False,
 ) -> Dict[str, Any]:
-    from .subflows import run_routed_queues, build_queue_round_summary
+    from .subflows import build_queue_round_summary
     from .conflict_review import (
         append_requirement_change_candidates,
         apply_requirement_change_candidates,
     )
 
-    if coordinator.is_last_meeting_round(artifact, round_num):
-        run_routed_queues(
-            coordinator, artifact, runner,
-            round_num=round_num, drain_non_formal=True,
-        )
     round_discussions = runner.get_round_discussions()
     all_open_questions = runner.get_all_open_questions()
-    agenda_snapshot = runner.get_agenda_snapshot()
+    issue_snapshot = runner.get_issue_snapshot()
     queue_round_summary = build_queue_round_summary(artifact, round_num=round_num)
     append_round_discussion_record(
         artifact,
         round_num=round_num,
         round_discussions=round_discussions,
-        agenda_snapshot=agenda_snapshot,
+        issue_snapshot=issue_snapshot,
         queue_round_summary=queue_round_summary,
     )
     oq_pool = artifact.get("open_questions", [])
     seen = {
-        (q.get("topic_id"), q.get("from_agent"), q.get("to_agent"), q.get("question"))
+        (q.get("issue_id"), q.get("from_agent"), q.get("to_agent"), q.get("question"))
         for q in oq_pool
     }
     for oq in all_open_questions:
         oq["round"] = round_num
-        k = (oq.get("topic_id"), oq.get("from_agent"), oq.get("to_agent"), oq.get("question"))
+        k = (oq.get("issue_id"), oq.get("from_agent"), oq.get("to_agent"), oq.get("question"))
         if k in seen:
             continue
         oq_pool.append(oq)
@@ -509,81 +432,111 @@ def post_round_pipeline(
     apply_mediator_updates(artifact, updates)
 
     existing_decisions = artifact.get("decisions", []) or []
-    existing_topic_ids = {
-        str(d.get("source_topic_id") or "").strip()
+    existing_issue_ids = {
+        str(d.get("source_issue_id") or "").strip()
         for d in existing_decisions if isinstance(d, dict)
     }
     for disc in round_discussions:
         if not isinstance(disc, dict):
             continue
-        _topic = disc.get("topic", {}) if isinstance(disc.get("topic"), dict) else {}
-        _resolution = disc.get("resolution", {}) if isinstance(disc.get("resolution"), dict) else {}
-        _tid = str(_topic.get("id") or "").strip()
-        if not _tid or _tid in existing_topic_ids:
+        issue = disc.get("issue", {}) if isinstance(disc.get("issue"), dict) else {}
+        resolution = disc.get("resolution", {}) if isinstance(disc.get("resolution"), dict) else {}
+        tid = str(issue.get("id") or "").strip()
+        if not tid or tid in existing_issue_ids:
             continue
-        _rstatus = str(_resolution.get("resolution_status") or "").strip()
-        if _rstatus not in {"agreed", "human_decision"}:
+        rstatus = str(resolution.get("resolution_status") or "").strip()
+        if rstatus not in {"agreed", "human_decision"}:
             continue
-        _dec_text = str(_resolution.get("decision") or _resolution.get("summary") or "").strip()
-        if not _dec_text:
+        dec_text = str(resolution.get("decision") or resolution.get("summary") or "").strip()
+        if not dec_text:
             continue
         dec_record = {
-            "id": f"DEC-R{round_num}-{_tid}",
-            "summary": _dec_text,
-            "decision": _dec_text,
-            "source_topic_id": _tid,
+            "id": f"DEC-R{round_num}-{tid}",
+            "summary": dec_text,
+            "decision": dec_text,
+            "source_issue_id": tid,
             "round": round_num,
-            "resolved_conflict_ids": _resolution.get("affected_conflict_ids", []),
-            "affected_requirement_ids": _resolution.get("affected_requirement_ids", []),
-            "dod_complete": bool(_dec_text and _resolution.get("affected_requirement_ids")),
+            "resolved_conflict_ids": resolution.get("affected_conflict_ids", []),
+            "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
+            "dod_complete": bool(dec_text and resolution.get("affected_requirement_ids")),
         }
         if not dec_record["affected_requirement_ids"]:
             coordinator.flow.logger.warning(
                 "Traceability 警告：決策 %s 缺少 affected_requirement_ids，追溯鏈不完整", dec_record["id"],
             )
         existing_decisions.append(dec_record)
-        existing_topic_ids.add(_tid)
+        existing_issue_ids.add(tid)
     artifact["decisions"] = existing_decisions
 
     previous_requirements_snapshot = stable_json(artifact.get("requirements", []) or [])
-    draft = coordinator.flow.analyst_agent.run_requirements_analyst("update_draft", artifact=artifact)
-    artifact["requirements"] = draft["requirements"]
-    change_candidates = draft.get("requirement_change_candidates", [])
-    if isinstance(change_candidates, list) and change_candidates:
-        append_requirement_change_candidates(artifact, change_candidates)
-    artifact = apply_requirement_change_candidates(coordinator, artifact)
-    requirements_changed = previous_requirements_snapshot != stable_json(artifact.get("requirements", []) or [])
-    normalization_stats = normalize_requirement_fields(artifact.get("requirements", []) or [])
-    verification_stats = {}
-    if is_final_meeting_round(artifact, round_num):
-        verification_stats = verify_requirements_for_final_round(artifact, round_num=round_num)
-        coordinator.flow.logger.info(
-            "需求驗證：verified=%s unverified=%s",
-            verification_stats.get("verified_count", 0),
-            verification_stats.get("unverified_count", 0),
+    previous_requirement_pool_snapshot = stable_json(requirement_discussion_pool(artifact))
+    change_candidates = []
+    if finalize_requirements:
+        draft = coordinator.flow.analyst_agent.run_requirements_analyst(
+            "finalize_requirements",
+            artifact=artifact,
         )
-    requirements_changed = requirements_changed or previous_requirements_snapshot != stable_json(artifact.get("requirements", []) or [])
+        artifact["requirements"] = draft["requirements"]
+        change_candidates = draft.get("requirement_change_candidates", [])
+        if isinstance(change_candidates, list) and change_candidates:
+            append_requirement_change_candidates(artifact, change_candidates)
+        artifact = apply_requirement_change_candidates(coordinator, artifact)
+    elif artifact.get("requirements"):
+        draft = coordinator.flow.analyst_agent.run_requirements_analyst("update_draft", artifact=artifact)
+        artifact["requirements"] = draft["requirements"]
+        change_candidates = draft.get("requirement_change_candidates", [])
+        if isinstance(change_candidates, list) and change_candidates:
+            append_requirement_change_candidates(artifact, change_candidates)
+        artifact = apply_requirement_change_candidates(coordinator, artifact)
+    candidate_pool_changed = bool(artifact.pop("_candidate_pool_changed", False))
+    requirements_changed = (
+        previous_requirements_snapshot != stable_json(artifact.get("requirements", []) or [])
+        or previous_requirement_pool_snapshot != stable_json(requirement_discussion_pool(artifact))
+        or candidate_pool_changed
+    )
+    normalization_stats = requirement_fields(artifact.get("requirements", []) or [])
+    final_meeting_stats = {}
+    requirements_changed = (
+        requirements_changed
+        or previous_requirements_snapshot != stable_json(artifact.get("requirements", []) or [])
+        or previous_requirement_pool_snapshot != stable_json(requirement_discussion_pool(artifact))
+        or candidate_pool_changed
+    )
 
     prev_models = artifact.get("system_models", {}).get("models", [])
     if prev_models and not requirements_changed and not change_candidates:
         model_data = artifact.get("system_models", {})
         coordinator.flow.logger.info("System model：需求無變更，本輪沿用既有模型")
     elif prev_models:
+        revision_context = build_model_revision_context(
+            artifact,
+            round_num=round_num,
+            previous_models=prev_models,
+            change_candidates=change_candidates,
+            round_discussions=round_discussions,
+        )
         model_data = coordinator.flow.modeler_agent.generate_requirement_models(
             artifact,
-            max_iterations=read_max_iterations(coordinator.flow.config, default=3),
+            max_iterations=3,
+            revision_context=revision_context,
         )
     else:
         model_data = coordinator.flow.modeler_agent.generate_requirement_models(
             artifact,
-            max_iterations=read_max_iterations(coordinator.flow.config, default=3),
+            max_iterations=3,
         )
     artifact["system_models"] = model_data
     draft_version = round_num
+    previous_draft = (
+        coordinator.flow.store.load_draft(draft_version - 1)
+        if draft_version > 0
+        else None
+    )
     draft_md = coordinator.flow.analyst_agent.run_requirements_analyst(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
-        recent_decisions_limit=coordinator.flow.config.get("agenda_items", 5),
+        previous_draft=previous_draft,
+        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.touch_artifact_meta(artifact, updated_by="flow.run_meeting_round", round_num=round_num)
@@ -591,17 +544,17 @@ def post_round_pipeline(
         artifact,
         round_num=round_num,
         normalization_stats=normalization_stats,
-        promotion_stats=verification_stats,
+        final_meeting_stats=final_meeting_stats,
     )
     save_pending_decisions_report(coordinator, artifact)
     cap_meeting_trace(artifact)
     coordinator.flow.store.save_artifact(artifact)
     coordinator.flow.store.save_plantuml_files(model_data)
     coordinator.flow.logger.info(
-        "Round %s status: verified=%s unverified=%s pending_decisions=%s unresolved_conflicts=%s open_questions=%s",
+        "Round %s status: requirements=%s incomplete_requirements=%s pending_decisions=%s unresolved_conflicts=%s open_questions=%s",
         round_num,
-        round_status["verified_count"],
-        round_status["unverified_count"],
+        round_status["total_requirements"],
+        round_status["incomplete_requirement_count"],
         round_status["pending_decision_count"],
         round_status["unresolved_conflict_count"],
         round_status["unanswered_open_questions_count"],
@@ -617,34 +570,11 @@ def run_meeting_round_block(
     round_num: int,
 ) -> Dict[str, Any]:
     artifact = coordinator.flow.ensure_artifact_contract(artifact)
-    artifact = coordinator.run_round_pipeline_step(
-        stage="hidden_elicitation",
-        round_num=round_num,
-        artifact=artifact,
-        action_fn=run_round_hidden_elicitation,
-        action_kwargs={
-            "coordinator": coordinator,
-            "artifact": artifact,
-            "round_num": round_num,
-        },
-    )
-    artifact = coordinator.run_round_pipeline_step(
-        stage="pre_round_review",
-        round_num=round_num,
-        artifact=artifact,
-        action_fn=run_pre_round_review,
-        action_kwargs={
-            "coordinator": coordinator,
-            "artifact": artifact,
-            "recent_discussions": recent_topic_discussions(artifact, rounds=1),
-            "round_num": round_num,
-        },
-    )
     coordinator.run_round_pipeline_step(
-        stage="save_pre_meeting_updates",
+        stage="save_meeting_preparation_outputs",
         round_num=round_num,
         artifact=artifact,
-        action_fn=save_pre_meeting_updates,
+        action_fn=save_meeting_preparation_outputs,
         action_kwargs={
             "coordinator": coordinator,
             "artifact": artifact,
@@ -653,11 +583,6 @@ def run_meeting_round_block(
     )
     current_round_proposals = collect_issue_proposals(
         coordinator, artifact, round_num=round_num,
-    )
-    current_round_proposals = append_final_verification_proposal(
-        current_round_proposals,
-        round_num=round_num,
-        artifact=artifact,
     )
     existing_issue_proposals = artifact.get("issue_proposals", []) or []
     seen_issue_ids = {
@@ -677,7 +602,7 @@ def run_meeting_round_block(
     artifact["issue_proposals"] = existing_issue_proposals
     coordinator.flow.store.save_artifact(artifact)
 
-    runner = AgendaRunner(
+    runner = MeetingRunner(
         coordinator.flow.mediator_agent,
         coordinator.flow.registry,
         artifact,
@@ -689,10 +614,10 @@ def run_meeting_round_block(
         coordinator.flow.logger,
     )
     coordinator.run_round_pipeline_step(
-        stage="agenda_loop",
+        stage="meeting_loop",
         round_num=round_num,
         artifact=artifact,
-        action_fn=coordinator.run_agenda_loop,
+        action_fn=coordinator.run_meeting_loop,
         action_kwargs={"runner": runner},
     )
     return coordinator.run_round_pipeline_step(

@@ -1,7 +1,8 @@
 # Flow setup: instantiate agents, tools, store, policy, and runtime services.
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
-from agents.base import AgentRegistry, AgentSkillToolPolicy
+from typing import Dict, Any, Optional
+from agents.base import AgentRegistry
+from agents.tools.policy import AgentSkillToolPolicy
 from agents.profile import (
     UserAgent,
     AnalystAgent,
@@ -48,7 +49,7 @@ class Flow:
         self.policy = AgentSkillToolPolicy()
         artifact_path = None
         if getattr(self.store, "project_id", None) and hasattr(self.store, "artifact_dir"):
-            artifact_path = str(self.store.artifact_dir / "artifact.json")
+            artifact_path = str(self.store.artifact_dir)
         self.tool_registry = ToolRegistry(
             config=self.config,
             policy=self.policy,
@@ -118,10 +119,11 @@ class Flow:
             human_setting(config, "enable_human_escalation", True)
         )
 
-        eat = config.get("enable_agenda_types")
+        eat = config.get("enable_meeting")
         if isinstance(eat, dict):
-            self.mediator_agent.enabled_agenda_type_ids = [
-                k for k, v in eat.items() if v
+            self.mediator_agent.enabled_issue_type_ids = [
+                k for k, v in eat.items()
+                if v and k not in {"elicitation", "conflict_review"}
             ]
         self.meeting = MeetingCoordinator(self)
 
@@ -149,8 +151,14 @@ class Flow:
 
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """集中初始化 artifact 目前需要的最小欄位。"""
-        artifact.setdefault("elicitation_candidates", [])
-        artifact.setdefault("initial_requirement_candidates", [])
+        artifact.setdefault("reqt_candidates", [])
+        artifact.setdefault("change_record", artifact.get("requirement_change_candidates", []))
+        elicitation = artifact.setdefault("elicitation", {})
+        elicitation.setdefault("plan", {})
+        elicitation.setdefault("meeting", {})
+        elicitation.setdefault("elicited_reqts", [])
+        elicitation.setdefault("elicitation_stop_reason", "")
+        artifact.setdefault("elicitation_trace", [])
         artifact.setdefault("candidate_review_log", [])
         return artifact
 

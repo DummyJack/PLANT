@@ -17,17 +17,24 @@ def run_meeting_round(flow, artifact: Dict[str, Any], round_num: int) -> Dict[st
     return flow.meeting.run_meeting_round(artifact, round_num)
 
 
-def write_pre_meeting_conflict_report(flow, artifact: Dict[str, Any], round_num: int) -> None:
+def write_conflict_report(flow, artifact: Dict[str, Any], round_num: int) -> None:
     if not artifact.get("conflicts"):
         return
     flow.logger.info("產出需求 Conflict 報告")
+    previous_report = (
+        flow.store.load_markdown(f"conflict_report_v{round_num - 1}.md")
+        if round_num > 0 and hasattr(flow.store, "load_markdown")
+        else ""
+    )
     conflict_md = flow.analyst_agent.generate_conflict_report(
         artifact,
         round_num=round_num,
         recent_decisions_limit=flow.config.get("agenda_items", 5),
+        previous_report=previous_report,
     )
+    flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
     flow.store.save_markdown(conflict_md, "conflict_report.md")
-    flow.logger.info("  ✓ 已存 conflict_report.md")
+    flow.logger.info("  ✓ 已存 conflict_report_v%s.md / conflict_report.md", round_num)
 
 
 def run_one_round(
@@ -38,7 +45,7 @@ def run_one_round(
     is_retry: bool = False,
 ) -> Dict[str, Any]:
     if is_retry:
-        flow.logger.info(f"=== Round {round_num}: 開會（正式 SRS 未通過，補充討論） ===")
+        flow.logger.info(f"=== Round {round_num}: 開會（Final meeting 後補充討論） ===")
     else:
         flow.logger.info(f"=== Round {round_num}: 開會 ===")
     artifact = flow.run_meeting_round(artifact, round_num)
@@ -53,7 +60,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     artifact = {
         "rough_idea": rough_idea,
         "stakeholders": [],
-        "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
+        "scope": {"in_scope": [], "out_of_scope": []},
         "requirements": [],
         "conflicts": [],
         "feedback": {},
@@ -82,10 +89,14 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     flow.logger.info("=== Phase 0: 初始草稿建立 ===")
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
-    write_pre_meeting_conflict_report(flow, artifact, round_num=0)
+    write_conflict_report(flow, artifact, round_num=0)
 
     for round_num in range(1, rounds + 1):
         artifact = run_one_round(flow, artifact, round_num)
+
+    flow.logger.info("=== Final ===")
+    artifact = flow.meeting.run_final(artifact)
+    flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
     flow.finalize(artifact)
@@ -96,7 +107,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact = existing_artifact
     artifact.setdefault(
-        "scope", {"in_scope": [], "out_of_scope": [], "description": ""}
+        "scope", {"in_scope": [], "out_of_scope": []}
     )
     artifact.setdefault("feedback", {})
     artifact.setdefault("meta", {})
@@ -115,10 +126,14 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     artifact.setdefault("meta", {})["session_end_round"] = end_round
     flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
 
-    write_pre_meeting_conflict_report(flow, artifact, round_num=start_round - 1)
+    write_conflict_report(flow, artifact, round_num=start_round - 1)
 
     for round_num in range(start_round, start_round + rounds):
         artifact = run_one_round(flow, artifact, round_num)
+
+    flow.logger.info("=== Final ===")
+    artifact = flow.meeting.run_final(artifact)
+    flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
     flow.finalize(artifact)
