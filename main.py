@@ -17,7 +17,7 @@ from utils.language import sync_output_language
 
 def main():
     print("=" * 60)
-    print("Plant 系統")
+    print("PLANT 系統")
     print("=" * 60)
     print()
 
@@ -53,6 +53,7 @@ def main():
             if rounds < 1:
                 print("❌ 回合數必須大於 0")
                 continue
+            print()
             print(f"✓ 設定回合數：{rounds}")
             break
         except ValueError:

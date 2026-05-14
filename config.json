@@ -1,8 +1,8 @@
 {
   "rounds": 1,
-  "agenda_items": 5,
+  "issue_items": 5,
   "max_stakeholders": 5,
-  "elicitation_max_turns": 1,
+  "elicitation_max_turns": 10,
   "enable_tools": {
     "web_search": true,
     "file_parser": true,
