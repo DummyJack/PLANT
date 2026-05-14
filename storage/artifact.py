@@ -196,6 +196,114 @@ def requirements_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def conflict_requirement_ids(item: Dict[str, Any]) -> List[str]:
+    req_ids = [
+        str(req_id).strip()
+        for req_id in (item.get("requirement_ids") or item.get("reqs") or [])
+        if str(req_id).strip()
+    ]
+    idx = 1
+    while True:
+        value = str(item.get(f"req_{idx}") or "").strip()
+        if not value:
+            break
+        if value not in req_ids:
+            req_ids.append(value)
+        idx += 1
+    for key in ("req_a", "req_b"):
+        value = str(item.get(key) or "").strip()
+        if value and value not in req_ids:
+            req_ids.append(value)
+    return req_ids
+
+
+def conflict_output_id(prefix: str, index: int) -> str:
+    return f"{prefix}-{index}"
+
+
+def nested_meeting_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row.pop("id", None)
+        out.append(row)
+    return out
+
+
+def requirement_text_by_id(data: Dict[str, Any]) -> Dict[str, str]:
+    rows = combined_requirement_candidates(data)
+    rows.extend([
+        row for row in (data.get("requirements", []) or [])
+        if isinstance(row, dict)
+    ])
+    return {
+        str(row.get("id") or "").strip(): str(row.get("text") or "").strip()
+        for row in rows
+        if str(row.get("id") or "").strip() and str(row.get("text") or "").strip()
+    }
+
+
+def replace_requirement_ids_with_text(row: Dict[str, Any], req_texts: Dict[str, str]) -> Dict[str, Any]:
+    out = dict(row)
+    idx = 1
+    while True:
+        key = f"req_{idx}"
+        if key not in out:
+            break
+        req_id = str(out.get(key) or "").strip()
+        if req_id in req_texts:
+            out[key] = req_texts[req_id]
+        idx += 1
+    return out
+
+
+def conflict_report_row(item: Dict[str, Any], req_texts: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    row = {}
+    if "id" in item:
+        row["id"] = item["id"]
+    req_texts = req_texts or {}
+    req_ids = conflict_requirement_ids(item)
+    if not req_ids and isinstance(item.get("meeting"), list) and item["meeting"]:
+        first_meeting = item["meeting"][0]
+        if isinstance(first_meeting, dict):
+            req_ids = conflict_requirement_ids(first_meeting)
+    for idx, req_id in enumerate(req_ids, 1):
+        row[f"req_{idx}"] = req_texts.get(req_id, req_id)
+    final_label = str(item.get("final_label") or item.get("label") or "").strip()
+    if final_label:
+        row["label"] = final_label
+    if "description" in item:
+        row["description"] = item["description"]
+    return row
+
+
+def flatten_conflict_meeting_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    meeting = row.get("meeting")
+    if not isinstance(meeting, list) or not meeting:
+        return row
+    first = meeting[0]
+    if not isinstance(first, dict):
+        row.pop("meeting", None)
+        return row
+    for key in ("initial_label", "final_label", "description", "status"):
+        value = first.get(key)
+        if value not in (None, ""):
+            row[key] = value
+    details = first.get("details")
+    if isinstance(details, dict):
+        row["meeting"] = details
+    else:
+        row.pop("meeting", None)
+    return row
+
+
+def remove_final_item_label(row: Dict[str, Any]) -> Dict[str, Any]:
+    row.pop("label", None)
+    return row
+
+
 def normalized_pair_id_map(rows: Any) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     idx = 1
@@ -269,34 +377,52 @@ def conflict_pair_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
     meeting_descriptions = conflict_meeting_descriptions(meeting_rows, id_map)
     meeting_final_labels = conflict_meeting_final_labels(meeting_rows, id_map)
     reviewed_pairs: List[Dict[str, Any]] = []
+    pair_num = 1
     for item in meeting_rows or []:
         if not isinstance(item, dict):
             continue
-        pair_id = mapped_pair_id(item.get("id", item.get("pair_id")), id_map)
-        if not pair_id:
+        req_ids = conflict_requirement_ids(item)
+        if len(req_ids) != 2:
             continue
-        label = meeting_final_labels.get(pair_id)
+        pair_id = conflict_output_id("PAIR", pair_num)
+        pair_num += 1
+        source_id = mapped_pair_id(item.get("id", item.get("pair_id")), id_map)
+        if not source_id:
+            continue
+        label = meeting_final_labels.get(source_id)
         if label not in {"Conflict", "Neutral"}:
             continue
         row = {
             "id": pair_id,
+            "req_1": req_ids[0],
+            "req_2": req_ids[1],
             "label": label,
         }
-        description = meeting_descriptions.get(pair_id)
+        description = meeting_descriptions.get(source_id)
         if description:
             row["description"] = description
-        reviewed_pairs.append(row)
+        meeting = conflict_meeting_payload([item], {str(item.get("id") or item.get("pair_id") or ""): pair_id})
+        if meeting:
+            row["meeting"] = nested_meeting_rows(meeting)
+        reviewed_pairs.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
     if reviewed_pairs:
         return reviewed_pairs
 
     out: List[Dict[str, Any]] = []
-    for idx, item in enumerate(rows or [], 1):
+    pair_num = 1
+    for item in rows or []:
         if not isinstance(item, dict):
+            continue
+        req_ids = conflict_requirement_ids(item)
+        if len(req_ids) != 2:
             continue
         row = dict(item)
         old_id = str(row.get("id") or row.get("pair_id") or "").strip()
-        new_id = id_map.get(old_id) or f"PAIR-{idx}"
+        new_id = conflict_output_id("PAIR", pair_num)
+        pair_num += 1
         row["id"] = new_id
+        row["req_1"] = req_ids[0]
+        row["req_2"] = req_ids[1]
         row.pop("pair_id", None)
         for key in (
             "supplemented",
@@ -315,7 +441,48 @@ def conflict_pair_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
             row["label"] = meeting_final_labels[new_id]
         if meeting_descriptions.get(new_id):
             row["description"] = meeting_descriptions[new_id]
-        out.append(row)
+        out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
+    return out
+
+
+def conflict_multiple_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
+    id_map = normalized_pair_id_map(rows)
+    meeting_descriptions = conflict_meeting_descriptions(meeting_rows, id_map)
+    meeting_final_labels = conflict_meeting_final_labels(meeting_rows, id_map)
+    out: List[Dict[str, Any]] = []
+    multiple_num = 1
+    source_rows = list(meeting_rows or []) or list(rows or [])
+    for item in source_rows:
+        if not isinstance(item, dict):
+            continue
+        req_ids = conflict_requirement_ids(item)
+        if len(req_ids) < 3:
+            continue
+        source_id = mapped_pair_id(item.get("id", item.get("pair_id")), id_map)
+        label = (
+            meeting_final_labels.get(source_id)
+            or str(item.get("final_label") or item.get("label") or "").strip()
+        )
+        if label not in {"Conflict", "Neutral"}:
+            continue
+        new_id = conflict_output_id("MULTIPLE", multiple_num)
+        multiple_num += 1
+        row: Dict[str, Any] = {"id": new_id}
+        for idx, req_id in enumerate(req_ids, 1):
+            row[f"req_{idx}"] = req_id
+        row["label"] = label
+        description = (
+            meeting_descriptions.get(source_id)
+            or str(item.get("description") or item.get("rationale") or item.get("reason") or "").strip()
+        )
+        if description:
+            row["description"] = description
+        meeting = []
+        if item.get("meeting_conflict_review") or item.get("final_label") or item.get("initial_label"):
+            meeting = conflict_meeting_payload([item], {str(item.get("id") or item.get("pair_id") or ""): new_id})
+        if meeting:
+            row["meeting"] = nested_meeting_rows(meeting)
+        out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
     return out
 
 
@@ -328,6 +495,8 @@ def conflict_meeting_payload(rows: Any, id_map: Dict[str, str]) -> List[Dict[str
         row["id"] = mapped_pair_id(row.get("id", row.get("pair_id")), id_map)
         row.pop("pair_id", None)
         row.pop("topic_id", None)
+        for key in ("req_a", "req_b", "requirement_ids"):
+            row.pop(key, None)
         description = str(
             row.get("description")
             or row.get("rationale")
@@ -357,16 +526,77 @@ def conflict_meeting_payload(rows: Any, id_map: Dict[str, str]) -> List[Dict[str
 
 
 def conflicts_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    pairs = data.get(
-        "reqt_pairs",
-        data.get("conflicting_reqt", data.get("conflicts", [])),
-    ) or []
+    state = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
+    pairs = state.get("pairs") or []
+    multiple = state.get("multiple") or []
     meeting = data.get("conflict_meeting", data.get("pair_reviews", [])) or []
-    id_map = extend_pair_id_map(normalized_pair_id_map(pairs), meeting)
-    return {
-        "reqt_pairs": conflict_pair_payload(pairs, meeting),
-        "conflict_meeting": conflict_meeting_payload(meeting, id_map),
+    pair_payload = conflict_pair_payload(pairs, meeting)
+    multiple_payload = conflict_multiple_payload(list(pairs) + list(multiple), meeting)
+    report_rows: List[Dict[str, Any]] = []
+    req_texts = requirement_text_by_id(data)
+    pair_payload = [
+        replace_requirement_ids_with_text(row, req_texts)
+        for row in pair_payload
+    ]
+    multiple_payload = [
+        replace_requirement_ids_with_text(row, req_texts)
+        for row in multiple_payload
+    ]
+    source_rows = list(pairs) + list(multiple)
+    source_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in source_rows
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
     }
+    for item in list(pair_payload) + list(multiple_payload):
+        source = source_by_id.get(str(item.get("id") or "").strip(), item)
+        report_source = {**source, **item}
+        report_source.pop("requirement_ids", None)
+        report_source.pop("reqs", None)
+        report_rows.append(conflict_report_row(report_source, req_texts))
+    return {
+        "report": report_rows,
+        "pairs": pair_payload,
+        "multiple": multiple_payload,
+    }
+
+
+def conflict_rows_from_payload(conflicts: Any) -> List[Dict[str, Any]]:
+    if not isinstance(conflicts, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    source_rows = list(conflicts.get("pairs", []) or []) + list(conflicts.get("multiple", []) or [])
+    for item in source_rows:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row["requirement_ids"] = conflict_requirement_ids(row)
+        rows.append(row)
+    return rows
+
+
+def conflict_meeting_rows_from_payload(conflicts: Any) -> List[Dict[str, Any]]:
+    if not isinstance(conflicts, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    if "pairs" in conflicts or "multiple" in conflicts:
+        source_rows = list(conflicts.get("pairs", []) or []) + list(conflicts.get("multiple", []) or [])
+        for item in source_rows:
+            if not isinstance(item, dict):
+                continue
+            parent_id = str(item.get("id") or "").strip()
+            for meeting_row in item.get("meeting", []) if isinstance(item.get("meeting"), list) else []:
+                if isinstance(meeting_row, dict):
+                    row = dict(meeting_row)
+                    if parent_id and not str(row.get("id") or "").strip():
+                        row["id"] = parent_id
+                    rows.append(row)
+    else:
+        rows = [
+            dict(item) for item in (conflicts.get("conflict_meeting", []) or [])
+            if isinstance(item, dict)
+        ]
+    return rows
 
 
 def elicitation_payload(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -493,9 +723,8 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     project_file = artifact_dir / "project.json"
     stakeholders_file = artifact_dir / "stakeholders.json"
     requirements_file = artifact_dir / "requirements.json"
-    reqt_pairs_file = artifact_dir / "reqt_pairs.json"
-    legacy_conflicts_file = artifact_dir / "conflicts.json"
-    if not any(path.exists() for path in (stakeholders_file, project_file, requirements_file, reqt_pairs_file, legacy_conflicts_file)):
+    conflict_file = artifact_dir / "conflict.json"
+    if not any(path.exists() for path in (stakeholders_file, project_file, requirements_file, conflict_file)):
         return None
 
     project = load_json_path(project_file, {})
@@ -508,10 +737,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         project.get("scope", {"in_scope": [], "out_of_scope": []}),
     )
     requirements = load_json_path(requirements_file, {})
-    conflicts = load_json_path(
-        reqt_pairs_file,
-        load_json_path(legacy_conflicts_file, {}),
-    )
+    conflicts = load_json_path(conflict_file, {})
     feedback = feedback_dict(load_json_path(artifact_dir / "feedback.json", []))
     elicitation = load_json_path(artifact_dir / "meeting" / "elicitation_meeting.json", {})
     discussions = load_json_path(artifact_dir / "meeting" / "discussions.json", {})
@@ -550,9 +776,9 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
             requirements.get("requirements", []) or [],
             allowed_source_stakeholders=allowed_stakeholders,
         ),
-        "conflicts": conflicts.get("reqt_pairs", conflicts.get("conflicting_reqt", [])) or [],
-        "conflict_meeting": conflicts.get("conflict_meeting", []) or [],
-        "pair_reviews": conflicts.get("conflict_meeting", []) or [],
+        "conflicts": conflict_rows_from_payload(conflicts),
+        "conflict_meeting": conflict_meeting_rows_from_payload(conflicts),
+        "pair_reviews": conflict_meeting_rows_from_payload(conflicts),
         "elicitation": {
             "plan": elicitation.get("plan", {}) or {},
             "meeting": elicitation.get("meeting", {}) or {},
@@ -588,14 +814,11 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     legacy_project_file = artifact_dir / "project.json"
     if legacy_project_file.exists():
         legacy_project_file.unlink()
-    legacy_conflicts_file = artifact_dir / "conflicts.json"
-    if legacy_conflicts_file.exists():
-        legacy_conflicts_file.unlink()
     save_json_path(base_dir, stakeholders_payload(data), artifact_dir / "stakeholders.json")
     save_json_path(base_dir, scope_payload(data), artifact_dir / "scope.json")
     save_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
     save_json_path(base_dir, requirements_payload(data), artifact_dir / "requirements.json")
-    save_json_path(base_dir, conflicts_payload(data), artifact_dir / "reqt_pairs.json")
+    save_json_path(base_dir, conflicts_payload(data), artifact_dir / "conflict.json")
     save_json_path(base_dir, elicitation_payload(data), artifact_dir / "meeting" / "elicitation_meeting.json")
     save_json_path(base_dir, discussions_payload(data), artifact_dir / "meeting" / "discussions.json")
     save_json_path(base_dir, data.get("decisions", []) or [], artifact_dir / "meeting" / "decisions.json")

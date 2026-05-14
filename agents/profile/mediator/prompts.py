@@ -272,7 +272,7 @@ def conflict_review_prompt(
     participants: List[str],
     candidate_count: int,
 ) -> str:
-    return f"""你是需求會議主持人，即將進行「衝突批次再審查」（同一輪內可能有多筆 Conflict/Neutral pairs 需一併做標籤再審查）。
+    return f"""你是需求會議主持人，即將進行「衝突批次再審查」（同一輪內可能有多筆 Conflict/Neutral 項目需一併做標籤再審查）。
 
     請決定本輪討論模式（只能二選一）：
     - sequential：參與者依你指定的 participants **陣列順序**逐一發言。此模式**不得**使用 speaking_order 欄位；順序**只能**用 participants 表達。

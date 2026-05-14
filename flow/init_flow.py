@@ -120,7 +120,9 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.info("Analyst: Conflict 辨識")
     artifact = flow.analyst_agent.run_conflict_detection(artifact)
-    if artifact.get("conflicts") and meeting_setting(flow.config, "conflict_review", True):
+    conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+    conflict_items = list(conflict_state.get("pairs") or []) + list(conflict_state.get("multiple") or [])
+    if conflict_items and meeting_setting(flow.config, "conflict_review", True):
         artifact = flow.meeting.run_conflict_review(artifact, round_num=0)
     flow.store.save_artifact(artifact)
 

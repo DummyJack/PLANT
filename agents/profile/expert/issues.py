@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from utils.language import current_output_language
 
 from agents.profile.conflict_review import conflict_review_statement_hint
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import (
@@ -54,7 +55,7 @@ class ExpertIssues:
             row for row in (artifact.get("open_questions") or []) if isinstance(row, dict)
         ]
         conflicts = [
-            row for row in (artifact.get("conflicts") or []) if isinstance(row, dict)
+            row for row in all_conflict_rows(artifact) if isinstance(row, dict)
         ]
         return {
             "iteration": kwargs.get("iteration", 0) + 1,

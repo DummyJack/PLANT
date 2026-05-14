@@ -2,6 +2,7 @@
 from typing import Any, Dict, Optional
 
 from agents.base import BaseAgent
+from agents.profile.analyst.conflict_store import conflict_entries_count
 
 from .srs import DocumentorSrs
 
@@ -61,7 +62,7 @@ class DocumentorAgent(
             "has_draft": latest_version >= 0,
             "requirements_count": len(artifact.get("requirements", []) or []),
             "decisions_count": len(artifact.get("decisions", []) or []),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs.get("max_iterations", 1),
         }

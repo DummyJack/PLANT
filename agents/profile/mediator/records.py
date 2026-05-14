@@ -3,6 +3,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from agents.profile.analyst.conflict_store import all_conflict_rows, conflict_entries_count
+
 from .prompts import update_decisions_prompt
 from .validation import ISSUE_CATEGORY_LABEL
 
@@ -57,7 +59,7 @@ class MediatorRecords:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs.get("max_iterations", 3),
             "round_discussion_count": len(round_discussions),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "issue_id": (issue_context.get("issue") or {}).get("id", ""),
             "has_existing_design_rationale": bool(kwargs.get("existing_md")),
         }
@@ -147,7 +149,7 @@ class MediatorRecords:
     ) -> Dict:
         user_prompt = update_decisions_prompt(
             round_discussions=round_discussions,
-            conflicts=artifact.get("conflicts", []),
+            conflicts=all_conflict_rows(artifact),
         )
 
         messages = self.build_direct_messages(user_prompt)
@@ -160,7 +162,7 @@ class MediatorRecords:
 
         return {
             "new_decisions": dict_rows(response.get("new_decisions", [])),
-            "conflicts": dict_rows(response.get("conflicts", artifact.get("conflicts", []))),
+            "conflicts": dict_rows(response.get("conflicts", all_conflict_rows(artifact))),
             "new_conflicts": dict_rows(response.get("new_conflicts", [])),
         }
 

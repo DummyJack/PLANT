@@ -9,6 +9,10 @@ from agents.profile.mediator.validation import issue_proposal as issue_proposal_
 from agents.profile.analyst.requirements import (
     requirement_discussion_pool,
 )
+from agents.profile.analyst.conflict_store import (
+    all_conflict_rows,
+    set_conflict_entries,
+)
 
 
 def requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -44,7 +48,7 @@ def build_round_status_summary(
 ) -> Dict[str, Any]:
     requirements = [r for r in requirement_discussion_pool(artifact) if isinstance(r, dict)]
     open_questions = [q for q in (artifact.get("open_questions", []) or []) if isinstance(q, dict)]
-    conflicts = [c for c in (artifact.get("conflicts", []) or []) if isinstance(c, dict)]
+    conflicts = [c for c in all_conflict_rows(artifact) if isinstance(c, dict)]
     pending_decisions = [r for r in (artifact.get("pending_decisions", []) or []) if isinstance(r, dict)]
     incomplete_requirements = [
         r for r in requirements
@@ -77,19 +81,6 @@ def save_meeting_preparation_outputs(
     round_num: int,
 ) -> None:
     coordinator.flow.store.save_artifact(artifact)
-    if artifact.get("conflicts"):
-        previous_report = (
-            coordinator.flow.store.load_markdown(f"conflict_report_v{round_num - 1}.md")
-            if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown")
-            else ""
-        )
-        conflict_md = coordinator.flow.analyst_agent.generate_conflict_report(
-            artifact, round_num=round_num,
-            recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
-            previous_report=previous_report,
-        )
-        coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
-        coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
     draft_version = round_num
     previous_draft = (
         coordinator.flow.store.load_draft(draft_version - 1)
@@ -104,7 +95,7 @@ def save_meeting_preparation_outputs(
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.logger.info(
-        "會議準備輸出：artifact + conflict_report + draft_v%s", draft_version,
+        "會議準備輸出：artifact + draft_v%s", draft_version,
     )
 
 
@@ -342,7 +333,7 @@ def apply_mediator_updates(
             return []
         return [row for row in value if isinstance(row, dict)]
 
-    current_conflicts = dict_rows(artifact.get("conflicts", []))
+    current_conflicts = dict_rows(all_conflict_rows(artifact))
     new_decisions = dict_rows(updates.get("new_decisions", []))
     prev_conflicts_by_id = {
         c.get("id"): c for c in current_conflicts if c.get("id")
@@ -382,7 +373,7 @@ def apply_mediator_updates(
             c.setdefault("conflict_type", orig["conflict_type"])
         if orig.get("resolved_by_decision_id") and c.get("label") == "Neutral":
             c.setdefault("resolved_by_decision_id", orig["resolved_by_decision_id"])
-    artifact["conflicts"] = new_conflicts
+    set_conflict_entries(artifact, new_conflicts)
     return {"new_decisions": new_decisions}
 
 

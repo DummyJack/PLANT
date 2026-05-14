@@ -7,6 +7,7 @@ from statistics import mean
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from utils import json_dump_no_scientific
 
 RQ2_DIR = Path(__file__).resolve().parent.parent
@@ -170,7 +171,7 @@ def extract_pair_preds_with_missing(
 ) -> Tuple[List[str], List[int]]:
     """依 pair_index（或 PAIR-xxx id）取得每對最終標籤，並回報未覆蓋 pair。"""
     by_k: Dict[int, str] = {}
-    for c in artifact.get("conflicts", []) or []:
+    for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
             continue
         pi = c.get("pair_index")
@@ -232,7 +233,7 @@ def extract_conflict_review_details(
     details["discussion_mode"] = str(entry.get("discussion_mode") or "")
     details["participants"] = list(entry.get("participants") or [])
     conflicts_by_id: Dict[str, Dict[str, Any]] = {}
-    for c in artifact.get("conflicts", []) or []:
+    for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
             continue
         cid = str(c.get("id") or "").strip()
@@ -280,7 +281,7 @@ def build_pair_changed_flags(
     flags: List[bool] = [False] * n_pairs
     by_k: Dict[int, bool] = {}
 
-    for c in artifact.get("conflicts", []) or []:
+    for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
             continue
         pi = c.get("pair_index")
@@ -341,7 +342,7 @@ def build_pair_review_details(
         if 0 <= ik < n_pairs:
             artifact_reviews_by_pair[ik] = row
 
-    for c in artifact.get("conflicts", []) or []:
+    for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
             continue
         pi = c.get("pair_index")

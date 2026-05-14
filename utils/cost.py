@@ -11,12 +11,8 @@ class CostTracker:
     # 單位：USD / 1M tokens
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
         # 官方定價（Text tokens, Standard）
-        "gpt-5.4": {"input": 2.50, "output": 15.00},
         "gpt-5.2": {"input": 1.75, "output": 14.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
-        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-        "gemini-3.1-flash-lite-preview": {"input": 0.25, "output": 1.50},
-        "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
     }
 
     def __init__(

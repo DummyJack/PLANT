@@ -139,7 +139,6 @@ def run_rq3_flow(flow: Any, scenario: str, stakeholders: List[Dict[str, Any]]) -
     from flow.main import (
         run_one_round,
         sync_project_output_language,
-        write_conflict_report,
     )
 
     rounds = int(flow.config.get("rounds", 1) or 1)
@@ -156,7 +155,6 @@ def run_rq3_flow(flow: Any, scenario: str, stakeholders: List[Dict[str, Any]]) -
     flow.logger.info("=== Phase 0: 初始草稿建立（RQ3 seeded stakeholders） ===")
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
-    write_conflict_report(flow, artifact, round_num=0)
 
     for round_num in range(1, rounds + 1):
         artifact = run_one_round(flow, artifact, round_num)

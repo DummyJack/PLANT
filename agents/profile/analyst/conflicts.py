@@ -5,6 +5,11 @@ from typing import Any, Dict, List, Optional
 
 from storage.markdown import clean_llm_output
 
+from .conflict_store import (
+    conflict_entries_count,
+    set_multiple_conflicts,
+    set_pair_conflicts,
+)
 from .requirements import requirement_discussion_pool
 from .validation import conflict_records, signoff_decisions
 
@@ -36,7 +41,7 @@ class AnalystConflicts:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs.get("max_iterations", 3),
             "requirements_count": len(requirement_discussion_pool(artifact)),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "discussion_rows_count": len(kwargs.get("discussion_rows") or []),
             "proposal_count": len(kwargs.get("proposal_list") or []),
         }
@@ -279,7 +284,7 @@ Neutral 判準：
         )
         if missing_pairs:
             missing_rows = [pair_rows[i] for i in missing_pairs]
-            self.logger.info("兩兩衝突補判 Missing %s 對", len(missing_rows))
+            self.logger.info("兩兩衝突補判 %s 對（Missing: %s）", len(missing_rows), len(missing_pairs))
             retry_conflicts = self.run_pair_conflict_detection(
                 base_task=base_task,
                 context=context,
@@ -327,7 +332,7 @@ Neutral 判準：
             if still_missing:
                 raise RuntimeError(f"兩兩 Conflict 分析仍缺少 pair_index: {still_missing}")
 
-        return {**artifact, "conflicts": pair_conflicts}
+        return set_pair_conflicts({**artifact}, pair_conflicts)
 
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
         """用 reqt_candidates 做 3+ 需求群組衝突判斷，並附加到既有兩兩結果。"""
@@ -361,15 +366,12 @@ Neutral 判準：
         ]
         self.logger.info("整體衝突判斷：%s 筆 3+ 需求衝突", len(holistic_conflicts))
 
-        merged: List[Dict[str, Any]] = [
-            dict(row) for row in (artifact.get("conflicts") or [])
-            if isinstance(row, dict)
-        ]
-        for row in holistic_conflicts:
+        multiple_rows: List[Dict[str, Any]] = []
+        for idx, row in enumerate(holistic_conflicts, 1):
             item = dict(row)
-            item["id"] = f"PAIR-{len(merged) + 1}"
-            merged.append(item)
-        return {**artifact, "conflicts": merged}
+            item["id"] = f"MULTIPLE-{idx}"
+            multiple_rows.append(item)
+        return set_multiple_conflicts({**artifact}, multiple_rows)
 
     def execute_conflict_detection(self, artifact: Dict) -> Dict:
         """相容入口：先做兩兩判斷，再做 3+ 需求整體衝突判斷。"""
@@ -384,20 +386,20 @@ Neutral 判準：
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, Any]], str]:
-        """Analyst 根據逐 pair review、原文與會議發言做需求關係標籤確認。"""
+        """Analyst 根據逐項 review、原文與會議發言做需求關係標籤確認。"""
         if not proposal_list:
             return [], ""
         prompt = (
-            "你是資深需求分析師（Analyst）。請根據 requirement pair 原文與各 agent 的逐筆 pair_reviews，"
-            "對每筆 Conflict/Neutral pair 做最終裁定。\n\n"
+            "請根據 requirements 原文與各 agent 的逐筆 pair_reviews，"
+            "對每筆 Conflict/Neutral 項目做最終裁定。\n\n"
             f"# 待裁定項目\n{json.dumps(proposal_list, ensure_ascii=False, indent=2)}\n\n"
             f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
             f"# 補充會議內容（僅在 pair_reviews 不足時參考）\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 裁定規則\n"
-            "- 先看 requirement_a / requirement_b 原文，再看各 agent 的 pair_reviews。\n"
+            "- 先看 requirements 原文，再看各 agent 的 pair_reviews。\n"
             "- discussion_rows 只在 pair_reviews 證據不足時作補充參考。\n"
             "- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。\n"
-            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirement_a / requirement_b 原文本身已足以明確推翻現標籤。\n"
+            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirements 原文本身已足以明確推翻現標籤。\n"
             "- 若證據不足、理由不一致或沒有明確共識，維持 current_label。\n"
             "- Conflict 只在兩項需求無法同時成立，或一方成立會直接違反另一方時成立。\n"
             "- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也可裁定為 Conflict。\n"
@@ -405,7 +407,7 @@ Neutral 判準：
             "- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。\n"
             "- 若支持 Neutral 的 pair_reviews 主要以子集、細化、補充步驟或同流程關係作為理由，必須重新檢查是否其實已存在直接語義關係；若存在，不可僅因不互斥就維持 Neutral。\n"
             "- 若 pair 呈現重複、近似重複、細化、範圍重疊，或同一需求槽位的措辭、限制、觸發條件、數量、頻率差異，需檢查是否必須合併、改寫、刪除或裁定；若是，不可維持 Neutral。\n"
-            "- 你必須對 proposal_list 中的每一個 pair 都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
+            "- 你必須對 proposal_list 中的每一個項目都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
             "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n"
             "- 請直接做最終裁定，不要重述整場會議。\n\n"
             "# 輸出 JSON array\n"
@@ -444,13 +446,13 @@ Neutral 判準：
         if not decision_list:
             return [], ""
         prompt = (
-            "以下每筆 Conflict/Neutral pair 的 final_label 已經決定。"
+            "以下每筆 Conflict/Neutral 項目的 final_label 已經決定。"
             "請在不改變 final_label 的前提下，整理一段可放入紀錄的最終理由。\n\n"
-            f"# 已決定的 pairs\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
+            f"# 已決定的項目\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
             f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
             f"# 補充會議內容\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 規則\n"
-            "- 不可新增、刪除或改變任何 pair 的 final_label/new_label。\n"
+            "- 不可新增、刪除或改變任何項目的 final_label/new_label。\n"
             "- reason 必須根據需求原文、各 agent 的 pair_reviews 與最終裁定整理。\n"
             "- reason 要清楚說明為什麼最後維持或改成該標籤。\n"
             "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n\n"
@@ -503,41 +505,49 @@ Neutral 判準：
     ) -> str:
         """依 conflict-analyzer skill 與 assets/conflict_report_template.json 結構，從 artifact 產出需求 Conflict 分析報告（Markdown）；含所有 Conflict（含已解決）並標示是否已解決。"""
         _ = recent_decisions_limit
-        decisions = artifact.get("decisions", [])
-        all_conflicts = artifact.get("conflicts", [])
-        context = {
-            "conflicts": all_conflicts,
-            "requirements": requirement_discussion_pool(artifact),
-            "stakeholders": artifact.get("stakeholders", []),
-            "scope": artifact.get("scope", {}),
-            "project_overview": (artifact.get("scope") or {}).get("description", ""),
-            "open_questions": artifact.get("open_questions", []),
-            "decisions": decisions,
-            "round_num": round_num,
-        }
+        conflict_payload = artifact.get("conflict", {}) or {}
+        conflict_rows = (
+            conflict_payload.get("report", [])
+            if isinstance(conflict_payload, dict)
+            else []
+        ) or []
+        conflict_rows = [
+            row for row in conflict_rows
+            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+        ]
+        if not conflict_rows:
+            return ""
+        context = conflict_rows
         previous_report_text = (previous_report or "").strip()
         if previous_report_text:
-            context["previous_conflict_report"] = previous_report_text
-            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中），根據 Context.previous_conflict_report 與最新 Context 修訂需求 Conflict 分析報告。
+            context = {
+                "previous_conflict_report": previous_report_text,
+                "conflicts": conflict_rows,
+            }
+            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中），根據 Context.previous_conflict_report 與最新 Context 修訂需求衝突報告。
 
 規則：
-- Context.conflicts 全部都要列入。
-- label=Conflict 視為 unresolved；label=Neutral 視為 resolved。
-- resolved / unresolved 統計請與此規則一致。
+- Context.conflicts 已經是完成衝突再審查後仍被判定為 Conflict 的項目。
+- 請直接整理成報告，不要重新分類、不新增衝突、不移除項目。
+- 每一筆 Context.conflicts 都要列入報告，並保留 id、涉及需求與 description。
+- Context.conflicts 中的 req_1、req_2、req_N 已經是需求原文。
+- 若 description 已足夠，直接使用；不足時只能基於該筆 req_N 原文補充說明。
 - 這是報告迭代修訂，不是從零重寫；保留上一版仍有效的章節與文字。
-- 若上一版內容已被最新 conflicts、requirements 或 decisions 推翻，必須更新或移除。
-- 本報告只整理需求關係、衝突狀態、影響需求與待確認缺口。
+- 若上一版內容已被最新 Context.conflicts 推翻，必須更新或移除。
+- 不要討論 Neutral、resolved、unresolved 統計。
 - 其餘章節依 report_template 結構整理。
 
 只輸出 Markdown，勿輸出 JSON 或程式碼區塊。"""
         else:
-            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中）產出需求 Conflict 分析報告。
+            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中）產出需求衝突報告。
 
 規則：
-- Context.conflicts 全部都要列入。
-- label=Conflict 視為 unresolved；label=Neutral 視為 resolved。
-- resolved / unresolved 統計請與此規則一致。
-- 本報告只整理需求關係、衝突狀態、影響需求與待確認缺口。
+- Context 是一個 list，內容已經是完成衝突再審查後仍被判定為 Conflict 的項目。
+- 請直接整理成報告，不要重新分類、不新增衝突、不移除項目。
+- 每一筆 Context item 都要列入報告，並保留 id、涉及需求與 description。
+- Context item 中的 req_1、req_2、req_N 已經是需求原文。
+- 若 description 已足夠，直接使用；不足時只能基於該筆 req_N 原文補充說明。
+- 不要討論 Neutral、resolved、unresolved 統計。
 - 其餘章節依 report_template 結構整理。
 
 只輸出 Markdown，勿輸出 JSON 或程式碼區塊。"""

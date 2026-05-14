@@ -1,6 +1,10 @@
 import json
 from typing import Any, Dict, List
 
+from storage.artifact import conflicts_payload
+
+from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
+
 from .record import build_pair_review_records
 from .support import (
     analyst_signoff_conflict_recheck,
@@ -12,6 +16,44 @@ from .support import (
     normalize_conflict_review_statement_for_record,
 )
 # ---------- 衝突再審查主流程 ----------
+
+def save_conflict_report_from_conflict_payload(
+    coordinator: Any,
+    artifact: Dict[str, Any],
+    *,
+    round_num: int,
+) -> None:
+    """根據 artifact/conflict.json 產生 conflict_report.md。"""
+    coordinator.flow.store.save_artifact(artifact)
+    payload = conflicts_payload(artifact)
+    conflict_rows = [
+        row for row in (payload.get("report", []) or [])
+        if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+    ]
+    if not conflict_rows:
+        return
+    previous_report = (
+        coordinator.flow.store.load_markdown(f"conflict_report_v{round_num - 1}.md")
+        if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown")
+        else ""
+    )
+    report_artifact = {
+        **artifact,
+        "conflict": payload,
+        "conflict_rows": conflict_rows,
+    }
+    conflict_md = coordinator.flow.analyst_agent.generate_conflict_report(
+        report_artifact,
+        round_num=round_num,
+        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
+        previous_report=previous_report,
+    )
+    coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
+    coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
+    coordinator.flow.logger.info(
+        "需求衝突報告已產生：conflict_report_v%s.md",
+        round_num,
+    )
 
 def run_conflict_review_round(
     coordinator: Any,
@@ -77,16 +119,16 @@ def run_conflict_review_round(
 def conflict_review(
     coordinator: Any, artifact: Dict[str, Any], round_num: int
 ) -> Dict[str, Any]:
-    """針對本輪所有 Conflict/Neutral pairs 執行一次衝突再審查與逐筆裁定。"""
+    """針對本輪所有 Conflict/Neutral 項目執行一次衝突再審查與逐筆裁定。"""
+    normalize_conflict_state(artifact)
     candidates = [
         c
-        for c in (artifact.get("conflicts", []) or [])
+        for c in all_conflict_rows(artifact)
         if isinstance(c, dict) and str(c.get("label") or "").strip() in {"Conflict", "Neutral"}
     ]
     if not candidates:
         coordinator.flow.logger.info("需求衝突再審查：無需處理項目")
         return artifact
-
     conflicts_by_id: Dict[str, Dict[str, Any]] = {
         str(c.get("id") or "").strip(): c
         for c in candidates
@@ -105,11 +147,14 @@ def conflict_review(
         label = str(conflict.get("label") or "").strip()
         desc = (conflict.get("description") or "").strip()
         req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
-        conflict_summaries.append(f"- [{cid}] 標籤={label}  需求={req_ids}  描述: {desc}")
-        req_a_id = req_ids[0] if len(req_ids) >= 1 else ""
-        req_b_id = req_ids[1] if len(req_ids) >= 2 else ""
-        req_a = requirement_by_id.get(req_a_id, {})
-        req_b = requirement_by_id.get(req_b_id, {})
+        is_multiple = len(req_ids) >= 3 or cid.startswith("MULTIPLE-")
+        review_focus = (
+            "判斷這組 3 條以上 requirements 共同成立時是否產生衝突；不要只挑其中任兩條重複做 pair 判斷。"
+            if is_multiple
+            else ""
+        )
+        focus_line = f"  判斷焦點: {review_focus}" if review_focus else ""
+        conflict_summaries.append(f"- [{cid}] 標籤={label}  需求={req_ids}  描述: {desc}{focus_line}")
         req_rows = [
             {
                 "id": rid,
@@ -124,24 +169,12 @@ def conflict_review(
             "current_conflict_type": str(conflict.get("conflict_type") or "").strip(),
             "requirement_ids": req_ids,
             "requirements": req_rows,
-            "requirement_a": {
-                "id": req_a_id,
-                "text": str(req_a.get("text") or "").strip(),
-            },
-            "requirement_b": {
-                "id": req_b_id,
-                "text": str(req_b.get("text") or "").strip(),
-            },
         })
-        conflict["requirement_a"] = {
-            "id": req_a_id,
-            "text": str(req_a.get("text") or "").strip(),
-        }
-        conflict["requirement_b"] = {
-            "id": req_b_id,
-            "text": str(req_b.get("text") or "").strip(),
-        }
+        if review_focus:
+            pair_cards[-1]["review_focus"] = review_focus
         conflict["requirements"] = req_rows
+        if review_focus:
+            conflict["review_focus"] = review_focus
 
     plan = coordinator.flow.mediator_agent.plan_conflict_review(
         candidates[0], artifact=artifact, registry=coordinator.flow.registry
@@ -368,4 +401,5 @@ def conflict_review(
     )
 
     coordinator.flow.logger.info("需求衝突再審查完成：%s 筆，改判 %s 筆", len(conflicts_by_id), changed)
+    save_conflict_report_from_conflict_payload(coordinator, artifact, round_num=round_num)
     return artifact

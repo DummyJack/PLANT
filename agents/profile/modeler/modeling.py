@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
 from agents.skills.base import get_skill
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 from .validation import (
     ALLOWED_DIAGRAM_TYPES,
@@ -28,7 +29,7 @@ class ModelerModeling:
             "requirements": requirement_discussion_pool(artifact),
             "stakeholders": artifact.get("stakeholders", []) or [],
             "scope": artifact.get("scope", {}) or {},
-            "conflicts": artifact.get("conflicts", []) or [],
+            "conflicts": all_conflict_rows(artifact),
             "open_questions": artifact.get("open_questions", []) or [],
             "feedback": {"domain_research": feedback.get("domain_research", {}) or {}},
             "elicitation": artifact.get("elicitation", {}) or {},

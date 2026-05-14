@@ -10,6 +10,7 @@
 from typing import Any, Dict, Optional
 
 from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.profile.analyst.conflict_store import conflict_entries_count
 from agents.profile.mediator.meeting_runner import (
     run_meeting_loop as run_mediator_meeting_loop,
     run_round_opa_loop as run_mediator_round_opa_loop,
@@ -121,7 +122,7 @@ class MeetingCoordinator:
             "stage": stage,
             "round_num": round_num,
             "requirements_count": len(requirement_discussion_pool(artifact)),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "open_questions_count": len(artifact.get("open_questions", []) or []),
         }
         decision = {

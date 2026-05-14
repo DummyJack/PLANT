@@ -17,8 +17,6 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
     source = dict(details)
     source.pop("pair_id", None)
     source.pop("topic_id", None)
-    source.pop("req_a", None)
-    source.pop("req_b", None)
     source.pop("requirement_ids", None)
 
     source.pop("reason", None)
@@ -41,6 +39,7 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
                 continue
             item = dict(review)
             item.pop("id", None)
+            item.pop("confidence", None)
             item.pop("independent_label", None)
             if "rationale" in item and "reason" not in item:
                 item["reason"] = item.pop("rationale")
@@ -137,10 +136,10 @@ def build_rq2_record_by_type(
             if final_label:
                 base["pred"] = final_label
             conflict_meeting = {
-                "description": description or str(details.get("description") or "").strip(),
                 "status": str(details.get("status") or "").strip(),
                 "initial_label": str(details.get("initial_label") or "").strip(),
                 "final_label": final_label,
+                "description": description or str(details.get("description") or "").strip(),
                 "details": review_details,
             }
             base["conflict_meeting"] = [conflict_meeting]
@@ -198,11 +197,12 @@ def write_rq2_outputs(
     prefix: str,
     results_dir: Path,
     result: Dict[str, Any],
-    record: List[Dict[str, Any]],
+    record: Dict[str, Any],
     cost: Dict[str, Any],
-    reqt_pairs: Optional[List[Dict[str, Any]]] = None,
+    conflict: Optional[Dict[str, Any]] = None,
+    requirements: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Path]:
-    """寫入 RQ2 result / record / cost 與 reqt_pairs 輸出檔案。"""
+    """寫入 RQ2 result / record / cost 與 artifact-style 輸出檔案。"""
     results_dir.mkdir(parents=True, exist_ok=True)
     run_idx = next_result_index(prefix, results_dir)
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
@@ -210,7 +210,8 @@ def write_rq2_outputs(
     cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"
     plant_dir = results_dir / prefix
     plant_dir.mkdir(parents=True, exist_ok=True)
-    reqt_pairs_path = plant_dir / f"reqt_pairs_{run_idx}.json"
+    conflict_path = plant_dir / f"conflict_{run_idx}.json"
+    requirements_path = plant_dir / f"requirements_{run_idx}.json"
 
     with result_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -218,14 +219,17 @@ def write_rq2_outputs(
         json_dump_no_scientific(record, f, indent=2, ensure_ascii=False)
     with cost_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(cost, f, indent=2, ensure_ascii=False)
-    with reqt_pairs_path.open("w", encoding="utf-8") as f:
-        json_dump_no_scientific(reqt_pairs or [], f, indent=2, ensure_ascii=False)
+    with conflict_path.open("w", encoding="utf-8") as f:
+        json_dump_no_scientific(conflict or {}, f, indent=2, ensure_ascii=False)
+    with requirements_path.open("w", encoding="utf-8") as f:
+        json_dump_no_scientific(requirements or {}, f, indent=2, ensure_ascii=False)
 
     return {
         "result": result_path,
         "record": record_path,
         "cost": cost_path,
-        "reqt_pairs": reqt_pairs_path,
+        "conflict": conflict_path,
+        "requirements": requirements_path,
     }
 
 def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:

@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from storage.markdown import clean_llm_output
 
 
@@ -109,7 +110,7 @@ class DocumentorSrs:
         ]
         resolved_conflicts = [
             dict(row)
-            for row in (artifact.get("conflicts", []) or [])
+            for row in all_conflict_rows(artifact)
             if isinstance(row, dict) and str(row.get("label") or "").strip() == "Neutral"
         ]
 

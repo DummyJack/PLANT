@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import closure_vote_prompt as build_closure_vote_prompt
@@ -15,16 +16,15 @@ class MediatorAgentSupport:
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
             "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
-            "請先根據每個 pair 的 requirement_a / requirement_b 原文獨立重判，"
+            "請先根據每個項目的 requirements 原文獨立重判，"
             "並將重判結果填入 proposed_label（Conflict 或 Neutral）。\n"
             "你必須同時做兩層檢視：\n"
             "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
-            "2) 逐筆檢視：每個 [PAIR-xxx] 都必須明確寫出：\n"
+            "2) 逐筆檢視：每個 [PAIR-xxx] 或 [MULTIPLE-xxx] 都必須明確寫出：\n"
             "   - proposed_label: 你重判後建議採用的標籤（Conflict 或 Neutral）\n"
             "   - confidence: high / medium / low\n"
             "   - reason: 一句到兩句審查理由，需說明你的獨立判斷依據\n"
             "reason 只能填純理由文字，不要包含 id、proposed_label、confidence 或欄位名稱。\n"
-            "Neutral 的定義：兩項需求既不衝突、也不重複，且沒有直接語義關係。\n\n"
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
 
@@ -154,7 +154,7 @@ class MediatorAgentSupport:
                 "label": c.get("label"),
                 "description": (c.get("description") or ""),
             }
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
         ]
         oqs = [
             {"from_agent": q.get("from_agent"), "question": (q.get("question") or "")}

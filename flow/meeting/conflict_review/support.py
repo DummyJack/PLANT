@@ -3,10 +3,11 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
 from agents.profile.analyst.requirements import next_requirement_id, requirement_discussion_pool
 
-PAIR_ID_RE = re.compile(
-    r"\[(PAIR[^\]]+)\]|\"id\"\s*:\s*\"(PAIR[^\"]+)\"|\b(PAIR-\d+)\b",
+CONFLICT_ITEM_ID_RE = re.compile(
+    r"\[((?:PAIR|MULTIPLE)[^\]]+)\]|\"id\"\s*:\s*\"((?:PAIR|MULTIPLE)[^\"]+)\"|\b((?:PAIR|MULTIPLE)-\d+)\b",
     re.IGNORECASE,
 )
 LABEL_RE = re.compile(r"\b(Conflict|Neutral)\b", re.IGNORECASE)
@@ -27,13 +28,14 @@ def mark_conflicts_resolved_by_ids(
     if not conflict_ids:
         return
     target = {str(cid).strip() for cid in conflict_ids if str(cid).strip()}
-    for c in artifact.get("conflicts", []) or []:
+    for c in all_conflict_rows(artifact):
         cid = str(c.get("id") or "").strip()
         if cid not in target:
             continue
         c["label"] = "Neutral"
         if decision_id:
             c["resolved_by_decision_id"] = decision_id
+    normalize_conflict_state(artifact)
 
 def pair_review_record(
     review: Dict[str, Any],
@@ -108,7 +110,7 @@ def extract_pair_reviews_from_statement(
         line = raw_line.strip()
         if not line:
             continue
-        pair_match = PAIR_ID_RE.search(line)
+        pair_match = CONFLICT_ITEM_ID_RE.search(line)
         if not pair_match:
             continue
         pair_id = (
@@ -192,7 +194,7 @@ def normalize_conflict_review_statement_for_record(
         ).strip()
 
     if not review_summary:
-        first_pair = PAIR_ID_RE.search(text)
+        first_pair = CONFLICT_ITEM_ID_RE.search(text)
         prefix = text[: first_pair.start()].strip() if first_pair else ""
         review_summary = re.sub(
             r"^(overall\s*[:,]?\s*)",
@@ -816,12 +818,6 @@ def analyst_signoff_conflict_recheck(
         "extracted_pair_reviews_preview": extracted_pair_reviews[:3],
         "extracted_pair_reviews": extracted_pair_reviews,
     }
-    coordinator.flow.logger.info(
-        "需求衝突再審查裁定：發言=%s，發言紀錄=%s，pair_reviews=%s",
-        len(contributions or []),
-        len(discussion_rows),
-        len(extracted_pair_reviews),
-    )
     if extracted_pair_reviews:
         coordinator.flow.logger.info(
             "需求衝突再審查裁定：pair_reviews 預覽=%s",

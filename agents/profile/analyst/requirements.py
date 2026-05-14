@@ -2,6 +2,8 @@
 import re
 from typing import Any, Dict, List
 
+from .conflict_store import all_conflict_rows, requirement_ids
+
 
 def requirement_candidate(
     candidate: Dict[str, Any],
@@ -119,12 +121,12 @@ def assess_requirements_for_final_meeting(
         if isinstance(req, dict)
     ]
     unresolved_conflict_req_ids = set()
-    for conflict in artifact.get("conflicts", []) or []:
+    for conflict in all_conflict_rows(artifact):
         if not isinstance(conflict, dict):
             continue
         if str(conflict.get("label") or "").strip() != "Conflict":
             continue
-        for rid in conflict.get("requirement_ids", []) or []:
+        for rid in requirement_ids(conflict):
             rid_s = str(rid or "").strip()
             if rid_s:
                 unresolved_conflict_req_ids.add(rid_s)

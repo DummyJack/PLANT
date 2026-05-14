@@ -2,6 +2,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from agents.profile.analyst.conflict_store import all_conflict_rows, conflict_entries_count
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import (
@@ -158,7 +159,7 @@ class MediatorIssuePlanning:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs.get("max_iterations", 3),
             "requirements_count": len(requirement_discussion_pool(artifact)),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "open_questions_count": len(artifact.get("open_questions", []) or []),
             "issue_pool_count": len(issue_pool or []) if isinstance(issue_pool, list) else 0,
         }
@@ -780,7 +781,7 @@ class MediatorIssuePlanning:
             )
         conflicts = [
             c
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
             if c.get("id", "") not in skip_source_ids
         ]
         if conflicts:
@@ -1044,7 +1045,7 @@ class MediatorIssuePlanning:
 
         n_candidates = 0
         if isinstance(artifact, dict):
-            for c in artifact.get("conflicts") or []:
+            for c in all_conflict_rows(artifact):
                 if not isinstance(c, dict):
                     continue
                 if str(c.get("label") or "").strip() in {"Conflict", "Neutral"}:

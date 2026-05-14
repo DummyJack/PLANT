@@ -3,6 +3,7 @@ import json
 from typing import Dict, Optional
 
 from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.profile.analyst.conflict_store import all_conflict_rows
 
 from .validation import domain_research_payload, research_result_payload
 
@@ -105,13 +106,13 @@ class ExpertDomainResearch:
         conflicts = [
             {"id": c.get("id"),
              "description": (c.get("description") or "")}
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
             if c.get("label") == "Conflict"
         ]
         neutrals = [
             {"id": c.get("id"),
              "description": (c.get("description") or "")}
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
             if c.get("label") == "Neutral"
         ]
         disc_summaries = []

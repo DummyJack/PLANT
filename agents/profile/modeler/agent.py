@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
+from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .modeling import ModelerModeling
@@ -145,7 +146,7 @@ class ModelerAgent(
         neutrals = [
             {"id": c.get("id"),
              "description": (c.get("description") or "")}
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
             if c.get("label") == "Neutral"
         ]
         conflicts_summary = [
@@ -155,7 +156,7 @@ class ModelerAgent(
                 "description": (c.get("description") or ""),
                 "requirement_ids": c.get("requirement_ids", []),
             }
-            for c in artifact.get("conflicts", [])
+            for c in all_conflict_rows(artifact)
             if isinstance(c, dict)
         ]
         return {
@@ -217,7 +218,7 @@ class ModelerAgent(
                         "description": c.get("description"),
                         "requirement_ids": c.get("requirement_ids", []),
                     }
-                    for c in artifact.get("conflicts", [])
+                    for c in all_conflict_rows(artifact)
                     if isinstance(c, dict)
                 ],
                 "open_questions": artifact.get("open_questions", []),

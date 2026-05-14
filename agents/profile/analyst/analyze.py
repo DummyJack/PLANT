@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from storage.markdown import clean_llm_output
 
+from .conflict_store import all_conflict_rows, conflict_entries_count
 from .validation import (
     requirement_record as analyst_requirement_record,
     requirement_records,
@@ -77,7 +78,7 @@ class AnalystRequirements:
             "stakeholder_count": len(stakeholders),
             "requirements_count": len(requirement_discussion_pool(artifact)),
             "decisions_count": len(artifact.get("decisions", []) or []),
-            "conflicts_count": len(artifact.get("conflicts", []) or []),
+            "conflicts_count": conflict_entries_count(artifact),
             "has_scope": bool(artifact.get("scope")),
         }
 
@@ -166,8 +167,9 @@ class AnalystRequirements:
             req_pool = requirement_discussion_pool(artifact)
             if req_pool:
                 context["requirements"] = req_pool
-            if artifact.get("conflicts"):
-                context["conflicts"] = artifact["conflicts"]
+            conflict_entries = all_conflict_rows(artifact)
+            if conflict_entries:
+                context["conflicts"] = conflict_entries
         task = """# 任務
 根據 rough_idea、stakeholder text、reqt_candidates 與目前會議結果，界定本專案需求範圍。
 
@@ -270,7 +272,7 @@ class AnalystRequirements:
             "stakeholders": artifact.get("stakeholders", []),
             "stakeholder_names": stakeholder_names,
             "requirements": requirements,
-            "conflicts": artifact.get("conflicts", []),
+            "conflicts": all_conflict_rows(artifact),
             "open_questions": artifact.get("open_questions", []),
             "decisions": decisions,
             "draft_version": draft_version if draft_version is not None else 0,
@@ -362,7 +364,7 @@ class AnalystRequirements:
             "requirements": artifact.get("requirements", []),
             "decisions": artifact.get("decisions", []),
             "discussions": artifact.get("discussions", []),
-            "conflicts": artifact.get("conflicts", []),
+            "conflicts": all_conflict_rows(artifact),
             "scope": artifact.get("scope", {}),
         }
         task = """請基於 Context.requirements 更新需求，重點是消化已明確形成的 decisions / discussions 對需求文字與驗收欄位的影響。
@@ -386,7 +388,7 @@ class AnalystRequirements:
             self.logger.warning(f"draft 更新失敗: {e}")
             return {
                 "requirements": artifact.get("requirements", []),
-                "conflicts": artifact.get("conflicts", []),
+                "conflicts": all_conflict_rows(artifact),
                 "requirement_change_candidates": [],
             }
         requirements = data.get("requirements", artifact.get("requirements", []))
@@ -410,7 +412,7 @@ class AnalystRequirements:
         )
         return {
             "requirements": requirements,
-            "conflicts": artifact.get("conflicts", []),
+            "conflicts": all_conflict_rows(artifact),
             "requirement_change_candidates": change_candidates,
         }
 
@@ -420,7 +422,7 @@ class AnalystRequirements:
             "reqt_candidates": candidate_pool,
             "decisions": artifact.get("decisions", []),
             "discussions": artifact.get("discussions", []),
-            "conflicts": artifact.get("conflicts", []),
+            "conflicts": all_conflict_rows(artifact),
             "scope": artifact.get("scope", {}),
             "stakeholders": artifact.get("stakeholders", []),
             "elicitation": artifact.get("elicitation", {}),
@@ -466,7 +468,7 @@ class AnalystRequirements:
             normalized.append(row)
         return {
             "requirements": normalized,
-            "conflicts": artifact.get("conflicts", []),
+            "conflicts": all_conflict_rows(artifact),
             "requirement_change_candidates": [],
         }
 

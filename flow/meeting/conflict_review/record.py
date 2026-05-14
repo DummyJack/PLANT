@@ -41,21 +41,20 @@ def build_pair_review_records(
             review_row = dict(row)
             review_row.pop("review_round", None)
             meeting_conflict_review.setdefault(key, []).append(review_row)
-        records.append(
-            {
-                "id": pair_id,
-                "round": round_num,
-                "req_a": req_ids[0] if len(req_ids) >= 1 else "",
-                "req_b": req_ids[1] if len(req_ids) >= 2 else "",
-                "initial_label": str(
-                    (conflict.get("conflict_review") or conflict.get("pre_meeting_review") or {}).get("from_label")
-                    or conflict.get("label")
-                    or ""
-                ).strip(),
-                "final_label": final_label,
-                "description": str(decision.get("reason") or "").strip(),
-                "decided_by": str(decision.get("decided_by") or "").strip(),
-                "meeting_conflict_review": meeting_conflict_review,
-            }
-        )
+        record = {
+            "id": pair_id,
+            "round": round_num,
+            "initial_label": str(
+                (conflict.get("conflict_review") or conflict.get("pre_meeting_review") or {}).get("from_label")
+                or conflict.get("label")
+                or ""
+            ).strip(),
+            "final_label": final_label,
+            "description": str(decision.get("reason") or "").strip(),
+            "decided_by": str(decision.get("decided_by") or "").strip(),
+            "meeting_conflict_review": meeting_conflict_review,
+        }
+        for idx, req_id in enumerate(req_ids, 1):
+            record[f"req_{idx}"] = req_id
+        records.append(record)
     return records

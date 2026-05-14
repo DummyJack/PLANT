@@ -19,7 +19,7 @@ from Plant.utils import default_csv_path, load_rq2_dataset
 PROMPT_FOR_RUNS = True
 
 
-def choose_scenario(data_path: Optional[Path]) -> Optional[str]:
+def choose_scenarios(data_path: Optional[Path]) -> Optional[list[str]]:
     path = data_path or default_csv_path()
     try:
         rows, _ = load_rq2_dataset(path)
@@ -41,17 +41,25 @@ def choose_scenario(data_path: Optional[Path]) -> Optional[str]:
     for idx, scenario in enumerate(scenarios, 1):
         print(f"  {idx}. {scenario}（{scenario_counts[scenario]} 筆）")
 
-    raw_scenario = input("請選擇要執行的情境（Enter: 全部，輸入編號）：").strip()
+    raw_scenario = input("請選擇要執行的情境（Enter: 全部，可輸入 1,3,5）：").strip()
     if not raw_scenario:
         return None
-    if raw_scenario.isdigit():
-        selected_idx = int(raw_scenario)
-        if 1 <= selected_idx <= len(scenarios):
-            return scenarios[selected_idx - 1]
-        print("錯誤：情境編號超出範圍")
+    tokens = [token.strip() for token in raw_scenario.split(",") if token.strip()]
+    if not tokens or any(not token.isdigit() for token in tokens):
+        print("錯誤：請輸入情境編號；多個情境請使用 1,3,5 格式")
         sys.exit(1)
-    print("錯誤：請輸入情境編號")
-    sys.exit(1)
+    selected: list[str] = []
+    seen: set[int] = set()
+    for token in tokens:
+        selected_idx = int(token)
+        if selected_idx < 1 or selected_idx > len(scenarios):
+            print("錯誤：情境編號超出範圍")
+            sys.exit(1)
+        if selected_idx in seen:
+            continue
+        seen.add(selected_idx)
+        selected.append(scenarios[selected_idx - 1])
+    return selected
 
 
 def main() -> None:
@@ -61,7 +69,7 @@ def main() -> None:
         arg_path = Path(sys.argv[1]).expanduser()
         data_path = arg_path if arg_path.is_absolute() else (Path.cwd() / arg_path).resolve()
 
-    scenario = choose_scenario(data_path)
+    scenarios = choose_scenarios(data_path)
     count = 0
 
     if PROMPT_FOR_RUNS:
@@ -80,7 +88,7 @@ def main() -> None:
     else:
         runs = 1
 
-    run_experiments(count=count, runs=runs, data_path=data_path, scenario=scenario)
+    run_experiments(count=count, runs=runs, data_path=data_path, scenarios=scenarios)
 
 
 if __name__ == "__main__":

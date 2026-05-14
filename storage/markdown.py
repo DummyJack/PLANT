@@ -16,14 +16,12 @@ def clean_llm_output(text: str) -> str:
 
 def markdown_target_dir(artifact_dir: Path, output_dir: Path, filename: str) -> Path:
     """指定輸出檔案放置目錄。"""
-    if filename in {"srs.md", "design_rationale.md"}:
+    if filename in {"srs.md", "design_rationale.md", "conflict_report.md"}:
         return output_dir
     if filename.startswith("R") and filename.endswith(".md"):
         return artifact_dir / "MoM"
-    if filename == "conflict_report.md" or (
-        filename.startswith("conflict_report_v") and filename.endswith(".md")
-    ):
-        return artifact_dir / "MoM"
+    if filename.startswith("conflict_report_v") and filename.endswith(".md"):
+        return artifact_dir / "report"
     return artifact_dir
 
 
@@ -38,6 +36,10 @@ def save_markdown(
     filepath = target_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+    if filename.startswith("conflict_report"):
+        for legacy_path in (artifact_dir / filename, artifact_dir / "MoM" / filename):
+            if legacy_path.exists():
+                legacy_path.unlink()
 
 
 def load_markdown(artifact_dir: Path, output_dir: Path, filename: str) -> str:
