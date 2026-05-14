@@ -16,7 +16,7 @@ def format_loaded_models_summary(config: dict) -> str:
         parts.append(f"{name}: {model_name}")
     if not parts:
         return "✓ 載入配置（agent_models 無有效項目）"
-    return "✓ 載入配置 — " + "；".join(parts)
+    return "✓ 載入配置 — " + " | ".join(parts)
 
 
 def human_setting(config: Dict[str, Any], key: str, default: Any) -> Any:

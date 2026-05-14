@@ -2,7 +2,36 @@
 from typing import Dict, List
 
 
+STAKEHOLDER_CATEGORY_LABELS = {
+    "Primary Users": "核心使用者",
+    "System Owners & Management": "系統所有者與管理者",
+    "External Parties": "外部相關單位",
+}
+
+
 class Collect:
+    @staticmethod
+    def scenario_selection(scenarios: List[Dict[str, str]]) -> Dict[str, str]:
+        while True:
+            print("\n請選擇你想要做的情境：")
+            for i, scenario in enumerate(scenarios, 1):
+                title = str(scenario.get("title") or "").strip()
+                application_type = str(scenario.get("application_type") or "").strip()
+                suffix = f"（{application_type}）" if application_type else ""
+                print(f"{i}. {title}{suffix}")
+
+            user_input = input("\n請選擇情境編號：").strip()
+            if not user_input:
+                print("\n❌ 請選擇一個情境")
+                continue
+            try:
+                idx = int(user_input) - 1
+            except ValueError:
+                return {"title": user_input, "custom": True}
+            if 0 <= idx < len(scenarios):
+                return scenarios[idx]
+            print(f"\n⚠️ 編號 {user_input} 無效，請重新選擇")
+
     @staticmethod
     def user_selection(
         proposed: List[Dict[str, str]], max_select: int = 5
@@ -10,9 +39,10 @@ class Collect:
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
-                category = str(sh.get("category") or "").strip()
-                category_label = f" [{category}]" if category else ""
-                print(f"{i}. {sh['name']}{category_label}，理由: {sh['reason']}")
+                stakeholder_type = str(sh.get("type") or "").strip()
+                display_type = STAKEHOLDER_CATEGORY_LABELS.get(stakeholder_type, stakeholder_type)
+                type_label = f"({display_type})" if display_type else ""
+                print(f"{i}. {sh['name']}{type_label}，理由: {sh['reason']}")
 
             print(
                 "\n提示: 可以輸入編號或直接輸入新的利害關係人名稱(例如: 1,3,系統管理員)"
@@ -25,6 +55,7 @@ class Collect:
 
             try:
                 selected_indices = []
+                has_invalid_selection = False
                 parts = [x.strip() for x in user_input.split(",")]
 
                 for part in parts:
@@ -33,11 +64,16 @@ class Collect:
                         if 0 <= idx < len(proposed):
                             selected_indices.append(idx)
                         else:
-                            print(f"\n⚠️ 編號 {part} 無效，已忽略")
+                            print(f"\n⚠️ 編號 {part} 無效，請重新選擇")
+                            has_invalid_selection = True
+                            break
                     except ValueError:
                         if part:
                             proposed.append({"name": part, "reason": "使用者自訂"})
                             selected_indices.append(len(proposed) - 1)
+
+                if has_invalid_selection:
+                    continue
 
                 if len(selected_indices) > max_select:
                     print(f"\n⚠️ 選擇超過 {max_select} 個，請重新選擇")
@@ -46,10 +82,6 @@ class Collect:
                 if len(selected_indices) == 0:
                     print("\n❌ 至少需要選擇 1 個利害關係人")
                     continue
-
-                print("\n✓ 已選擇的利害關係人：")
-                for i, idx in enumerate(selected_indices, 1):
-                    print(f"  {i}. {proposed[idx]['name']}")
 
                 return selected_indices
 

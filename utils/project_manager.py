@@ -42,7 +42,7 @@ class ProjectManager:
             print(f"   初始想法: {project.get('rough_idea', '未知')}\n")
 
         print("=" * 60)
-        print("0. 創建新專案\n")
+        print()
 
         while True:
             try:

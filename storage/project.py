@@ -10,13 +10,11 @@ from typing import Any, Dict, List, Optional
 def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
     if not project_path.is_dir():
         return None
-    stakeholders_file = project_path / "artifact" / "stakeholders.json"
-    legacy_project_file = project_path / "artifact" / "project.json"
+    project_file = project_path / "artifact" / "project.json"
     rough_idea = "未知"
-    source_file = stakeholders_file if stakeholders_file.exists() else legacy_project_file
-    if source_file.exists():
+    if project_file.exists():
         try:
-            with open(source_file, "r", encoding="utf-8") as f:
+            with open(project_file, "r", encoding="utf-8") as f:
                 project = json.load(f)
                 rough_idea = project.get("rough_idea", "未知")
         except Exception:

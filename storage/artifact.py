@@ -27,16 +27,14 @@ def stakeholder_record(row: Any) -> Dict[str, Any]:
         text_rows = [str(x).strip() for x in text if str(x).strip()]
     else:
         text_rows = []
-    for key in ("requirements", "goals", "concerns"):
-        value = row.get(key)
-        if isinstance(value, list):
-            text_rows.extend(str(x).strip() for x in value if str(x).strip())
-        elif str(value or "").strip():
-            text_rows.append(str(value).strip())
-    return {
+    record = {
         "name": str(row.get("name") or row.get("id") or "").strip(),
         "text": list(dict.fromkeys(text_rows)),
     }
+    stakeholder_type = str(row.get("type") or "").strip()
+    if stakeholder_type:
+        record["type"] = stakeholder_type
+    return record
 
 
 STAKEHOLDER_GROUPS = (
@@ -46,22 +44,27 @@ STAKEHOLDER_GROUPS = (
 )
 
 def stakeholder_group(row: Dict[str, Any]) -> str:
-    category = str(row.get("category") or row.get("group") or "").strip()
-    if category in STAKEHOLDER_GROUPS:
-        return category
+    stakeholder_type = str(row.get("type") or "").strip()
+    if stakeholder_type in STAKEHOLDER_GROUPS:
+        return stakeholder_type
     return "Primary Users"
 
 
-def stakeholders_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    grouped: Dict[str, List[Dict[str, Any]]] = {key: [] for key in STAKEHOLDER_GROUPS}
+def project_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    stakeholders: List[Dict[str, Any]] = []
     for item in data.get("stakeholders", []) or []:
         row = stakeholder_record(item)
         if not row.get("name") and not row.get("text"):
             continue
-        grouped[stakeholder_group(item if isinstance(item, dict) else row)].append(row)
+        stakeholders.append({
+            "name": row.get("name", ""),
+            "type": stakeholder_group(item if isinstance(item, dict) else row),
+            "text": row.get("text", []),
+        })
     return {
         "rough_idea": data.get("rough_idea", ""),
-        **grouped,
+        "scenario": data.get("scenario", ""),
+        "stakeholders": stakeholders,
     }
 
 
@@ -70,11 +73,18 @@ def stakeholder_rows(payload: Any) -> List[Dict[str, Any]]:
         return [stakeholder_record(row) for row in payload]
     if not isinstance(payload, dict):
         return []
+    if isinstance(payload.get("stakeholders"), list):
+        rows = []
+        for item in payload.get("stakeholders", []) or []:
+            row = stakeholder_record(item)
+            row["type"] = stakeholder_group(item if isinstance(item, dict) else row)
+            rows.append(row)
+        return rows
     rows: List[Dict[str, Any]] = []
     for group in STAKEHOLDER_GROUPS:
         for item in payload.get(group, []) or []:
             row = stakeholder_record(item)
-            row["category"] = group
+            row["type"] = group
             rows.append(row)
     return rows
 
@@ -98,27 +108,21 @@ def stakeholder_names(data: Dict[str, Any]) -> set[str]:
     return names
 
 
-def combined_requirement_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def requirement_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
-    elicitation = data.get("elicitation") if isinstance(data.get("elicitation"), dict) else {}
-    sources = [
-        data.get("reqt_candidates", []) or [],
-        elicitation.get("elicited_reqts", []) or [],
-    ]
-    for source_rows in sources:
-        for item in source_rows:
-            if not isinstance(item, dict):
-                continue
-            marker = str(item.get("text") or item.get("statement") or "").strip().lower()
-            if not marker:
-                marker = str(item.get("id") or "").strip()
-            if marker in seen:
-                continue
-            seen.add(marker)
-            row = dict(item)
-            clean_requirement_fields(row, allowed_source_stakeholders=stakeholder_names(data))
-            rows.append(row)
+    for item in data.get("reqt_candidates", []) or []:
+        if not isinstance(item, dict):
+            continue
+        marker = str(item.get("text") or item.get("statement") or "").strip().lower()
+        if not marker:
+            marker = str(item.get("id") or "").strip()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        row = dict(item)
+        clean_requirement_fields(row, allowed_source_stakeholders=stakeholder_names(data))
+        rows.append(row)
     return rows
 
 
@@ -187,8 +191,8 @@ def change_record_payload(rows: Any) -> List[Dict[str, Any]]:
 def requirements_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     allowed_stakeholders = stakeholder_names(data)
     return {
-        "reqt_candidates": combined_requirement_candidates(data),
-        "change_record": change_record_payload(data.get("change_record", data.get("requirement_change_candidates", [])) or []),
+        "reqt_candidates": requirement_candidates(data),
+        "change_record": change_record_payload(data.get("change_record", []) or []),
         "requirements": requirement_payload_rows(
             data.get("requirements", []) or [],
             allowed_source_stakeholders=allowed_stakeholders,
@@ -210,10 +214,6 @@ def conflict_requirement_ids(item: Dict[str, Any]) -> List[str]:
         if value not in req_ids:
             req_ids.append(value)
         idx += 1
-    for key in ("req_a", "req_b"):
-        value = str(item.get(key) or "").strip()
-        if value and value not in req_ids:
-            req_ids.append(value)
     return req_ids
 
 
@@ -233,7 +233,7 @@ def nested_meeting_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def requirement_text_by_id(data: Dict[str, Any]) -> Dict[str, str]:
-    rows = combined_requirement_candidates(data)
+    rows = requirement_candidates(data)
     rows.extend([
         row for row in (data.get("requirements", []) or [])
         if isinstance(row, dict)
@@ -296,7 +296,15 @@ def flatten_conflict_meeting_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         row["meeting"] = details
     else:
         row.pop("meeting", None)
-    return row
+    ordered: Dict[str, Any] = {}
+    for key, value in row.items():
+        if key in {"meeting", "initial_label", "final_label", "description", "status"}:
+            continue
+        ordered[key] = value
+    for key in ("initial_label", "final_label", "description", "status", "meeting"):
+        if key in row:
+            ordered[key] = row[key]
+    return ordered
 
 
 def remove_final_item_label(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,12 +437,8 @@ def conflict_pair_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
             "supplement_reason",
             "requirement_ids",
             "conflict_review",
-            "pre_meeting_review",
             "resolved_by_decision_id",
             "pair_index",
-            "conflict_type",
-            "requirement_a",
-            "requirement_b",
         ):
             row.pop(key, None)
         if meeting_final_labels.get(new_id):
@@ -495,7 +499,7 @@ def conflict_meeting_payload(rows: Any, id_map: Dict[str, str]) -> List[Dict[str
         row["id"] = mapped_pair_id(row.get("id", row.get("pair_id")), id_map)
         row.pop("pair_id", None)
         row.pop("topic_id", None)
-        for key in ("req_a", "req_b", "requirement_ids"):
+        for key in ("requirement_ids",):
             row.pop(key, None)
         description = str(
             row.get("description")
@@ -602,27 +606,21 @@ def conflict_meeting_rows_from_payload(conflicts: Any) -> List[Dict[str, Any]]:
 def elicitation_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     elicitation = data.get("elicitation") if isinstance(data.get("elicitation"), dict) else {}
     plan = elicitation.get("plan", {}) or {}
-    max_turns = plan.get("round_limit", plan.get("max_turns"))
-    if max_turns is None:
-        max_turns = data.get("elicitation_max_turns")
     meeting_rows = elicitation.get("meeting", {})
     if not isinstance(meeting_rows, dict):
         meeting_rows = {}
     return {
         "plan": {
-            "round_limit": max_turns,
+            "round_limit": plan.get("round_limit"),
             "participants": plan.get("participants", []) or [],
             "mode": plan.get("mode", ""),
         },
         "meeting": meeting_rows,
         "elicited_reqts": requirement_payload_rows(
-            elicitation.get("elicited_reqts", data.get("elicited_reqts", [])) or [],
+            elicitation.get("elicited_reqts", []) or [],
             allowed_source_stakeholders=stakeholder_names(data),
         ),
-        "elicitation_stop_reason": elicitation.get(
-            "elicitation_stop_reason",
-            data.get("elicitation_stop_reason", ""),
-        ),
+        "elicitation_stop_reason": elicitation.get("elicitation_stop_reason", ""),
     }
 
 
@@ -721,17 +719,12 @@ def feedback_dict(payload: Any) -> Dict[str, Any]:
 
 def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     project_file = artifact_dir / "project.json"
-    stakeholders_file = artifact_dir / "stakeholders.json"
     requirements_file = artifact_dir / "requirements.json"
     conflict_file = artifact_dir / "conflict.json"
-    if not any(path.exists() for path in (stakeholders_file, project_file, requirements_file, conflict_file)):
+    if not any(path.exists() for path in (project_file, requirements_file, conflict_file)):
         return None
 
     project = load_json_path(project_file, {})
-    stakeholders = load_json_path(
-        stakeholders_file,
-        project.get("stakeholders", []),
-    )
     scope = load_json_path(
         artifact_dir / "scope.json",
         project.get("scope", {"in_scope": [], "out_of_scope": []}),
@@ -752,7 +745,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         row["issue_id"] = row.get("issue_id") or row.get("id")
         issue_rows.append(row)
 
-    stakeholder_list = stakeholder_rows(stakeholders)
+    stakeholder_list = stakeholder_rows(project)
     allowed_stakeholders = {
         str(row.get("name") or "").strip()
         for row in stakeholder_list
@@ -760,9 +753,14 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     }
     artifact: Dict[str, Any] = {
         "rough_idea": (
-            stakeholders.get("rough_idea", "")
-            if isinstance(stakeholders, dict)
-            else project.get("rough_idea", "")
+            project.get("rough_idea", "")
+            if isinstance(project, dict) and project.get("rough_idea")
+            else ""
+        ),
+        "scenario": (
+            project.get("scenario", "")
+            if isinstance(project, dict) and project.get("scenario")
+            else ""
         ),
         "stakeholders": stakeholder_list,
         "scope": scope if isinstance(scope, dict) else {"in_scope": [], "out_of_scope": []},
@@ -771,7 +769,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
             requirements.get("reqt_candidates", []) or [],
             allowed_source_stakeholders=allowed_stakeholders,
         ),
-        "requirement_change_candidates": change_record_payload(requirements.get("change_record", []) or []),
+        "change_record": change_record_payload(requirements.get("change_record", []) or []),
         "requirements": requirement_payload_rows(
             requirements.get("requirements", []) or [],
             allowed_source_stakeholders=allowed_stakeholders,
@@ -811,10 +809,7 @@ def load_artifact(artifact_dir: Path) -> Optional[Dict[str, Any]]:
 
 def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    legacy_project_file = artifact_dir / "project.json"
-    if legacy_project_file.exists():
-        legacy_project_file.unlink()
-    save_json_path(base_dir, stakeholders_payload(data), artifact_dir / "stakeholders.json")
+    save_json_path(base_dir, project_payload(data), artifact_dir / "project.json")
     save_json_path(base_dir, scope_payload(data), artifact_dir / "scope.json")
     save_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
     save_json_path(base_dir, requirements_payload(data), artifact_dir / "requirements.json")
