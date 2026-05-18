@@ -121,6 +121,7 @@ class ExpertIssues:
 # 提案邊界
 - 只提出會影響 requirement、constraint、risk 或 evidence basis 的議題。
 - 可以根據既有 feedback 的 constraints / risks / recommendations / open_items 提案，但必須說明適用範圍與需求影響。
+- feedback 是領域研究輔助資料，不是正式需求；不得直接把 recommendations 升格成 new_requirement，除非明確需要 stakeholder 或 analyst 確認。
 - 可以根據 open_questions 提案，但只有合規、標準、安全、外部義務、領域風險或 evidence gap 會改變需求時才提出。
 - 可以根據 requirements 主動發現問題，例如安全/合規/可用性/可靠性/NFR 沒有可驗證標準，或外部限制沒有證據。
 - 議題必須聚焦 domain / compliance / risk / evidence basis，不提出無外部限制或證據影響的一般需求議題。
@@ -326,10 +327,10 @@ class ExpertIssues:
     - 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。"""
         elif category == "open_question":
             category_hint = """# 本議題特別要求（open_question）
-    - 優先回答可確認的 domain facts、外部限制與 evidence gap；只提出會影響 constraint、risk 或 evidence basis 的問題。"""
+    - 優先回答可確認的領域事實、外部限制與證據缺口；只提出會影響限制、風險或證據依據的問題。"""
         elif category == "new_requirement":
             category_hint = """# 本議題特別要求（new_requirement）
-    - 說明此新增需求是否只是候選 constraint、NFR 或 risk mitigation，以及是否來自強制義務、最佳實務或 evidence gap。"""
+    - 說明此新增需求是否只是候選限制、非功能需求或風險緩解方向，以及是否來自強制義務、最佳實務或證據缺口。"""
         else:
             category_hint = ""
 
@@ -362,7 +363,7 @@ class ExpertIssues:
             known_pair_ids_text = json.dumps(known_pair_ids, ensure_ascii=False)
             pair_reviews_json = ""
             response_contract = """# 回應契約
-    - 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。
+    - 外層只能輸出合法 JSON object；不要 Markdown、不要 ```json 程式碼區塊、不要額外說明文字。
     - 外層只能有 text 欄位。
     - text 必須是 JSON object 字串，不是巢狀 object。
     - text JSON 結構必須為 {"pair_reviews":[...]}。

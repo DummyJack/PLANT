@@ -88,7 +88,7 @@ class ExpertAgent(
         lines = []
         if "artifact_query" in self.tools:
             lines.append(
-                "- artifact_query 用於先確認專案 scenario、scope、URL 與既有 domain research。"
+                "- artifact_query 用於先確認 scenario、scope、requirements/URL、stakeholders、open_questions 與既有 domain research。"
             )
         if "read_file" in self.tools:
             lines.append(

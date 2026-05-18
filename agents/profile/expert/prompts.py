@@ -16,6 +16,7 @@ EXPERT_ISSUE_RULES = """- text 需包含：暫時結論、依據、風險/限制
 - 若屬強制義務要明講；若只是最佳實務或待補證據也要明講。
 - 可引用 requirement id、conflict id、研究發現或來源線索。
 - 若資訊不足，明確指出 evidence gap；不要虛構法規或標準。
+- feedback / research finding 是輔助依據，不是正式決議；若要轉成需求，必須標示為候選並交由 analyst/user/mediator 決定。
 - 涉及範圍、優先級或需求措辭時，只說明外部限制、證據強度與風險影響。"""
 
 EXPERT_CONFLICT_ISSUE_RULES = """# 本議題特別要求（conflict_discussion）

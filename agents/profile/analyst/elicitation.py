@@ -8,6 +8,34 @@ from .prompts import user_requirement_extraction_contract
 from .validation import validate_elicited_reqts
 
 
+def parse_json_array_text(raw: str) -> List[Any]:
+    text = str(raw or "").strip()
+    candidates = [text]
+    if "```" in text:
+        for part in text.split("```"):
+            value = part.strip()
+            if value.lower().startswith("json"):
+                value = value[4:].strip()
+            if value.startswith("[") and value.endswith("]"):
+                candidates.append(value)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+    last_error = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_error = e
+            continue
+        if isinstance(data, list):
+            return data
+    if last_error is not None:
+        raise ValueError("JSON array parse failed") from last_error
+    raise ValueError("JSON array parse failed")
+
+
 class AnalystElicitation:
     def extract_elicited_reqts(
         self,
@@ -160,9 +188,37 @@ class AnalystElicitation:
                 {},
                 mode="analysis",
             )
-            raw = self.parse_issue_response_json(raw_text)
-            if not isinstance(raw, list):
-                raise ValueError("elicitation extraction output must be a JSON array")
+            try:
+                raw = parse_json_array_text(raw_text)
+            except ValueError as first_error:
+                repair_prompt = f"""上一輪 elicitation extraction 輸出不是合法 JSON array。請只修正格式，不要重新分析、不要新增需求。
+
+# 必須輸出
+[
+  {{"text":"候選 User Requirement","priority":"must|should|could"}}
+]
+
+# 規則
+- 只能輸出 JSON array。
+- 每筆只包含 text、priority。
+- priority 只能是 must、should 或 could。
+- 如果原始輸出沒有可抽取的新需求，輸出 []。
+- 不要輸出 Markdown、程式碼區塊、前言或額外文字。
+
+# 原始輸出
+{str(raw_text or "")[:12000]}"""
+                repaired = self.model.chat(
+                    self.build_direct_messages(repair_prompt),
+                    action="elicitation_extraction_repair",
+                ) or ""
+                try:
+                    raw = parse_json_array_text(repaired)
+                except ValueError as repair_error:
+                    raw_preview = str(raw_text or "").strip().replace("\n", "\\n")[:500]
+                    raise ValueError(
+                        f"elicitation extraction output must be a JSON array: {first_error}; "
+                        f"repair failed: {repair_error}; raw_preview={raw_preview}"
+                    ) from repair_error
             for row in raw:
                 if not isinstance(row, dict):
                     continue

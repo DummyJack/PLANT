@@ -207,6 +207,7 @@ def signoff_decisions(rows: Any) -> List[Dict[str, Any]]:
             {
                 "id": cid,
                 "new_label": label,
+                "reason": clean_text(row.get("reason")),
             }
         )
     return decisions

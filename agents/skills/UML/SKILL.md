@@ -6,6 +6,13 @@ allowed-tools: plantuml_validate, artifact_query
 
 # UML Modeling Skill
 
+## Priority Rules
+
+- Follow caller-provided diagram types, modeling scope, output schema, and requirement-level limits over skill examples.
+- Model only accepted requirements, decisions, and explicit project context.
+- Do not infer implementation services, databases, APIs, deployment nodes, message buses, frameworks, or architecture components unless explicitly required.
+- Do not draw open questions, pending candidates, external research, recommendations, or risks as confirmed model elements unless accepted into requirements.
+
 ## When to Use This Skill
 
 Use this skill when:

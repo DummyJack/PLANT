@@ -65,9 +65,11 @@ class ModelerAgent(
 - 若使用，只產生需求層級模型參考；不可從模型反推新增需求或把未確認內容畫成正式模型。"""
 
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
-        return """- artifact_query 用於查詢 URL、scope、feedback、open_questions 與既有 models。
+        return """- artifact_query 用於查詢 requirements、URL、scope、feedback、open_questions 與既有 models。
 - plantuml_validate 用於驗證或修正 PlantUML 語法；驗證通過不代表需求內容已被正式決策。
-- 模型必須以 URL 與目前 scope 為依據；資訊不足時不要硬畫未確認元素，不可用圖反推新增需求。"""
+- 模型必須以正式 requirements 與目前 scope 為主；若尚無正式 requirements，才使用 URL 候選需求作為 fallback。
+- feedback 只能作為邊界、限制、風險或不確定性提示，不可被轉成新的 actor、use case、class、state 或流程步驟。
+- 資訊不足時不要硬畫未確認元素，不可用圖反推新增需求。"""
 
     def build_model_observation(self, **kwargs: Any) -> Dict[str, Any]:
         return self.build_model_state(
@@ -135,9 +137,11 @@ class ModelerAgent(
                 "summary": (resolution.get("summary") or ""),
             })
         return {
+            "scenario": artifact.get("scenario", {}) or artifact.get("rough_idea", ""),
+            "stakeholders": self.model_stakeholders(artifact),
             "requirements": summary_reqs,
             "scope": artifact.get("scope", {}),
-            "feedback": artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {},
+            "feedback": self.model_feedback(artifact),
             "current_models": current_model_rows,
             "model_revision_context": artifact.get("model_revision_context", {}) or {},
             "open_questions": [
@@ -175,9 +179,11 @@ class ModelerAgent(
             reqs = self.model_requirements(artifact)
             models = self.system_model_rows(artifact)
             context = {
+                "scenario": artifact.get("scenario", {}) or artifact.get("rough_idea", ""),
+                "stakeholders": self.model_stakeholders(artifact),
                 "requirements": reqs,
                 "scope": artifact.get("scope", {}),
-                "feedback": artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {},
+                "feedback": self.model_feedback(artifact),
                 "open_questions": artifact.get("open_questions", []),
                 "current_models": [
                     {
@@ -196,12 +202,15 @@ class ModelerAgent(
     {ctx_text}
 
     # 輸出要求
-    - models_to_update：需更新的 model type 列表（限 use_case_text, context_diagram, use_case_diagram, activity_diagram, sequence_diagram, state_machine, class_diagram；use_case_text 會附在 use_case_diagram.text）
+    - models_to_update：需更新的 model type 列表（限 context_diagram, use_case_diagram, activity_diagram, sequence_diagram, state_machine, class_diagram；use_case_text 會由流程附在 use_case_diagram.text）
     - models_to_create：需新建的 model type 列表
-    - 若既有模型已存在，這是 revision-aware 模型迭代；只標記受 model_revision_context 或 requirements 影響的圖表。
+    - use_case_text 由流程在 use_case_diagram 後自動產生；不要單獨把 use_case_text 放入 models_to_update 或 models_to_create。
+    - 若既有模型已存在，這是帶有修訂脈絡的模型迭代；只標記受 model_revision_context 或 requirements 影響的圖表。
     - current_models.source 表示既有模型來源，例如 initial_modeling 或 R1-M1；只用於追蹤來源，不可改寫成新需求。
     - 未受影響的既有圖表不得列入 models_to_update。
-    - feedback 只作為限制/風險註記，不可擴張功能。
+    - feedback 只包含 constraints、risks、open_items；constraints/risks 只作為限制或風險註記，不可擴張功能。
+    - feedback.open_items 只是不確定性提示，不可畫成已確認模型元素。
+    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
     輸出 JSON:
     {{
     "models_to_update": ["需更新的 diagram type"],
@@ -280,7 +289,9 @@ class ModelerAgent(
                     new_row["plantuml"] = result.get("plantuml", "")
                 if result.get("text"):
                     new_row["text"] = result.get("text", [])
-                new_row["source"] = artifact.get("model_source", "")
+                new_row["source"] = artifact.get("model_source") or self.model_source(
+                    artifact.get("model_revision_context")
+                )
                 if existing:
                     existing.clear()
                     existing.update(new_row)
@@ -399,6 +410,11 @@ class ModelerAgent(
                 if item not in {"use_case_diagram", "use_case_text"}
             ]
             target_types = ["use_case_diagram", "use_case_text"] + target_types
+        else:
+            target_types = [
+                item for item in target_types
+                if item != "use_case_text"
+            ]
 
         if not target_types:
             return records
@@ -497,7 +513,7 @@ class ModelerAgent(
     根據當前狀態與上一步結果，選下一個動作。
 
     # 動作
-    - build_full_model：尚無模型時，一次建立完整 requirement-level models，並完成驗證/修正
+    - build_full_model：尚無模型時，一次建立完整需求層級模型，並完成驗證/修正
     - assess_impact：先判斷哪些圖表受影響
     - update_diagram：{{"diagram_type":"use_case_text/context_diagram/use_case_diagram/activity_diagram/sequence_diagram/state_machine/class_diagram"}}；use_case_text 會附在 use_case_diagram.text
     - validate_diagram：{{"diagram_type":"..."}}
@@ -513,6 +529,7 @@ class ModelerAgent(
     # 規則
     - 先 assess_impact，再決定是否更新模型
     - 圖表是否需要建立或更新，以 assess_impact 的 UML skill 判斷結果為準；不要自行新增未列入的圖表。
+    - use_case_text 由流程在 use_case_diagram 後自動產生；不要單獨選 use_case_text。
     - 需要補專案事實或驗證模型語法時，遵守本輪工具使用資料
     - 每個需更新的圖表都走：update_diagram → validate_diagram →（若失敗）fix_diagram → validate_diagram
     - 所有受影響圖表處理完後選 done

@@ -64,6 +64,34 @@ def normalize_conflict_type(value: Any, *, final_label: str) -> str:
     return conflict_type if conflict_type in CONFLICT_TYPE_VALUES else "other"
 
 
+def parse_json_array_text(raw: str) -> List[Any]:
+    text = str(raw or "").strip()
+    candidates = [text]
+    if "```" in text:
+        for part in text.split("```"):
+            value = part.strip()
+            if value.lower().startswith("json"):
+                value = value[4:].strip()
+            if value.startswith("[") and value.endswith("]"):
+                candidates.append(value)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+    last_error = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_error = e
+            continue
+        if isinstance(data, list):
+            return data
+    if last_error is not None:
+        raise ValueError("JSON array parse failed") from last_error
+    raise ValueError("JSON array parse failed")
+
+
 class AnalystConflicts:
     def invoke_conflict_skill(
         self,
@@ -239,11 +267,39 @@ class AnalystConflicts:
 {json.dumps(pair_rows, ensure_ascii=False, indent=2)}
 
 只輸出一個 JSON 物件：{{"conflicts":[...]}}。勿輸出 Markdown 或其他文字。"""
+        raw = ""
         try:
             raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
             data = self.parse_issue_response_json(raw)
-        except Exception as e:
-            raise RuntimeError(f"{error_label}輸出格式不合格: {e}") from e
+        except Exception as first_error:
+            repair_prompt = f"""上一輪 {error_label} 輸出不是合法 JSON object。請只根據原始輸出與指定 pairs 修正格式，不要重新分析、不要新增 pair。
+
+# 必須輸出
+{{"conflicts":[...]}}
+
+# 欄位規則
+- conflicts 必須是 array。
+- 每筆必須包含 pair_index、label、reason。
+- label 只能是 "Conflict" 或 "Neutral"。
+- label 是 "Conflict" 時才可包含 type。
+- pair_index 只能來自指定 pairs。
+
+# 指定 pairs
+{json.dumps(pair_rows, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{str(raw or "")[:12000]}"""
+            try:
+                data = self.chat_json(
+                    self.build_direct_messages(repair_prompt, context=context),
+                    action=self.usage_action("conflict.repair_pair_json"),
+                )
+            except Exception as repair_error:
+                raw_preview = str(raw or "").strip().replace("\n", "\\n")[:500]
+                raise RuntimeError(
+                    f"{error_label}輸出格式不合格: {first_error}; "
+                    f"修復失敗: {repair_error}; raw_preview={raw_preview}"
+                ) from repair_error
         return conflict_records(
             data.get("conflicts", []),
             pairwise_mode=True,
@@ -262,7 +318,7 @@ class AnalystConflicts:
 
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
         return [
-            req for req in (artifact.get("URL") or [])
+            req for req in (artifact.get("requirements") or artifact.get("URL") or [])
             if isinstance(req, dict)
             and str(req.get("id") or "").strip()
             and str(req.get("text") or "").strip()
@@ -323,13 +379,8 @@ class AnalystConflicts:
 """
 
     def execute_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
-        """用 URL 做相鄰兩兩需求衝突判斷。"""
-        requirements = [
-            req for req in (artifact.get("URL") or [])
-            if isinstance(req, dict)
-            and str(req.get("id") or "").strip()
-            and str(req.get("text") or "").strip()
-        ]
+        """用正式 requirements；若尚無正式 requirements，fallback 到 URL 做相鄰兩兩需求衝突判斷。"""
+        requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 2:
             return set_pair_conflicts({**artifact}, [])
 
@@ -440,7 +491,7 @@ class AnalystConflicts:
         return set_pair_conflicts({**artifact}, pair_conflicts)
 
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
-        """用 URL 做 3+ 需求群組衝突判斷，並附加到既有兩兩結果。"""
+        """用正式 requirements；若尚無正式 requirements，fallback 到 URL 做 3+ 需求群組衝突判斷。"""
         requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 3:
             self.logger.info("整體衝突判斷 0 組（Conflict: 0）")
@@ -462,8 +513,31 @@ class AnalystConflicts:
                 holistic_task, context=context, mode="analysis"
             )
             holistic_data = self.parse_issue_response_json(holistic_raw)
-        except Exception as e:
-            raise RuntimeError(f"整體 Conflict 分析輸出格式不合格: {e}") from e
+        except Exception as first_error:
+            repair_prompt = f"""上一輪整體 Conflict 分析輸出不是合法 JSON object。請只修正格式，不要重新分析。
+
+# 必須輸出
+{{"conflicts":[...]}}
+
+# 規則
+- 若原始輸出沒有明確 3 條以上需求群組衝突，輸出 {{"conflicts":[]}}。
+- 每筆 Conflict 必須包含 label="Conflict" 與 requirement_ids。
+- requirement_ids 必須包含 3 個以上需求 id。
+- 不要輸出 Markdown 或額外文字。
+
+# 原始輸出
+{str(holistic_raw or "")[:12000]}"""
+            try:
+                holistic_data = self.chat_json(
+                    self.build_direct_messages(repair_prompt, context=context),
+                    action=self.usage_action("conflict.repair_holistic_json"),
+                )
+            except Exception as repair_error:
+                raw_preview = str(holistic_raw or "").strip().replace("\n", "\\n")[:500]
+                raise RuntimeError(
+                    f"整體 Conflict 分析輸出格式不合格: {first_error}; "
+                    f"修復失敗: {repair_error}; raw_preview={raw_preview}"
+                ) from repair_error
         holistic_conflicts = [
             row for row in conflict_records(holistic_data.get("conflicts", []))
             if row.get("label") == "Conflict"
@@ -513,19 +587,37 @@ class AnalystConflicts:
         )
         messages = self.build_direct_messages(prompt)
         raw = (self.model.chat(messages, action="conflict_recheck_signoff") or "").strip()
-        text = raw
-        if text.startswith("```json"):
-            text = text[len("```json") :].strip()
-        elif text.startswith("```"):
-            text = text[len("```") :].strip()
-        if text.endswith("```"):
-            text = text[:-3].strip()
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise ValueError("conflict signoff must return a JSON array") from e
-        if not isinstance(data, list):
-            raise ValueError("conflict signoff must return a JSON array")
+            data = parse_json_array_text(raw)
+        except ValueError as first_error:
+            repair_prompt = f"""上一輪 conflict signoff 輸出不是合法 JSON array。請只修正格式，不要重新裁定。
+
+# 必須輸出
+[{{"id":"衝突ID","new_label":"Conflict 或 Neutral","reason":"一句繁中裁定理由"}}]
+
+# 規則
+- 只能輸出 JSON array。
+- 必須對 proposal_list 中每個 id 輸出一筆 decision。
+- new_label 只能是 Conflict 或 Neutral。
+- 不要輸出 Markdown 或額外文字。
+
+# proposal_list
+{json.dumps(proposal_list, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{raw[:12000]}"""
+            repaired = self.model.chat(
+                self.build_direct_messages(repair_prompt),
+                action="conflict_recheck_signoff_repair",
+            ) or ""
+            try:
+                data = parse_json_array_text(repaired)
+            except ValueError as repair_error:
+                raw_preview = raw.strip().replace("\n", "\\n")[:500]
+                raise ValueError(
+                    f"conflict signoff must return a JSON array: {first_error}; "
+                    f"repair failed: {repair_error}; raw_preview={raw_preview}"
+                ) from repair_error
         return signoff_decisions(data), raw
 
     def finalize_conflict_review_reasons(
@@ -582,9 +674,38 @@ class AnalystConflicts:
         if text.endswith("```"):
             text = text[:-3].strip()
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise ValueError("conflict final reason must return a JSON array") from e
+            data = parse_json_array_text(text)
+        except ValueError as first_error:
+            repair_prompt = f"""上一輪 conflict final reason 輸出不是合法 JSON array。請只修正格式，不要重新分析、不要新增項目。
+
+# 必須輸出
+[{{"id":"PAIR-1","description":"最終裁定描述","final_type":"scope"}}]
+
+# 規則
+- 只能輸出 JSON array。
+- 必須只包含 decision_list 中存在的 id。
+- 每筆必須包含 id 與 description。
+- final_label 是 Conflict 時可包含 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- final_label 是 Neutral 時不要輸出 final_type。
+- 不要輸出 Markdown、程式碼區塊、前言或額外文字。
+
+# decision_list
+{json.dumps(decision_list, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{raw[:12000]}"""
+            repaired = self.model.chat(
+                self.build_direct_messages(repair_prompt),
+                action="conflict_recheck_final_reason_repair",
+            ) or ""
+            try:
+                data = parse_json_array_text(repaired)
+            except ValueError as repair_error:
+                raw_preview = raw.strip().replace("\n", "\\n")[:500]
+                raise ValueError(
+                    f"conflict final reason must return a JSON array: {first_error}; "
+                    f"repair failed: {repair_error}; raw_preview={raw_preview}"
+                ) from repair_error
         if not isinstance(data, list):
             raise ValueError("conflict final reason must return a JSON array")
         out: List[Dict[str, str]] = []

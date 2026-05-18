@@ -17,6 +17,73 @@ from .requirements import requirement_discussion_pool
 from .prompts import requirements_skill_guidance, user_requirement_extraction_contract
 
 
+def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for stakeholder in artifact.get("stakeholders", []) or []:
+        if not isinstance(stakeholder, dict):
+            continue
+        name = str(stakeholder.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"name": name}
+        stakeholder_type = str(stakeholder.get("type") or "").strip()
+        if stakeholder_type:
+            row["type"] = stakeholder_type
+        rows.append(row)
+    return rows
+
+
+def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    clean: Dict[str, Any] = {}
+    for key in ("constraints", "risks", "recommendations", "open_items"):
+        rows = [
+            row for row in feedback.get(key, []) or []
+            if isinstance(row, dict) and str(row.get("text") or "").strip()
+        ]
+        if rows:
+            clean[key] = rows
+    return clean
+
+
+def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for question in artifact.get("open_questions", []) or []:
+        if not isinstance(question, dict):
+            continue
+        text = str(question.get("question") or "").strip()
+        if not text:
+            continue
+        row = {"question": text}
+        for key in ("id", "to", "status", "source", "type"):
+            value = question.get(key)
+            if value:
+                row[key] = value
+        rows.append(row)
+    return rows
+
+
+def draft_system_models(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for model in artifact.get("system_models", []) or []:
+        if not isinstance(model, dict):
+            continue
+        model_type = str(model.get("type") or "").strip()
+        name = str(model.get("name") or "").strip()
+        if not model_type and not name:
+            continue
+        row: Dict[str, Any] = {}
+        if name:
+            row["name"] = name
+        if model_type:
+            row["type"] = model_type
+        if model.get("text"):
+            row["text"] = model.get("text")
+        row["has_plantuml"] = bool(str(model.get("plantuml") or "").strip())
+        rows.append(row)
+    return rows
+
+
 class AnalystRequirements:
     def run_requirements_analyst(
         self,
@@ -281,8 +348,8 @@ class AnalystRequirements:
         meeting_record_md: str = "",
         round_num: Optional[int] = None,
     ) -> str:
-        URL = requirement_discussion_pool(artifact)
-        for req in URL:
+        user_requirements = requirement_discussion_pool(artifact)
+        for req in user_requirements:
             req_norm = self.requirement_record(req)
             req.update(req_norm)
 
@@ -290,12 +357,14 @@ class AnalystRequirements:
         context = {
             "scenario": scenario_prompt_value(artifact.get("scenario", {}) or {}),
             "scope": scope,
-            "stakeholders": artifact.get("stakeholders", []),
-            "URL": URL,
+            "stakeholders": draft_stakeholders(artifact),
+            "user_requirements": user_requirements,
+            "URL": user_requirements,
             "conflict_report": (conflict_report_md or "").strip(),
             "meeting_record": (meeting_record_md or "").strip(),
-            "feedback": artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {},
-            "system_models": artifact.get("system_models", []) or [],
+            "feedback": draft_feedback(artifact),
+            "open_questions": draft_open_questions(artifact),
+            "system_models": draft_system_models(artifact),
             "version": draft_version if draft_version is not None else 0,
         }
         previous_draft_text = (previous_draft or "").strip()
@@ -312,23 +381,31 @@ class AnalystRequirements:
 
 修訂方式：
 - 這是文字層面的迭代修訂，不是從零重寫；請保留上一版草稿的主要章節結構、可讀格式與已仍然有效的內容。
-- 依最新 User Requirements、衝突報告與會議記錄更新內容；若上一版內容已過期，必須修正或移到待確認區。
-- 需求草稿條目只能來自 User Requirements，並且必須逐筆保留原 id。
+- 本步驟不是需求抽取或需求分析；不得從 scenario、stakeholders、feedback、system_models、conflict_report 或 open_questions 推導新的使用者需求（User Requirements）。
+- 依最新使用者需求（User Requirements）、衝突報告與會議記錄更新內容；若上一版內容已過期，必須修正或移到待確認區。
+- 使用者需求（User Requirements）指輸入資料中的 user_requirements；URL 是舊欄位別名，不是網站連結。
+- 需求草稿條目只能來自使用者需求（User Requirements），並且必須逐筆保留原 id。
 - 不得重新編號、不得合併或拆分需求、不得改變需求語意。
-- 新增需求只能來自 User Requirements 中已有 id 的條目；不得從上一版文字自行推導新需求。
-- 若 User Requirements 已移除或不再包含某個 id，新的草稿不得保留該 id 作為需求草稿條目。
+- 新增需求只能來自使用者需求（User Requirements）中已有 id 的條目；不得從上一版文字自行推導新需求。
+- 若使用者需求（User Requirements）已移除或不再包含某個 id，新的草稿不得保留該 id 作為需求草稿條目。
 
 需求分區：
-- Candidate Requirements：只列 User Requirements 中的候選需求。
-- Pending Decisions / Open Issues：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
+- 候選需求（Candidate Requirements）：只列使用者需求（User Requirements）中的候選需求。
+- 待決議事項 / 開放問題（Pending Decisions / Open Issues）：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
 
 需求表欄位：
 - 每一筆需求列必須包含：ID、Priority、Stakeholder、Requirement、Source。
 
+輔助資料使用方式：
+- feedback 只能用於限制、風險、建議或待確認整理，不可轉成需求。
+- system_models 只能用於追蹤、覆蓋檢查或模型摘要，不可轉成需求。
+- conflict_report 只能用於衝突與待決議整理。
+- open_questions 只能列為待確認問題，不可當成已確認需求。
+
 禁止事項：
 - 不得新增未定案內容、未被輸入資料支持的量化指標或外部依賴。
 - meeting_record 中尚未決議的問題、to_confirm、assumptions 必須保留為待確認內容，不得寫成已確認需求。
-- 不得保留上一版中已被最新會議記錄或 User Requirements 推翻的內容。
+- 不得保留上一版中已被最新會議記錄或使用者需求（User Requirements）推翻的內容。
 
 若有本輪決策，請更新精簡決策表。"""
         else:
@@ -336,15 +413,23 @@ class AnalystRequirements:
 
 草稿邊界：
 - 這是一份草稿，不是正式定版文件；只整理輸入資料內已有的需求、衝突、決議與開放問題。
-- 需求草稿條目只能來自 User Requirements，並且必須逐筆保留原 id。
+- 本步驟不是需求抽取或需求分析；不得從 scenario、stakeholders、feedback、system_models、conflict_report 或 open_questions 推導新的使用者需求（User Requirements）。
+- 使用者需求（User Requirements）指輸入資料中的 user_requirements；URL 是舊欄位別名，不是網站連結。
+- 需求草稿條目只能來自使用者需求（User Requirements），並且必須逐筆保留原 id。
 - 不得重新編號、不得合併或拆分需求、不得改變需求語意。
 
 需求分區：
-- Candidate Requirements：只列 User Requirements 中的候選需求。
-- Pending Decisions / Open Issues：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
+- 候選需求（Candidate Requirements）：只列使用者需求（User Requirements）中的候選需求。
+- 待決議事項 / 開放問題（Pending Decisions / Open Issues）：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
 
 需求表欄位：
 - 每一筆需求列必須包含：ID、Priority、Stakeholder、Requirement、Source。
+
+輔助資料使用方式：
+- feedback 只能用於限制、風險、建議或待確認整理，不可轉成需求。
+- system_models 只能用於追蹤、覆蓋檢查或模型摘要，不可轉成需求。
+- conflict_report 只能用於衝突與待決議整理。
+- open_questions 只能列為待確認問題，不可當成已確認需求。
 
 禁止事項：
 - 不得新增未定案內容、未被輸入資料支持的量化指標或外部依賴。
@@ -358,7 +443,7 @@ class AnalystRequirements:
         md = clean_llm_output(raw)
         expected_ids = {
             str(req.get("id") or "").strip()
-            for req in URL
+            for req in user_requirements
             if isinstance(req, dict) and str(req.get("id") or "").strip()
         }
         draft_req_ids = set(re.findall(r"\bURL-\d+\b", md or ""))

@@ -1,12 +1,19 @@
 ---
 name: domain-research
-description: Research domain knowledge for requirements engineering. Gathers best practices, regulatory requirements, and competitive insights.
+description: Research external domain knowledge to support requirements review without directly creating formal requirements. Gathers best practices, regulatory requirements, and competitive insights.
 allowed-tools: artifact_query, read_file, web_search
 ---
 
 # Domain Research Skill
 
-Research domain knowledge to enrich requirements elicitation.
+Research external domain knowledge to support requirements review without directly creating formal requirements.
+
+## Priority Rules
+
+- If the caller provides an output schema, follow the caller schema exactly.
+- Do not create formal requirements unless the caller explicitly asks for requirements.
+- Treat research findings as evidence, constraints, risks, recommendations, or open questions that need stakeholder or analyst validation.
+- Do not write files unless the caller explicitly asks you to save artifacts.
 
 ## Arguments
 
@@ -116,10 +123,10 @@ Combine research results:
 - Note confidence levels
 - Flag items needing validation
 
-### Step 5: Save and Report
+### Step 5: Return Findings
 
-Save to `.requirements/{domain}/research/`
-Display summary of findings.
+Return structured findings to the caller using the caller's requested format.
+If no format is provided, summarize findings, constraints, risks, recommendations, sources, confidence, and validation gaps.
 
 ## Examples
 
@@ -153,16 +160,14 @@ Key Findings:
    - Page load < 2 seconds critical
    - Real-time validation reduces errors
 
-Derived Requirements (8):
-  REQ-RES-001: System shall support guest checkout
-  REQ-RES-002: System shall display checkout progress
-  REQ-RES-003: System shall support multiple payment methods
-  REQ-RES-004: System shall complete checkout in 3 steps or fewer
+Requirement Implications (not formal requirements):
+  - Guest checkout may be a candidate requirement.
+  - Checkout progress display may be a candidate requirement.
+  - Multiple payment options may be a candidate requirement.
+  - Short checkout flow may be a candidate usability constraint.
   ... (4 more)
 
 Confidence: MEDIUM (needs stakeholder validation)
-
-Saved to: .requirements/checkout/research/RES-20251225-170000.yaml
 ```
 
 ### Regulatory Research
@@ -201,15 +206,13 @@ Key Findings:
    - Annual penetration testing
    - Change detection mechanisms
 
-Derived Requirements (15):
-  REQ-RES-001: System shall not store CVV/CVC after authorization [MUST]
-  REQ-RES-002: System shall encrypt stored card data using AES-256 [MUST]
-  REQ-RES-003: System shall mask PAN displaying only last 4 digits [MUST]
+Requirement Implications (not formal requirements):
+  - Not storing CVV/CVC after authorization may be a mandatory constraint.
+  - Encrypting stored card data may be a mandatory constraint.
+  - Masking displayed PAN may be a mandatory constraint.
   ... (12 more)
 
 Confidence: HIGH (from official documentation)
-
-Saved to: .requirements/payment/research/RES-20251225-171500.yaml
 ```
 
 ### Competitive Research
@@ -253,15 +256,15 @@ Feature Matrix:
   Supplier management   | ✓ | ✓ | - | Should have
   Mobile app            | ✓ | ✓ | - | Should have
 
-Derived Requirements (10):
-  REQ-RES-001: System shall provide real-time inventory visibility [MUST]
-  REQ-RES-002: System shall support multiple warehouse locations [SHOULD]
-  REQ-RES-003: System shall integrate with barcode scanners [SHOULD]
+Requirement Implications (not formal requirements):
+  - Real-time inventory visibility may be table stakes.
+  - Multiple warehouse support may be a candidate requirement.
+  - Barcode scanner integration may be a candidate integration need.
   ... (7 more)
 
 Confidence: LOW (based on public information)
 
-Saved to: .requirements/inventory/research/RES-20251225-173000.yaml
+No files are written unless requested by the caller.
 ```
 
 ### Technical Research
@@ -301,10 +304,10 @@ Technical Constraints:
   - SSR considerations for Next.js
   - Bundle size implications
 
-Derived Requirements (5):
-  REQ-RES-001: System shall use React 18 or later [CONSTRAINT]
-  REQ-RES-002: System shall separate server state from client state [SHOULD]
-  REQ-RES-003: System shall minimize bundle size impact of state library [SHOULD]
+Requirement Implications (not formal requirements):
+  - React 18+ may be a technical constraint.
+  - Server/client state separation may be a design recommendation.
+  - Bundle size impact may need validation as a quality constraint.
   ... (2 more)
 
 Confidence: MEDIUM (verify with team)
@@ -312,9 +315,9 @@ Confidence: MEDIUM (verify with team)
 Saved to: .requirements/frontend/research/RES-20251225-174500.yaml
 ```
 
-## Output Format
+## Fallback Output Format
 
-### Saved YAML Structure
+Use this only when the caller does not provide a schema.
 
 ```yaml
 research_session:
@@ -342,14 +345,12 @@ research_session:
     category_2:
       - "{finding 3}"
 
-  derived_requirements:
-    - id: REQ-RES-001
-      text: "{requirement}"
-      source: research
+  requirement_implications:
+    - text: "{candidate implication, not a formal requirement}"
       source_detail: "{specific source}"
       confidence: high|medium|low
       needs_validation: true
-      priority: must|should|could
+      implication_type: constraint|risk|recommendation|candidate_requirement|open_question
 
   recommendations:
     - "{recommendation 1}"

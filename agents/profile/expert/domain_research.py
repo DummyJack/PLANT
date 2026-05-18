@@ -15,7 +15,7 @@ ACTIONS = [
 
 def research_requirement_candidates(artifact):
     rows = []
-    for req in artifact.get("URL") or []:
+    for req in artifact.get("requirements") or artifact.get("URL") or []:
         if not isinstance(req, dict) or not str(req.get("text") or "").strip():
             continue
         row = {
@@ -25,6 +25,40 @@ def research_requirement_candidates(artifact):
             "source": req.get("source", ""),
         }
         rows.append(row)
+    return rows
+
+
+def research_stakeholders(artifact):
+    rows = []
+    for stakeholder in artifact.get("stakeholders") or []:
+        if not isinstance(stakeholder, dict):
+            continue
+        name = str(stakeholder.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"name": name}
+        stakeholder_type = str(stakeholder.get("type") or "").strip()
+        if stakeholder_type:
+            row["type"] = stakeholder_type
+        rows.append(row)
+    return rows
+
+
+def research_open_questions(artifact):
+    rows = []
+    for question in artifact.get("open_questions") or []:
+        if not isinstance(question, dict):
+            continue
+        text = str(question.get("question") or "").strip()
+        if not text:
+            continue
+        rows.append(
+            {
+                "question": text,
+                "status": question.get("status"),
+                "type": question.get("type"),
+            }
+        )
     return rows
 
 
@@ -54,6 +88,9 @@ class ExpertDomainResearch:
             "scenario": scenario_prompt_value(scenario_source),
             "scope": artifact.get("scope", {}),
             "URL": URL,
+            "user_requirements": URL,
+            "stakeholders": research_stakeholders(artifact),
+            "open_questions": research_open_questions(artifact),
             "has_existing_research": bool(existing),
             "research_results_count": len(research_results),
             "iteration": iteration + 1,
@@ -76,19 +113,22 @@ class ExpertDomainResearch:
                 "scenario": scenario_prompt_value(scenario_source),
                 "scope": artifact.get("scope", {}),
                 "URL": research_requirement_candidates(artifact),
+                "user_requirements": research_requirement_candidates(artifact),
+                "stakeholders": research_stakeholders(artifact),
+                "open_questions": research_open_questions(artifact),
             }
             task = f"""針對以下問題進行領域研究：{query}
 
-    請依 `domain-research` skill 執行研究。
+    請使用 `domain-research` skill 的研究方法與證據蒐集準則；若 skill 範例與本任務輸出格式不同，必須以本任務的 feedback JSON 結構為準。
 
     只輸出本專案 feedback JSON。
 
     研究邊界：
-    - 根據產品情境、需求範圍與 User Requirements 判斷外部領域因素。
-    - feedback 只作為研究輔助資料，不產生需求。
+    - 根據 scenario、scope、stakeholders、open_questions 與 user_requirements 判斷外部領域因素；user_requirements 優先使用正式 requirements，若尚無正式 requirements 才使用 URL 候選需求；URL 是舊欄位名稱，不是網站連結。
+    - feedback 只作為領域研究輔助資料，不產生需求。
     - 需要證據時可使用本輪工具使用資料中允許的工具。
     - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text 與 related_URL。
-    - related_URL 只能引用 User Requirements 中存在的 id；整體專案層級請輸出空陣列。
+    - related_URL 只能引用 user_requirements 中存在的 id；整體專案層級請輸出空陣列。
     - 不要為了填欄位硬關聯需求。
 
     輸出 JSON：
@@ -131,13 +171,15 @@ class ExpertDomainResearch:
                 "research_results": research_results,
                 "existing_research": existing,
             }
-            task = """綜合本輪研究結果與既有 feedback，整理成本專案 feedback 格式。
+            task = """綜合本輪 research_results 與 existing_research（artifact.feedback 既有領域研究），整理成本專案 feedback 格式。
 
     合併邊界：
     - 只做合併、去重、保留來源與整理格式。
+    - existing_research 只可作為合併與去重依據，不可當成新的外部證據，也不可自行延伸新結論。
     - 不新增 research_results / existing_research 以外的結論。
     - 不得捏造來源、法規、數值門檻或研究結論。
-    - feedback 只作為研究輔助資料，不產生需求。
+    - feedback 只作為領域研究輔助資料，不產生需求。
+    - 若 skill 範例或研究資料包含 requirement_implications，本任務只能將其整理為 constraints、risks、recommendations 或 open_items，不得輸出正式 requirements。
     - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text 與 related_URL。
 
     輸出 JSON：
@@ -171,7 +213,7 @@ class ExpertDomainResearch:
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
 
         user_prompt = f"""# 任務
-    根據 scenario、scope、URL 與上一步結果，選下一個動作。
+    根據 scenario、scope、stakeholders、open_questions、user_requirements（正式 requirements 優先，URL 候選需求 fallback）與上一步結果，選下一個動作。
 
     # 動作
     - research_issue：{{"query":"具體研究問題"}}
@@ -186,7 +228,7 @@ class ExpertDomainResearch:
 
     # 規則
     - 只有當外部領域知識可能影響候選需求理解、限制、風險或證據依據時，才選 research_issue。
-    - 研究問題必須來自 scenario、scope 或 URL 中的具體內容。
+    - 研究問題必須來自 scenario、scope、stakeholders、open_questions 或 user_requirements 中的具體內容；URL 不是網站連結。
     - 若問題可由利害關係人或既有專案資料回答，不要選 research_issue。
     - 每次 research_issue 只聚焦一個具體問題
     - 工具使用邊界遵守本輪工具使用資料

@@ -62,11 +62,40 @@ class ModelerModeling:
 
     @staticmethod
     def model_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
+        source_rows = artifact.get("requirements") or artifact.get("URL") or []
         return [
             {"id": r.get("id"), "text": r.get("text", "")}
-            for r in (artifact.get("URL") or [])
+            for r in source_rows
             if isinstance(r, dict) and str(r.get("text") or "").strip()
         ]
+
+    @staticmethod
+    def model_stakeholders(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
+        rows: list[Dict[str, Any]] = []
+        for stakeholder in artifact.get("stakeholders", []) or []:
+            if not isinstance(stakeholder, dict):
+                continue
+            name = str(stakeholder.get("name") or "").strip()
+            if not name:
+                continue
+            row = {"name": name}
+            stakeholder_type = str(stakeholder.get("type") or "").strip()
+            if stakeholder_type:
+                row["type"] = stakeholder_type
+            rows.append(row)
+        return rows
+
+    @staticmethod
+    def model_feedback(artifact_or_context: Dict[str, Any]) -> Dict[str, Any]:
+        feedback = (
+            artifact_or_context.get("feedback")
+            if isinstance(artifact_or_context.get("feedback"), dict)
+            else {}
+        )
+        return {
+            key: feedback.get(key, []) or []
+            for key in ("constraints", "risks", "open_items")
+        }
 
     def build_model_context(
         self,
@@ -75,11 +104,12 @@ class ModelerModeling:
         revision_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """保留建模需要的 artifact 欄位，避免把 pending 內容畫成正式模型。"""
-        feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         return {
+            "scenario": artifact.get("scenario", {}) or artifact.get("rough_idea", ""),
+            "stakeholders": self.model_stakeholders(artifact),
             "requirements": self.model_requirements(artifact),
             "scope": artifact.get("scope", {}) or {},
-            "feedback": feedback,
+            "feedback": self.model_feedback(artifact),
             "open_questions": artifact.get("open_questions", []) or [],
             "system_models": self.system_model_rows(artifact),
             "model_source": self.model_source(revision_context),
@@ -112,8 +142,10 @@ class ModelerModeling:
         req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
         artifact_context = artifact_context or {}
         context_payload = {
+            "scenario": artifact_context.get("scenario", {}) or artifact_context.get("rough_idea", ""),
+            "stakeholders": self.model_stakeholders(artifact_context),
             "scope": artifact_context.get("scope", {}) or {},
-            "feedback": artifact_context.get("feedback") if isinstance(artifact_context.get("feedback"), dict) else {},
+            "feedback": self.model_feedback(artifact_context),
             "open_questions": artifact_context.get("open_questions", []) or [],
             "model_revision_context": artifact_context.get("model_revision_context", {}) or {},
         }
@@ -165,7 +197,7 @@ class ModelerModeling:
     Use Case Diagram:
     {use_case_diagram_text}
 
-    補充背景（不得擴張 requirements；只可用於邊界判斷）:
+    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
     {context_text}
 
     - 只能整理 Use Case Diagram 中已出現的 actor 與 use case；不要補入圖中沒有的 use case。
@@ -176,6 +208,7 @@ class ModelerModeling:
     - interface 寫使用者進入或操作的頁面、畫面、入口或系統介面；若需求未明確，使用需求層級名稱，不要臆測 UI 細節。
     - related_requirements 只能放本次需求中已出現的 requirement id。
     - 不要輸出 source；source 由系統依建模來源補上。
+    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
     {{
       "type": "use_case_text",
@@ -204,17 +237,19 @@ class ModelerModeling:
     需求:
     {req_text}
 
-    補充背景（不得擴張 requirements；只可用於邊界判斷）:
+    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
     {context_text}
     {diagram_layout_hint}
 
-    - 這是 revision-aware 模型迭代：以上一版 PlantUML 為基礎，只修訂受 model_revision_context / requirements 影響的元素。
+    - 這是帶有修訂脈絡的模型迭代：以上一版 PlantUML 為基礎，只修訂受 model_revision_context / requirements 影響的元素。
     - 未受影響的 actor、use case、流程、資料輸入/輸出、狀態或概念必須保留；不得因重畫而改名或刪除仍有效元素。
-    - PlantUML elements（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
+    - PlantUML 圖中元素（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
     - 若資訊不足，不可臆測，也不要硬畫未確認元素。
-    - 此為 requirement-level model，不是 design/architecture model；不可擴張需求。
+    - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
+    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
     - name 必須依本圖實際表達的需求內容命名，格式為「主題 + 圖型」，不要只寫泛稱。
     - 不要輸出 source；source 由系統依建模來源補上。
+    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
     {{"name": "依本圖內容命名的圖表標題", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
         else:
@@ -223,15 +258,17 @@ class ModelerModeling:
     需求:
     {req_text}
 
-    補充背景（不得擴張 requirements；只可用於邊界判斷）:
+    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
     {context_text}
     {diagram_layout_hint}
 
-    - PlantUML elements（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
+    - PlantUML 圖中元素（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
     - 若資訊不足，不可臆測，也不要硬畫未確認元素。
-    - 此為 requirement-level model，不是 design/architecture model；不可擴張需求。
+    - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
+    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
     - name 必須依本圖實際表達的需求內容命名，格式為「主題 + 圖型」，不要只寫泛稱。
     - 不要輸出 source；source 由系統依建模來源補上。
+    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
     {{"name": "依本圖內容命名的圖表標題", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
 

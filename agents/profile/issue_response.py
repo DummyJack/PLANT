@@ -54,12 +54,21 @@ class IssueResponseSupport:
                 try:
                     parsed = self.parse_issue_response_json(raw)
                 except ValueError as e:
-                    return {
-                        "text": "",
-                        "open_questions": [],
-                        "error": "invalid_json",
-                        "format_error": str(e),
-                    }
+                    try:
+                        repair_messages = self.build_direct_messages(
+                            "上一個回覆不是合法 JSON object。請只修正格式，不要重新分析、不要新增內容。"
+                            "輸出必須是單一 JSON object，且至少保留 text 欄位。\n\n"
+                            f"原始回覆：\n{raw}"
+                        )
+                        repaired = self.model.chat(repair_messages)
+                        parsed = self.parse_issue_response_json(repaired)
+                    except Exception:
+                        return {
+                            "text": "",
+                            "open_questions": [],
+                            "error": "invalid_json",
+                            "format_error": str(e),
+                        }
                 return self.issue_response_payload(parsed)
             return {"text": "", "open_questions": [], "error": "invalid_issue_response_mode"}
         action = kwargs.pop("action", f"{self.name}.issue.response")
