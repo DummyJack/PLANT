@@ -18,17 +18,13 @@ STAKEHOLDER_CATEGORIES = {
 def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for item in selected or []:
-        if isinstance(item, dict):
-            name = str(item.get("name") or "").strip()
-            stakeholder_type = str(item.get("type") or "").strip()
-        else:
-            name = str(item or "").strip()
-            stakeholder_type = ""
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        stakeholder_type = str(item.get("type") or "").strip()
         if not name:
             continue
-        if stakeholder_type not in STAKEHOLDER_CATEGORIES:
-            stakeholder_type = "Primary Users"
-        records.append({"name": name, "type": stakeholder_type, "text": []})
+        records.append({"name": name, "type": stakeholder_type})
     return records
 
 
@@ -57,13 +53,9 @@ def merge_stakeholder_inputs(
     return merged
 
 
-def stage_skip(config: Dict[str, Any], name: str) -> bool:
+def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
     stages = config.get("stage") if isinstance(config.get("stage"), dict) else {}
-    value = stages.get(name)
-    if isinstance(value, dict):
-        raise RuntimeError(
-            f"stage.{name} 設定格式已不支援 object；請改成布林值，例如 \"{name}\": true"
-        )
+    value = stages.get(name, default)
     return bool(value)
 
 
@@ -102,12 +94,11 @@ def require_stage_inputs(flow, artifact: Dict[str, Any], stage_name: str) -> Non
             _path_exists(flow, "project.json")
             and _path_exists(flow, "scope.json")
             and _path_exists(flow, "requirements.json")
-            and _path_exists(flow, "conflict.json")
             and _has_candidate_requirements(artifact)
         ):
             return
         raise RuntimeError(
-            "stage.domain_research 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/conflict.json"
+            "stage.domain_research 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json"
         )
     if stage_name == "system_model":
         if (
@@ -125,14 +116,13 @@ def require_stage_inputs(flow, artifact: Dict[str, Any], stage_name: str) -> Non
             _path_exists(flow, "project.json")
             and _path_exists(flow, "scope.json")
             and _path_exists(flow, "requirements.json")
-            and _path_exists(flow, "conflict.json")
             and _path_exists(flow, "feedback.json")
             and _path_exists(flow, "models", "system_models.json")
             and _has_candidate_requirements(artifact)
         ):
             return
         raise RuntimeError(
-            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/conflict.json、artifact/feedback.json、artifact/models/system_models.json"
+            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/models/system_models.json"
         )
 
 
@@ -164,6 +154,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         selected_indices = Collect.user_selection(proposed, max_select=max_sh)
         selected = [proposed[i] for i in selected_indices]
         stakeholders = selected_stakeholders(selected)
+        if not stakeholders:
+            raise RuntimeError(
+                "未選出合法 stakeholders；需要 {'name': ..., 'type': ...} 格式"
+            )
         artifact["stakeholders"] = stakeholders
         flow.user_agent.stakeholders = stakeholders
         flow.store.save_artifact(artifact)
@@ -174,10 +168,15 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             [row["name"] for row in stakeholders],
         )
         stakeholders = merge_stakeholder_inputs(stakeholders, generated_stakeholders)
+        if not any(row.get("text") for row in stakeholders if isinstance(row, dict)):
+            raise RuntimeError("stakeholders 缺少 text；無法進行初始需求分析")
     artifact["stakeholders"] = stakeholders
     flow.user_agent.stakeholders = stakeholders
     flow.store.save_artifact(artifact)
     flow.logger.info(f"✓ {len(stakeholders)} 位利害關係人提出需求")
+
+    if not any(row.get("text") for row in stakeholders if isinstance(row, dict)):
+        raise RuntimeError("stakeholders 缺少 text；無法進行初始需求分析")
 
     analysis = flow.analyst_agent.run_requirements_analyst(
         "analyze_requirements", stakeholders=stakeholders,
@@ -208,7 +207,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.store.save_artifact(artifact)
     flow.logger.info("✓ 需求範圍生成完成")
 
-    if stage_skip(flow.config, "elicitation"):
+    if not stage_enabled(flow.config, "elicitation"):
         flow.logger.info("=== 需求擷取會議 ===")
         require_stage_inputs(flow, artifact, "elicitation")
         flow.logger.info("跳過需求擷取會議：使用既有候選需求")
@@ -232,7 +231,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.info("=== 需求衝突辨識 ===")
     require_stage_inputs(flow, artifact, "conflict_detection")
-    if stage_skip(flow.config, "conflict_detection"):
+    if not stage_enabled(flow.config, "conflict_detection"):
         flow.logger.info("跳過需求衝突辨識：使用既有衝突結果")
     else:
         artifact = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
@@ -242,14 +241,14 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     if (
         conflict_items
         and meeting_setting(flow.config, "conflict_review", True)
-        and not stage_skip(flow.config, "conflict_detection")
+        and stage_enabled(flow.config, "conflict_detection")
     ):
         artifact = flow.meeting.run_conflict_review(artifact, round_num=1)
     flow.store.save_artifact(artifact)
 
     flow.logger.info("=== Expert: 領域研究 ===")
     require_stage_inputs(flow, artifact, "domain_research")
-    if stage_skip(flow.config, "domain_research"):
+    if not stage_enabled(flow.config, "domain_research"):
         flow.logger.info("跳過領域研究：使用既有 feedback")
     else:
         review = flow.expert_agent.run_domain_research_loop(
@@ -262,7 +261,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.info("=== Modeler: 系統模型 ===")
     require_stage_inputs(flow, artifact, "system_model")
-    if stage_skip(flow.config, "system_model"):
+    if not stage_enabled(flow.config, "system_model"):
         flow.logger.info("跳過系統模型：使用既有 system_models")
         model_data = artifact.get("system_models", [])
     else:
@@ -277,12 +276,12 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(model, dict) and str(model.get("name") or model.get("type") or "").strip()
     ]
     flow.logger.info("✓ 系統模型產生完成：%s", "、".join(model_names) if model_names else "無")
-    if not stage_skip(flow.config, "system_model"):
+    if stage_enabled(flow.config, "system_model"):
         flow.store.save_plantuml_files(model_data)
 
     flow.logger.info("=== Analyst: 草稿化 ===")
     require_stage_inputs(flow, artifact, "draft")
-    if stage_skip(flow.config, "draft"):
+    if not stage_enabled(flow.config, "draft"):
         flow.logger.info("跳過草稿化：使用既有需求草稿")
     else:
         conflict_report_md = flow.store.load_markdown("conflict_report.md")

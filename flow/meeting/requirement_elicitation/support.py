@@ -463,7 +463,14 @@ def collect_closure_votes(
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history or [],
         )
-        data = run_closure_vote_loop(agent, role=role, prompt=prompt)
+        try:
+            data = run_closure_vote_loop(agent, role=role, prompt=prompt)
+        except Exception as e:
+            data = {
+                "vote": "continue",
+                "reason": f"closure vote 格式修復失敗，保守起見繼續需求擷取: {e}",
+                "missing_question": "",
+            }
         vote = str(data.get("vote") or "").strip().lower()
         votes.append(
             {

@@ -168,7 +168,7 @@ def conflict_review(
 
     requirement_by_id: Dict[str, Dict[str, Any]] = {
         str(r.get("id") or "").strip(): r
-        for r in (artifact.get("URL") or [])
+        for r in (artifact.get("requirements") or artifact.get("URL") or [])
         if isinstance(r, dict) and str(r.get("id") or "").strip()
     }
 

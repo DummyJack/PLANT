@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 import os
 
-from .init_flow import stage_skip
+from .init_flow import stage_enabled
 
 
 def sync_project_output_language(artifact: Dict[str, Any]) -> None:
@@ -99,7 +99,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
 
-    if stage_skip(flow.config, "formal_meeting"):
+    if not stage_enabled(flow.config, "formal_meeting"):
         require_formal_meeting_inputs(flow)
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議：使用既有需求草稿")
@@ -109,7 +109,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
             artifact = run_one_round(flow, artifact, round_num)
 
     flow.logger.info("=== Final ===")
-    if stage_skip(flow.config, "final_meeting"):
+    if not stage_enabled(flow.config, "final_meeting"):
         require_final_meeting_inputs(flow)
         flow.logger.info("跳過 Final：使用既有會議結果")
     else:
@@ -118,7 +118,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
-    if stage_skip(flow.config, "SRS"):
+    if not stage_enabled(flow.config, "SRS"):
         require_srs_inputs(artifact)
         flow.logger.info("跳過 SRS：使用既有正式規格文件")
     else:
@@ -150,7 +150,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     artifact.setdefault("meta", {})["session_end_round"] = end_round
     flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
 
-    if stage_skip(flow.config, "formal_meeting"):
+    if not stage_enabled(flow.config, "formal_meeting"):
         require_formal_meeting_inputs(flow)
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議：使用既有需求草稿")
@@ -160,7 +160,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
             artifact = run_one_round(flow, artifact, round_num)
 
     flow.logger.info("=== Final ===")
-    if stage_skip(flow.config, "final_meeting"):
+    if not stage_enabled(flow.config, "final_meeting"):
         require_final_meeting_inputs(flow)
         flow.logger.info("跳過 Final：使用既有會議結果")
     else:
@@ -169,7 +169,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
-    if stage_skip(flow.config, "SRS"):
+    if not stage_enabled(flow.config, "SRS"):
         require_srs_inputs(artifact)
         flow.logger.info("跳過 SRS：使用既有正式規格文件")
     else:
