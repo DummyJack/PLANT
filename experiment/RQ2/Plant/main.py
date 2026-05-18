@@ -297,12 +297,32 @@ def run_conflict(
                     },
                 )
 
+    missing_pred_rows = []
     y_pred = []
     for i in range(total):
         pred = results_by_idx[i][0]
         if pred not in {"Conflict", "Neutral"}:
-            raise RuntimeError(f"RQ2 第 {i + 1} 筆缺少有效 pred")
+            row = data[i] if 0 <= i < len(data) else {}
+            missing_pred_rows.append(
+                {
+                    "row": i + 1,
+                    "type": str(row.get("types") or "Unknown"),
+                    "error": str(
+                        ((results_by_idx.get(i) or (None, {}))[1] or {})
+                    )[:300],
+                }
+            )
+            continue
         y_pred.append(pred)
+    if missing_pred_rows:
+        preview = ", ".join(
+            f"第 {row['row']} 筆({row['type']})"
+            for row in missing_pred_rows[:10]
+        )
+        raise RuntimeError(
+            f"RQ2 有 {len(missing_pred_rows)} 筆缺少有效 pred；"
+            f"通常是前面某個 type 整批失敗造成。前幾筆：{preview}"
+        )
     record_by_type = build_rq2_record_by_type(
         grouped, meetings_by_type, results_by_idx
     )
