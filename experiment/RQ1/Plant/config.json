@@ -1,6 +1,6 @@
 {
   "verbose": true,
-  "elicitation_max_turns": 2,
+  "elicitation_max_turns": 20,
   "enable_agents": {
     "user": true,
     "analyst": true,

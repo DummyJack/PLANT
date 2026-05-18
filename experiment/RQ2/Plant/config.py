@@ -6,19 +6,33 @@ from typing import Any, Dict, Optional
 
 from flow.setup import Flow
 from storage.artifact import save_artifact as save_split_artifact
+from storage.markdown import load_markdown as load_markdown_file
+from storage.markdown import save_markdown as save_markdown_file
 from utils import model_has_token_pricing
 
 class ExperimentLogger:
-    """實驗用無輸出 logger（不寫 log 檔）。"""
+    """實驗用 console logger（不寫 log 檔）。"""
+
+    @staticmethod
+    def fmt(args: tuple) -> str:
+        if not args:
+            return ""
+        if len(args) == 1:
+            return str(args[0])
+        msg = str(args[0])
+        try:
+            return msg % args[1:]
+        except Exception:
+            return " ".join(str(x) for x in args)
 
     def info(self, *args, **kwargs):
-        pass
+        print(self.fmt(args), flush=True)
 
     def warning(self, *args, **kwargs):
-        pass
+        print(f"[Flow][WARN] {self.fmt(args)}", flush=True)
 
     def error(self, *args, **kwargs):
-        pass
+        print(f"[Flow][ERROR] {self.fmt(args)}", flush=True)
 
 class ExperimentStore:
     """實驗用暫存 store；artifact_query 需要 artifact/ 分檔作為唯讀上下文。"""
@@ -28,6 +42,7 @@ class ExperimentStore:
         # AgendaRunner 會讀取 output_dir；不指向 repo 根目錄，避免誤讀既有 design_rationale.md
         self.output_dir = Path(tempfile.gettempdir()) / "plant_rq2_experiment_store"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.base_dir = self.output_dir
         self.project_dir = self.output_dir
         self.artifact_dir = self.project_dir / "artifact"
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -39,7 +54,7 @@ class ExperimentStore:
         pass
 
     def save_markdown(self, content: str, filename: str):
-        pass
+        save_markdown_file(self.artifact_dir, self.output_dir, content, filename)
 
     def save_plantuml_files(self, model_data: Dict[str, Any]):
         pass
@@ -52,6 +67,9 @@ class ExperimentStore:
 
     def load_draft(self, version: int):
         return None
+
+    def load_markdown(self, filename: str) -> str:
+        return load_markdown_file(self.artifact_dir, self.output_dir, filename)
 
 def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
     """彙總 Flow 內各 LLM 的 CostTracker（與 flow.finalize 的 cost_summary 結構相近）。"""
