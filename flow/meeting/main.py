@@ -18,7 +18,6 @@ from agents.profile.analyst.conflict_store import (
 def requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str, int]:
     stats = {
         "text_trimmed": 0,
-        "source_stakeholders_normalized": 0,
     }
     for req in requirements or []:
         if not isinstance(req, dict):
@@ -30,12 +29,6 @@ def requirement_fields(requirements: List[Dict[str, Any]]) -> Dict[str, int]:
             req["text"] = trimmed
             stats["text_trimmed"] += 1
 
-        stakeholders = req.get("source_stakeholders")
-        if stakeholders is None:
-            req["source_stakeholders"] = []
-        elif not isinstance(stakeholders, list):
-            req["source_stakeholders"] = [str(stakeholders).strip()] if str(stakeholders).strip() else []
-            stats["source_stakeholders_normalized"] += 1
     return stats
 
 
@@ -52,7 +45,7 @@ def build_round_status_summary(
     pending_decisions = [r for r in (artifact.get("pending_decisions", []) or []) if isinstance(r, dict)]
     incomplete_requirements = [
         r for r in requirements
-        if not str(r.get("acceptance_criteria") or "").strip()
+        if not str(r.get("text") or "").strip() or not str(r.get("source") or "").strip()
     ]
 
     summary = {
@@ -87,10 +80,13 @@ def save_meeting_preparation_outputs(
         if draft_version > 0
         else None
     )
+    conflict_report_md = coordinator.flow.store.load_markdown("conflict_report.md")
     draft_md = coordinator.flow.analyst_agent.run_requirements_analyst(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
         previous_draft=previous_draft,
+        conflict_report_md=conflict_report_md,
+        meeting_record_md="",
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.logger.info(
@@ -292,20 +288,23 @@ def build_model_revision_context(
         if decision_round == int(round_num) and decision_id:
             decision_ids.append(decision_id)
     discussion_issue_ids = []
+    meeting_ids = []
     for row in round_discussions or []:
         if not isinstance(row, dict):
             continue
+        meeting_id = str(row.get("meeting_id") or "").strip()
+        if meeting_id:
+            meeting_ids.append(meeting_id)
         issue = row.get("issue") if isinstance(row.get("issue"), dict) else {}
         issue_id = str(issue.get("id") or "").strip()
         if issue_id:
             discussion_issue_ids.append(issue_id)
 
-    previous_model_summary = [
+    previous_models_context = [
         {
             "name": model.get("name"),
             "type": model.get("type"),
-            "to_confirm": model.get("to_confirm", []),
-            "maturity": model.get("maturity", ""),
+            "source": model.get("source"),
         }
         for model in previous_models or []
         if isinstance(model, dict)
@@ -316,9 +315,30 @@ def build_model_revision_context(
         "changed_requirement_ids": list(dict.fromkeys(changed_requirement_ids)),
         "change_candidate_ids": list(dict.fromkeys(change_candidate_ids)),
         "decision_ids": list(dict.fromkeys(decision_ids)),
+        "meeting_ids": list(dict.fromkeys(meeting_ids)),
         "discussion_issue_ids": list(dict.fromkeys(discussion_issue_ids)),
-        "previous_model_summary": previous_model_summary,
+        "previous_models": previous_models_context,
     }
+
+
+def round_meeting_record_markdown(
+    coordinator: Any,
+    round_discussions: List[Dict[str, Any]],
+) -> str:
+    meeting_ids = []
+    for row in round_discussions or []:
+        if not isinstance(row, dict):
+            continue
+        meeting_id = str(row.get("meeting_id") or "").strip()
+        if meeting_id and meeting_id not in meeting_ids:
+            meeting_ids.append(meeting_id)
+
+    parts = []
+    for meeting_id in meeting_ids:
+        md = coordinator.flow.store.load_markdown(f"{meeting_id}.md").strip()
+        if md:
+            parts.append(md)
+    return "\n\n".join(parts)
 
 
 # ---------- apply mediator updates ----------
@@ -341,35 +361,37 @@ def apply_mediator_updates(
     candidate_conflicts = updates.get("conflicts", current_conflicts)
     new_conflicts = dict_rows(candidate_conflicts) or current_conflicts
     extra_new_conflicts = dict_rows(updates.get("new_conflicts", []))
-    next_conflict_num = len(
-        [c for c in new_conflicts if isinstance(c, dict) and str(c.get("id") or "").startswith("CF-")]
+    next_pair_num = len(
+        [c for c in new_conflicts if isinstance(c, dict) and str(c.get("id") or "").startswith("PAIR-")]
+    ) + 1
+    next_multiple_num = len(
+        [c for c in new_conflicts if isinstance(c, dict) and str(c.get("id") or "").startswith("MULTIPLE-")]
     ) + 1
     for row in extra_new_conflicts:
         if not isinstance(row, dict):
             continue
         candidate = dict(row)
         if not str(candidate.get("id") or "").strip():
-            candidate["id"] = f"CF-{next_conflict_num}"
-            next_conflict_num += 1
+            req_ids = [
+                str(item).strip()
+                for item in (candidate.get("requirement_ids") or [])
+                if str(item).strip()
+            ]
+            if len(req_ids) >= 3:
+                candidate["id"] = f"MULTIPLE-{next_multiple_num}"
+                next_multiple_num += 1
+            else:
+                candidate["id"] = f"PAIR-{next_pair_num}"
+                next_pair_num += 1
         new_conflicts.append(candidate)
-    cf_to_decision = {}
-    for d in new_decisions:
-        did = d.get("id")
-        for cf_id in d.get("resolved_conflict_ids", []):
-            if cf_id:
-                cf_to_decision[cf_id] = did
     for c in new_conflicts:
         if not isinstance(c, dict):
             continue
-        if c.get("label") == "Neutral" and c.get("id"):
-            c.setdefault("resolved_by_decision_id", cf_to_decision.get(c["id"]))
         orig = prev_conflicts_by_id.get(c.get("id"))
         if not orig:
             continue
         if orig.get("requirement_ids") is not None:
             c.setdefault("requirement_ids", orig["requirement_ids"])
-        if orig.get("resolved_by_decision_id") and c.get("label") == "Neutral":
-            c.setdefault("resolved_by_decision_id", orig["resolved_by_decision_id"])
     set_conflict_entries(artifact, new_conflicts)
     return {"new_decisions": new_decisions}
 
@@ -491,10 +513,10 @@ def post_round_pipeline(
         or candidate_pool_changed
     )
 
-    prev_models = artifact.get("system_models", {}).get("models", [])
+    prev_models = artifact.get("system_models") if isinstance(artifact.get("system_models"), list) else []
     if prev_models and not requirements_changed and not change_candidates:
-        model_data = artifact.get("system_models", {})
-        coordinator.flow.logger.info("System model：需求無變更，本輪沿用既有模型")
+        model_data = prev_models
+        coordinator.flow.logger.info("系統模型：需求無變更，本輪沿用既有模型")
     elif prev_models:
         revision_context = build_model_revision_context(
             artifact,
@@ -503,12 +525,12 @@ def post_round_pipeline(
             change_candidates=change_candidates,
             round_discussions=round_discussions,
         )
-        model_data = coordinator.flow.modeler_agent.generate_requirement_models(
+        model_data = coordinator.flow.modeler_agent.generate_system_models(
             artifact,
             revision_context=revision_context,
         )
     else:
-        model_data = coordinator.flow.modeler_agent.generate_requirement_models(
+        model_data = coordinator.flow.modeler_agent.generate_system_models(
             artifact,
         )
     artifact["system_models"] = model_data
@@ -518,10 +540,14 @@ def post_round_pipeline(
         if draft_version > 0
         else None
     )
+    conflict_report_md = coordinator.flow.store.load_markdown("conflict_report.md")
+    meeting_record_md = round_meeting_record_markdown(coordinator, round_discussions)
     draft_md = coordinator.flow.analyst_agent.run_requirements_analyst(
         "create_draft", artifact=artifact, draft_version=draft_version,
         round_num=round_num,
         previous_draft=previous_draft,
+        conflict_report_md=conflict_report_md,
+        meeting_record_md=meeting_record_md,
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.touch_artifact_meta(artifact, updated_by="flow.run_meeting_round", round_num=round_num)
@@ -535,6 +561,12 @@ def post_round_pipeline(
     cap_meeting_trace(artifact)
     coordinator.flow.store.save_artifact(artifact)
     coordinator.flow.store.save_plantuml_files(model_data)
+    model_names = [
+        str(model.get("name") or model.get("type") or "").strip()
+        for model in (model_data if isinstance(model_data, list) else [])
+        if isinstance(model, dict) and str(model.get("name") or model.get("type") or "").strip()
+    ]
+    coordinator.flow.logger.info("系統模型：%s", "、".join(model_names) if model_names else "無")
     coordinator.flow.logger.info(
         "Round %s status: requirements=%s incomplete_requirements=%s pending_decisions=%s unresolved_conflicts=%s open_questions=%s",
         round_num,

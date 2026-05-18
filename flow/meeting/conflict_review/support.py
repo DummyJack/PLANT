@@ -20,8 +20,6 @@ def mark_conflicts_resolved_by_ids(
         if cid not in target:
             continue
         c["label"] = "Neutral"
-        if decision_id:
-            c["resolved_by_decision_id"] = decision_id
     normalize_conflict_state(artifact)
 
 def pair_review_record(
@@ -53,13 +51,13 @@ def pair_review_record(
     }
 
 def extract_reviews_from_json(
-    statement: str,
+    text: str,
     *,
     known_pair_ids: List[str],
     current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """只從合法 JSON statement 的 pair_reviews 欄位提取逐筆 review。"""
-    text = str(statement or "").strip()
+    """只從合法 JSON text 的 pair_reviews 欄位提取逐筆 review。"""
+    text = str(text or "").strip()
     if not text:
         return []
 
@@ -93,14 +91,14 @@ def extract_reviews_from_json(
     return deduped
 
 
-def normalize_review_statement(
-    statement: str,
+def normalize_review_text(
+    text: str,
     *,
     known_pair_ids: List[str],
     current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> str:
     """將 conflict review 發言正規化成 review_summary + pair_reviews JSON 字串。"""
-    text = str(statement or "").strip()
+    text = str(text or "").strip()
     if not text:
         return ""
 
@@ -118,9 +116,7 @@ def normalize_review_statement(
     except Exception:
         parsed = None
     if isinstance(parsed, dict):
-        review_summary = str(
-            parsed.get("review_summary") or parsed.get("overall_assessment") or ""
-        ).strip()
+        review_summary = str(parsed.get("review_summary") or "").strip()
 
     return json.dumps(
         {
@@ -201,14 +197,14 @@ def collect_discussion_rows(contributions: List[Dict[str, Any]]) -> list[dict]:
         if not isinstance(c, dict):
             continue
         resp = c.get("response") or {}
-        statement = ""
+        text = ""
         if isinstance(resp, dict):
-            statement = (resp.get("statement") or resp.get("content") or "").strip()
+            text = (resp.get("text") or resp.get("content") or "").strip()
         else:
-            statement = str(resp).strip()
+            text = str(resp).strip()
         agent_name = str(c.get("agent") or "").strip()
-        if statement:
-            discussion_rows.append({"agent": agent_name, "statement": statement})
+        if text:
+            discussion_rows.append({"agent": agent_name, "text": text})
     return discussion_rows
 
 def collect_reviews(
@@ -226,11 +222,11 @@ def collect_reviews(
         resp = c.get("response") or {}
         raw_reviews = resp.get("pair_reviews") if isinstance(resp, dict) else None
         if not isinstance(raw_reviews, list):
-            statement = ""
+            text = ""
             if isinstance(resp, dict):
-                statement = str(resp.get("statement") or resp.get("content") or "").strip()
+                text = str(resp.get("text") or resp.get("content") or "").strip()
             parsed_reviews = extract_reviews_from_json(
-                statement,
+                text,
                 known_pair_ids=known_pair_ids,
                 current_labels_by_id=current_labels_by_id,
             )
@@ -304,30 +300,23 @@ def apply_change_record(
             continue
 
         if change_type == "update" and req_id in by_id:
-            if field in {"text", "priority", "acceptance_criteria"}:
+            if field in {"text", "priority", "source"}:
                 proposed_req = dict(by_id[req_id])
                 proposed_req[field] = candidate.get("after")
                 by_id[req_id][field] = candidate.get("after")
                 candidate["status"] = "applied"
                 continue
-            if field == "source_stakeholders":
-                after = candidate.get("after")
-                if isinstance(after, list):
-                    by_id[req_id][field] = after
-                    candidate["status"] = "applied"
-                    continue
-
         candidate["status"] = "pending_review"
 
     artifact["requirements"] = requirements
     artifact["change_record"] = candidates
     return artifact
 
-def get_contribution_statement(contribution: Dict[str, Any]) -> str:
+def get_contribution_text(contribution: Dict[str, Any]) -> str:
     if not isinstance(contribution, dict):
         return ""
     resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
-    return str(resp.get("statement") or resp.get("content") or "").strip()
+    return str(resp.get("text") or resp.get("content") or "").strip()
 
 
 def merge_review_decisions(
@@ -394,11 +383,6 @@ def merge_review_decisions(
                 {
                     "id": cid,
                     "current_label": current_label,
-                    "requirement_ids": [
-                        str(r)
-                        for r in (conflict.get("requirement_ids") or [])
-                        if str(r).strip()
-                    ],
                     "requirements": list(conflict.get("requirements") or []),
                     "requirement_a": dict((conflict.get("requirement_a") or {})),
                     "requirement_b": dict((conflict.get("requirement_b") or {})),
@@ -575,6 +559,7 @@ def finalize_review_reasons(
         )
 
     reason_by_id: Dict[str, str] = {}
+    final_type_by_id: Dict[str, str] = {}
     raw_outputs: List[str] = []
     batch_size = 8
     for start in range(0, len(decision_items), batch_size):
@@ -589,6 +574,9 @@ def finalize_review_reasons(
             reason = str(row.get("reason") or "").strip()
             if pair_id and reason:
                 reason_by_id[pair_id] = reason
+                final_type = str(row.get("final_type") or "").strip()
+                if final_type:
+                    final_type_by_id[pair_id] = final_type
 
     missing = [
         str(item.get("id") or "").strip()
@@ -612,6 +600,9 @@ def finalize_review_reasons(
                 reason = str(row.get("reason") or "").strip()
                 if pair_id and reason:
                     reason_by_id[pair_id] = reason
+                    final_type = str(row.get("final_type") or "").strip()
+                    if final_type:
+                        final_type_by_id[pair_id] = final_type
 
     missing = [
         str(item.get("id") or "").strip()
@@ -627,6 +618,8 @@ def finalize_review_reasons(
         if cid in reason_by_id:
             decision["reason"] = reason_by_id[cid]
             decision["reason_by"] = "analyst"
+        if cid in final_type_by_id:
+            decision["final_type"] = final_type_by_id[cid]
     return {
         "final_reason_status": "ok",
         "reason_count": len(reason_by_id),
@@ -640,18 +633,18 @@ def collect_missing_reviews(
     contributions: List[Dict[str, Any]],
     participants: List[str],
 ) -> List[Dict[str, Any]]:
-    """若某位審查 agent 沒有有效發言，單獨補收一次，避免 meeting_conflict_review 只剩少數角色。"""
-    existing_with_statement = {
+    """若某位審查 agent 沒有有效發言，單獨補收一次，避免 details 只剩少數角色。"""
+    existing_with_text = {
         str(c.get("agent") or "").strip()
         for c in contributions or []
         if isinstance(c, dict)
         and str(c.get("agent") or "").strip()
-        and get_contribution_statement(c)
+        and get_contribution_text(c)
     }
     missing = [
         str(p).strip()
         for p in participants or []
-        if str(p).strip() and str(p).strip() not in existing_with_statement
+        if str(p).strip() and str(p).strip() not in existing_with_text
     ]
     if not missing:
         return contributions

@@ -153,7 +153,7 @@ class Flow:
 
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """集中初始化 artifact 目前需要的最小欄位。"""
-        artifact.setdefault("reqt_candidates", [])
+        artifact.setdefault("URL", [])
         artifact.setdefault("change_record", artifact.get("change_record", []))
         elicitation = artifact.setdefault("elicitation", {})
         elicitation.setdefault("plan", {})

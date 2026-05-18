@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from agents.profile.analyst.requirements import requirement_candidate, requirement_discussion_pool
+from agents.profile.scenario import scenario_prompt_value
 
 ELICITATION_PHASES = [
     "initial_requirement",
@@ -114,7 +115,7 @@ def without_finish_proposals(
     for c in contributions or []:
         if not isinstance(c, dict):
             continue
-        if c.get("agent") != "user" and stop_phrase in get_contribution_statement(c):
+        if c.get("agent") != "user" and stop_phrase in get_contribution_text(c):
             continue
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
         if c.get("agent") != "user" and str(resp.get("action") or "").strip().lower() == FINISH_AGENT_ACTION:
@@ -137,9 +138,9 @@ def collect_user_summary(contributions: List[Dict[str, Any]]) -> str:
     for c in contributions or []:
         if not isinstance(c, dict) or c.get("agent") != "user":
             continue
-        statement = get_contribution_statement(c)
-        if statement:
-            parts.append(statement)
+        text = get_contribution_text(c)
+        if text:
+            parts.append(text)
     return "\n".join(parts).strip()
 
 def build_phase_guidance(phase: str) -> str:
@@ -177,14 +178,14 @@ def build_recent_ask_history(
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()
-            statement = str(row.get("statement") or "").strip()
-            if not statement:
+            text = str(row.get("text") or "").strip()
+            if not text:
                 continue
             if agent != "user" and not question_text:
                 question_from = agent
-                question_text = extract_first_question(statement) or compact_text(statement)
+                question_text = extract_first_question(text) or compact_text(text)
             elif agent == "user" and not user_response:
-                user_response = compact_text(statement)
+                user_response = compact_text(text)
         if not log.get("new_candidates_count"):
             missing_signal = "上一輪未形成新 candidate，請避免原樣重複；若同一缺口仍重要，可換一種更具體但不誘導的問法。"
         elif log.get("new_candidate_texts"):
@@ -222,8 +223,8 @@ def find_finish_proposal(
         agent_action = str(resp.get("action") or "").strip().lower()
         if agent_action == FINISH_AGENT_ACTION:
             return agent, stop_phrase
-        statement = get_contribution_statement(c)
-        if statement and stop_phrase in statement:
+        text = get_contribution_text(c)
+        if text and stop_phrase in text:
             return agent, stop_phrase
     return "", ""
 
@@ -380,13 +381,6 @@ def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[s
             append_unique(closed, "priority detail")
             append_unique(do_not_repeat, "do not re-ask priority for already covered items")
 
-    if has_any("acceptance", "criteria", "success", "measure", "metric", "standard", "驗收", "標準", "成功", "量測", "指標"):
-        if confirmed_signal:
-            append_unique(confirmed, "acceptance criteria or success standard")
-        if user_not_care:
-            append_unique(closed, "acceptance detail")
-            append_unique(do_not_repeat, "do not re-ask acceptance details unless needed to make a requirement testable")
-
     if user_not_care and not closed:
         append_unique(closed, "rejected or low-priority discussion direction")
         append_unique(do_not_repeat, "do not repeat the rejected discussion direction")
@@ -397,11 +391,11 @@ def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[s
         "do_not_repeat": do_not_repeat,
     }
 
-def get_contribution_statement(contribution: Dict[str, Any]) -> str:
+def get_contribution_text(contribution: Dict[str, Any]) -> str:
     if not isinstance(contribution, dict):
         return ""
     resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
-    return str(resp.get("statement") or "").strip()
+    return str(resp.get("text") or "").strip()
 
 def select_question(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
     for c in contributions or []:
@@ -410,11 +404,11 @@ def select_question(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
         agent = str(c.get("agent") or "").strip()
         if not agent or agent == "user":
             continue
-        statement = get_contribution_statement(c)
-        if not statement:
+        text = get_contribution_text(c)
+        if not text:
             continue
-        if "?" in statement or "？" in statement:
-            return agent, statement
+        if "?" in text or "？" in text:
+            return agent, text
     return "", ""
 
 def merge_turn_summary(
@@ -464,7 +458,7 @@ def collect_closure_votes(
             role=role,
             proposer_role=proposer_role,
             role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
-            scenario=artifact.get("scenario", {}),
+            scenario=scenario_prompt_value(artifact.get("scenario", {})),
             requirements=requirements,
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history or [],
@@ -505,28 +499,34 @@ def extract_candidates(
     turn: int,
 ) -> List[Dict[str, Any]]:
     mode = get_elicitation_mode(artifact)
-    discussion_parts: List[str] = []
-    interviewer_context_parts: List[str] = []
+    allowed_stakeholders = {
+        str(row.get("name") or "").strip()
+        for row in artifact.get("stakeholders", []) or []
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
+    stakeholder_rows: List[Dict[str, str]] = []
     for c in contributions:
         if not isinstance(c, dict):
             continue
         agent = c.get("agent", "?")
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-        statement = (resp.get("statement") or "").strip()
-        if not statement:
-            continue
-        if mode == "oracle":
-            discussion_parts.append(f"\n【{agent}】\n{statement}\n")
+        text = (resp.get("text") or "").strip()
+        if not text:
             continue
         if agent == "user":
-            discussion_parts.append(f"\n【user】\n{statement}\n")
-        elif str(agent).strip() in {"analyst", "expert", "modeler"}:
-            interviewer_context_parts.append(f"\n【{agent}_question】\n{statement}\n")
-    discussion_text = ""
-    if mode == "main_flow" and interviewer_context_parts:
-        discussion_text += "".join(interviewer_context_parts)
-    discussion_text += "".join(discussion_parts)
-    if not discussion_text.strip():
+            speaking_as = resp.get("speaking_as")
+            if isinstance(speaking_as, str):
+                speaking_as = [speaking_as]
+            names = [
+                str(name).strip()
+                for name in (speaking_as or [])
+                if str(name).strip() in allowed_stakeholders
+            ]
+            if not names and len(allowed_stakeholders) == 1:
+                names = list(allowed_stakeholders)
+            for name in names:
+                stakeholder_rows.append({"name": name, "text": text})
+    if not stakeholder_rows:
         return []
 
     existing_texts = {
@@ -534,23 +534,23 @@ def extract_candidates(
         for r in requirement_discussion_pool(artifact)
         if isinstance(r, dict) and r.get("text")
     }
-    existing_ids = {
-        str(r.get("id") or "").strip()
+    existing_requirements = [
+        {
+            "id": str(r.get("id") or "").strip(),
+            "text": str(r.get("text") or "").strip(),
+            "priority": str(r.get("priority") or "").strip(),
+            "stakeholder": r.get("stakeholder"),
+            "source": str(r.get("source") or "").strip(),
+        }
         for r in requirement_discussion_pool(artifact)
-        if isinstance(r, dict) and r.get("id")
-    }
-    valid_source_stakeholders = [
-        str(row.get("name") or "").strip()
-        for row in artifact.get("stakeholders", []) or []
-        if isinstance(row, dict) and str(row.get("name") or "").strip()
+        if isinstance(r, dict) and str(r.get("text") or "").strip()
     ]
-
     raw = coordinator.flow.analyst_agent.extract_elicited_reqts(
-        discussion_text=discussion_text,
-        existing_ids=sorted(existing_ids),
+        stakeholders=stakeholder_rows,
+        existing_requirements=existing_requirements,
         mode=mode,
-        scenario=artifact.get("scenario", {}),
-        valid_source_stakeholders=valid_source_stakeholders,
+        scenario=scenario_prompt_value(artifact.get("scenario", {})),
+        source=f"elicitation_r{round_num}",
     )
     if not isinstance(raw, list):
         raise RuntimeError("elicited requirement extraction did not return a list")

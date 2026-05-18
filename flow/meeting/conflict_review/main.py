@@ -1,11 +1,11 @@
 import json
 from typing import Any, Dict, List
 
-from storage.artifact import conflicts_payload
+from storage.artifact import conflict_payload, load_json_path, save_json_path
 
 from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
 
-from .record import build_pair_review_records
+from .record import attach_review_records_to_conflicts, build_pair_review_records
 from .support import (
     analyst_signoff,
     analyst_changed_label_ids,
@@ -13,7 +13,7 @@ from .support import (
     collect_reviews,
     consensus_decisions,
     collect_missing_reviews,
-    normalize_review_statement,
+    normalize_review_text,
 )
 # ---------- 衝突再審查主流程 ----------
 
@@ -23,9 +23,11 @@ def save_conflict_report(
     *,
     round_num: int,
 ) -> None:
-    """根據 artifact/conflict.json 產生 conflict_report.md。"""
+    """根據衝突再審查結果產生結構化 report JSON 與 Markdown 報告。"""
     coordinator.flow.store.save_artifact(artifact)
-    payload = conflicts_payload(artifact)
+    if coordinator.flow.config.get("enable_conflict_report", True) is False:
+        return
+    payload = conflict_payload(artifact, include_report=True)
     conflict_rows = [
         row for row in (payload.get("report", []) or [])
         if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
@@ -33,7 +35,7 @@ def save_conflict_report(
     if not conflict_rows:
         return
     previous_report = (
-        coordinator.flow.store.load_markdown(f"conflict_report_v{round_num - 1}.md")
+        coordinator.flow.store.load_markdown("conflict_report.md")
         if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown")
         else ""
     )
@@ -42,17 +44,35 @@ def save_conflict_report(
         "conflict": payload,
         "conflict_rows": conflict_rows,
     }
+    report_artifact = coordinator.flow.analyst_agent.generate_conflict_resolutions(report_artifact)
+    report_payload = (report_artifact.get("conflict", {}) or {}).get("report", []) or []
+    report_path = coordinator.flow.store.artifact_dir / "report" / f"conflict_report_v{round_num}.json"
+    save_json_path(
+        coordinator.flow.store.base_dir,
+        report_payload,
+        report_path,
+    )
+    artifact["conflict"] = {
+        key: value
+        for key, value in (report_artifact.get("conflict", payload) or {}).items()
+        if key != "report"
+    }
+    coordinator.flow.store.save_artifact(artifact)
+    report_rows = load_json_path(report_path, [])
+    if not isinstance(report_rows, list):
+        raise RuntimeError(f"conflict report JSON 格式錯誤: {report_path}")
+    scenario = artifact.get("scenario") if isinstance(artifact.get("scenario"), dict) else {}
     conflict_md = coordinator.flow.analyst_agent.generate_conflict_report(
-        report_artifact,
+        {
+            "scenario": str(scenario.get("name") or "").strip(),
+            "conflict_report": report_rows,
+        },
         round_num=round_num,
-        recent_decisions_limit=coordinator.flow.config.get("issue_items", 5),
         previous_report=previous_report,
     )
-    coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
     coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
     coordinator.flow.logger.info(
-        "需求衝突報告已產生：conflict_report_v%s.md",
-        round_num,
+        "需求衝突報告已產生：conflict_report.md",
     )
 
 def run_conflict_review_round(
@@ -95,26 +115,26 @@ def run_conflict_review_round(
             continue
         agent_name = str(c.get("agent") or "").strip()
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-        statement = str(resp.get("statement") or resp.get("content") or "").strip()
-        if not agent_name or not statement:
+        text = str(resp.get("text") or resp.get("content") or "").strip()
+        if not agent_name or not text:
             continue
         if isinstance(resp.get("pair_reviews"), list) and resp.get("pair_reviews"):
-            statement = json.dumps(
+            text = json.dumps(
                 {
-                    "review_summary": statement,
+                    "review_summary": text,
                     "pair_reviews": resp.get("pair_reviews"),
                 },
                 ensure_ascii=False,
             )
-        normalized_statement = normalize_review_statement(
-            statement,
+        normalized_text = normalize_review_text(
+            text,
             known_pair_ids=known_pair_ids,
             current_labels_by_id=current_labels_by_id,
         )
-        resp["statement"] = normalized_statement
+        resp["text"] = normalized_text
         if not isinstance(resp.get("pair_reviews"), list) or not resp.get("pair_reviews"):
             parsed_reviews = collect_reviews(
-                [{"agent": agent_name, "response": {"statement": normalized_statement}}],
+                [{"agent": agent_name, "response": {"text": normalized_text}}],
                 known_pair_ids=known_pair_ids,
                 current_labels_by_id=current_labels_by_id,
             )[1]
@@ -124,7 +144,7 @@ def run_conflict_review_round(
                     for row in parsed_reviews
                 ]
         c["response"] = resp
-        conversation_rows.append(f"{agent_name}: {normalized_statement}")
+        conversation_rows.append(f"{agent_name}: {normalized_text}")
     return contributions, conversation_rows, contribution_agents
 
 def conflict_review(
@@ -148,7 +168,7 @@ def conflict_review(
 
     requirement_by_id: Dict[str, Dict[str, Any]] = {
         str(r.get("id") or "").strip(): r
-        for r in (artifact.get("reqt_candidates") or [])
+        for r in (artifact.get("URL") or [])
         if isinstance(r, dict) and str(r.get("id") or "").strip()
     }
 
@@ -157,6 +177,7 @@ def conflict_review(
     for cid, conflict in conflicts_by_id.items():
         label = str(conflict.get("label") or "").strip()
         req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
+        initial_reason = str(conflict.get("initial_reason") or "").strip()
         is_multiple = len(req_ids) >= 3 or cid.startswith("MULTIPLE-")
         review_focus = (
             "判斷這組 3 條以上 requirements 共同成立時是否產生衝突；不要只挑其中任兩條重複做 pair 判斷。"
@@ -164,7 +185,8 @@ def conflict_review(
             else ""
         )
         focus_line = f"  判斷焦點: {review_focus}" if review_focus else ""
-        conflict_summaries.append(f"- [{cid}] 標籤={label}  需求={req_ids}{focus_line}")
+        reason_line = f"  初判理由: {initial_reason}" if initial_reason else ""
+        conflict_summaries.append(f"- [{cid}] 初判={label}{focus_line}{reason_line}")
         req_rows = [
             {
                 "id": rid,
@@ -174,10 +196,11 @@ def conflict_review(
         ]
         pair_cards.append({
             "id": cid,
-            "current_label": label,
-            "requirement_ids": req_ids,
             "requirements": req_rows,
+            "current_label": label,
         })
+        if initial_reason:
+            pair_cards[-1]["initial_reason"] = initial_reason
         if review_focus:
             pair_cards[-1]["review_focus"] = review_focus
         conflict["requirements"] = req_rows
@@ -377,6 +400,11 @@ def conflict_review(
             "to_label": new_label if modify else old_label,
             "reason": str(dec.get("reason") or ""),
         }
+        final_type = str(dec.get("final_type") or "").strip()
+        if new_label == "Conflict" and final_type:
+            conflict["final_type"] = final_type
+        elif new_label == "Neutral":
+            conflict.pop("final_type", None)
 
     pair_review_records = build_pair_review_records(
         conflicts_by_id,
@@ -384,15 +412,7 @@ def conflict_review(
         extracted_pair_reviews if isinstance(extracted_pair_reviews, list) else [],
         round_num=round_num,
     )
-    existing_pair_reviews = [
-        row for row in (artifact.get("pair_reviews", []) or [])
-        if not (
-            isinstance(row, dict)
-            and int(row.get("round") or -1) == int(round_num)
-        )
-    ]
-    existing_pair_reviews.extend(pair_review_records)
-    artifact["pair_reviews"] = existing_pair_reviews
+    attach_review_records_to_conflicts(conflicts_by_id, pair_review_records)
 
     recheck_log = artifact.setdefault("conflict_review_log", [])
     recheck_log.append(
@@ -406,7 +426,6 @@ def conflict_review(
             "changed_count": changed,
             "conversation": conversation_rows,
             "decisions": decisions,
-            "pair_reviews": pair_review_records,
             "signoff_debug": signoff_debug,
         }
     )

@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.profile.scenario import scenario_prompt_value
 from utils import meeting_setting
 from utils.language import current_output_language
 
@@ -50,9 +51,12 @@ def meeting_rows(
     def row_id(turn_no: int, row_no: int = 1) -> str:
         return f"elicit-{turn_no}-{row_no}"
 
+    def row_text(row: Dict[str, Any]) -> str:
+        return str(row.get("text") or "").strip()
+
     def answer_fields(row: Dict[str, Any]) -> Dict[str, str]:
-        statement = str(row.get("statement") or "").strip()
-        if not statement:
+        text = row_text(row)
+        if not text:
             return {}
         speaking_as = row.get("speaking_as") or []
         if isinstance(speaking_as, str):
@@ -60,17 +64,17 @@ def meeting_rows(
         keys = [str(name).strip() for name in speaking_as if str(name).strip()]
         if not keys:
             return {}
-        return {key: statement for key in keys}
+        return {key: text for key in keys}
 
     for index, turn in enumerate(elicitation_trace or [], 1):
         if not isinstance(turn, dict):
             continue
         turn_no = turn_number(turn, index)
         if bool(turn.get("forced_finish")):
-            statement = str(turn.get("judged_action") or "").strip()
+            text = str(turn.get("judged_action") or "").strip()
             agent = str(turn.get("judged_action_agent") or "mediator").strip() or "mediator"
-            if statement:
-                rows.append({"id": row_id(turn_no), agent: statement})
+            if text:
+                rows.append({"id": row_id(turn_no), agent: text})
             continue
         if str(turn.get("discussion_mode") or "").strip() == "simultaneous":
             turn_row_index = 1
@@ -86,13 +90,13 @@ def meeting_rows(
                 if not isinstance(contribution, dict):
                     continue
                 agent = str(contribution.get("agent") or "").strip()
-                statement = str(contribution.get("statement") or "").strip()
-                if not agent or not statement:
+                text = row_text(contribution)
+                if not agent or not text:
                     continue
                 if agent != "user":
                     if pending_question:
                         rows.append({"id": next_turn_row_id(), **pending_question})
-                    pending_question = {agent: statement}
+                    pending_question = {agent: text}
                     continue
                 if pending_question:
                     rows.append(
@@ -115,7 +119,7 @@ def meeting_rows(
                 continue
             if str(row.get("agent") or "").strip() != "user":
                 continue
-            answer = str(row.get("statement") or "").strip()
+            answer = row_text(row)
             answer_fields_map = answer_fields(row)
             break
         if bool(turn.get("judge_finish")) and not answer:
@@ -171,8 +175,8 @@ def log_elicitation_turn(
     pending_question: Optional[Dict[str, Any]] = None
     for row in contribution_rows:
         agent = str(row.get("agent") or "").strip()
-        statement = str(row.get("statement") or "").strip()
-        if not agent or not statement:
+        text = str(row.get("text") or "").strip()
+        if not agent or not text:
             continue
         if agent != "user":
             targets = [
@@ -181,7 +185,7 @@ def log_elicitation_turn(
                 if str(name).strip()
             ]
             target_label = "、".join(targets) if targets else "stakeholder"
-            logger.info("  %s → %s：%s", agent.capitalize(), target_label, statement)
+            logger.info("  %s → %s：%s", agent.capitalize(), target_label, text)
             pending_question = {"agent": agent, "targets": targets}
             continue
         speaking_as = [
@@ -194,7 +198,7 @@ def log_elicitation_turn(
         if not speaking_as:
             pending_question = None
             continue
-        logger.info("  %s：%s", "、".join(speaking_as), statement)
+        logger.info("  %s：%s", "、".join(speaking_as), text)
         pending_question = None
     logger.info("  候選需求：本輪 %s 筆，累計 %s 筆", len(new_candidates), cumulative_candidates)
     preview = [
@@ -292,12 +296,12 @@ def run_elicitation_meeting(
         else "本次會議結束。"
     )
 
-    def append_finish_turn(final_turn: int, final_agent: str, final_statement: str) -> None:
+    def append_finish_turn(final_turn: int, final_agent: str, final_text: str) -> None:
         final_recent_ask_history = build_recent_ask_history(elicitation_trace, max_items=3)
         final_contributions = [
             {
                 "agent": final_agent,
-                "response": {"statement": final_statement, "action": FINISH_AGENT_ACTION},
+                "response": {"text": final_text, "action": FINISH_AGENT_ACTION},
             }
         ]
         final_turn_log = {
@@ -305,12 +309,12 @@ def run_elicitation_meeting(
             "turn": final_turn,
             "meeting_phase": "conclusion",
             "issue_id": f"ELICIT-R{round_num}-T{final_turn}",
-            "contributions": [{"agent": final_agent, "statement": final_statement, "action": FINISH_AGENT_ACTION}],
+            "contributions": [{"agent": final_agent, "text": final_text, "action": FINISH_AGENT_ACTION}],
             "discussion_mode": "sequential",
             "participants": [final_agent],
             "speaking_order": [final_agent],
             "judged_action_agent": final_agent,
-            "judged_action": final_statement,
+            "judged_action": final_text,
             "recent_ask_history": final_recent_ask_history,
             "new_candidates_count": 0,
             "new_candidate_texts": [],
@@ -367,7 +371,7 @@ def run_elicitation_meeting(
             "id": f"ELICIT-R{round_num}-T{turn}",
             "title": "待命名需求擷取會議",
             "description": (
-                f"產品情境：{json.dumps(artifact.get('scenario') or {}, ensure_ascii=False)}\n\n"
+                f"產品情境：{json.dumps(scenario_prompt_value(artifact.get('scenario')), ensure_ascii=False)}\n\n"
                 f"本輪會議階段：{meeting_phase}\n"
                 f"階段指引：{phase_guidance}\n\n"
                 f"本輪發言模式：{turn_mode}\n"
@@ -392,7 +396,7 @@ def run_elicitation_meeting(
             "participants": turn_participants,
             "discussion_mode": turn_mode,
             "source_ids": [],
-            "scenario": artifact.get("scenario", {}),
+            "scenario": scenario_prompt_value(artifact.get("scenario", {})),
             "meeting_phase": meeting_phase,
             "phase_guidance": phase_guidance,
             "meeting_goal": turn_goal,
@@ -439,12 +443,12 @@ def run_elicitation_meeting(
         interviewer_contributions = list(contributions)
         interviewer_finish = False
         closure_vote: Dict[str, Any] = {}
-        finish_proposer, finish_statement = find_finish_proposal(
+        finish_proposer, finish_text = find_finish_proposal(
             interviewer_contributions,
             stop_phrase,
         )
         effective_contributions = list(interviewer_contributions)
-        if finish_statement:
+        if finish_text:
             closure_vote = collect_closure_votes(
                 coordinator,
                 artifact,
@@ -469,7 +473,7 @@ def run_elicitation_meeting(
                     {
                         "agent": finish_proposer or "analyst",
                         "response": {
-                            "statement": stop_phrase,
+                            "text": stop_phrase,
                             "content": stop_phrase,
                             "action": FINISH_AGENT_ACTION,
                         },
@@ -487,28 +491,28 @@ def run_elicitation_meeting(
                 )
 
         user_question_contributions = user_questions(effective_contributions)
-        judged_action_agent, judged_statement = select_question(user_question_contributions)
+        judged_action_agent, judged_text = select_question(user_question_contributions)
         judge_action_type = ""
         if interviewer_finish:
             if not finish_proposer:
                 raise RuntimeError("Requirement elicitation finish 缺少提議收束的 agent")
             judged_action_agent = finish_proposer
-            judged_statement = stop_phrase
-        elif not judged_statement:
-            raise RuntimeError("Requirement elicitation agent loop 未產生可詢問 user 的問題")
-        if judged_statement and user_agent and hasattr(user_agent, "judge_interviewer_action_type"):
+            judged_text = stop_phrase
+        elif not judged_text:
+            raise RuntimeError("Requirement elicitation agent loop 未產生可詢問利害關係人的問題")
+        if judged_text and user_agent and hasattr(user_agent, "judge_interviewer_action_type"):
             try:
                 judge_action_type = str(
-                    user_agent.judge_interviewer_action_type(judged_statement)
+                    user_agent.judge_interviewer_action_type(judged_text)
                 ).strip().lower()
             except Exception as e:
                 raise RuntimeError("Requirement elicitation action type 判定失敗") from e
-        if stop_phrase in judged_statement:
+        if stop_phrase in judged_text:
             interviewer_finish = True
             judge_action_type = "finish"
 
         contributions = list(effective_contributions)
-        if user_agent and not interviewer_finish and judged_statement and user_question_contributions:
+        if user_agent and not interviewer_finish and judged_text and user_question_contributions:
             if user_answer_all_questions:
                 paired_contributions: List[Dict[str, Any]] = []
                 question_ids = {id(c) for c in user_question_contributions}
@@ -601,7 +605,7 @@ def run_elicitation_meeting(
                         "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
                     }
                 )
-        elif finish_statement and not interviewer_finish and not judged_statement:
+        elif finish_text and not interviewer_finish and not judged_text:
             judge_action_type = "finish_rejected_by_vote"
 
         record_contributions = list(contributions)
@@ -614,10 +618,10 @@ def run_elicitation_meeting(
                 continue
             agent_name = str(c.get("agent") or "").strip()
             resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-            statement = str(resp.get("statement") or "").strip()
-            if not agent_name or not statement:
+            text = str(resp.get("text") or "").strip()
+            if not agent_name or not text:
                 continue
-            row = {"agent": agent_name, "statement": statement}
+            row = {"agent": agent_name, "text": text}
             agent_action = str(resp.get("action") or "").strip()
             action_focus = str(resp.get("action_focus") or "").strip()
             if agent_action:
@@ -660,7 +664,7 @@ def run_elicitation_meeting(
             "agent_actions": turn_strategy.get("agent_actions") or {},
             "goal": turn_goal,
             "judged_action_agent": judged_action_agent,
-            "judged_action": judged_statement,
+            "judged_action": judged_text,
             "judge_action_type": judge_action_type,
             "judge_finish": interviewer_finish,
             "closure_vote": closure_vote,
@@ -677,7 +681,7 @@ def run_elicitation_meeting(
             all_candidates.extend(new_candidates)
 
         user_response_for_memory = collect_user_summary(contributions)
-        current_memory = derive_turn_summary(judged_statement, user_response_for_memory)
+        current_memory = derive_turn_summary(judged_text, user_response_for_memory)
         merged_memory = merge_turn_summary(previous_turn_summary, current_memory)
 
         previous_turn_summary = {
@@ -687,7 +691,7 @@ def run_elicitation_meeting(
             "participants": list(turn_participants),
             "agent_actions": dict(turn_strategy.get("agent_actions") or {}),
             "judged_action_agent": judged_action_agent,
-            "judged_action": judged_statement,
+            "judged_action": judged_text,
             "new_candidates_count": len(new_candidates),
             "speaking_order": list(record_speaking_order),
             "closure_vote": closure_vote,

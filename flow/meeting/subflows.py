@@ -329,9 +329,9 @@ def execute_clarification_queue(
                 substep="clarification.collect_response",
                 observation={"target_name": target_name, "artifact_context_source": "artifact_folder"},
                 decision={"action": "collect_issue_response", "params": {"target_name": target_name}, "reasoning": "收集定向釐清回答。"},
-                result={"statement_present": bool((response.get("statement") or "").strip()), "open_questions_count": len(response.get("open_questions", []) or [])},
+                result={"text_present": bool((response.get("text") or "").strip()), "open_questions_count": len(response.get("open_questions", []) or [])},
             )
-            statement = (response.get("statement") or "").strip()
+            text = (response.get("text") or "").strip()
             open_questions = response.get("open_questions", []) or []
             for q in open_questions:
                 if not isinstance(q, dict):
@@ -349,15 +349,15 @@ def execute_clarification_queue(
                 )
             resolution = coordinator.flow.mediator_agent.build_issue_result(
                 resolution_status="direct_clarification",
-                summary=statement or "已執行定向釐清，但未取得明確回答。",
+                summary=text or "已執行定向釐清，但未取得明確回答。",
                 decision="",
                 mediator_compromise={},
-                agreed_points=[statement] if statement else [],
-                unresolved_points=[] if statement else ["尚未取得可用回答。"],
+                agreed_points=[text] if text else [],
+                unresolved_points=[] if text else ["尚未取得可用回答。"],
                 new_open_questions=[],
                 affected_conflict_ids=[
                     sid for sid in (issue.get("source_ids") or [])
-                    if isinstance(sid, str) and sid.startswith("CF-")
+                    if isinstance(sid, str) and sid.startswith(("PAIR-", "MULTIPLE-"))
                 ],
                 change_record=(
                     [
@@ -370,14 +370,14 @@ def execute_clarification_queue(
                             "change_type": "update",
                             "field": "text",
                             "before": None,
-                            "after": statement,
+                            "after": text,
                             "reason": "Derived from direct clarification response.",
                             "source_ids": list(issue.get("source_ids", [])),
                             "status": "pending_review",
                             "auto_apply": False,
                         }
                     ]
-                    if statement and any(isinstance(sid, str) and sid.startswith(("REQ-", "FR-", "NFR-")) for sid in (issue.get("source_ids") or []))
+                    if text and any(isinstance(sid, str) and sid.startswith(("REQ-", "FR-", "NFR-")) for sid in (issue.get("source_ids") or []))
                     else []
                 ),
                 needs_human=False,
@@ -400,8 +400,8 @@ def execute_clarification_queue(
                             "trace": row,
                         }
                     )
-            if not statement:
-                raise RuntimeError("clarification_queue agent 回答缺少 statement")
+            if not text:
+                raise RuntimeError("clarification_queue agent 回答缺少 text")
             row["status"] = "answered"
             row["queue_processed_round"] = round_num
             record_queue_item_trace(
@@ -409,7 +409,7 @@ def execute_clarification_queue(
                 queue_name="clarification_queue",
                 issue=issue,
                 substep="clarification.finalize_item",
-                observation={"statement_present": bool(statement)},
+                observation={"text_present": bool(text)},
                 decision={"action": "finalize_queue_item", "params": {"issue_id": issue.get("id")}, "reasoning": "根據回答結果更新 queue item 狀態與 round discussion。"},
                 result={"status": row["status"]},
             )
@@ -502,7 +502,7 @@ def execute_human_decision_queue(
             new_open_questions=[],
             affected_conflict_ids=[
                 sid for sid in (issue.get("source_ids") or [])
-                if isinstance(sid, str) and sid.startswith("CF-")
+                if isinstance(sid, str) and sid.startswith(("PAIR-", "MULTIPLE-"))
             ],
             change_record=(
                 [

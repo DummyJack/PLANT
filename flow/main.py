@@ -43,7 +43,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         "scope": {"in_scope": [], "out_of_scope": []},
         "requirements": [],
         "feedback": {},
-        "system_models": {},
+        "system_models": [],
         "discussions": [],
         "decisions": [],
         "open_questions": [],

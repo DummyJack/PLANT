@@ -64,28 +64,19 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     if stakeholders:
         flow.logger.info(f"✓ 使用 artifact 中預載的 {len(stakeholders)} 位利害關係人")
     else:
-        scenarios = flow.analyst_agent.run_requirements_analyst(
+        scenario = flow.analyst_agent.run_requirements_analyst(
             "analyze_scenario", rough_idea=rough_idea,
         )
-        selected_scenario = Collect.scenario_selection(scenarios)
-        scenario_title = str(selected_scenario.get("title") or "").strip()
-        if selected_scenario.get("custom"):
-            completed = flow.analyst_agent.analyze_scenario(
-                rough_idea, scenario_name=scenario_title,
-            )
-            selected_scenario = completed[0]
-        else:
-            selected_scenario = dict(selected_scenario)
         artifact["scenario"] = {
-            "name": str(selected_scenario.get("title") or scenario_title).strip(),
-            "application_type": str(selected_scenario.get("application_type") or "").strip(),
-            "Category": selected_scenario.get("Category") or {
+            "name": str((scenario or {}).get("name") or "").strip(),
+            "application_type": "",
+            "Category": {
                 "primary_category": "",
                 "subcategories": [],
             },
         }
         flow.store.save_artifact(artifact)
-        flow.logger.info("✓ 已選擇情境：%s", artifact["scenario"].get("name", ""))
+        flow.logger.info("✓ 初步情境分析完成")
 
         scenario_idea = artifact["scenario"]
         proposed = flow.user_agent.propose_stakeholders(scenario_idea)
@@ -99,7 +90,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         flow.store.save_artifact(artifact)
         flow.logger.info(f"✓ 已選擇 {len(selected)} 位利害關係人")
 
-        generated_stakeholders = flow.user_agent.generate_stakeholder_requirements(
+        generated_stakeholders = flow.user_agent.generate_stakeholder_text(
             scenario_idea,
             [row["name"] for row in stakeholders],
         )
@@ -121,9 +112,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     initial_candidates = build_requirement_candidates_from_requirements(
         analyzed_requirements,
     )
-    artifact["reqt_candidates"] = list(initial_candidates)
+    artifact["URL"] = list(initial_candidates)
     artifact["requirements"] = []
     flow.store.save_artifact(artifact)
+    flow.logger.info("✓ 初始需求分析完成")
 
     initial_scope = flow.analyst_agent.run_requirements_analyst(
         "generate_scope",
@@ -135,6 +127,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             "out_of_scope": initial_scope.get("out_of_scope", []) or [],
         }
     flow.store.save_artifact(artifact)
+    flow.logger.info("✓ 需求範圍生成完成")
 
     if meeting_setting(flow.config, "elicitation", True):
         flow.logger.info("=== 需求擷取會議 ===")
@@ -143,13 +136,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         )
         elicited_reqts = (artifact.get("elicitation") or {}).get("elicited_reqts", []) or []
         if elicited_reqts:
-            artifact["reqt_candidates"] = ensure_requirement_candidate_ids(
-                list(artifact.get("reqt_candidates", []) or []) + list(elicited_reqts)
+            artifact["URL"] = ensure_requirement_candidate_ids(
+                list(artifact.get("URL", []) or []) + list(elicited_reqts)
             )
             flow.logger.info(
                 "需求擷取會議結束 | + 候選需求池 %s 筆（目前候選 %s 筆）",
                 len(elicited_reqts),
-                len(artifact.get("reqt_candidates", []) or []),
+                len(artifact.get("URL", []) or []),
             )
             flow.store.save_artifact(artifact)
 
@@ -162,50 +155,40 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         artifact = flow.meeting.run_conflict_review(artifact, round_num=1)
     flow.store.save_artifact(artifact)
 
-    flow.logger.info("Expert: 領域研究")
+    flow.logger.info("=== Expert: 領域研究 ===")
     review = flow.expert_agent.run_domain_research_loop(
         artifact,
     )
     flow.store.save_artifact(artifact)
-    review_actions = review.get("actions_taken", [])
-    dr = artifact.get("feedback", {}).get("domain_research") or {}
+    dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     if dr and isinstance(dr, dict) and dr:
-        flow.logger.info(f"✓ 領域研究完成（{len(review_actions)} 步驟）")
-    else:
-        flow.logger.info("領域研究完成，無結果寫入")
+        flow.logger.info("✓ 領域研究完成")
 
-    flow.logger.info("Modeler: generate System Model")
-    model_data = flow.modeler_agent.generate_requirement_models(
+    flow.logger.info("=== Modeler: 系統模型 ===")
+    model_data = flow.modeler_agent.generate_system_models(
         artifact,
     )
     artifact["system_models"] = model_data
     flow.store.save_artifact(artifact)
-    model_count = len(model_data.get("models", []))
-    flow.logger.info(f"  ✓ 產生 {model_count} 張需求工程模型")
+    model_names = [
+        str(model.get("name") or model.get("type") or "").strip()
+        for model in (model_data if isinstance(model_data, list) else [])
+        if isinstance(model, dict) and str(model.get("name") or model.get("type") or "").strip()
+    ]
+    flow.logger.info("✓ 系統模型產生完成：%s", "、".join(model_names) if model_names else "無")
     flow.store.save_plantuml_files(model_data)
 
-    flow.logger.info("Analyst: refine scope")
-    refined_scope = flow.analyst_agent.run_requirements_analyst(
-        "refine_scope",
-        artifact=artifact,
-    )
-    if isinstance(refined_scope, dict):
-        artifact["scope"] = {
-            "in_scope": refined_scope.get("in_scope", []) or [],
-            "out_of_scope": refined_scope.get("out_of_scope", []) or [],
-        }
-    flow.store.save_artifact(artifact)
-
-    flow.logger.info("Analyst: 草稿化")
+    flow.logger.info("=== Analyst: 草稿化 ===")
+    conflict_report_md = flow.store.load_markdown("conflict_report.md")
     draft_md = flow.analyst_agent.run_requirements_analyst(
         "create_draft",
         artifact=artifact,
         draft_version=0,
+        conflict_report_md=conflict_report_md,
+        meeting_record_md="",
     )
     flow.store.save_draft(draft_md, version=0)
-    flow.logger.info(
-        f"✓ Draft v0: {len(artifact['requirements'])} 條需求，{len(artifact.get('conflicts', []))} 個 Conflict"
-    )
+    flow.logger.info("✓ 需求草稿已經生成完成")
 
     flow.touch_artifact_meta(
         artifact,
