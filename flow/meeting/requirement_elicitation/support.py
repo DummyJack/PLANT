@@ -458,7 +458,7 @@ def collect_closure_votes(
             role=role,
             proposer_role=proposer_role,
             role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
-            scenario=scenario_prompt_value(artifact.get("scenario", {})),
+            scenario=artifact.get("scenario", {}),
             requirements=requirements,
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history or [],

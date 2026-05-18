@@ -3,6 +3,16 @@
   "issue_items": 5,
   "max_stakeholders": 5,
   "elicitation_max_turns": 10,
+  "stage": {
+    "elicitation": false,
+    "conflict_detection": false,
+    "domain_research": false,
+    "system_model": false,
+    "draft": false,
+    "formal_meeting": false,
+    "final_meeting": false,
+    "SRS": false
+  },
   "enable_tools": {
     "web_search": true,
     "read_file": true,

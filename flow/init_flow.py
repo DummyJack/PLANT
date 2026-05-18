@@ -57,6 +57,85 @@ def merge_stakeholder_inputs(
     return merged
 
 
+def stage_skip(config: Dict[str, Any], name: str) -> bool:
+    stages = config.get("stage") if isinstance(config.get("stage"), dict) else {}
+    value = stages.get(name)
+    if isinstance(value, dict):
+        raise RuntimeError(
+            f"stage.{name} 設定格式已不支援 object；請改成布林值，例如 \"{name}\": true"
+        )
+    return bool(value)
+
+
+def _path_exists(flow, *parts: str) -> bool:
+    artifact_dir = getattr(flow.store, "artifact_dir", None)
+    if artifact_dir is None:
+        return False
+    return artifact_dir.joinpath(*parts).exists()
+
+
+def _has_candidate_requirements(artifact: Dict[str, Any]) -> bool:
+    return bool(artifact.get("URL") or artifact.get("requirements"))
+
+
+def require_stage_inputs(flow, artifact: Dict[str, Any], stage_name: str) -> None:
+    if stage_name == "elicitation":
+        if (
+            _path_exists(flow, "project.json")
+            and _path_exists(flow, "scope.json")
+            and _path_exists(flow, "requirements.json")
+            and artifact.get("stakeholders")
+            and _has_candidate_requirements(artifact)
+        ):
+            return
+        raise RuntimeError(
+            "stage.elicitation 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json，且 artifact 內已有 stakeholders 與 URL/requirements"
+        )
+    if stage_name == "conflict_detection":
+        if _path_exists(flow, "requirements.json") and _has_candidate_requirements(artifact):
+            return
+        raise RuntimeError(
+            "stage.conflict_detection 缺少輸入；需要 artifact/requirements.json 且 artifact 內已有 URL/requirements"
+        )
+    if stage_name == "domain_research":
+        if (
+            _path_exists(flow, "project.json")
+            and _path_exists(flow, "scope.json")
+            and _path_exists(flow, "requirements.json")
+            and _path_exists(flow, "conflict.json")
+            and _has_candidate_requirements(artifact)
+        ):
+            return
+        raise RuntimeError(
+            "stage.domain_research 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/conflict.json"
+        )
+    if stage_name == "system_model":
+        if (
+            _path_exists(flow, "project.json")
+            and _path_exists(flow, "scope.json")
+            and _path_exists(flow, "requirements.json")
+            and _has_candidate_requirements(artifact)
+        ):
+            return
+        raise RuntimeError(
+            "stage.system_model 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json"
+        )
+    if stage_name == "draft":
+        if (
+            _path_exists(flow, "project.json")
+            and _path_exists(flow, "scope.json")
+            and _path_exists(flow, "requirements.json")
+            and _path_exists(flow, "conflict.json")
+            and _path_exists(flow, "feedback.json")
+            and _path_exists(flow, "models", "system_models.json")
+            and _has_candidate_requirements(artifact)
+        ):
+            return
+        raise RuntimeError(
+            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/conflict.json、artifact/feedback.json、artifact/models/system_models.json"
+        )
+
+
 def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     rough_idea = artifact["rough_idea"]
 
@@ -129,8 +208,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.store.save_artifact(artifact)
     flow.logger.info("✓ 需求範圍生成完成")
 
-    if meeting_setting(flow.config, "elicitation", True):
+    if stage_skip(flow.config, "elicitation"):
         flow.logger.info("=== 需求擷取會議 ===")
+        require_stage_inputs(flow, artifact, "elicitation")
+        flow.logger.info("跳過需求擷取會議：使用既有候選需求")
+    elif meeting_setting(flow.config, "elicitation", True):
+        flow.logger.info("=== 需求擷取會議 ===")
+        require_stage_inputs(flow, artifact, "elicitation")
         artifact = flow.meeting.run_requirement_elicitation_meeting(
             artifact, round_num=0,
         )
@@ -147,48 +231,70 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 需求衝突辨識 ===")
-    artifact = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
-    artifact = flow.analyst_agent.execute_group_conflict_detection(artifact)
+    require_stage_inputs(flow, artifact, "conflict_detection")
+    if stage_skip(flow.config, "conflict_detection"):
+        flow.logger.info("跳過需求衝突辨識：使用既有衝突結果")
+    else:
+        artifact = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
+        artifact = flow.analyst_agent.execute_group_conflict_detection(artifact)
     conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
     conflict_items = list(conflict_state.get("pairs") or []) + list(conflict_state.get("multiple") or [])
-    if conflict_items and meeting_setting(flow.config, "conflict_review", True):
+    if (
+        conflict_items
+        and meeting_setting(flow.config, "conflict_review", True)
+        and not stage_skip(flow.config, "conflict_detection")
+    ):
         artifact = flow.meeting.run_conflict_review(artifact, round_num=1)
     flow.store.save_artifact(artifact)
 
     flow.logger.info("=== Expert: 領域研究 ===")
-    review = flow.expert_agent.run_domain_research_loop(
-        artifact,
-    )
+    require_stage_inputs(flow, artifact, "domain_research")
+    if stage_skip(flow.config, "domain_research"):
+        flow.logger.info("跳過領域研究：使用既有 feedback")
+    else:
+        review = flow.expert_agent.run_domain_research_loop(
+            artifact,
+        )
     flow.store.save_artifact(artifact)
     dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     if dr and isinstance(dr, dict) and dr:
         flow.logger.info("✓ 領域研究完成")
 
     flow.logger.info("=== Modeler: 系統模型 ===")
-    model_data = flow.modeler_agent.generate_system_models(
-        artifact,
-    )
-    artifact["system_models"] = model_data
-    flow.store.save_artifact(artifact)
+    require_stage_inputs(flow, artifact, "system_model")
+    if stage_skip(flow.config, "system_model"):
+        flow.logger.info("跳過系統模型：使用既有 system_models")
+        model_data = artifact.get("system_models", [])
+    else:
+        model_data = flow.modeler_agent.generate_system_models(
+            artifact,
+        )
+        artifact["system_models"] = model_data
+        flow.store.save_artifact(artifact)
     model_names = [
         str(model.get("name") or model.get("type") or "").strip()
         for model in (model_data if isinstance(model_data, list) else [])
         if isinstance(model, dict) and str(model.get("name") or model.get("type") or "").strip()
     ]
     flow.logger.info("✓ 系統模型產生完成：%s", "、".join(model_names) if model_names else "無")
-    flow.store.save_plantuml_files(model_data)
+    if not stage_skip(flow.config, "system_model"):
+        flow.store.save_plantuml_files(model_data)
 
     flow.logger.info("=== Analyst: 草稿化 ===")
-    conflict_report_md = flow.store.load_markdown("conflict_report.md")
-    draft_md = flow.analyst_agent.run_requirements_analyst(
-        "create_draft",
-        artifact=artifact,
-        draft_version=0,
-        conflict_report_md=conflict_report_md,
-        meeting_record_md="",
-    )
-    flow.store.save_draft(draft_md, version=0)
-    flow.logger.info("✓ 需求草稿已經生成完成")
+    require_stage_inputs(flow, artifact, "draft")
+    if stage_skip(flow.config, "draft"):
+        flow.logger.info("跳過草稿化：使用既有需求草稿")
+    else:
+        conflict_report_md = flow.store.load_markdown("conflict_report.md")
+        draft_md = flow.analyst_agent.run_requirements_analyst(
+            "create_draft",
+            artifact=artifact,
+            draft_version=0,
+            conflict_report_md=conflict_report_md,
+            meeting_record_md="",
+        )
+        flow.store.save_draft(draft_md, version=0)
+        flow.logger.info("✓ 需求草稿已經生成完成")
 
     flow.touch_artifact_meta(
         artifact,
