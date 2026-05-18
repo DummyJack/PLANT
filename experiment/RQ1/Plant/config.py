@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 from flow.setup import Flow
-from storage.artifact import save_artifact as save_split_artifact
 from utils import model_has_token_pricing
 
 from .oracle_user import OracleConfigs
@@ -39,17 +38,16 @@ class ExperimentLogger:
 
 
 class ExperimentStore:
-    """RQ1 experiment store: write temp artifact files for artifact_query context."""
+    """RQ1 experiment store: only keep primary experiment output files."""
 
     def __init__(self, results_dir: Path) -> None:
         self.project_id = "rq1_plant_elicitation"
         self.output_dir = results_dir
         self.project_dir = results_dir
         self.artifact_dir = self.project_dir / "artifact"
-        self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     def save_artifact(self, data: Dict[str, Any]):
-        save_split_artifact(self.project_dir, self.artifact_dir, data)
+        pass
 
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
         pass

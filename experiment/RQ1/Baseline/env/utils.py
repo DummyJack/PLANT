@@ -98,7 +98,7 @@ You are an expert judge evaluating the type of an interviewer's action in a requ
 ## **Action Types**
 1. **clarify**: The interviewer is asking for clarification about something mentioned in the conversation (e.g., "What do you mean by X?", "Can you explain Y?")
 2. **probe**: The interviewer is probing for new information or deeper details about requirements (e.g., "What about Z?", "Do you need feature A?")
-3. **finish**: The interviewer is indicating the conversation should end and generating a comprehensive set of user stories as the final output artifact. The finish action typically includes a statement like "I have gathered enough information" followed by a set of user stories in the format "As a [user type], I want to [action/goal] so that [benefit/value]." (e.g., "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\n User Story 1: As a user, I want to ... so that ...\n\n User Story 2: As a user, I want to ... so that ...\n\n ...")
+3. **finish**: The interviewer is indicating the conversation should end and generating a comprehensive set of user stories as the final output artifact. The finish action typically includes a text like "I have gathered enough information" followed by a set of user stories in the format "As a [user type], I want to [action/goal] so that [benefit/value]." (e.g., "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\n User Story 1: As a user, I want to ... so that ...\n\n User Story 2: As a user, I want to ... so that ...\n\n ...")
 
 ## **Instruction**
 1. Analyze the interviewer's latest utterance in the context of the conversation
@@ -142,7 +142,7 @@ Please analyze the interviewer's action and provide your assessment in JSON form
 """
 
 PASSIVE_RESPONSE_SYSTEM = """## **Task**
-You are a user being interviewed about your software requirements. Respond naturally to the interviewer's questions or statements.
+You are a user being interviewed about your software requirements. Respond naturally to the interviewer's questions or texts.
 
 ## **Instructions**
 1. Answer based on your implied requirements if the question is relevant
@@ -162,7 +162,7 @@ PASSIVE_RESPONSE_USER = """
 **Interviewer's Latest Utterance:**
 {latest_utterance}
 
-Please respond naturally to the interviewer's question or statement.
+Please respond naturally to the interviewer's question or text.
 
 **Context of this latest utterance:**
 - Action type: {action_type}

@@ -21,8 +21,20 @@
         "RequirementText": "I prefer to select the report format and content scope before report generation, instead of using a default report template."
       },
       {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to choose the analysis time range before generating the report."
+      },
+      {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to download or export the generated stock report after it is created."
+      },
+      {
         "Aspect": "Content",
         "RequirementText": "I expect the generated reports to include basic stock information, market trends, and financial data."
+      },
+      {
+        "Aspect": "Content",
+        "RequirementText": "I expect the generated report to include charts or tables that summarize key stock indicators."
       },
       {
         "Aspect": "Style",
@@ -31,6 +43,42 @@
       {
         "Aspect": "Style",
         "RequirementText": "I prefer the website components to use a navy color."
+      },
+      {
+        "Aspect": "Data Quality",
+        "RequirementText": "I expect stock prices, market trends, and financial data in the report to be based on current data."
+      },
+      {
+        "Aspect": "Data Quality",
+        "RequirementText": "I expect the report to show when the stock data was last updated."
+      },
+      {
+        "Aspect": "Data Quality",
+        "RequirementText": "I expect the system to warn me when stock data is missing, delayed, or inconsistent."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect the system to retrieve stock information from external market data APIs."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect the system to use a configurable external market data provider for retrieving stock information."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect the system to show the connection status of the external market data provider before generating a report."
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "I expect stock analysis reports to be generated within an acceptable amount of time after I submit my choices."
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "I expect the system to remain responsive while generating stock analysis reports."
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "I expect the system to support multiple users generating stock reports without noticeable slowdown."
       }
     ],
     "URL": [
@@ -41,7 +89,19 @@
       "As a user, I want the generated reports to include market trends, so that I can understand how the stock performs in the market.",
       "As a user, I want the generated reports to include financial data, so that I can analyze the stock’s financial performance.",
       "As a user, I want the website background color to be white, so that the interface follows the specified visual requirement.",
-      "As a user, I want the website components to use a navy color, so that the interface matches the specified component color."
+      "As a user, I want the website components to use a navy color, so that the interface matches the specified component color.",
+      "As a user, I want stock prices, market trends, and financial data in generated reports to be based on current data, so that I can trust the report's analysis.",
+      "As a user, I want the generated report to show when the stock data was last updated, so that I can judge the freshness of the analysis.",
+      "As a user, I want the system to warn me when stock data is missing, delayed, or inconsistent, so that I do not rely on misleading reports.",
+      "As a user, I want the system to retrieve stock information from external market data APIs, so that reports are based on market data sources.",
+      "As a user, I want the system to use a configurable external market data provider, so that stock information can be retrieved from an appropriate data source.",
+      "As a user, I want to see the connection status of the external market data provider before generating a report, so that I know whether the report can use an available data source.",
+      "As a user, I want stock analysis reports to be generated within an acceptable amount of time after I submit my choices, so that I can use the report without long delays.",
+      "As a user, I want the system to remain responsive while generating stock analysis reports, so that I can continue using the interface during report generation.",
+      "As an administrator, I want the system to support multiple users generating stock reports without noticeable slowdown, so that the service remains usable under normal load.",
+      "As a user, I want to choose the analysis time range before generating the report, so that the generated analysis matches the period I care about.",
+      "As a user, I want to download or export the generated stock report after it is created, so that I can save or share the analysis.",
+      "As a user, I want the generated report to include charts or tables that summarize key stock indicators, so that I can understand the analysis more quickly."
     ]
   },
   {
@@ -70,6 +130,10 @@
         "RequirementText": "I prefer financial interactions, such as collecting patient fees and preparing claims, to be handled within the same system"
       },
       {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer users to filter hospital reports by department, date range, and report type."
+      },
+      {
         "Aspect": "Content",
         "RequirementText": "I expect hospital performance information to be reflected through detailed financial, inventory, patient, and operational reports"
       },
@@ -86,12 +150,56 @@
         "RequirementText": "I expect daily employee reports to include detailed descriptions of activities"
       },
       {
+        "Aspect": "Content",
+        "RequirementText": "I expect claim records to include patient information, service details, claim status, and supporting notes."
+      },
+      {
+        "Aspect": "Content",
+        "RequirementText": "I expect laboratory management information to include test requests, test results, and related patient details."
+      },
+      {
         "Aspect": "Style",
         "RequirementText": "I prefer the website to use a peach puff background color."
       },
       {
         "Aspect": "Style",
         "RequirementText": "I prefer the website’s interface components to be displayed in indian red."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect patient electronic files to be accessible only to authorized hospital staff."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect different hospital roles to have different permissions for patient, financial, inventory, and claim records."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect sensitive patient and financial information to be protected from unauthorized access."
+      },
+      {
+        "Aspect": "Auditability",
+        "RequirementText": "I expect changes to patient records, financial records, and claims to be logged for audit purposes."
+      },
+      {
+        "Aspect": "Auditability",
+        "RequirementText": "I expect audit logs to include the user, time, and action performed."
+      },
+      {
+        "Aspect": "Auditability",
+        "RequirementText": "I expect exports of sensitive patient or financial data to be recorded for audit review."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect patient, pharmacy, financial, claim, laboratory, and theater information to be synchronized across modules."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect claim formulation to exchange relevant data with financial and patient record modules."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect laboratory and theater records to be linked to relevant patient electronic files."
       }
     ],
     "URL": [
@@ -113,7 +221,19 @@
       "As a user, I want the website to provide laboratory management functionality, so that laboratory-related activities can be managed.",
       "As a user, I want the website to provide theater management functionality, so that theater-related activities can be managed.",
       "As a user, I want the website’s background color configured to peach puff, so that the overall background appears in that color.",
-      "As a user, I want the website’s components to use indian red, so that interface components appear in that color."
+      "As a user, I want the website’s components to use indian red, so that interface components appear in that color.",
+      "As an administrator, I want patient electronic files to be accessible only to authorized hospital staff, so that sensitive medical information is protected.",
+      "As an administrator, I want different hospital roles to have different permissions for patient, financial, inventory, and claim records, so that each staff member can access only appropriate information.",
+      "As an administrator, I want sensitive patient and financial information to be protected from unauthorized access, so that confidential hospital data remains secure.",
+      "As an administrator, I want changes to patient records, financial records, and claims to be logged, so that hospital activities can be audited.",
+      "As an administrator, I want audit logs to include the user, time, and action performed, so that each sensitive operation is traceable.",
+      "As an administrator, I want exports of sensitive patient or financial data to be recorded, so that external data sharing can be reviewed.",
+      "As an administrator, I want patient, pharmacy, financial, claim, laboratory, and theater information to be synchronized across modules, so that hospital data stays consistent.",
+      "As a user, I want claim formulation to exchange relevant data with financial and patient record modules, so that claims can be prepared using consistent hospital information.",
+      "As a hospital staff member, I want laboratory and theater records to be linked to relevant patient electronic files, so that clinical and operational information can be reviewed together.",
+      "As a user, I want to filter hospital reports by department, date range, and report type, so that I can find the operational information I need.",
+      "As a user, I want claim records to include patient information, service details, claim status, and supporting notes, so that claims are complete and reviewable.",
+      "As a user, I want laboratory management information to include test requests, test results, and related patient details, so that lab activity can be managed with patient context."
     ]
   },
   {
@@ -154,6 +274,14 @@
         "RequirementText": "I prefer the platform to support responsive interaction on desktop devices."
       },
       {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to search trips by origin, destination, travel date, and transport type."
+      },
+      {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to cancel or modify a booking from my account when allowed."
+      },
+      {
         "Aspect": "Content",
         "RequirementText": "I prefer to view real-time seat availability before confirming a booking decision."
       },
@@ -166,12 +294,52 @@
         "RequirementText": "I prefer to access my booking history through my account"
       },
       {
+        "Aspect": "Content",
+        "RequirementText": "I expect trip results to include departure time, arrival time, duration, operator, and route information."
+      },
+      {
         "Aspect": "Style",
         "RequirementText": "I prefer the platform to use a snow-colored background consistently across all pages."
       },
       {
         "Aspect": "Style",
         "RequirementText": "I prefer the platform’s interface components to use a dim gray color consistently."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect my payment information to be protected during ticket purchases."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect only logged-in users to access their own booking history."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect the system to protect personal trip and account information from unauthorized access."
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "I expect the selected seat to be temporarily reserved while payment is being processed."
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "I expect the system to prevent double booking of the same seat."
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "I expect booking status to remain consistent if payment fails or the network connection is interrupted."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect the platform to integrate with payment gateways for ticket purchases."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect the platform to integrate with email and SMS services for booking confirmations."
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "I expect bus and railway ticket availability to be synchronized with the relevant transport operators."
       }
     ],
     "URL": [
@@ -191,7 +359,19 @@
       "As a user, I want the platform to have a responsive design that adapts to mobile devices, so that I can use it comfortably on my phone or tablet.",
       "As a user, I want the platform to have a responsive design that adapts to desktop devices, so that I can use it comfortably on my computer.",
       "As a user, I want all backgrounds configured with snow, so that the visual background appearance is consistently snowy across the platform.",
-      "As a user, I want all components configured with dim gray, so that the visual appearance of components is consistently dim gray across the platform."
+      "As a user, I want all components configured with dim gray, so that the visual appearance of components is consistently dim gray across the platform.",
+      "As a user, I want my payment information to be protected during ticket purchases, so that I can pay securely.",
+      "As a user, I want only logged-in users to access their own booking history, so that personal trip records remain private.",
+      "As a user, I want the system to protect personal trip and account information from unauthorized access, so that my travel data and account details remain secure.",
+      "As a user, I want the selected seat to be temporarily reserved while payment is being processed, so that another user cannot book the same seat during checkout.",
+      "As a user, I want the system to prevent double booking of the same seat, so that each ticket is assigned to only one valid booking.",
+      "As a user, I want booking status to remain consistent if payment fails or the network connection is interrupted, so that I know whether my booking is valid.",
+      "As a user, I want the platform to integrate with payment gateways, so that I can complete ticket purchases through supported payment services.",
+      "As a user, I want the platform to integrate with email and SMS services, so that booking confirmations can be delivered automatically.",
+      "As a user, I want bus and railway ticket availability to be synchronized with the relevant transport operators, so that the platform shows accurate availability.",
+      "As a user, I want to search trips by origin, destination, travel date, and transport type, so that I can find the route I need.",
+      "As a user, I want to cancel or modify a booking from my account when allowed, so that I can manage trip changes.",
+      "As a user, I want trip results to include departure time, arrival time, duration, operator, and route information, so that I can compare available trips."
     ]
   },
   {
@@ -224,6 +404,14 @@
         "RequirementText": "I prefer to personalize my learning experience by choosing an avatar."
       },
       {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to retry incorrect questions after receiving feedback."
+      },
+      {
+        "Aspect": "Interaction",
+        "RequirementText": "I prefer to set reminders or learning sessions to help me maintain a regular study habit."
+      },
+      {
         "Aspect": "Content",
         "RequirementText": "I prefer to navigate the website through clearly separated pages (home, activity pages, dashboard, blog)"
       },
@@ -244,12 +432,52 @@
         "RequirementText": "I expect supplementary learning content to be available through blog pages related to vocabulary learning."
       },
       {
+        "Aspect": "Content",
+        "RequirementText": "I expect vocabulary entries to include definitions, example sentences, and usage notes."
+      },
+      {
         "Aspect": "Style",
         "RequirementText": "I prefer the website’s body background to be light gray."
       },
       {
         "Aspect": "Style",
         "RequirementText": "I prefer the main interface components to use a dark red color."
+      },
+      {
+        "Aspect": "Adaptivity",
+        "RequirementText": "I expect the system to adjust vocabulary difficulty based on my learning progress."
+      },
+      {
+        "Aspect": "Adaptivity",
+        "RequirementText": "I expect the system to recommend review activities based on words I struggle with."
+      },
+      {
+        "Aspect": "Adaptivity",
+        "RequirementText": "I expect the weekly learning pace to be adjustable when my performance suggests it is too easy or too difficult."
+      },
+      {
+        "Aspect": "Assessment",
+        "RequirementText": "I expect the system to show correct answers and brief explanations after I answer incorrectly."
+      },
+      {
+        "Aspect": "Assessment",
+        "RequirementText": "I expect the system to identify vocabulary words that I have mastered and words that still need practice."
+      },
+      {
+        "Aspect": "Assessment",
+        "RequirementText": "I expect progress summaries to include accuracy, practice frequency, and weak vocabulary areas."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect AI-generated vocabulary examples and exercises to be screened for inappropriate or harmful content before being shown to learners."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect AI-generated learning content to avoid offensive, misleading, or unsafe language usage."
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "I expect users to be able to report unsafe or inappropriate AI-generated content for review."
       }
     ],
     "URL": [
@@ -270,71 +498,136 @@
       "As a user, I want the website to include a dashboard page, so that I can view my progress summary in a dedicated area.",
       "As a user, I want the website to include blog pages, so that I can access additional content related to vocabulary learning.",
       "As a user, I want the body backgrounds of the website to be light gray, so that the overall page background has the specified color.",
-      "As a user, I want the main components of the website to be dark red, so that the primary interface elements have the specified color."
+      "As a user, I want the main components of the website to be dark red, so that the primary interface elements have the specified color.",
+      "As a learner, I want the system to adjust vocabulary difficulty based on my learning progress, so that I can keep learning at an appropriate level.",
+      "As a learner, I want the system to recommend review activities based on words I struggle with, so that I can focus on weak vocabulary areas.",
+      "As a learner, I want the weekly learning pace to be adjustable when my performance suggests it is too easy or too difficult, so that the learning plan fits my ability.",
+      "As a learner, I want the system to show correct answers and brief explanations after I answer incorrectly, so that I can understand my mistakes.",
+      "As a learner, I want the system to identify vocabulary words that I have mastered and words that still need practice, so that I know what to review.",
+      "As a learner, I want progress summaries to include accuracy, practice frequency, and weak vocabulary areas, so that I can understand my learning status.",
+      "As a learner, I want AI-generated vocabulary examples and exercises to be screened for inappropriate or harmful content, so that the learning environment remains safe.",
+      "As a learner, I want AI-generated learning content to avoid offensive, misleading, or unsafe language usage, so that I can trust the material I practice with.",
+      "As a learner, I want to report unsafe or inappropriate AI-generated content for review, so that problematic material can be corrected.",
+      "As a learner, I want to retry incorrect questions after receiving feedback, so that I can reinforce vocabulary I missed.",
+      "As a learner, I want to set reminders or learning sessions, so that I can maintain a regular study habit.",
+      "As a learner, I want vocabulary entries to include definitions, example sentences, and usage notes, so that I can understand how each word is used."
     ]
   },
   {
-    "name": "Social Networking and Content Sharing Platform",
-    "application_type": "Community Platforms",
+    "name": "訂餐外送系統",
+    "application_type": "E-commerce Web",
     "Category": {
       "primary_category": "User Interaction",
       "subcategories": [
+        "E-commerce",
         "Authentication",
-        "Form Systems",
-        "E-commerce"
+        "Real-time Features"
       ]
     },
-    "initial_requirements": "I want a social website where I can connect with others, share content, and keep track of my own activities.",
+    "initial_requirements": "我想要一個線上訂餐外送平台，讓顧客可以搜尋餐廳、瀏覽菜單、加入購物車、下單付款並追蹤外送，同時讓餐廳管理菜單與訂單、外送員接收派單並完成配送、平台管理者查看營運狀態。",
     "Implicit Requirements": [
       {
         "Aspect": "Interaction",
-        "RequirementText": "I prefer to interact with the website through a registered account that requires creating an account and logging in"
+        "RequirementText": "我偏好可以依地點、關鍵字、餐點類別、評分、外送時間與價格篩選餐廳。"
       },
       {
         "Aspect": "Interaction",
-        "RequirementText": "I prefer to connect with others by explicitly inviting friends and forming friend relationships"
+        "RequirementText": "我偏好在結帳前可以確認並修改購物車中的餐點、數量、備註、配送方式、地址與金額明細。"
       },
       {
         "Aspect": "Interaction",
-        "RequirementText": "I prefer to engage with shared content by voting on it to express my opinions."
-      },
-      {
-        "Aspect": "Interaction",
-        "RequirementText": "I prefer to actively share content by uploading pictures as a primary way of participation."
-      },
-      {
-        "Aspect": "Interaction",
-        "RequirementText": "I prefer the system to provide incentive mechanisms, such as earning points, to encourage my participation in activities like content sharing."
+        "RequirementText": "我偏好餐廳與外送員能透過明確的按鈕接單、拒單，並更新備餐或配送進度。"
       },
       {
         "Aspect": "Content",
-        "RequirementText": "I expect the website to provide a personal homepage that aggregates my user information in one place."
+        "RequirementText": "我期望餐廳列表能顯示評分、營業時間、外送時段、外送門檻與預估外送時間。"
       },
       {
         "Aspect": "Content",
-        "RequirementText": "I expect the website to keep a record of my activities and updates and present them as part of my personal content."
+        "RequirementText": "我期望訂單明細包含餐點項目、數量、備註、金額明細、付款狀態、配送地址與訂單狀態。"
+      },
+      {
+        "Aspect": "Content",
+        "RequirementText": "我期望營運報表包含交易量、熱門餐點、使用者留存、營收、訂單數據與外送效率等資訊。"
       },
       {
         "Aspect": "Style",
-        "RequirementText": "I prefer the website to use a light cyan background as the default visual appearance."
+        "RequirementText": "我偏好平台整體背景使用白色或淺色系。"
       },
       {
         "Aspect": "Style",
-        "RequirementText": "I prefer the website’s interface components to be styled using a cadet blue color scheme."
+        "RequirementText": "我偏好主要操作元件使用橘色或暖色系，以符合餐飲外送平台的視覺風格。"
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "我期望下單、付款和查詢操作能快速完成，不會讓顧客在流程中等待太久。"
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "我期望用餐尖峰時段仍能順利完成搜尋、下單與付款，不會因流量變大而明顯變慢。"
+      },
+      {
+        "Aspect": "Performance",
+        "RequirementText": "我期望外送員位置更新足夠即時，讓顧客能大致掌握外送進度與預估到達時間。"
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "我期望主要用餐時段平台的下單、付款與追蹤功能能穩定可用。"
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "我期望系統發生故障後能盡快恢復，而且既有訂單與付款紀錄不會遺失。"
+      },
+      {
+        "Aspect": "Reliability",
+        "RequirementText": "我期望餐廳接單設備出問題時，訂單不會卡住，而是能被轉到備援設備或營運後台處理。"
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "我期望付款資料與個人資料在平台上受到安全保護。"
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "我期望顧客與外送員的電話等聯絡資訊不會直接互相暴露。"
+      },
+      {
+        "Aspect": "Security",
+        "RequirementText": "我期望退款、帳號修改與權限變更這類高風險操作只有授權人員能執行。"
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "我期望平台能支援常見付款服務，並在付款完成後正確更新訂單狀態。"
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "我期望訂單的重要狀態能透過應用程式推播、簡訊或電子郵件通知相關使用者。"
+      },
+      {
+        "Aspect": "Integration",
+        "RequirementText": "我期望外送導航與顧客追蹤能連接地圖與定位服務。"
       }
     ],
     "URL": [
-      "As a user, I want to create an account on the website, so that I can become a registered user.",
-      "As a user, I want to log in to the website, so that I can access my registered account.",
-      "As a user, I want to invite friends to join the website, so that my friends can also use the site.",
-      "As a user, I want to make friends on the website, so that I can connect with other users.",
-      "As a user, I want to vote on content, so that I can express my opinion on what is shared.",
-      "As a user, I want to upload pictures, so that I can share my images on the website.",
-      "As a user, I want to earn points when I use features such as uploading pictures, so that I can accumulate points on the website.",
-      "As a user, I want a personal homepage that displays my user information, so that I can see my profile details.",
-      "As a user, I want a personal homepage that displays my updates, so that I can see my recent activity.",
-      "As a user, I want the website’s default background to be light cyan, so that the site appearance matches the specified style.",
-      "As a user, I want the website’s components to be styled in cadet blue, so that the component styling matches the specified color."
+      "作為顧客，我想要依地點、關鍵字、餐點類別、評分、外送時間與價格篩選餐廳，以便快速找到符合需求的餐廳。",
+      "作為顧客，我想要在結帳前確認並修改餐點、數量、備註、配送方式、地址與金額明細，以便避免送出錯誤訂單。",
+      "作為餐廳或外送員，我想要透過明確的按鈕接單、拒單並更新進度，以便讓訂單狀態即時反映給相關使用者。",
+      "作為顧客，我想要餐廳列表顯示評分、營業時間、外送時段、外送門檻與預估外送時間，以便比較不同餐廳。",
+      "作為顧客，我想要訂單明細顯示餐點、數量、備註、金額、付款、地址與狀態，以便確認訂單內容。",
+      "作為平台管理者，我想要查看交易量、熱門餐點、使用者留存、營收、訂單數據與外送效率，以便掌握平台營運狀況。",
+      "作為顧客，我想要平台整體背景使用白色或淺色系，以便訂餐流程的畫面保持清爽。",
+      "作為顧客，我想要主要操作元件使用橘色或暖色系，以便介面呈現餐飲外送平台的視覺風格。",
+      "作為顧客，我想要下單、付款和查詢操作快速完成，以便不會在訂餐流程中等待太久。",
+      "作為顧客，我想要用餐尖峰時段仍能順利搜尋、下單與付款，以便流量變大時也能完成訂餐。",
+      "作為顧客，我想要外送員位置更新足夠即時，以便掌握外送進度與預估到達時間。",
+      "作為平台營運方，我想要主要用餐時段的下單、付款與追蹤功能穩定可用，以便維持服務連續性。",
+      "作為平台營運方，我想要系統故障後能盡快恢復且保留既有訂單與付款紀錄，以便降低業務中斷風險。",
+      "作為餐廳，我想要接單設備故障時訂單能轉到備援設備或營運後台，以便訂單不會卡住。",
+      "作為顧客，我想要付款資料與個人資料受到安全保護，以便安心使用平台付款與訂餐。",
+      "作為顧客或外送員，我想要聯絡電話不會直接互相暴露，以便保護個人聯絡資料。",
+      "作為平台管理者，我想要退款、帳號修改與權限變更只有授權人員能執行，以便降低高風險操作被濫用的可能。",
+      "作為顧客，我想要平台支援常見付款服務並正確更新付款結果，以便付款後訂單狀態能即時反映。",
+      "作為顧客、餐廳或外送員，我想要訂單重要狀態透過應用程式推播、簡訊或電子郵件通知，以便即時掌握訂單變化。",
+      "作為外送員與顧客，我想要外送導航與訂單追蹤連接地圖與定位服務，以便支援送餐導航與配送進度追蹤。"
     ]
   }
 ]

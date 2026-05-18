@@ -152,7 +152,7 @@ def main():
     user_max_tokens = int(pick("user_max_tokens", 1024))
     user_timeout = float(pick("user_timeout", 30.0))
     user_answer_quality = str(pick("user_answer_quality", "high"))
-    max_steps = int(pick("max_steps", 20))
+    max_turns = int(pick("max_turns", 20))
     interviewer_temperature = float(pick("interviewer_temperature", 0.0))
     interviewer_timeout = float(pick("interviewer_timeout", 60.0))
     interviewer_max_tokens = int(pick("interviewer_max_tokens", 1024))
@@ -245,7 +245,7 @@ def main():
             user_max_tokens=user_max_tokens,
             user_timeout=user_timeout,
             user_answer_quality=user_answer_quality,
-            max_steps=max_steps,
+            max_turns=max_turns,
             verbose=verbose,
             evaluation_result_path=evaluation_result_path,
             conversation_result_path=conversation_result_path,
@@ -409,8 +409,8 @@ def main():
     conversation_results = results.get("conversation_results", [])
     if conversation_results:
         print(f"總任務數：{len(conversation_results)}")
-        avg_turns = sum(r.get("total_turns", 0) for r in conversation_results) / len(conversation_results)
-        print(f"平均對話輪數：{avg_turns:.1f}")
+        avg_turns = sum(r.get("turns", 0) for r in conversation_results) / len(conversation_results)
+        print(f"平均 Turns：{avg_turns:.1f}")
 
     overall_metrics = results.get("overall_metrics", {})
     if overall_metrics:
@@ -448,6 +448,7 @@ def main():
             ("elicitation_ratio", "IRE", "平均取得比例", "percent"),
             ("tkqr", "TKQR", "平均 TKQR", "float4"),
             ("ora", "ORA", "平均 ORA", "float4"),
+            ("average_turn", "Turns", "Turns", "float4"),
         ]
         print("\n多次執行結果統計（平均值 ± 標準差）：")
         summary_metrics = {}

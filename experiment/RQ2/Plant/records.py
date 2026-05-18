@@ -20,7 +20,6 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
     source.pop("requirement_ids", None)
 
     source.pop("reason", None)
-    source.pop("rationale", None)
 
     source.pop("round", None)
     if "from_label" in source and "initial_label" not in source:
@@ -40,23 +39,17 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
             item = dict(review)
             item.pop("id", None)
             item.pop("independent_label", None)
-            if "rationale" in item and "reason" not in item:
-                item["reason"] = item.pop("rationale")
-            else:
-                item.pop("rationale", None)
             review_rows.append(item)
         return review_rows
 
     for key, value in source.items():
-        if key == "meeting_conflict_review" and isinstance(value, dict):
+        if key == "details" and isinstance(value, dict):
             grouped_reviews: Dict[str, List[Any]] = {}
             for round_key, rows in value.items():
                 cleaned_rows = cleaned_review_rows(rows)
                 if cleaned_rows:
                     grouped_reviews[str(round_key)] = cleaned_rows
-            cleaned["meeting_conflict_review"] = grouped_reviews
-        elif key == "meeting_conflict_review" and isinstance(value, list):
-            cleaned["meeting_conflict_review"] = cleaned_review_rows(value)
+            cleaned["details"] = grouped_reviews
         else:
             cleaned[key] = value
 
@@ -128,17 +121,26 @@ def build_rq2_record_by_type(
             details = normalize_pair_details(base.pop("details", {}))
             base.pop("id", None)
             base = {"id": record_pair_id_from_index(local_pair_index), **base}
-            review_details = details.get("meeting_conflict_review")
+            review_details = details.get("details")
             if not isinstance(review_details, dict):
                 review_details = {}
-            final_label = str(details.get("final_label") or base.get("pred") or "").strip()
-            if final_label:
-                base["pred"] = final_label
+            final_label = str(details.get("final_label") or "").strip()
+            if final_label not in {"Conflict", "Neutral"}:
+                raise RuntimeError(f"RQ2 record 缺少 final_label: {base['id']}")
+            initial_label = str(details.get("initial_label") or "").strip()
+            if initial_label not in {"Conflict", "Neutral"}:
+                raise RuntimeError(f"RQ2 record 缺少 initial_label: {base['id']}")
+            description = str(details.get("description") or "").strip()
+            if not description:
+                raise RuntimeError(f"RQ2 record 缺少 description: {base['id']}")
+            if not review_details:
+                raise RuntimeError(f"RQ2 record 缺少 details: {base['id']}")
+            base["pred"] = final_label
             conflict_meeting = {
                 "status": str(details.get("status") or "").strip(),
-                "initial_label": str(details.get("initial_label") or "").strip(),
+                "initial_label": initial_label,
                 "final_label": final_label,
-                "description": description or str(details.get("description") or "").strip(),
+                "description": description_by_pair_index.get(local_pair_index, "") or description,
                 "details": review_details,
             }
             base["conflict_meeting"] = [conflict_meeting]
@@ -149,7 +151,6 @@ def build_rq2_record_by_type(
 def build_rq2_result_payload(
     *,
     model_name: str,
-    data_file_label: str,
     y_true: List[str],
     y_pred: List[str],
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
@@ -178,7 +179,6 @@ def build_rq2_result_payload(
 
     return {
         "model": str(model_name),
-        "data_file": data_file_label,
         "total": len(y_true),
         "count": {
             "conflict": n_conflict,

@@ -1,5 +1,6 @@
 {
   "enable_human_escalation": false,
+  "enable_conflict_report": false,
   "enable_agents": {
     "user": false,
     "documentor": false

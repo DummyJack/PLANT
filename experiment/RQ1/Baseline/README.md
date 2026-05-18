@@ -115,7 +115,7 @@ Each task in `ReqElicitGym/data/test.json` is a JSON object with:
 
 - `name`: system name
 - `application_type`: one of 10 application types
-- `initial_requirements`: underspecified initial requirement statement (first user utterance)
+- `initial_requirements`: underspecified initial requirement text (first user utterance)
 - `Implicit Requirements`: a list of implicit requirements, each with:
   - `Aspect`: `Interaction` / `Content` / `Style`
   - `RequirementText`: the hidden requirement text

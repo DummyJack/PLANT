@@ -179,7 +179,7 @@ class OracleUserAgent(UserAgent):
                     if role not in interviewer_roles:
                         continue
                     resp = item.get("response", {}) if isinstance(item.get("response"), dict) else {}
-                    text = str(resp.get("statement") or resp.get("content") or "").strip()
+                    text = str(resp.get("text") or resp.get("content") or "").strip()
                     if text:
                         return {role: text}, self.format_interviewer_actions(topic, {role: text})
 
@@ -191,7 +191,7 @@ class OracleUserAgent(UserAgent):
                 if role not in interviewer_roles:
                     continue
                 resp = item.get("response", {}) if isinstance(item.get("response"), dict) else {}
-                text = str(resp.get("statement") or resp.get("content") or "").strip()
+                text = str(resp.get("text") or resp.get("content") or "").strip()
                 if text:
                     actions_by_role[role] = text
             if actions_by_role:
@@ -208,7 +208,7 @@ class OracleUserAgent(UserAgent):
         ]
         for role, text in actions_by_role.items():
             lines.append(f"- role: {role}")
-            lines.append(f"  statement: {text}")
+            lines.append(f"  text: {text}")
         return "\n".join(lines)
 
     @staticmethod
@@ -304,7 +304,7 @@ class OracleUserAgent(UserAgent):
                 "elicited_req_ids": [],
             }
         role = str(selected_role or "merged").strip() or "merged"
-        self.rq1_pending_turn_log["plant"][role] = selected_action or "(no statement)"
+        self.rq1_pending_turn_log["plant"][role] = selected_action or "(no text)"
         if user_response:
             self.rq1_pending_turn_log["users"].append(user_response)
         if action_type:
@@ -342,15 +342,15 @@ class OracleUserAgent(UserAgent):
         expected_roles = pending.get("expected_roles") or list(plant_rows.keys())
         plant_parts = []
         for role in expected_roles:
-            statement = str(plant_rows.get(role) or "").strip()
-            if statement:
-                plant_parts.append(f"{role}: {statement}")
-        for role, statement in plant_rows.items():
+            text = str(plant_rows.get(role) or "").strip()
+            if text:
+                plant_parts.append(f"{role}: {text}")
+        for role, text in plant_rows.items():
             if role in expected_roles:
                 continue
-            statement = str(statement or "").strip()
-            if statement:
-                plant_parts.append(f"{role}: {statement}")
+            text = str(text or "").strip()
+            if text:
+                plant_parts.append(f"{role}: {text}")
         user_text = "\n".join(
             str(value).strip()
             for value in (pending.get("users") or [])
@@ -484,8 +484,9 @@ class OracleUserAgent(UserAgent):
         return {
             "action": decision.get("action", ""),
             "status": "success",
-            "statement": response.get("statement", ""),
+            "text": response.get("text", ""),
             "open_questions": response.get("open_questions", []),
+            "speaking_as": response.get("speaking_as", []) or ["Oracle User"],
             "oracle_action_type": response.get("oracle_action_type", ""),
             "oracle_is_relevant": bool(response.get("oracle_is_relevant", False)),
             "oracle_revealed_ids": response.get("oracle_revealed_ids", []) or [],
@@ -628,8 +629,9 @@ class OracleUserAgent(UserAgent):
         )
         result = {
             "agent": self.name,
-            "statement": user_response,
+            "text": user_response,
             "open_questions": [],
+            "speaking_as": ["Oracle User"],
             "oracle_action_type": self.last_action_info.get("action_type", ""),
             "oracle_is_relevant": bool(
                 self.last_action_info.get("is_relevant_to_implied_requirements", False)

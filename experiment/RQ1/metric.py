@@ -29,10 +29,10 @@ def compute_tkqr(hit_sequence: Sequence[int], total_requirements: int) -> float:
     return dcg / idcg
 
 
-def compute_ora(num_rounds: int, total_requirements: int) -> float:
+def compute_ora(turns: int, total_requirements: int) -> float:
     import math
 
-    n = int(num_rounds or 0)
+    n = int(turns or 0)
     k = int(total_requirements or 0) + 1
     if k <= 0:
         return 0.0
@@ -65,7 +65,13 @@ def aggregate_action_type_effectiveness(task_results: List[Dict[str, Any]]) -> D
 
 def aggregate_aspect_type_elicitation(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
-    for aspect in ("Interaction", "Content", "Style"):
+    aspects: List[str] = []
+    for task in task_results:
+        for aspect in (task.get("aspect_type_elicitation", {}) or {}).keys():
+            if aspect not in aspects:
+                aspects.append(aspect)
+
+    for aspect in aspects:
         total = sum(
             int((t.get("aspect_type_elicitation", {}).get(aspect, {}) or {}).get("total", 0) or 0)
             for t in task_results

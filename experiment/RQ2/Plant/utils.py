@@ -108,7 +108,7 @@ def sync_config_language(artifact: Dict[str, Any], *, write_artifact_meta: bool 
     """依輸入內容同步輸出語系，供各 agent prompt 使用。"""
     req_texts = [
         str(r.get("text") or "").strip()
-        for r in ((artifact.get("reqt_candidates") or []) + (artifact.get("requirements") or []))
+        for r in ((artifact.get("URL") or []) + (artifact.get("requirements") or []))
         if isinstance(r, dict)
     ]
     text_for_detect = " ".join(
@@ -130,11 +130,7 @@ def build_type_rough_idea(type_name: str) -> str:
     return f"我要做一個 {tn}"
 
 def default_csv_path() -> Path:
-    p = DATA_DIR / "cn_100.csv"
-    if p.exists():
-        return p
-    fb = DATA_DIR / "cn_pairs.csv"
-    return fb if fb.exists() else p
+    return DATA_DIR / "cn_pairs.csv"
 
 def load_rq2_dataset(path: Path) -> Tuple[List[Dict[str, Any]], str]:
     """載入實驗列資料。支援 CSV，或 JSON 陣列（打包多筆於單一檔）。
@@ -159,7 +155,7 @@ def load_rq2_dataset(path: Path) -> Tuple[List[Dict[str, Any]], str]:
         return rows, path.name
     if suffix == ".csv":
         rows = []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 rows.append(row)
@@ -192,7 +188,7 @@ def extract_pair_preds_with_missing(
         lb = (c.get("label") or "").strip()
         if lb in ("Conflict", "Neutral"):
             by_k[ik] = lb
-    preds = [by_k.get(k, "Neutral") for k in range(n_pairs)]
+    preds = [by_k.get(k, "") for k in range(n_pairs)]
     missing = [k for k in range(n_pairs) if k not in by_k]
     return preds, missing
 
@@ -268,9 +264,7 @@ def extract_conflict_review_details(
     details["decisions"] = decision_rows
     return details
 
-def build_pair_changed_flags(
-    artifact: Dict[str, Any], n_pairs: int, preds: List[str]
-) -> List[bool]:
+def build_pair_changed_flags(artifact: Dict[str, Any], n_pairs: int) -> List[bool]:
     """每對：衝突再審查是否改判（仍用 from/to label 比對，但不輸出這兩個欄位）。"""
     flags: List[bool] = [False] * n_pairs
     by_k: Dict[int, bool] = {}
@@ -296,12 +290,12 @@ def build_pair_changed_flags(
 
         final_label = str(c.get("label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
-            final_label = preds[ik] if ik < len(preds) else "Neutral"
+            raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
         pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
-        from_label = str(pm.get("from_label") or final_label).strip() or final_label
-        to_label = str(pm.get("to_label") or final_label).strip() or final_label
-        changed = bool(pm.get("result") == "modify" or from_label != to_label)
+        from_label = str(pm.get("from_label") or "").strip()
+        to_label = str(pm.get("to_label") or "").strip()
+        changed = bool(pm.get("result") == "modify" or (from_label and to_label and from_label != to_label))
 
         by_k[ik] = changed
 
@@ -312,23 +306,9 @@ def build_pair_changed_flags(
 def build_pair_review_details(
     artifact: Dict[str, Any],
     n_pairs: int,
-    preds: List[str],
 ) -> Dict[int, Dict[str, Any]]:
-    """用 conflicts[].conflict_review 組回 RQ2 record 的 pair details。"""
+    """用 conflict.pairs[].meeting 組回 RQ2 record 的 pair details。"""
     details_by_k: Dict[int, Dict[str, Any]] = {}
-    artifact_reviews_by_pair: Dict[int, Dict[str, Any]] = {}
-    for row in artifact.get("pair_reviews", []) or []:
-        if not isinstance(row, dict):
-            continue
-        pair_id = str(row.get("pair_id") or row.get("id") or "").strip()
-        if not pair_id.startswith("PAIR-"):
-            continue
-        try:
-            ik = int(pair_id.split("-", 1)[-1]) - 1
-        except ValueError:
-            continue
-        if 0 <= ik < n_pairs:
-            artifact_reviews_by_pair[ik] = row
 
     for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
@@ -352,17 +332,30 @@ def build_pair_review_details(
         pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
         final_label = str(c.get("label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
-            final_label = preds[ik] if ik < len(preds) else "Neutral"
-        from_label = str(pm.get("from_label") or final_label).strip() or final_label
+            raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
-        review_row = artifact_reviews_by_pair.get(ik, {})
+        meeting_rows = c.get("meeting") if isinstance(c.get("meeting"), list) else []
+        if not meeting_rows or not isinstance(meeting_rows[0], dict):
+            raise RuntimeError(f"RQ2 pair 缺少 conflict meeting: PAIR-{ik + 1}")
+        review_row = meeting_rows[0]
+        initial_label = str(review_row.get("initial_label") or "").strip()
+        review_final_label = str(review_row.get("final_label") or "").strip()
+        description = str(review_row.get("description") or "").strip()
+        details = review_row.get("details")
+        if initial_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 pair initial_label 不合法: PAIR-{ik + 1}")
+        if review_final_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 pair final_label 不合法: PAIR-{ik + 1}")
+        if not description:
+            raise RuntimeError(f"RQ2 pair 缺少 description: PAIR-{ik + 1}")
+        if not isinstance(details, dict) or not details:
+            raise RuntimeError(f"RQ2 pair 缺少 details: PAIR-{ik + 1}")
         details_by_k[ik] = {
-            "status": str(pm.get("status") or "").strip(),
-            "initial_label": from_label,
-            "final_label": final_label,
-            "reason": str(pm.get("reason") or "").strip(),
-            "requirement_ids": list(c.get("requirement_ids") or []),
-            "description": str(pm.get("reason") or "").strip(),
-            "meeting_conflict_review": review_row.get("meeting_conflict_review") or {},
+            "status": str(review_row.get("status") or pm.get("status") or "").strip(),
+            "initial_label": initial_label,
+            "final_label": review_final_label,
+            "reason": description,
+            "description": description,
+            "details": details,
         }
     return details_by_k

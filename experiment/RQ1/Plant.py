@@ -18,7 +18,6 @@ if str(RQ1_DIR) not in sys.path:
 
 OUTPUT_PREFIX = "Plant"
 RESULTS_DIR = RQ1_DIR / "results"
-PLANT_ARTIFACT_DIR = RESULTS_DIR / OUTPUT_PREFIX
 DEFAULT_CONFIG_PATH = RQ1_DIR / "Plant" / "config.json"
 FLOW_CONFIG_PATH = (RQ1_DIR / "../../config.json").resolve()
 DEFAULT_DATA_PATH = (RQ1_DIR / "ReqElicitBench.json").resolve()
@@ -39,10 +38,11 @@ def main() -> None:
     from Plant.oracle_user import OracleUserAgent
     from Plant.records import (
         build_cost_payload,
+        build_plant_models,
         build_result_payload,
         build_task_record,
         print_final_summary,
-        resolve_interviewer_model_label,
+        resolve_plant_model_label,
     )
     from Plant.utils import (
         next_result_index,
@@ -107,7 +107,6 @@ def main() -> None:
 
     verbose = bool(exp_cfg.get("verbose", True))
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    PLANT_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
     run_results: List[Dict[str, Any]] = []
     run_metrics: List[Dict[str, Any]] = []
@@ -122,7 +121,7 @@ def main() -> None:
 
         print(f"\n=== Run {run_i + 1}/{runs}（run_id={run_id}）===")
         print("\n正在建立環境...")
-        flow = build_flow(flow_cfg, verbose=verbose, results_dir=PLANT_ARTIFACT_DIR)
+        flow = build_flow(flow_cfg, verbose=verbose, results_dir=RESULTS_DIR)
         oracle_cfg = build_oracle_configs(exp_cfg, api_key, base_url)
         oracle_user = OracleUserAgent(
             model=flow.agent_models["user"],
@@ -140,6 +139,7 @@ def main() -> None:
         records: List[Dict[str, Any]] = []
         task_result_rows: List[Dict[str, Any]] = []
         elicitation_meeting_payload: Dict[str, Any] = {}
+        project_payload: Dict[str, Any] = {}
         t0 = time.perf_counter()
         for i, task in enumerate(tasks, start=1):
             print()
@@ -155,6 +155,7 @@ def main() -> None:
                     token_before += int(m.costTracker.export_summary_dict().get("total_tokens", 0) or 0)
             one = run_one_task(flow, oracle_user, task)
             elicitation_meeting_payload = one.get("elicitation", {}) or {}
+            project_payload = one.get("project", {}) or {}
             token_after = 0
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):
@@ -165,13 +166,13 @@ def main() -> None:
                 task_idx=i - 1,
                 task=task,
                 per_task=one,
-                interviewer_model=resolve_interviewer_model_label(flow_cfg, one),
+                plant_model_label=resolve_plant_model_label(flow_cfg, one),
                 user_answer_quality=str(exp_cfg.get("user_answer_quality", "high")),
                 token_cost=task_token_cost,
             )
             task_result_rows.append(task_record)
             print(
-                f"\n任務 {i} 完成：總輪數={int(task_record.get('total_turns', 0) or 0)}，"
+                f"\n任務 {i} 完成：總輪數={int(task_record.get('turns', 0) or 0)}，"
                 f"已取得需求數={int(task_record.get('total_elicited', 0) or 0)}"
             )
 
@@ -187,7 +188,8 @@ def main() -> None:
         result_path = RESULTS_DIR / f"result_{prefix}_{run_id}.json"
         record_path = RESULTS_DIR / f"record_{prefix}_{run_id}.json"
         cost_path = RESULTS_DIR / f"cost_{prefix}_{run_id}.json"
-        elicitation_meeting_path = PLANT_ARTIFACT_DIR / f"elicitation_meeting_{run_id}.json"
+        elicitation_meeting_path = RESULTS_DIR / f"elicitation_meeting_{run_id}.json"
+        project_path = RESULTS_DIR / f"project_{run_id}.json"
 
         with result_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -200,7 +202,7 @@ def main() -> None:
                         "task_name": t["task_name"],
                         "initial_requirements": t["initial_requirements"],
                         "user_answer_quality": t["user_answer_quality"],
-                        "interviewer_model": t["interviewer_model"],
+                        "Plant": build_plant_models(flow_cfg),
                         "conversation": t["conversation"],
                     }
                     for t in task_result_rows
@@ -214,6 +216,8 @@ def main() -> None:
             json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
         with elicitation_meeting_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(elicitation_meeting_payload, f, indent=2, ensure_ascii=False)
+        with project_path.open("w", encoding="utf-8") as f:
+            json_dump_no_scientific(project_payload, f, indent=2, ensure_ascii=False)
 
         print_final_summary(result, task_result_rows)
 
@@ -229,6 +233,7 @@ def main() -> None:
             ("average_elicitation_ratio", "IRE", "平均取得比例", "percent"),
             ("average_tkqr", "TKQR", "平均 TKQR", "float4"),
             ("average_ora", "ORA", "平均 ORA", "float4"),
+            ("average_turn", "Turns", "Turns", "float4"),
         ]
         print("\n多次執行結果統計（平均值 ± 標準差）：")
         summary_metrics: Dict[str, Any] = {}

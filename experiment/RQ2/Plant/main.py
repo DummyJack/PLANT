@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from flow.setup import Flow
-from storage.artifact import conflicts_payload, requirements_payload
+from storage.artifact import conflict_payload, requirements_payload
 
 from .config import build_flow, build_plant_cost_payload, load_rq2_config
 from .utils import (
@@ -54,7 +54,7 @@ def run_type_group_batch(
         _, row = items[k]
         requirements.append(
             {
-                "id": f"REQ-CAND-{(k * 2) + 1}",
+                "id": f"URL-{(k * 2) + 1}",
                 "text": str(row.get("Text1") or ""),
                 "source": "benchmark",
                 "types": type_name,
@@ -62,7 +62,7 @@ def run_type_group_batch(
         )
         requirements.append(
             {
-                "id": f"REQ-CAND-{(k * 2) + 2}",
+                "id": f"URL-{(k * 2) + 2}",
                 "text": str(row.get("Text2") or ""),
                 "source": "benchmark",
                 "types": type_name,
@@ -71,7 +71,7 @@ def run_type_group_batch(
 
     artifact: Dict[str, Any] = {
         "rough_idea": build_type_rough_idea(type_name),
-        "reqt_candidates": requirements,
+        "URL": requirements,
         "conflict": {"pairs": [], "multiple": []},
     }
     sync_config_language(artifact, write_artifact_meta=False)
@@ -101,17 +101,17 @@ def run_type_group_batch(
         )
 
     preds, missing_after_review = extract_pair_preds_with_missing(updated, n)
-    for k in missing_after_review:
-        if 0 <= k < n:
-            preds[k] = analyst_preds[k]
-    details_by_index = build_pair_review_details(updated, n, preds)
+    if missing_after_review:
+        missing_ids = [f"PAIR-{k + 1}" for k in missing_after_review]
+        raise RuntimeError(f"RQ2 conflict review 後仍缺少最終標籤: {missing_ids}")
+    details_by_index = build_pair_review_details(updated, n)
     for k in range(n):
         details = details_by_index.get(k)
         if 0 <= k < len(preds) and isinstance(details, dict):
             final_label = str(details.get("final_label") or "").strip()
             if final_label in {"Conflict", "Neutral"}:
                 preds[k] = final_label
-    changed_flags = build_pair_changed_flags(updated, n, preds)
+    changed_flags = build_pair_changed_flags(updated, n)
     meeting_details = extract_conflict_review_details(updated, round_num=1)
     meetings_by_type[type_name] = meeting_details
     print("衝突再審查會議：", flush=True)
@@ -137,11 +137,7 @@ def run_type_group_batch(
         gi, row = items[k]
         tkey = str(row.get("types") or type_name)
         pair_details = details_by_index.get(k, {})
-        review_details = (
-            pair_details.get("meeting_conflict_review")
-            if isinstance(pair_details, dict)
-            else {}
-        )
+        review_details = pair_details.get("details") if isinstance(pair_details, dict) else {}
         results_by_idx[gi] = (
             preds[k],
             {
@@ -159,31 +155,35 @@ def run_type_group_batch(
                 },
             },
         )
-    payload = conflicts_payload(updated)
+    payload = conflict_payload(updated)
     req_id_map: Dict[str, str] = {}
     remapped_requirements: List[Dict[str, Any]] = []
     for req in requirements:
         old_id = str(req.get("id") or "").strip()
-        new_id = f"REQ-CAND-{len(requirements_artifact['reqt_candidates']) + len(remapped_requirements) + 1}"
+        new_id = f"REQ-{len(requirements_artifact['requirements']) + len(remapped_requirements) + 1}"
         req_id_map[old_id] = new_id
         item = dict(req)
         item["id"] = new_id
         remapped_requirements.append(item)
-    exported_requirements = requirements_payload({"reqt_candidates": remapped_requirements})
-    for req in exported_requirements.get("reqt_candidates", []) or []:
-        if isinstance(req, dict):
-            req.pop("source_stakeholders", None)
-    requirements_artifact["reqt_candidates"].extend(
-        exported_requirements.get("reqt_candidates", []) or []
+    exported_requirements = requirements_payload({"requirements": remapped_requirements})
+    requirements_artifact["requirements"].extend(
+        exported_requirements.get("requirements", []) or []
     )
 
     for pair in payload.get("pairs", []) or []:
         item = dict(pair)
         item["id"] = f"PAIR-{len(conflict_artifact['pairs']) + 1}"
-        for req_key in ("req_1", "req_2"):
-            old_req_id = str(item.get(req_key) or "").strip()
+        remapped_refs: List[Dict[str, Any]] = []
+        for req in item.get("requirements") or []:
+            if not isinstance(req, dict):
+                continue
+            req_row = dict(req)
+            old_req_id = str(req_row.get("id") or "").strip()
             if old_req_id in req_id_map:
-                item[req_key] = req_id_map[old_req_id]
+                req_row["id"] = req_id_map[old_req_id]
+            remapped_refs.append(req_row)
+        if remapped_refs:
+            item["requirements"] = remapped_refs
         conflict_artifact["pairs"].append(item)
 
 def run_conflict(
@@ -198,20 +198,20 @@ def run_conflict(
     """執行衝突辨識實驗。
 
     - 依 CSV/JSON 的 types 分組；**同一 type 內**整批做一次 pairwise 辨識，再全組一次衝突複核。
-    - data_path 為 None：使用預設 cn_100.csv（或 cn_pairs.csv）；亦可傳入 .json 陣列。
+    - data_path 為 None：使用預設 cn_pairs.csv；亦可傳入 .json 陣列。
     - count > 0：只取前 count 筆。
     - record 輸出為 type-indexed object：``{ "<type 名稱>": [pair, ...] }``，同一 type 僅一筆。
     - conflict 輸出只保留主流程 conflict.json 的 pairs 區塊：``{"pairs": [...]}``。
     """
     try:
         if data_path is not None:
-            data, data_file_label = load_rq2_dataset(Path(data_path).resolve())
+            data, _ = load_rq2_dataset(Path(data_path).resolve())
         else:
             p = default_csv_path()
             if not p.exists():
                 print(f"錯誤：找不到資料檔 {p}")
                 return None
-            data, data_file_label = load_rq2_dataset(p)
+            data, _ = load_rq2_dataset(p)
     except (OSError, ValueError) as e:
         print(f"錯誤：無法載入資料：{e}")
         return None
@@ -234,7 +234,6 @@ def run_conflict(
         if not data:
             print(f"錯誤：找不到情境/type：{', '.join(selected_scenarios)}")
             return None
-        data_file_label = f"{data_file_label}::{' + '.join(selected_scenarios)}"
 
     if count > 0:
         data = data[:count]
@@ -249,7 +248,7 @@ def run_conflict(
 
     meetings_by_type: Dict[str, Any] = {}
     conflict_artifact: Dict[str, Any] = {"pairs": []}
-    requirements_artifact: Dict[str, Any] = {"reqt_candidates": []}
+    requirements_artifact: Dict[str, Any] = {"requirements": []}
     for g, items in grouped.items():
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
@@ -301,13 +300,14 @@ def run_conflict(
     y_pred = []
     for i in range(total):
         pred = results_by_idx[i][0]
-        y_pred.append(pred if pred is not None else "Neutral")
+        if pred not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 第 {i + 1} 筆缺少有效 pred")
+        y_pred.append(pred)
     record_by_type = build_rq2_record_by_type(
         grouped, meetings_by_type, results_by_idx
     )
     result = build_rq2_result_payload(
         model_name=str(model_name),
-        data_file_label=data_file_label,
         y_true=y_true,
         y_pred=y_pred,
         grouped=grouped,

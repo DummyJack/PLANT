@@ -6,7 +6,6 @@ ORDERED_NAMES = [
     "Hospital Management and Information System",  # 醫院管理與資訊系統
     "Bus and Railway Ticket Booking System",  # 公車與鐵路訂票系統
     "Adult Vocabulary Learning and Quiz System",  # 單字學習與測驗系統
-    "Social Networking and Content Sharing Platform",  # 社群網路與內容分享平台
 ]
 
 
@@ -14,7 +13,6 @@ def main() -> None:
     base = Path(__file__).resolve().parent
     src = base / "ReqElicitBench.json"
     out_paths = [
-        base.parent / "ReqElicitBench_5.json",
         base / "ReqElicitBench_5.json",
     ]
 

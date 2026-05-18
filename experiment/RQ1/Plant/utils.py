@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+from storage.artifact import project_payload
+
 
 def next_result_index(prefix: str, results_dir: Path) -> int:
     """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
@@ -54,15 +56,24 @@ def task_implicit_requirements(task: Dict) -> List[Dict[str, str]]:
 
 
 def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
+    initial = task_initial_requirements(task)
     return {
-        "rough_idea": task_initial_requirements(task),
-        "stakeholders": [],
-        "scope": {"in_scope": [], "out_of_scope": [], "description": ""},
-        "reqt_candidates": [],
+        "rough_idea": initial,
+        "scenario": {
+            "name": str(task.get("name") or "").strip(),
+        },
+        "stakeholders": [
+            {
+                "name": "Oracle User",
+                "type": "Primary Users",
+                "text": [initial] if initial else [],
+            }
+        ],
+        "scope": {"in_scope": [], "out_of_scope": []},
+        "URL": [],
         "requirements": [],
-        "conflicts": [],
         "feedback": {},
-        "system_models": {},
+        "system_models": [],
         "open_questions": [],
         "decisions": [],
         "discussions": [],
@@ -77,6 +88,22 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         },
         "elicited_reqts": [],
     }
+
+
+def rq1_project_payload(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    payload = project_payload(artifact)
+    stakeholders = []
+    for row in payload.get("stakeholders", []) or []:
+        if not isinstance(row, dict):
+            continue
+        stakeholders.append(
+            {
+                "name": row.get("name", ""),
+                "type": row.get("type", ""),
+            }
+        )
+    payload["stakeholders"] = stakeholders
+    return payload
 
 
 def safe_turn_no(value: Any) -> int:
@@ -158,8 +185,8 @@ def print_rq1_oracle_elicitation_trace(
 
         if forced_finish:
             participants = str(turn_log.get("judged_action_agent") or "mediator").strip() or "mediator"
-            statement = str(turn_log.get("judged_action") or "").strip()
-            logger.info("  Plant: participants=%s | %s", participants, statement or "(no statement)")
+            text = str(turn_log.get("judged_action") or "").strip()
+            logger.info("  Plant: participants=%s | %s", participants, text or "(no text)")
             logger.info("  停止：達到最後一輪，直接進入 finish 收尾（不再執行 user 對話）")
         else:
             mode = str(turn_log.get("discussion_mode") or "").strip()
@@ -179,8 +206,8 @@ def print_rq1_oracle_elicitation_trace(
             ]
             if mode != "simultaneous" and speaking_order:
                 parts.append("speaker_order=%s" % ",".join(speaking_order))
-            statement = str(turn_log.get("judged_action") or "").strip()
-            logger.info("  Plant: %s | %s", " | ".join(parts), statement or "(no statement)")
+            text = str(turn_log.get("judged_action") or "").strip()
+            logger.info("  Plant: %s | %s", " | ".join(parts), text or "(no text)")
             user_texts = [
                 str(text).strip()
                 for text in trace_row.get("user_texts", []) or []
@@ -209,12 +236,7 @@ def run_one_task(
     artifact = ensure_artifact(task)
     oracle_user.set_task(task)
 
-    stakeholders = oracle_user.generate_stakeholder_requirements(
-        rough_idea=artifact["rough_idea"],
-        selected_stakeholders=["Oracle User"],
-    )
-    artifact["stakeholders"] = stakeholders
-    flow.user_agent.stakeholders = stakeholders
+    flow.user_agent.stakeholders = artifact["stakeholders"]
     req_before = len(artifact["requirements"])
 
     logger_verbose = getattr(flow.logger, "verbose", None)
@@ -256,6 +278,7 @@ def run_one_task(
         "elicitation_plan": (artifact.get("elicitation") or {}).get("plan", {}),
         "elicitation_meeting": (artifact.get("elicitation") or {}).get("meeting", {}),
         "elicitation": artifact.get("elicitation", {}),
+        "project": rq1_project_payload(artifact),
         "elicitation_trace": elicitation_trace,
         "oracle_trace": list(oracle_user.oracle_trace),
     }

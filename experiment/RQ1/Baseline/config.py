@@ -33,8 +33,7 @@ class ReqElicitGymConfig:
     user_answer_quality: str = "high"
 
     # Environment configuration
-    max_steps: int = 20
-    max_turns: int = 40  # Maximum conversation turns
+    max_turns: int = 20  # Maximum conversation turns
 
     # Tracking configuration  
     track_conversation_history: bool = True
@@ -61,8 +60,8 @@ class ReqElicitGymConfig:
 
     def validate(self):
         """Validate configuration parameters."""
-        if self.max_steps <= 0:
-            raise ValueError("max_steps must be positive")
+        if self.max_turns <= 0:
+            raise ValueError("max_turns must be positive")
         if self.judge_temperature < 0:
             raise ValueError("judge_temperature must be non-negative")
         if self.user_temperature < 0:

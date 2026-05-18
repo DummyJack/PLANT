@@ -25,7 +25,7 @@ def resolve_role_model_name(flow_cfg: Dict[str, Any], role: str) -> str:
     return ""
 
 
-def enabled_interviewer_agents(flow_cfg: Dict[str, Any]) -> List[str]:
+def enabled_plant_roles(flow_cfg: Dict[str, Any]) -> List[str]:
     base_roles = ["analyst", "expert", "modeler"]
     enabled = flow_cfg.get("enable_agents") or {}
     if not isinstance(enabled, dict):
@@ -34,7 +34,7 @@ def enabled_interviewer_agents(flow_cfg: Dict[str, Any]) -> List[str]:
     return out or ["analyst"]
 
 
-def format_interviewer_roles_with_models(flow_cfg: Dict[str, Any], roles: List[str]) -> str:
+def format_plant_roles_with_models(flow_cfg: Dict[str, Any], roles: List[str]) -> str:
     rows: List[str] = []
     for role in roles:
         role_name = str(role or "").strip()
@@ -48,14 +48,14 @@ def format_interviewer_roles_with_models(flow_cfg: Dict[str, Any], roles: List[s
     return ", ".join(rows)
 
 
-def build_plant_interviewer_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
+def build_plant_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
-    for role in enabled_interviewer_agents(flow_cfg):
+    for role in enabled_plant_roles(flow_cfg):
         out[role] = resolve_role_model_name(flow_cfg, role)
     return out
 
 
-def resolve_interviewer_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]) -> str:
+def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]) -> str:
     participants: List[str] = []
     for tlog in (per_task.get("elicitation_trace", []) or []):
         if not isinstance(tlog, dict):
@@ -76,9 +76,9 @@ def resolve_interviewer_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str
                     participants.append(role_name)
 
     if not participants:
-        participants = enabled_interviewer_agents(flow_cfg)
+        participants = enabled_plant_roles(flow_cfg)
 
-    return format_interviewer_roles_with_models(flow_cfg, participants)
+    return format_plant_roles_with_models(flow_cfg, participants)
 
 
 def build_cost_payload(flow: Flow, oracle_user: OracleUserAgent) -> Dict[str, Any]:
@@ -137,19 +137,20 @@ def compute_aspect_type_elicitation(
 ) -> Dict[str, Any]:
     # 與 ReqElicitGym 一樣：以 Implicit Requirements 的 Aspect 作為分母，
     # 命中 requirement id 作為分子。
-    totals = {"Interaction": 0, "Content": 0, "Style": 0}
-    elicited = {"Interaction": 0, "Content": 0, "Style": 0}
+    totals: Dict[str, int] = {}
+    elicited: Dict[str, int] = {}
     implicit = task_implicit_requirements(task)
     for i, req in enumerate(implicit, start=1):
-        aspect = str(req.get("aspect") or "").strip()
-        if aspect not in totals:
-            continue
+        aspect = str(req.get("aspect") or "").strip() or "Unknown"
         rid = f"IR-{i:02d}"
+        if aspect not in totals:
+            totals[aspect] = 0
+            elicited[aspect] = 0
         totals[aspect] += 1
         if rid in revealed_ids:
             elicited[aspect] += 1
     out: Dict[str, Any] = {}
-    for aspect in ("Interaction", "Content", "Style"):
+    for aspect in totals:
         total = totals[aspect]
         hit = elicited[aspect]
         out[aspect] = {
@@ -265,14 +266,14 @@ def strip_post_meeting_analysis_sections(text: str) -> str:
     return value[:cut_at].strip()
 
 
-def keep_user_record_statement(text: str) -> str:
+def keep_user_record_text(text: str) -> str:
     """User records should keep the natural answer and omit any trailing metadata JSON."""
     prefix, trailing_json = split_trailing_json_object(str(text or "").strip())
     cleaned = prefix if trailing_json and prefix else str(text or "").strip()
     return strip_metadata_json_objects(cleaned)
 
 
-def keep_interviewer_record_statement(text: str) -> str:
+def keep_interviewer_record_text(text: str) -> str:
     """Interviewer records should keep only the formal question/suggestion text."""
     cleaned = strip_post_meeting_analysis_sections(text)
     cleaned = strip_metadata_json_objects(cleaned)
@@ -293,7 +294,7 @@ def trace_turn_no(trace: Dict[str, Any]) -> int:
     return turn_no
 
 
-def format_mediator_record_statement(tlog: Dict[str, Any]) -> str:
+def format_mediator_record_text(tlog: Dict[str, Any]) -> str:
     discussion_mode = str(tlog.get("discussion_mode") or "").strip()
     is_finish = bool(tlog.get("judge_finish", False)) or bool(tlog.get("forced_finish", False))
     if is_finish:
@@ -326,7 +327,7 @@ def build_task_record(
     task_idx: int,
     task: Dict[str, Any],
     per_task: Dict[str, Any],
-    interviewer_model: str,
+    plant_model_label: str,
     user_answer_quality: str,
     token_cost: int,
 ) -> Dict[str, Any]:
@@ -385,15 +386,15 @@ def build_task_record(
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()
-            stmt = str(row.get("statement") or "").strip()
+            stmt = str(row.get("text") or "").strip()
             if not agent or not stmt:
                 continue
             if agent == "user":
-                user_stmt = keep_user_record_statement(stmt)
+                user_stmt = keep_user_record_text(stmt)
                 if user_stmt:
                     user_parts.append(user_stmt)
             elif agent in role_parts:
-                stmt = keep_interviewer_record_statement(stmt)
+                stmt = keep_interviewer_record_text(stmt)
                 if stmt:
                     role_parts[agent].append(stmt)
             else:
@@ -418,16 +419,16 @@ def build_task_record(
         else:
             action_type = action_types[0] if action_types else ""
             fallback_user_texts = [
-                keep_user_record_statement(text)
+                keep_user_record_text(text)
                 for text in (agg.get("user_texts", []) or [])
                 if str(text or "").strip()
             ]
             user_text = "\n".join(user_parts) if user_parts else "\n".join(fallback_user_texts)
 
         turn_entry = {"turn": turn_no}
-        mediator_statement = format_mediator_record_statement(tlog)
-        if mediator_statement:
-            turn_entry["mediator"] = mediator_statement
+        mediator_text = format_mediator_record_text(tlog)
+        if mediator_text:
+            turn_entry["mediator"] = mediator_text
         for role in ("analyst", "expert", "modeler"):
             role_text = "\n\n".join(role_parts[role]).strip()
             if role_text:
@@ -465,16 +466,16 @@ def build_task_record(
                 ),
             }
             user_text = "\n".join(
-                keep_user_record_statement(text)
+                keep_user_record_text(text)
                 for text in (agg.get("user_texts", []) or [])
                 if str(text or "").strip()
             )
             if user_text:
                 turn_entry["user"] = user_text
             conversation.append(turn_entry)
-    num_rounds = len(conversation)
+    turns = len(conversation)
     tkqr = compute_tkqr(hit_sequence, implicit_total)
-    ora = compute_ora(num_rounds, implicit_total)
+    ora = compute_ora(turns, implicit_total)
     # 面向統計改與 total_elicited 採同一來源，避免 turn 對齊差異導致口徑不一致。
     aspect_type_elicitation = compute_aspect_type_elicitation(task, oracle_revealed_ids)
 
@@ -491,16 +492,15 @@ def build_task_record(
         "application_type": app_type,
         "initial_requirements": task_initial_requirements(task),
         "user_answer_quality": user_answer_quality,
-        "interviewer_model": interviewer_model,
+        "plant_model_label": plant_model_label,
         "conversation": conversation,
-        "total_turns": num_rounds,
+        "turns": turns,
         # 對齊 result.task_results 結構
         "total_requirements": implicit_total,
         "total_elicited": elicited,
         "elicitation_ratio": elicitation_ratio,
         "tkqr": tkqr,
         "ora": ora,
-        "num_rounds": num_rounds,
         "optimal_rounds": implicit_total + 1,
         "token_cost": int(token_cost),
         "action_type_effectiveness": extract_action_type_effectiveness(conversation),
@@ -515,6 +515,15 @@ def build_result_payload(
     task_results: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     summary = compute_overall_metrics(task_results)
+    turns_values = [
+        int(t.get("turns", 0) or 0)
+        for t in task_results
+        if isinstance(t, dict)
+    ]
+    average_turn = (
+        sum(turns_values) / len(turns_values)
+        if turns_values else 0.0
+    )
     overall = {
         "total_test_samples": int(summary.get("total_tasks", 0) or 0),
         "total_hidden_requirements": int(summary.get("total_requirements_all_tasks", 0) or 0),
@@ -522,6 +531,7 @@ def build_result_payload(
         "average_elicitation_ratio": float(summary.get("elicitation_ratio", 0.0) or 0.0),
         "average_tkqr": float(summary.get("tkqr", 0.0) or 0.0),
         "average_ora": float(summary.get("ora", 0.0) or 0.0),
+        "average_turn": float(average_turn),
         "variance_elicitation_ratio": float(summary.get("variance_elicitation_ratio", 0.0) or 0.0),
         "variance_tkqr": float(summary.get("variance_tkqr", 0.0) or 0.0),
         "variance_ora": float(summary.get("variance_ora", 0.0) or 0.0),
@@ -535,11 +545,11 @@ def build_result_payload(
 
     return {
         "config": {
-            "Plant": build_plant_interviewer_models(flow_cfg),
+            "Plant": build_plant_models(flow_cfg),
             "judge_model": str((exp_cfg.get("oracle_judge", {}) or {}).get("model", "")),
             "user_model": str((exp_cfg.get("oracle_user", {}) or {}).get("model", "")),
             "user_answer_quality": str(exp_cfg.get("user_answer_quality", "high")),
-            "max_steps": int(flow_cfg.get("elicitation_max_turns", 0) or 0),
+            "max_turns": int(flow_cfg.get("elicitation_max_turns", 0) or 0),
         },
         "overall_evaluation": overall,
         "task_results": [
@@ -550,7 +560,7 @@ def build_result_payload(
                 "elicitation_ratio": t["elicitation_ratio"],
                 "tkqr": t["tkqr"],
                 "ora": t["ora"],
-                "num_rounds": t["num_rounds"],
+                "turns": t["turns"],
                 "optimal_rounds": t["optimal_rounds"],
                 "token_cost": t["token_cost"],
                 "action_type_effectiveness": t["action_type_effectiveness"],
@@ -572,11 +582,11 @@ def print_final_summary(result: Dict[str, Any], records: List[Dict[str, Any]]) -
     print("=" * 60)
     print(f"總任務數：{len(records)}")
     avg_turns = (
-        sum(int(r.get("total_turns", 0) or 0) for r in records) / len(records)
+        sum(int(r.get("turns", 0) or 0) for r in records) / len(records)
         if records
         else 0.0
     )
-    print(f"平均對話輪數：{avg_turns:.1f}")
+    print(f"平均 Turns：{avg_turns:.1f}")
 
     print("\n評估指標總結：")
     print(f"  總測試樣本數：{int(overall.get('total_test_samples', 0) or 0)}")
@@ -617,7 +627,7 @@ def print_final_summary(result: Dict[str, Any], records: List[Dict[str, Any]]) -
 
     if aspect_stats:
         print("\n面向類型取得比例：")
-        for aspect in ("Interaction", "Content", "Style"):
+        for aspect, s in aspect_stats.items():
             s = aspect_stats.get(aspect, {}) or {}
             total = int(s.get("total", 0) or 0)
             if total <= 0:

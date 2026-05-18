@@ -24,7 +24,7 @@ from metric import Metric
 from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 load_dotenv(dotenv_path=BASE_DIR / ".env")
-CN_PAIRS_CSV = "cn_100.csv"
+CN_PAIRS_CSV = "cn_pairs.csv"
 RESULTS_DIR = RQ2_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 
@@ -214,7 +214,7 @@ def build_baseline_cost_payload(model: BaselineModel) -> dict:
 
 # 載入資料集；limit > 0 時只取前 N 筆。
 def load_cn_pairs(csv_path: Path, limit: int) -> list[dict]:
-    with csv_path.open(encoding="utf-8") as f:
+    with csv_path.open(encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     if limit > 0:
         return rows[:limit]

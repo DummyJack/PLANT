@@ -119,7 +119,7 @@ def build_seeded_artifact(scenario: str, stakeholders: List[Dict[str, Any]], rou
         "requirements": [],
         "conflicts": [],
         "feedback": {},
-        "system_models": {},
+        "system_models": [],
         "discussions": [],
         "decisions": [],
         "open_questions": [],

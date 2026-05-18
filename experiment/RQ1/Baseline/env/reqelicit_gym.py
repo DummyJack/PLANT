@@ -59,12 +59,8 @@ class ReqElicitGym(gym.Env):
         self.current_task_total_requirements = 0
         self.current_task_elicited = 0  # Requirements elicited by interviewer
         
-        # Track requirements by aspect type (Interaction, Content, Style)
-        self.current_task_requirements_by_aspect = {
-            "Interaction": {"total": 0, "elicited": 0},
-            "Content": {"total": 0, "elicited": 0},
-            "Style": {"total": 0, "elicited": 0}
-        }
+        # Track requirements by aspect type from the active dataset.
+        self.current_task_requirements_by_aspect = {}
         
         # Step-by-step recording for current task
         self.current_task_step_records = []  # Records for each step in current task
@@ -89,7 +85,7 @@ class ReqElicitGym(gym.Env):
             "task_description": spaces.Text(max_length=5000),
             "goal": spaces.Text(max_length=500),
             "feedback": spaces.Text(max_length=5000),
-            "step_count": spaces.Box(low=0, high=self.config.max_steps, shape=(), dtype=int),
+            "step_count": spaces.Box(low=0, high=self.config.max_turns, shape=(), dtype=int),
             "episode_complete": spaces.Discrete(2),
             "total_requirements": spaces.Box(low=0, high=100, shape=(), dtype=int),
             "remaining_requirements": spaces.Box(low=0, high=100, shape=(), dtype=int),
@@ -188,18 +184,15 @@ class ReqElicitGym(gym.Env):
         self.current_task_total_requirements = len(self.remaining_requirements)
         self.current_task_elicited = 0
         
-        # Initialize requirements by aspect type
-        self.current_task_requirements_by_aspect = {
-            "Interaction": {"total": 0, "elicited": 0},
-            "Content": {"total": 0, "elicited": 0},
-            "Style": {"total": 0, "elicited": 0}
-        }
+        # Initialize requirements by aspect type from this task.
+        self.current_task_requirements_by_aspect = {}
         
         # Count total requirements by aspect type
         for req in self.remaining_requirements:
-            aspect = req.get("aspect", "")
-            if aspect in self.current_task_requirements_by_aspect:
-                self.current_task_requirements_by_aspect[aspect]["total"] += 1
+            aspect = req.get("aspect", "") or "Unknown"
+            if aspect not in self.current_task_requirements_by_aspect:
+                self.current_task_requirements_by_aspect[aspect] = {"total": 0, "elicited": 0}
+            self.current_task_requirements_by_aspect[aspect]["total"] += 1
         
         # Initialize step-by-step recording for current task
         self.current_task_step_records = []
@@ -260,9 +253,7 @@ class ReqElicitGym(gym.Env):
             aspect = req_data.get("Aspect", "")
             requirement_text = req_data.get("RequirementText", "")
             
-            # 依 Aspect 決定維度：Interaction/Content -> FR, Style -> NFR
-            # 亦可依實際需求調整
-            dimension = "NFR" if aspect == "Style" else "FR"
+            dimension = str(req_data.get("Dimension") or "").strip()
             
             implicit_req = {
                 "id": f"IR{implicit_req_id_counter}",
@@ -353,9 +344,10 @@ class ReqElicitGym(gym.Env):
                         self.elicited_requirements.append(req.copy())
                         
                         # Update aspect-specific statistics
-                        aspect = req.get("aspect", "")
-                        if aspect in self.current_task_requirements_by_aspect:
-                            self.current_task_requirements_by_aspect[aspect]["elicited"] += 1
+                        aspect = req.get("aspect", "") or "Unknown"
+                        if aspect not in self.current_task_requirements_by_aspect:
+                            self.current_task_requirements_by_aspect[aspect] = {"total": 0, "elicited": 0}
+                        self.current_task_requirements_by_aspect[aspect]["elicited"] += 1
                         break
             
             # Remove elicited requirements from remaining list
@@ -420,7 +412,7 @@ class ReqElicitGym(gym.Env):
             truncated = False
             # Record task statistics when episode completes
             self.record_task_statistics()
-        elif self.step_count >= self.config.max_steps:
+        elif self.step_count >= self.config.max_turns:
             self.episode_complete = True
             terminated = False
             truncated = True
@@ -528,7 +520,7 @@ class ReqElicitGym(gym.Env):
     
     def calculate_aspect_type_elicitation_ratio(self) -> Dict[str, Dict[str, Any]]:
         """
-        Calculate elicitation ratio for each aspect type (Interaction, Content, Style).
+        Calculate elicitation ratio for each aspect type in the dataset.
         
         Returns:
             Dictionary mapping aspect type to {"total": count, "elicited": count, "elicitation_ratio": float}
@@ -567,7 +559,7 @@ class ReqElicitGym(gym.Env):
             "elicitation_ratio": self.current_task_elicited / self.current_task_total_requirements if self.current_task_total_requirements > 0 else 0.0,
             "tkqr": tkqr,
             "ora": ora,
-            "num_rounds": self.step_count,  # Number of dialogue rounds
+            "turns": self.step_count,  # Number of dialogue turns
             "optimal_rounds": self.current_task_total_requirements + 1,  # K = |Q| + 1
             "token_cost": self.current_task_token_cost,  # Total tokens used for generating questions
             "action_type_effectiveness": action_effectiveness,  # Effectiveness by action type
@@ -588,7 +580,7 @@ class ReqElicitGym(gym.Env):
             "user_answer_quality": self.config.user_answer_quality,
             "interviewer_model": self.interviewer_model_name or "unknown",
             "conversation": self.current_task_conversation_turns.copy(),
-            "total_turns": len(self.current_task_conversation_turns),
+            "turns": len(self.current_task_conversation_turns),
         })
         
         if self.config.verbose:
@@ -618,7 +610,7 @@ class ReqElicitGym(gym.Env):
             - tkqr: Average Turn-discounted Key Question Rate
             - ora: Average Optimal Round Assessment
             - action_type_effectiveness: Overall effectiveness by action type
-            - aspect_type_elicitation: Overall elicitation ratio by aspect type (Interaction, Content, Style)
+            - aspect_type_elicitation: Overall elicitation ratio by dataset Aspect
             - total_tasks: Number of tasks evaluated
             - task_results: List of individual task statistics
         """
@@ -687,7 +679,7 @@ class ReqElicitGym(gym.Env):
             
             # Run conversation for current task
             step = 0
-            while step < self.config.max_steps:
+            while step < self.config.max_turns:
                 # Generate interviewer question
                 if self.config.verbose:
                     print(f"[輪次 {step + 1}]")
@@ -742,7 +734,7 @@ class ReqElicitGym(gym.Env):
                             print("\n對話已終止（interviewer 完成）。")
                     else:
                         if self.config.verbose:
-                            print(f"\n對話已截斷（達到最大步數：{self.config.max_steps}）。")
+                            print(f"\n對話已截斷（達到最大步數：{self.config.max_turns}）。")
                     break
             
             if self.config.verbose:
@@ -764,6 +756,15 @@ class ReqElicitGym(gym.Env):
             print("="*60)
         
         overall_metrics = self.evaluate_all_tasks()
+        turn_values = [
+            int(row.get("turns", 0) or 0)
+            for row in overall_metrics.get("task_results", []) or []
+            if isinstance(row, dict)
+        ]
+        overall_metrics["average_turn"] = (
+            sum(turn_values) / len(turn_values)
+            if turn_values else 0.0
+        )
         
         if self.config.verbose:
             print("\n總體評估結果：")
@@ -827,6 +828,15 @@ class ReqElicitGym(gym.Env):
                 raise ValueError("file_path must be provided or set config.evaluation_result_path")
             file_path = self.config.evaluation_result_path
         overall_metrics = self.evaluate_all_tasks()
+        turn_values = [
+            int(row.get("turns", 0) or 0)
+            for row in overall_metrics.get("task_results", []) or []
+            if isinstance(row, dict)
+        ]
+        overall_metrics["average_turn"] = (
+            sum(turn_values) / len(turn_values)
+            if turn_values else 0.0
+        )
 
         if not overall_metrics or overall_metrics.get("total_tasks", 0) == 0:
             if self.config.verbose:
@@ -845,7 +855,7 @@ class ReqElicitGym(gym.Env):
                 "elicitation_ratio": task_stats.get("elicitation_ratio", 0.0),
                 "tkqr": task_stats.get("tkqr", 0.0),
                 "ora": task_stats.get("ora", 0.0),
-                "num_rounds": task_stats.get("num_rounds", 0),
+                "turns": task_stats.get("turns", 0),
                 "optimal_rounds": task_stats.get("optimal_rounds", 0),
                 "token_cost": task_stats.get("token_cost", 0),
                 "action_type_effectiveness": task_stats.get("action_type_effectiveness", {}),
@@ -858,7 +868,7 @@ class ReqElicitGym(gym.Env):
                 "judge_model": self.config.judge_model_name,
                 "user_model": self.config.user_model_name,
                 "user_answer_quality": self.config.user_answer_quality,
-                "max_steps": self.config.max_steps,
+                "max_turns": self.config.max_turns,
             },
             "overall_evaluation": {
                 "total_test_samples": overall_metrics['total_tasks'],
@@ -868,6 +878,7 @@ class ReqElicitGym(gym.Env):
                 "average_elicitation_ratio": overall_metrics['elicitation_ratio'],
                 "average_tkqr": overall_metrics['tkqr'],
                 "average_ora": overall_metrics['ora'],
+                "average_turn": overall_metrics.get("average_turn", 0.0),
                 # Variances
                 "variance_elicitation_ratio": overall_metrics.get('variance_elicitation_ratio', 0.0),
                 "variance_tkqr": overall_metrics.get('variance_tkqr', 0.0),

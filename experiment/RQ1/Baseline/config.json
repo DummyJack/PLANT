@@ -10,7 +10,7 @@
   "user_max_tokens": 1024,
   "user_timeout": 30.0,
   "user_answer_quality": "high",
-  "max_steps": 10,
+  "max_turns": 10,
   "interviewer_temperature": 0.0,
   "interviewer_timeout": 60.0,
   "interviewer_max_tokens": 1024,
