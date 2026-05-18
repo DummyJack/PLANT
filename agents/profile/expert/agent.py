@@ -16,7 +16,7 @@ class ExpertAgent(
     ExpertParsing,
     BaseAgent,
 ):
-    """領域專家 Agent — 賦予 domain-research skill，可搭配 file_parser 等工具。"""
+    """領域專家 Agent — 賦予 domain-research skill，可搭配 read_file 等工具。"""
 
     name = "expert"
 
@@ -48,10 +48,8 @@ class ExpertAgent(
         )
 
     def build_domain_research_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.build_domain_research_state(
+        return self.build_research_observation(
             kwargs["artifact"],
-            kwargs.get("recent_discussions"),
-            kwargs.get("actions_taken", []),
             kwargs.get("research_results", []),
             kwargs.get("iteration", 0),
             kwargs["max_iterations"],
@@ -64,15 +62,7 @@ class ExpertAgent(
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        if kwargs.get("force_update_after_research"):
-            last = last_result or {}
-            if last.get("action") == "research_issue" and kwargs.get("research_results"):
-                return {
-                    "action": "update_findings",
-                    "params": {},
-                    "reasoning": "單輪 domain research 已完成研究，補跑 update_findings 寫回結果。",
-                }
-        return self.decide_next_domain_research_action(observation, last_result)
+        return self.decide_research_action(observation, last_result)
 
     def execute_domain_research_loop_action(
         self,
@@ -89,16 +79,29 @@ class ExpertAgent(
 
     def skill_usage_policy(self) -> str:
         return """domain-research：
-- 用於議題涉及外部法規、標準、安全、合規、領域最佳實務、domain risk 或 evidence gap。
-- 只有當外部資料會影響 requirement、constraint、risk 或 acceptance boundary 判斷時才使用。
-- 用於確認某項外部 obligation 是否真有約束力，或區分強制義務、最佳實務、風險提醒與待查證缺口。
+- 用於候選需求涉及外部法規、標準、安全、隱私、稽核、認證、第三方限制、外部資料限制、產業流程或 domain risk。
+- 只有當外部資料會影響候選需求、constraint、risk 或外部限制邊界判斷時才使用。
+- 用於確認某項 obligation 是否真有約束力，或區分強制義務、最佳實務、風險提醒與待查證缺口。
 - 不用於一般功能需求討論、scope/priority/UX preference、純需求語意衝突，或 artifact 已有足夠 domain research 的情況。"""
 
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
-        return """- artifact_query 用於先確認專案內部 requirements、conflicts、decisions、open_questions 與既有 domain research。
-- file_parser 用於查 doc/ 內專案參考文件；需要文件證據時先搜尋再讀相關片段。
-- web_search 只用於補外部法規、標準、官方文件、最佳實務或外部風險依據；不得覆蓋 artifact 內已知事實。
-- 區分強制義務、最佳實務、風險提醒與 evidence gap；外部研究結果預設只是候選依據。"""
+        lines = []
+        if "artifact_query" in self.tools:
+            lines.append(
+                "- artifact_query 用於先確認專案 scenario、scope、URL 與既有 domain research。"
+            )
+        if "read_file" in self.tools:
+            lines.append(
+                "- read_file 用於查 doc/ 內專案參考文件；需要文件證據時先搜尋再讀相關片段。"
+            )
+        if "web_search" in self.tools:
+            lines.append(
+                "- web_search 只用於補外部法規、標準、官方文件、最佳實務或外部風險依據；不得覆蓋 artifact 內已知事實。"
+            )
+        lines.append(
+            "- 區分強制義務、最佳實務、風險提醒與 evidence gap；外部研究結果預設只是候選依據。"
+        )
+        return "\n".join(lines)
 
     def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
         return self.issue_response_observation(**kwargs)
@@ -131,19 +134,19 @@ class ExpertAgent(
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)
-        statement = (response.get("statement") or "").strip()
-        if response.get("error") or not statement:
+        text = (response.get("text") or "").strip()
+        if response.get("error") or not text:
             return {
                 "action": decision.get("action", ""),
                 "status": "failed",
-                "error": response.get("error") or "missing_statement",
-                "format_error": response.get("format_error") or "issue response must include statement",
+                "error": response.get("error") or "missing_text",
+                "format_error": response.get("format_error") or "issue response must include text",
                 "summary": f"expert issue_response 格式不合格: {decision.get('action', '')}",
             }
         return {
             "action": decision.get("action", ""),
             "status": "success",
-            "statement": statement,
+            "text": text,
             "pair_reviews": response.get("pair_reviews", []),
             "open_questions": response.get("open_questions", []),
             "target_stakeholders": response.get("target_stakeholders", []),

@@ -8,6 +8,21 @@ from agents.profile.analyst.requirements import requirement_discussion_pool
 from storage.artifact import load_artifact as load_split_artifact
 
 
+def conflict_req_keys(item: Dict[str, Any]) -> List[str]:
+    return sorted(
+        [k for k in item.keys() if k.startswith("req_") and k[4:].isdigit()],
+        key=lambda k: int(k[4:]),
+    )
+
+
+def conflict_req_values(item: Dict[str, Any]) -> List[str]:
+    return [
+        str(item.get(k) or "").strip()
+        for k in conflict_req_keys(item)
+        if str(item.get(k) or "").strip()
+    ]
+
+
 class ArtifactQueryTool(BaseTool):
     name = "artifact_query"
     description = "查詢目前專案 artifact 中的需求、衝突、決議、議題、模型與研究資料。唯讀，不修改 artifact。"
@@ -19,7 +34,7 @@ class ArtifactQueryTool(BaseTool):
         },
         "section": {
             "type": "string",
-            "description": "artifact 區塊名稱，例如 requirements/conflicts/decisions/open_questions",
+            "description": "artifact 區塊名稱，例如 requirements/conflict/conflict_report/conflict_pairs/conflict_multiple/decisions/open_questions",
             "required": False,
         },
         "filters": {
@@ -111,6 +126,15 @@ class ArtifactQueryTool(BaseTool):
     def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
         if section == "requirements" and not artifact.get("requirements"):
             return requirement_discussion_pool(artifact)
+        if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
+            conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+            if section == "conflict_report":
+                raw = conflict.get("report", [])
+            elif section == "conflict_pairs":
+                raw = conflict.get("pairs", [])
+            else:
+                raw = conflict.get("multiple", [])
+            return raw if isinstance(raw, list) else []
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
@@ -122,12 +146,18 @@ class ArtifactQueryTool(BaseTool):
 
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
-            "requirements": ["id", "text", "type", "priority", "source_stakeholders", "source", "acceptance_criteria"],
-            "conflicts": ["id", "label", "description", "requirement_ids", "status"],
+            "requirements": ["id", "text", "priority", "source"],
             "decisions": ["id", "decision", "summary", "status"],
             "open_questions": ["from_agent", "to_agent", "question", "status", "issue_id"],
             "issue_proposals": ["issue_id", "title", "category", "priority_hint", "proposed_by", "round"],
         }
+        if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
+            fields = ["id"] + conflict_req_keys(item)
+            if section == "conflict_report":
+                fields += ["label", "description"]
+            else:
+                fields += ["initial_label", "final_label", "description", "status"]
+            return {k: item.get(k) for k in fields if k in item}
         fields = presets.get(section)
         if not fields:
             return dict(item)
@@ -159,8 +189,12 @@ class ArtifactQueryTool(BaseTool):
                 return False
         requirement_id = filters.get("requirement_id")
         if requirement_id:
+            req_key_values = set(conflict_req_values(item))
             rel = item.get("requirement_ids") or item.get("related_requirements") or []
-            if str(requirement_id) not in {str(x) for x in rel}:
+            if (
+                str(requirement_id) not in {str(x) for x in rel}
+                and str(requirement_id) not in req_key_values
+            ):
                 return False
         keyword = str(filters.get("keyword") or "").strip().lower()
         if keyword:
@@ -185,6 +219,25 @@ class ArtifactQueryTool(BaseTool):
     ) -> Dict[str, Any]:
         if not section:
             return {"ok": False, "error": "get_section 需要 section"}
+        if section == "conflict":
+            raw = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+            return {
+                "ok": True,
+                "mode": "get_section",
+                "section": section,
+                "item": raw,
+                "summary": "conflict 為單一區塊",
+            }
+        if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
+            items = self.post_process(section, self.as_list(artifact, section), fields, compact, limit)
+            return {
+                "ok": True,
+                "mode": "get_section",
+                "section": section,
+                "count": len(items),
+                "items": items,
+                "summary": f"{section} 回傳 {len(items)} 筆",
+            }
         raw = artifact.get(section)
         if isinstance(raw, list):
             items = self.post_process(section, raw, fields, compact, limit)
@@ -224,10 +277,11 @@ class ArtifactQueryTool(BaseTool):
         if not item_id:
             return {"ok": False, "error": "related_context 需要 item_id"}
         req = next((r for r in self.as_list(artifact, "requirements") if r.get("id") == item_id), None)
-        conflict = next((c for c in self.as_list(artifact, "conflicts") if c.get("id") == item_id), None)
+        conflict_rows = self.as_list(artifact, "conflict_pairs") + self.as_list(artifact, "conflict_multiple")
+        conflict = next((c for c in conflict_rows if c.get("id") == item_id), None)
         decision = next((d for d in self.as_list(artifact, "decisions") if d.get("id") == item_id), None)
         target = req or conflict or decision
-        target_section = "requirements" if req else ("conflicts" if conflict else ("decisions" if decision else ""))
+        target_section = "requirements" if req else ("conflict_pairs" if conflict else ("decisions" if decision else ""))
         if not target:
             return {"ok": False, "error": f"找不到 item_id: {item_id}"}
 
@@ -237,9 +291,14 @@ class ArtifactQueryTool(BaseTool):
 
         if req:
             rid = req.get("id")
+            req_text = str(req.get("text") or "").strip()
             related_conflicts = [
-                c for c in self.as_list(artifact, "conflicts")
-                if rid in set((c.get("requirement_ids") or c.get("related_requirements") or []))
+                c for c in conflict_rows
+                if (
+                    rid in set((c.get("requirement_ids") or c.get("related_requirements") or []))
+                    or req_text in set(conflict_req_values(c))
+                    or rid in set(conflict_req_values(c))
+                )
             ]
             blob = rid or ""
             related_decisions = [
@@ -252,6 +311,7 @@ class ArtifactQueryTool(BaseTool):
             ]
         elif conflict:
             rel_ids = set(conflict.get("requirement_ids") or conflict.get("related_requirements") or [])
+            rel_values = set(conflict_req_values(conflict))
             related_conflicts = [conflict]
             related_decisions = [
                 d for d in self.as_list(artifact, "decisions")
@@ -261,7 +321,10 @@ class ArtifactQueryTool(BaseTool):
                 q for q in self.as_list(artifact, "open_questions")
                 if item_id in json.dumps(q, ensure_ascii=False)
             ]
-            req = [r for r in self.as_list(artifact, "requirements") if r.get("id") in rel_ids]
+            req = [
+                r for r in self.as_list(artifact, "requirements")
+                if r.get("id") in rel_ids or str(r.get("text") or "").strip() in rel_values
+            ]
 
         if compact:
             target = self.compact_item(target_section, target) if target_section else dict(target)
@@ -269,7 +332,7 @@ class ArtifactQueryTool(BaseTool):
                 req = self.compact_item("requirements", req)
             elif isinstance(req, list):
                 req = [self.compact_item("requirements", x) for x in req]
-            related_conflicts = [self.compact_item("conflicts", x) for x in related_conflicts]
+            related_conflicts = [self.compact_item("conflict_pairs", x) for x in related_conflicts]
             related_decisions = [self.compact_item("decisions", x) for x in related_decisions]
             related_open_questions = [self.compact_item("open_questions", x) for x in related_open_questions]
 
@@ -298,7 +361,9 @@ class ArtifactQueryTool(BaseTool):
             }
         summary = {
             "requirements": len(self.as_list(artifact, "requirements")),
-            "conflicts": len(self.as_list(artifact, "conflicts")),
+            "conflict_report": len(self.as_list(artifact, "conflict_report")),
+            "conflict_pairs": len(self.as_list(artifact, "conflict_pairs")),
+            "conflict_multiple": len(self.as_list(artifact, "conflict_multiple")),
             "decisions": len(self.as_list(artifact, "decisions")),
             "open_questions": len(self.as_list(artifact, "open_questions")),
             "discussions": len(self.as_list(artifact, "discussions")),

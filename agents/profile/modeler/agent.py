@@ -3,21 +3,20 @@ import json
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
-from agents.profile.analyst.conflict_store import all_conflict_rows
-from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.skills.base import get_skill
 
 from .modeling import ModelerModeling
-from .prompts import MODEL_SELECTION_RULES
+from .prompts import uml_skill_subset
 from .issues import ModelerIssues
-from .validation import ALLOWED_DIAGRAM_TYPES, diagram_types, impact_assessment_payload
+from .validation import ALLOWED_MODEL_TYPES, model_types, parse_impact_assessment
 
 
 MODELER_ROLE_PROMPT = """你是 UML 系統建模專家，負責把需求轉成可驗證、可追溯的 UML 模型。
 
 規則：
 1. 精煉時只改受影響部分，保留未變動元素。
-2. 發現不一致時指出模型影響、缺口與待確認事項；不得直接改變已知需求語意。
-3. 資訊不足時用 to_confirm 標示，不可臆造。"""
+2. 發現不一致時指出模型影響與缺口；不得直接改變已知需求語意。
+3. 資訊不足時不要硬畫未確認元素；不可臆造。"""
 
 
 MODELER_LOOP_ACTIONS = [
@@ -30,7 +29,7 @@ MODELER_LOOP_ACTIONS = [
 ]
 
 
-AVAILABLE_MODEL_TYPES = sorted(ALLOWED_DIAGRAM_TYPES)
+AVAILABLE_MODEL_TYPES = sorted(ALLOWED_MODEL_TYPES)
 
 class ModelerAgent(
     ModelerModeling,
@@ -60,15 +59,15 @@ class ModelerAgent(
 
     def skill_usage_policy(self) -> str:
         return """UML：
-- 用於議題涉及系統邊界、actor/use case、角色互動、流程、資料流、互動順序、狀態轉換或需求到模型元素追蹤。
+- 用於議題涉及系統邊界、actor/use case、角色互動、流程、資料輸入/輸出、資料物件、互動順序、狀態轉換或需求到模型元素追蹤。
 - 用於模型能幫助釐清需求一致性、可行性、缺口或影響範圍時。
 - 只在議題有互動、流程、資料、狀態或模型追蹤價值時使用；沒有模型影響時不要使用。
 - 若使用，只產生需求層級模型參考；不可從模型反推新增需求或把未確認內容畫成正式模型。"""
 
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
-        return """- artifact_query 用於查詢 accepted requirements、decisions、conflicts、open_questions 與既有 models。
+        return """- artifact_query 用於查詢 URL、scope、feedback、open_questions 與既有 models。
 - plantuml_validate 用於驗證或修正 PlantUML 語法；驗證通過不代表需求內容已被正式決策。
-- 模型必須以已知需求與決策為依據；資訊不足時標示 to_confirm，不可用圖反推新增需求。"""
+- 模型必須以 URL 與目前 scope 為依據；資訊不足時不要硬畫未確認元素，不可用圖反推新增需求。"""
 
     def build_model_observation(self, **kwargs: Any) -> Dict[str, Any]:
         return self.build_model_state(
@@ -118,18 +117,14 @@ class ModelerAgent(
         self, artifact, recent_discussions, actions_taken,
         iteration, max_iterations,
     ):
-        models = artifact.get("system_models", {}).get("models", [])
-        model_summary = [
+        models = self.system_model_rows(artifact)
+        current_model_rows = [
             {"name": m.get("name"), "type": m.get("type"),
+             "source": m.get("source"),
              "has_plantuml": bool(m.get("plantuml"))}
             for m in models
         ]
-        reqs = requirement_discussion_pool(artifact)
-        summary_reqs = [
-            {"id": r.get("id"), "type": r.get("type"),
-             "text": (r.get("text") or "")}
-            for r in reqs
-        ]
+        summary_reqs = self.model_requirements(artifact)
         disc_summaries = []
         for disc in (recent_discussions or []):
             issue = disc.get("issue", {})
@@ -139,28 +134,12 @@ class ModelerAgent(
                 "title": issue.get("title"),
                 "summary": (resolution.get("summary") or ""),
             })
-        neutrals = [
-            {"id": c.get("id"),
-             "description": (c.get("description") or "")}
-            for c in all_conflict_rows(artifact)
-            if c.get("label") == "Neutral"
-        ]
-        conflicts_summary = [
-            {
-                "id": c.get("id"),
-                "label": c.get("label"),
-                "description": (c.get("description") or ""),
-                "requirement_ids": c.get("requirement_ids", []),
-            }
-            for c in all_conflict_rows(artifact)
-            if isinstance(c, dict)
-        ]
         return {
-            "current_models": model_summary,
-            "model_revision_context": artifact.get("model_revision_context", {}) or {},
             "requirements": summary_reqs,
-            "stakeholders": artifact.get("stakeholders", []),
             "scope": artifact.get("scope", {}),
+            "feedback": artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {},
+            "current_models": current_model_rows,
+            "model_revision_context": artifact.get("model_revision_context", {}) or {},
             "open_questions": [
                 {
                     "question": q.get("question"),
@@ -170,9 +149,6 @@ class ModelerAgent(
                 for q in artifact.get("open_questions", [])
                 if isinstance(q, dict)
             ],
-            "domain_research": (artifact.get("feedback") or {}).get("domain_research", {}),
-            "conflicts_summary": conflicts_summary,
-            "neutrals": neutrals,
             "recent_discussions": disc_summaries,
             "actions_taken": actions_taken,
             "has_validator": "plantuml_validate" in self.tools,
@@ -196,35 +172,18 @@ class ModelerAgent(
             return obs
 
         if action == "assess_impact":
-            reqs = requirement_discussion_pool(artifact)
-            models = artifact.get("system_models", {}).get("models", [])
+            reqs = self.model_requirements(artifact)
+            models = self.system_model_rows(artifact)
             context = {
-                "requirements": [
-                    {"id": r.get("id"), "type": r.get("type"),
-                     "text": r.get("text", "")}
-                    for r in reqs
-                ],
-                "stakeholders": artifact.get("stakeholders", []),
+                "requirements": reqs,
                 "scope": artifact.get("scope", {}),
-                "conflicts": [
-                    {
-                        "id": c.get("id"),
-                        "label": c.get("label"),
-                        "description": c.get("description"),
-                        "requirement_ids": c.get("requirement_ids", []),
-                    }
-                    for c in all_conflict_rows(artifact)
-                    if isinstance(c, dict)
-                ],
+                "feedback": artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {},
                 "open_questions": artifact.get("open_questions", []),
-                "domain_research": (artifact.get("feedback") or {}).get("domain_research", {}),
-                "workflow_sketch": artifact.get("workflow_sketch", {}),
                 "current_models": [
                     {
                         "name": m.get("name"),
                         "type": m.get("type"),
-                        "to_confirm": m.get("to_confirm", []),
-                        "maturity": m.get("maturity", ""),
+                        "source": m.get("source"),
                     }
                     for m in models
                 ],
@@ -233,18 +192,16 @@ class ModelerAgent(
             ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
             task = f"""分析需求與現有模型，完成兩件事：(1) 判斷哪些圖表需要更新或新建；(2) 產出與需求的一致性說明與缺口報告。
 
-    # Context
+    # 輸入資料
     {ctx_text}
 
     # 輸出要求
-    - models_to_update：需更新的 diagram type 列表（限 context_diagram, use_case_diagram, activity_diagram, data_flow_diagram, sequence_diagram, state_machine_diagram, class_diagram）
-    - models_to_create：需新建的 diagram type 列表
-    {MODEL_SELECTION_RULES}
-    - 若 Context.current_models 已有模型，這是 revision-aware 模型迭代；只標記受 model_revision_context、requirements、decisions 或 unresolved to_confirm 影響的圖表。
+    - models_to_update：需更新的 model type 列表（限 use_case_text, context_diagram, use_case_diagram, activity_diagram, sequence_diagram, state_machine, class_diagram；use_case_text 會附在 use_case_diagram.text）
+    - models_to_create：需新建的 model type 列表
+    - 若既有模型已存在，這是 revision-aware 模型迭代；只標記受 model_revision_context 或 requirements 影響的圖表。
+    - current_models.source 表示既有模型來源，例如 initial_modeling 或 R1-M1；只用於追蹤來源，不可改寫成新需求。
     - 未受影響的既有圖表不得列入 models_to_update。
-    - 若上一版模型的 to_confirm 已由最新 decisions 或 requirements 解決，應將相關圖表列入 models_to_update；未解決則保留為 gap 或 to_confirm。
-    - conflicts 只作為模型影響背景；模型輸出不更新 conflict label。
-    - domain_research 只作為限制/風險註記，不可擴張功能。
+    - feedback 只作為限制/風險註記，不可擴張功能。
     輸出 JSON:
     {{
     "models_to_update": ["需更新的 diagram type"],
@@ -254,9 +211,10 @@ class ModelerAgent(
     "gaps": ["缺口或不一致項目1", "缺口或不一致項目2"]
     }}
     只輸出 JSON。"""
-            messages = self.build_direct_messages(task)
+            skill = uml_skill_subset(get_skill("UML"), "selection")
+            messages = self.build_skill_messages(skill, "UML", task)
             try:
-                result = impact_assessment_payload(self.chat_json(messages))
+                result = parse_impact_assessment(self.chat_json(messages))
                 obs["result"] = result
                 to_update = result.get("models_to_update", [])
                 to_create = result.get("models_to_create", [])
@@ -278,7 +236,7 @@ class ModelerAgent(
                     "models_to_create": to_create,
                     "impact_summary": result.get("impact_summary", ""),
                 }
-                artifact.setdefault("system_models", {})["last_consistency_report"] = report
+                artifact["model_consistency_report"] = report
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"影響評估失敗: {e}"
@@ -289,43 +247,47 @@ class ModelerAgent(
             if not diagram_type:
                 obs["error"] = "diagram_type 參數為空"
                 return obs
-            models = artifact.get("system_models", {}).get("models", [])
+            models = self.system_model_rows(artifact)
             existing = next(
                 (m for m in models if m.get("type") == diagram_type), None
             )
-            reqs = requirement_discussion_pool(artifact)
-            stakeholders = artifact.get("stakeholders", [])
+            reqs = self.model_requirements(artifact)
             try:
-                result = self.update_single_diagram(
-                    diagram_type, reqs, stakeholders,
+                result = self.generate_or_update_model(
+                    diagram_type, reqs,
                     existing_model=existing,
                     artifact_context=artifact,
                 )
-                new_plantuml = result.get("plantuml", "")
-                new_name = result.get(
-                    "name",
-                    existing.get("name", diagram_type) if existing else diagram_type,
-                )
+                if diagram_type == "use_case_text":
+                    use_case_diagram = next(
+                        (
+                            m for m in models
+                            if m.get("type") == "use_case_diagram"
+                        ),
+                        None,
+                    )
+                    if not use_case_diagram:
+                        raise ValueError("use_case_text requires existing use_case_diagram")
+                    use_case_diagram["text"] = result.get("text", [])
+                    obs["summary"] = "use_case_diagram 文字用例已更新"
+                    return obs
+                new_name = str(result.get("name") or "").strip() or self.model_name(diagram_type)
+                new_row = {
+                    "name": new_name,
+                    "type": result.get("type") or diagram_type,
+                }
+                if result.get("plantuml"):
+                    new_row["plantuml"] = result.get("plantuml", "")
+                if result.get("text"):
+                    new_row["text"] = result.get("text", [])
+                new_row["source"] = artifact.get("model_source", "")
                 if existing:
-                    existing["plantuml"] = new_plantuml
+                    existing.clear()
+                    existing.update(new_row)
                     existing["name"] = new_name
-                    existing["maturity"] = "tentative" if diagram_type == "class_diagram" else "requirement_level"
-                    existing["model_stage"] = "generate_system_model"
-                    existing["source"] = "requirements_for_system_model"
-                    if "to_confirm" in result:
-                        existing["to_confirm"] = result.get("to_confirm") or []
                 else:
-                    artifact.setdefault("system_models", {}).setdefault(
-                        "models", []
-                    ).append({
-                        "name": new_name,
-                        "type": diagram_type,
-                        "plantuml": new_plantuml,
-                        "to_confirm": result.get("to_confirm") or [],
-                        "maturity": "tentative" if diagram_type == "class_diagram" else "requirement_level",
-                        "model_stage": "generate_system_model",
-                        "source": "requirements_for_system_model",
-                    })
+                    models.append(new_row)
+                    artifact["system_models"] = models
                 label = "更新" if existing else "新建"
                 obs["summary"] = f"{diagram_type} 已{label}"
             except Exception as e:
@@ -335,12 +297,16 @@ class ModelerAgent(
 
         if action == "validate_diagram":
             diagram_type = params.get("diagram_type", "")
-            models = artifact.get("system_models", {}).get("models", [])
+            models = self.system_model_rows(artifact)
             target = next(
                 (m for m in models if m.get("type") == diagram_type), None
             )
             if not target:
                 obs["error"] = f"找不到 {diagram_type}"
+                return obs
+            if not target.get("plantuml"):
+                obs["result"] = {"valid": True}
+                obs["summary"] = f"{diagram_type}: 非 PlantUML 模型，跳過語法驗證"
                 return obs
             validator = self.tools.get("plantuml_validate")
             if not validator:
@@ -348,9 +314,6 @@ class ModelerAgent(
                 obs["summary"] = f"{diagram_type}: 無驗證工具，跳過"
                 return obs
             code = target.get("plantuml", "")
-            if not code:
-                obs["error"] = f"{diagram_type} 無 PlantUML 內容"
-                return obs
             result = self.execute_tool(
                 "plantuml_validate",
                 {"plantuml_code": code},
@@ -366,12 +329,16 @@ class ModelerAgent(
 
         if action == "fix_diagram":
             diagram_type = params.get("diagram_type", "")
-            models = artifact.get("system_models", {}).get("models", [])
+            models = self.system_model_rows(artifact)
             target = next(
                 (m for m in models if m.get("type") == diagram_type), None
             )
             if not target:
                 obs["error"] = f"找不到 {diagram_type}"
+                return obs
+            if not target.get("plantuml"):
+                obs["result"] = {"skipped": True}
+                obs["summary"] = f"{diagram_type}: 非 PlantUML 模型，無需修正"
                 return obs
             error_msg = ""
             if (
@@ -381,7 +348,7 @@ class ModelerAgent(
                 error_msg = last_observation["result"].get("error", "")
             if not error_msg:
                 error_msg = "語法錯誤"
-            fixed = self.fix_plantuml(target, error_msg)
+            fixed = self.repair_plantuml(target, error_msg)
             if fixed:
                 target["plantuml"] = fixed
                 obs["summary"] = f"{diagram_type} 已修正"
@@ -418,14 +385,20 @@ class ModelerAgent(
         )
         last_obs = assess_obs
 
-        refreshed_report = (artifact.get("system_models") or {}).get("last_consistency_report") or {}
-        refreshed_targets = self.diagram_types(
+        refreshed_report = artifact.get("model_consistency_report") or {}
+        refreshed_targets = self.model_types(
             (refreshed_report.get("models_to_update") or [])
             + (refreshed_report.get("models_to_create") or [])
         )
         target_types: List[str] = []
         if refreshed_targets:
             target_types = refreshed_targets
+        if "use_case_diagram" in target_types:
+            target_types = [
+                item for item in target_types
+                if item not in {"use_case_diagram", "use_case_text"}
+            ]
+            target_types = ["use_case_diagram", "use_case_text"] + target_types
 
         if not target_types:
             return records
@@ -447,6 +420,8 @@ class ModelerAgent(
             )
             last_obs = update_obs
             if update_obs.get("error"):
+                continue
+            if diagram_type == "use_case_text":
                 continue
 
             validate_obs = self.execute_model_action(
@@ -504,7 +479,10 @@ class ModelerAgent(
         return records
 
     def diagram_types(self, items: List[Any]) -> List[str]:
-        return diagram_types(items)
+        return self.model_types(items)
+
+    def model_types(self, items: List[Any]) -> List[str]:
+        return model_types(items)
 
     def decide_next_model_action(self, state, last_observation=None):
         if not state.get("current_models") and not state.get("actions_taken"):
@@ -521,7 +499,7 @@ class ModelerAgent(
     # 動作
     - build_full_model：尚無模型時，一次建立完整 requirement-level models，並完成驗證/修正
     - assess_impact：先判斷哪些圖表受影響
-    - update_diagram：{{"diagram_type":"context_diagram/use_case_diagram/activity_diagram/data_flow_diagram/sequence_diagram/state_machine_diagram/class_diagram"}}
+    - update_diagram：{{"diagram_type":"use_case_text/context_diagram/use_case_diagram/activity_diagram/sequence_diagram/state_machine/class_diagram"}}；use_case_text 會附在 use_case_diagram.text
     - validate_diagram：{{"diagram_type":"..."}}
     - fix_diagram：{{"diagram_type":"..."}}
     - done：結束
@@ -534,8 +512,8 @@ class ModelerAgent(
 
     # 規則
     - 先 assess_impact，再決定是否更新模型
-    {MODEL_SELECTION_RULES}
-    - 需要補專案事實或驗證模型語法時，遵守本輪 Tool Context
+    - 圖表是否需要建立或更新，以 assess_impact 的 UML skill 判斷結果為準；不要自行新增未列入的圖表。
+    - 需要補專案事實或驗證模型語法時，遵守本輪工具使用資料
     - 每個需更新的圖表都走：update_diagram → validate_diagram →（若失敗）fix_diagram → validate_diagram
     - 所有受影響圖表處理完後選 done
     - reasoning 請使用一句繁體中文簡述。
@@ -597,18 +575,18 @@ class ModelerAgent(
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)
-        if response.get("error") or not str(response.get("statement") or "").strip():
+        if response.get("error") or not str(response.get("text") or "").strip():
             return {
                 "action": decision.get("action", ""),
                 "status": "failed",
-                "error": response.get("error") or "missing_statement",
-                "format_error": response.get("format_error") or "issue response must include statement",
+                "error": response.get("error") or "missing_text",
+                "format_error": response.get("format_error") or "issue response must include text",
                 "summary": f"modeler issue_response 格式不合格: {decision.get('action', '')}",
             }
         return {
             "action": decision.get("action", ""),
             "status": "success",
-            "statement": response.get("statement", ""),
+            "text": response.get("text", ""),
             "pair_reviews": response.get("pair_reviews", []),
             "open_questions": response.get("open_questions", []),
             "target_stakeholders": response.get("target_stakeholders", []),

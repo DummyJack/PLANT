@@ -14,15 +14,15 @@ DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
 
 DEFAULT_AGENT_TOOL_MAPPING: Dict[str, List[str]] = {
     "analyst": ["artifact_query"],
-    "expert": ["web_search", "file_parser", "artifact_query"],
+    "expert": ["web_search", "read_file", "artifact_query"],
     "modeler": ["plantuml_validate", "artifact_query"],
-    "documentor": [],
+    "documentor": ["artifact_query"],
     "mediator": ["artifact_query"],
     "user": ["artifact_query"],
 }
 
 DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {
-    "domain-research": ["web_search", "file_parser", "artifact_query"],
+    "domain-research": ["web_search", "read_file", "artifact_query"],
     "requirements-analyst": ["artifact_query"],
     "conflict-analyzer": ["artifact_query"],
     "UML": ["plantuml_validate", "artifact_query"],

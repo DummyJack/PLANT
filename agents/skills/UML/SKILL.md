@@ -1,6 +1,6 @@
 ---
 name: uml-modeling
-description: Requirement-level and UML diagram generation including context, use case, activity, data flow, sequence, state, and tentative class/domain diagrams
+description: Requirement-level and UML diagram generation including context, use case, activity, sequence, state, and tentative class/domain diagrams
 allowed-tools: plantuml_validate, artifact_query
 ---
 
@@ -10,7 +10,7 @@ allowed-tools: plantuml_validate, artifact_query
 
 Use this skill when:
 
-- **Uml Modeling tasks** - Working on diagram generation including context, use case, activity, data flow, sequence, state, and class/domain diagrams
+- **Uml Modeling tasks** - Working on diagram generation including context, use case, activity, sequence, state, and class/domain diagrams
 - **Requirement modeling decisions** - Need guidance on choosing requirement-level diagrams without inventing design details
 - **Modeling conventions** - Want consistent PlantUML notation for requirements analysis
 
@@ -44,7 +44,6 @@ Before creating UML diagrams:
 |---------|---------|-------------|
 | Use Case | Show actor-system interactions | Requirements |
 | Activity | Show user workflows, branches, and exceptions | Requirements, business processes |
-| Data Flow | Show inputs, transformations, stores, and outputs | Requirements, data-oriented systems |
 | Sequence | Show message flow over time | Core interaction order when needed |
 | State Machine | Show state transitions | Lifecycle modeling when states are explicit |
 
@@ -55,16 +54,15 @@ Before creating UML diagrams:
 | Context | Show system boundary, external actors, external systems, and high-level flows | Early requirements and scope alignment |
 | Use Case | Show actor-system interactions | Requirements |
 | Activity | Show workflows, branches, and exceptions | Requirements and process understanding |
-| Data Flow | Show data inputs, transformations, stores, and outputs | Requirements and data-oriented systems |
 | Sequence | Show core interaction order | Optional when ordering matters |
 | State Machine | Show state transitions | Optional when lifecycle states are explicit |
 
 For early requirements modeling:
 
-- Common baseline candidates: Context, Use Case, Activity, Data Flow; create them only when they help requirements understanding, validation, or traceability
+- Common baseline candidates: Context, Use Case, Activity; create them only when they help requirements understanding, validation, or traceability
 - Optional: Sequence when interaction order matters; State Machine when lifecycle states are explicit
 - Tentative only: Class/Domain model; do not treat it as implementation design
-- Open questions, pending candidates, or external research should become `to_confirm` or assumptions unless accepted into requirements
+- Open questions, pending candidates, or external research must not be drawn as confirmed model elements unless accepted into requirements
 
 ## Context Diagram
 
@@ -81,31 +79,6 @@ User --> System : request / input
 System --> User : result / output
 System --> DataSource : data request
 DataSource --> System : source data
-@enduml
-```
-
-## Data Flow Diagram
-
-### PlantUML Syntax
-
-```plantuml
-@startuml
-left to right direction
-actor "User" as User
-rectangle "System" {
-  rectangle "Capture Input" as Input
-  rectangle "Process Data" as Process
-  database "Stored Data" as Store
-  rectangle "Produce Output" as Output
-}
-cloud "External Source" as External
-
-User --> Input : input
-Input --> Process : normalized request
-External --> Process : source data
-Process --> Store : persisted data
-Process --> Output : result data
-Output --> User : output
 @enduml
 ```
 
@@ -420,7 +393,7 @@ rectangle "E-Commerce System" {
 @enduml
 ```
 
-## State Machine Diagram
+## State Machine
 
 ### PlantUML Syntax
 

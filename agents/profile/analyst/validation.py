@@ -3,6 +3,19 @@ import re
 from typing import Any, Dict, List, Optional
 
 
+CONFLICT_TYPES = {
+    "logical",
+    "technical",
+    "resource",
+    "temporal",
+    "data",
+    "state",
+    "priority",
+    "scope",
+    "other",
+}
+
+
 def clean_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -32,35 +45,28 @@ def requirement_text(text: Any) -> str:
 def requirement_record(
     req: Dict[str, Any],
 ) -> Dict[str, Any]:
-    out = dict(req) if isinstance(req, dict) else {}
-    out["text"] = requirement_text(out.get("text"))
+    source = dict(req) if isinstance(req, dict) else {}
+    out: Dict[str, Any] = {}
+    if clean_text(source.get("id")):
+        out["id"] = clean_text(source.get("id"))
+    out["text"] = requirement_text(
+        source.get("text")
+        or source.get("description")
+        or source.get("requirement")
+    )
 
-    rtype = clean_text(out.get("type")) or "FR"
-    rtype_upper = rtype.upper()
-    if rtype_upper in {"FUNCTIONAL", "FUNCTIONAL REQUIREMENT"}:
-        rtype = "FR"
-    elif rtype_upper in {"NON-FUNCTIONAL", "NON_FUNCTIONAL", "NON-FUNCTIONAL REQUIREMENT"}:
-        rtype = "NFR"
-    elif rtype.lower() == "constraint":
-        rtype = "constraint"
-    elif rtype_upper in {"FR", "NFR"}:
-        rtype = rtype_upper
-    else:
-        rtype = "FR"
-    out["type"] = rtype
-
-    priority = clean_text(out.get("priority")).lower() or "should"
+    priority = clean_text(source.get("priority")).lower() or "should"
     if priority not in {"must", "should", "could"}:
         priority = "should"
     out["priority"] = priority
 
-    sources = clean_list(out.get("source_stakeholders"))
-    out["source_stakeholders"] = sources
-
-    out["acceptance_criteria"] = clean_text(out.get("acceptance_criteria"))
-    out["source"] = clean_text(out.get("source"))
-    out.pop("rationale", None)
-    out.pop("status", None)
+    stakeholder = source.get("stakeholder")
+    if isinstance(stakeholder, dict):
+        out["stakeholder"] = {
+            "name": clean_text(stakeholder.get("name")),
+            "text": clean_text(stakeholder.get("text")),
+        }
+    out["source"] = clean_text(source.get("source"))
     return out
 
 
@@ -86,16 +92,28 @@ def scope_payload(scope: Any) -> Dict[str, Any]:
     }
 
 
-def validate_elicited_reqts(rows: Any) -> List[Dict[str, Any]]:
+def validate_elicited_reqts(
+    rows: Any,
+    *,
+    allowed_stakeholders: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     seen_texts = set()
+    allowed = {
+        clean_text(name)
+        for name in (allowed_stakeholders or [])
+        if clean_text(name)
+    }
     for row in requirement_records(rows):
         text_key = row.get("text", "").lower()
         if not text_key or text_key in seen_texts:
             continue
-        if not row.get("source"):
+        stakeholder = row.get("stakeholder") if isinstance(row.get("stakeholder"), dict) else {}
+        stakeholder_name = clean_text(stakeholder.get("name"))
+        stakeholder_text = clean_text(stakeholder.get("text"))
+        if not stakeholder_name or not stakeholder_text or not row.get("source"):
             continue
-        if not row.get("acceptance_criteria"):
+        if allowed and stakeholder_name not in allowed:
             continue
         seen_texts.add(text_key)
         candidates.append(row)
@@ -107,7 +125,7 @@ def conflict_records(
     *,
     pairwise_mode: bool = False,
     pair_count: int = 0,
-    pair_id_prefix: str = "PAIR",
+    pair_requirements: Optional[Dict[int, List[str]]] = None,
 ) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         return []
@@ -125,58 +143,50 @@ def conflict_records(
             label = clean_text(row.get("label"))
             if label not in {"Conflict", "Neutral"}:
                 continue
-            rid_a = f"{pair_id_prefix}-P{pair_index}-a"
-            rid_b = f"{pair_id_prefix}-P{pair_index}-b"
-            rel = row.get("requirement_ids") or row.get("related_requirements") or [rid_a, rid_b]
-            rel_ids = clean_list(rel) or [rid_a, rid_b]
+            rel = row.get("requirement_ids") or row.get("related_requirements")
+            rel_ids = clean_list(rel)
+            expected_ids = list((pair_requirements or {}).get(pair_index) or [])
+            if len(expected_ids) == 2:
+                rel_ids = expected_ids
+            if len(rel_ids) != 2:
+                continue
             entry: Dict[str, Any] = {
                 "id": f"PAIR-{pair_index + 1}",
                 "label": label,
                 "pair_index": pair_index,
                 "requirement_ids": rel_ids,
             }
+            reason = clean_text(row.get("reason"))
+            if reason:
+                entry["initial_reason"] = reason
+            conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
+            if label == "Conflict":
+                entry["initial_type"] = conflict_type if conflict_type in CONFLICT_TYPES else "other"
             by_pair[pair_index] = entry
         return [by_pair[i] for i in range(pair_count) if i in by_pair]
 
     conflicts: List[Dict[str, Any]] = []
-    neutral_count = 0
-    design_count = 0
-    conflict_count = 0
     for row in rows:
         if not isinstance(row, dict):
             continue
         label = clean_text(row.get("label"))
-        if label == "Neutral":
-            neutral_count += 1
-            conflicts.append(
-                {
-                    "id": f"NF-{neutral_count}",
-                    "label": "Neutral",
-                    "requirement_ids": clean_list(row.get("requirement_ids") or row.get("related_requirements")),
-                }
-            )
+        if label not in {"Conflict", "Neutral"}:
             continue
-        if label != "Conflict":
-            continue
-        conflict_count += 1
         rel_ids = clean_list(row.get("requirement_ids") or row.get("related_requirements"))
-        stakeholders = clean_list(row.get("stakeholder_names"))
-        if rel_ids or stakeholders:
-            entry: Dict[str, Any] = {
-                "id": f"CF-{conflict_count}",
-                "label": "Conflict",
-            }
-            if rel_ids:
-                entry["requirement_ids"] = rel_ids
-            if stakeholders:
-                entry["stakeholder_names"] = stakeholders
-        else:
-            design_count += 1
-            entry = {
-                "id": f"CF-D{design_count}",
-                "label": "Conflict",
-                "requirement_ids": [],
-            }
+        if label == "Conflict" and len(rel_ids) < 3:
+            continue
+        entry: Dict[str, Any] = {"label": label}
+        cid = clean_text(row.get("id"))
+        if cid:
+            entry["id"] = cid
+        if rel_ids:
+            entry["requirement_ids"] = rel_ids
+        reason = clean_text(row.get("reason"))
+        if reason:
+            entry["initial_reason"] = reason
+        conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
+        if label == "Conflict":
+            entry["initial_type"] = conflict_type if conflict_type in CONFLICT_TYPES else "other"
         conflicts.append(entry)
     return conflicts
 
@@ -242,7 +252,6 @@ def resolution_options_payload(data: Any) -> Optional[Dict[str, Any]]:
             "id": 4,
             "title": "需求處理建議（Analyst）",
             "description": recommended,
-            "rationale": "依 conflict-analyzer 的需求關係判斷整理需求處理建議",
         }
     if not best_options and not compromise:
         return None

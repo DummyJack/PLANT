@@ -114,18 +114,18 @@ conflict-analyzer：
         )
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages)
-        if response.get("error") or not str(response.get("statement") or "").strip():
+        if response.get("error") or not str(response.get("text") or "").strip():
             return {
                 "action": decision.get("action", ""),
                 "status": "failed",
-                "error": response.get("error") or "missing_statement",
-                "format_error": response.get("format_error") or "issue response must include statement",
+                "error": response.get("error") or "missing_text",
+                "format_error": response.get("format_error") or "issue response must include text",
                 "summary": f"analyst issue_response 格式不合格: {decision.get('action', '')}",
             }
         return {
             "action": decision.get("action", ""),
             "status": "success",
-            "statement": response.get("statement", ""),
+            "text": response.get("text", ""),
             "pair_reviews": response.get("pair_reviews", []),
             "open_questions": response.get("open_questions", []),
             "target_stakeholders": response.get("target_stakeholders", []),

@@ -1,6 +1,7 @@
-# PlantUML validator tool: validate diagrams online or with local fallback checks.
+# PlantUML validator tool: validate diagrams with the PlantUML server.
 import logging
 import re
+import socket
 import urllib.error
 import urllib.request
 
@@ -23,8 +24,7 @@ class PlantUMLValidatorTool(BaseTool):
         }
     }
 
-    def __init__(self, use_online: bool = True, server_url: str = ""):
-        self.use_online = use_online
+    def __init__(self, server_url: str = ""):
         self.server_url = (server_url or DEFAULT_ONLINE_SERVER).rstrip("/")
 
     def execute(self, **kwargs) -> str:
@@ -35,16 +35,15 @@ class PlantUMLValidatorTool(BaseTool):
         if "@startuml" not in code or "@enduml" not in code:
             return "語法錯誤: 缺少 @startuml 或 @enduml 標記"
 
-        if self.use_online is True:
-            return self.validate_online(code)
-        return self.fallback_validate(code)
+        return self.validate_online(code)
 
     def encode_hex(self, code: str) -> str:
         """PlantUML 官方支援的 HEX 編碼：~h + UTF-8 的十六進位"""
         return "~h" + code.encode("utf-8").hex()
 
     def validate_online(self, code: str) -> str:
-        """用官方線上伺服器驗證；線上不可用時退回本地基本檢查。"""
+        """用 PlantUML 線上伺服器驗證；任何錯誤都回傳驗證失敗。"""
+        url = ""
         try:
             encoded = self.encode_hex(code)
             url = f"{self.server_url}/svg/{encoded}"
@@ -52,48 +51,32 @@ class PlantUMLValidatorTool(BaseTool):
             with urllib.request.urlopen(req, timeout=15) as resp:
                 body = resp.read().decode("utf-8", errors="ignore")
             if re.search(r"(syntax\s+error|error\s+line|plantuml\s+error)", body, re.IGNORECASE):
-                return "語法錯誤: PlantUML 伺服器回傳錯誤訊息"
+                snippet = re.sub(r"\s+", " ", body).strip()[:500]
+                return f"語法錯誤: PlantUML server 回傳語法錯誤。detail={snippet}"
             return "驗證通過: PlantUML 語法正確（透過線上伺服器）"
         except urllib.error.HTTPError as e:
-            return f"語法錯誤或伺服器錯誤: HTTP {e.code}"
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="ignore")
+            except Exception:
+                body = ""
+            snippet = re.sub(r"\s+", " ", body).strip()[:500]
+            reason = getattr(e, "reason", "") or ""
+            return (
+                "驗證失敗: PlantUML server HTTP 錯誤"
+                f"。status={e.code}; reason={reason}; detail={snippet}; url={url}"
+            )
         except urllib.error.URLError as e:
-            logger.info("PlantUML 線上驗證不可用，改用本地基本檢查: %s", e.reason)
-            return self.fallback_validate(code)
+            reason = getattr(e, "reason", e)
+            logger.info("PlantUML 線上驗證不可用: %s", reason)
+            return f"驗證失敗: PlantUML server 連線錯誤。reason={reason}; url={url}"
+        except socket.timeout:
+            return f"驗證失敗: PlantUML server 連線逾時。timeout=15s; url={url}"
+        except TimeoutError:
+            return f"驗證失敗: PlantUML server 連線逾時。timeout=15s; url={url}"
         except Exception as e:
             logger.warning(f"線上驗證失敗: {e}")
-            return self.fallback_validate(code)
-
-    def fallback_validate(self, code: str) -> str:
-        """線上驗證不可用時的基本語法檢查"""
-        issues = []
-        starts = code.count("@startuml")
-        ends = code.count("@enduml")
-        if starts != ends:
-            issues.append(f"@startuml ({starts}) 與 @enduml ({ends}) 數量不匹配")
-
-        open_braces = code.count("{")
-        close_braces = code.count("}")
-        if open_braces != close_braces:
-            issues.append(f"大括號不匹配: {{ 有 {open_braces} 個, }} 有 {close_braces} 個")
-
-        arrow_pattern = re.compile(r"(--|->|<--|<->|\.\.>|<\.\.|--\|>|\.\.)")
-        lines = code.splitlines()
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("@") or stripped.startswith("'"):
-                continue
-            if stripped.startswith(("class ", "actor ", "usecase ", "participant ",
-                                    "note ", "package ", "rectangle ", "}", "end ",
-                                    "title ", "header ", "footer ", "legend ",
-                                    "skinparam", "hide ", "show ", "scale ",
-                                    "left to right", "top to bottom")):
-                continue
-            if arrow_pattern.search(stripped):
-                continue
-            if ":" in stripped:
-                continue
-
-        if issues:
-            return "基本檢查發現問題（無法進行完整線上語法驗證）:\n" + "\n".join(f"- {i}" for i in issues)
-
-        return "基本檢查通過（無法進行完整線上語法驗證）"
+            return (
+                "驗證失敗: PlantUML server 未知錯誤"
+                f"。error_type={type(e).__name__}; error={e}; url={url}"
+            )

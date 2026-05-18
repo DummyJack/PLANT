@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from .base import BaseTool
 
-logger = logging.getLogger("Plant.FileParserTool")
+logger = logging.getLogger("Plant.ReadFileTool")
 
 SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
 CHUNK_SEP = "##"  # chunk_id = "{relative_posix_path}##{index}"
@@ -490,8 +490,8 @@ def score_chunk(query_tokens: List[str], chunk_lower: str) -> float:
     return s
 
 
-class FileParserTool(BaseTool):
-    name = "file_parser"
+class ReadFileTool(BaseTool):
+    name = "read_file"
     description = (
         "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .pdf, .docx）。"
         "索引：.md 依 markdown-it-py 標題斷點（失敗則啟發式）、.txt 依啟發式標題／段落；"
@@ -691,7 +691,7 @@ class FileParserTool(BaseTool):
         except ImportError as e:
             return f"錯誤：缺少依賴（{e}），無法讀取 {suffix} 檔案。"
         except Exception as e:
-            logger.warning("file_parser 讀取失敗 %s: %s", path, e)
+            logger.warning("read_file 讀取失敗 %s: %s", path, e)
             return f"錯誤：無法讀取檔案：{e}"
 
         if output_format == "text":

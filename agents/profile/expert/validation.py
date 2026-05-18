@@ -3,16 +3,26 @@ import json
 from typing import Any, Dict, List
 
 
-DOMAIN_RESEARCH_LIST_FIELDS = (
+RESEARCH_FIELDS = (
     "findings",
     "sources",
-    "derived_requirements",
-    "compliance_risks",
-    "binding_obligations",
-    "risk_notes",
+    "constraints",
+    "risks",
     "recommendations",
-    "gaps_for_further_research",
+    "open_items",
 )
+
+TRACEABLE_RESEARCH_FIELDS = (
+    "findings",
+    "constraints",
+    "risks",
+    "recommendations",
+    "open_items",
+)
+
+
+def has_research_content(payload: Dict[str, Any]) -> bool:
+    return any(bool(payload.get(field)) for field in RESEARCH_FIELDS)
 
 
 def clean_text(value: Any) -> str:
@@ -49,66 +59,75 @@ def compact_list(values: Any) -> List[Any]:
     return rows
 
 
-def derived_requirements_list(values: Any) -> List[Dict[str, Any]]:
+def requirement_refs(values: Any) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+
+    refs: List[str] = []
+    seen = set()
+    for value in values:
+        ref = clean_text(value)
+        if not ref or ref in seen:
+            continue
+        refs.append(ref)
+        seen.add(ref)
+    return refs
+
+
+def research_items(values: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
     for value in compact_list(values):
         if isinstance(value, dict):
-            row = dict(value)
-            text = clean_text(row.get("text"))
+            text = clean_text(value.get("text") or value.get("finding") or value.get("note"))
             if not text:
                 continue
-            row["text"] = text
-            for key in ("source", "category", "rationale"):
-                if key in row:
-                    cleaned = clean_text(row.get(key))
-                    if cleaned:
-                        row[key] = cleaned
-                    else:
-                        row.pop(key, None)
+            row = {
+                "text": text,
+                "related_URL": requirement_refs(value.get("related_URL")),
+            }
         else:
             text = clean_text(value)
             if not text:
                 continue
-            row = {"text": text}
+            row = {"text": text, "related_URL": []}
 
-        dedupe_key = clean_text(row.get("text")).lower()
-        if dedupe_key and dedupe_key not in seen:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+        if key not in seen:
             rows.append(row)
-            seen.add(dedupe_key)
+            seen.add(key)
     return rows
 
 
-def research_result_payload(raw: Any) -> Dict[str, Any]:
+def clean_research_result(raw: Any) -> Dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    result: Dict[str, Any] = {}
+
+    result["findings"] = research_items(source.get("findings"))
+    result["sources"] = compact_list(source.get("sources"))
+    result["constraints"] = research_items(source.get("constraints"))
+    result["risks"] = research_items(source.get("risks"))
+    result["recommendations"] = research_items(source.get("recommendations"))
+    result["open_items"] = research_items(source.get("open_items"))
+    return result if has_research_content(result) else {}
+
+
+def clean_domain_research(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
-        result = dict(raw)
-    else:
-        result = {}
-
-    result["findings"] = compact_list(result.get("findings"))
-    result["sources"] = compact_list(result.get("sources"))
-    result["derived_requirements"] = derived_requirements_list(
-        result.get("derived_requirements")
-    )
-    result["binding_obligations"] = compact_list(result.get("binding_obligations"))
-    result["risk_notes"] = compact_list(result.get("risk_notes"))
-    result["recommendations"] = compact_list(result.get("recommendations"))
-    return result
-
-
-def domain_research_payload(raw: Any) -> Dict[str, Any]:
-    if isinstance(raw, dict):
-        source = raw.get("domain_research") if isinstance(raw.get("domain_research"), dict) else raw
-        if not source:
+        if not raw:
             return {}
-        result = dict(source)
+        result = {}
     else:
         return {}
 
-    for field in DOMAIN_RESEARCH_LIST_FIELDS:
-        result[field] = compact_list(result.get(field))
+    for field in RESEARCH_FIELDS:
+        if field in TRACEABLE_RESEARCH_FIELDS:
+            result[field] = research_items(raw.get(field))
+        else:
+            result[field] = compact_list(raw.get(field))
 
-    result["derived_requirements"] = derived_requirements_list(
-        result.get("derived_requirements")
-    )
-    return result
+    return result if has_research_content(result) else {}

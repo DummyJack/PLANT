@@ -8,7 +8,7 @@ from agents.profile.conflict_review import (
     CONFLICT_REVIEW_LABEL_RULES,
     CONFLICT_REVIEW_REASON_RULES,
     CONFLICT_REVIEW_RESPONSE_CONTRACT,
-    conflict_review_statement_hint,
+    conflict_review_text_hint,
 )
 
 from .conflict_store import all_conflict_rows
@@ -22,11 +22,11 @@ from .validation import resolution_options_payload
 
 
 ANALYST_ISSUE_TASK = (
-    "聚焦需求意圖、scope、需求條目品質、驗收條件、"
+    "聚焦需求意圖、需求範圍、需求條目品質、驗收條件、"
     "來源追蹤與未決缺口。"
 )
 
-ANALYST_ISSUE_RULES = """- statement 需說明：此議題對需求的影響、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
+ANALYST_ISSUE_RULES = """- text 需說明：此議題對需求的影響、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
 - 依據優先引用 requirement id、conflict id、stakeholder 觀點、既有討論或議題描述。
 - 判斷重點是需求是否清楚、可驗收、可追蹤、範圍是否穩定、是否需要拆成功能需求、非功能需求、限制條件或保留為未決問題。
 - 若提出需求修正，必須指出要改哪個欄位：需求文字、優先級、驗收條件或來源追蹤。
@@ -116,13 +116,8 @@ class AnalystIssues:
             if not rid or not text:
                 continue
             issues: List[str] = []
-            if not str(req.get("acceptance_criteria") or "").strip():
-                issues.append("missing_acceptance_criteria")
-            sources = req.get("source_stakeholders")
             source_text = str(req.get("source") or "").strip()
-            if not source_text and not (
-                isinstance(sources, list) and any(str(x).strip() for x in sources)
-            ):
+            if not source_text:
                 issues.append("missing_source_trace")
             if len(text) < 12:
                 issues.append("unclear_requirement_text")
@@ -193,7 +188,7 @@ class AnalystIssues:
         return {
             "action": "propose_requirement_issues",
             "params": {},
-            "reasoning": "根據需求品質、scope、可驗收性、可追蹤性與未決缺口提出需要會議處理的議題。",
+            "reasoning": "根據需求品質、需求範圍、可驗收性、可追蹤性與未決缺口提出需要會議處理的議題。",
         }
 
     def execute_analyst_issue_action(
@@ -229,8 +224,8 @@ class AnalystIssues:
 提出本輪需要進入 issue proposal 的需求工程議題。
 
 # 提案邊界
-- 只提出會影響 requirement quality、scope、acceptance criteria、source trace、open question 收斂或 requirement change 的議題。
-- 可以使用 Context.requirement_issue_signals 作為候選，但你必須自行判斷是否真的需要成為 issue proposal，可合併相似議題。
+- 只提出會影響需求品質、需求範圍、驗收條件、來源追蹤、未決問題收斂或需求變更的議題。
+- 可以使用需求議題候選訊號作為候選，但你必須自行判斷是否真的需要成為 issue proposal，可合併相似議題。
 - 可以提出 conflict_discussion，但焦點必須是需求語意、範圍、條件、互斥點或可驗證性；外部依據不足時列為風險或待確認事項。
 - 議題必須聚焦需求品質、可驗證性、來源追蹤或需求收斂，不提出缺乏需求影響的一般討論。
 - 不要替 user 發明新的偏好或需求。
@@ -394,7 +389,7 @@ class AnalystIssues:
     def fetch_resolution_options_for_issue(
         self, issue: Dict, artifact: Dict[str, Any]
     ) -> Optional[Dict]:
-        """議題為 Conflict 協調時，整理 requirement-level options；Analyst 不裁決商業方案。"""
+        """議題為 Conflict 協調時，整理需求層級處理選項；Analyst 不裁決商業方案。"""
         if issue.get("category") not in ("conflict_discussion",):
             return None
         if "conflict-analyzer" not in self.skill_names:
@@ -404,7 +399,7 @@ class AnalystIssues:
             s
             for s in source_ids
             if isinstance(s, str)
-            and (s.startswith("CF-") or s.startswith("CF-D") or s.startswith("NF-"))
+            and (s.startswith("PAIR-") or s.startswith("MULTIPLE-"))
         ]
         conflicts = all_conflict_rows(artifact)
         if conflict_ids:
@@ -419,15 +414,20 @@ class AnalystIssues:
             "requirements": requirement_discussion_pool(artifact),
             "stakeholders": artifact.get("stakeholders", []),
         }
-        task = """請針對 Context 中的議題與對應 Conflict/Neutral，整理 requirement-level 的需求處理選項。
+        task = """請針對輸入議題與對應 Conflict/Neutral，整理需求層級的處理選項。
+
+本專案覆蓋規則：
+- 本次只做需求層級的處理選項。
+- 輸入衝突項目的 label 視為既有判定，不要重新分類 Conflict/Neutral。
+- 不要改寫 artifact；只輸出下方指定 JSON。
 
 只輸出一個 JSON 物件，須含：
 - resolution_options：每筆含 option、strategy、description、pros、cons、recommendation
 - recommended_resolution：建議方案摘要
 
 邊界：
-- 只整理 requirement-level options，例如調整需求文字、拆分需求、補 acceptance criteria、保留待確認。
-- description 必須說明此選項會如何影響 requirement text、acceptance criteria 或 open question。
+- 只整理需求層級的處理選項，例如調整需求文字、拆分需求、補驗收條件、保留待確認。
+- description 必須說明此選項會如何影響需求文字、驗收條件或未決問題。
 - 若需要人類裁決，請在 recommendation 中明確標示為待裁決建議。
 
 勿輸出 Markdown 或其它文字。"""
@@ -451,7 +451,7 @@ class AnalystIssues:
         prev_text = ""
         if previous_responses:
             parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
                 for r in previous_responses
             ]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
@@ -512,18 +512,22 @@ class AnalystIssues:
         "urgency": "low | medium | high"
     }"""
         if issue.get("category") == "conflict_discussion":
-            statement_hint = conflict_review_statement_hint()
-            output_fields = f"    {statement_hint}"
+            text_hint = conflict_review_text_hint()
+            output_fields = f"    {text_hint}"
         else:
-            statement_hint = '"statement": "針對此議題的完整發言內容"'
-            target_json = ""
+            text_hint = '"text": "針對此議題的完整發言內容"'
             if issue_id.startswith("ELICIT-"):
-                target_json = ',\n    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
-            output_fields = (
-                f"    {statement_hint}{target_json},\n"
-                '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
-                f"{suggested_next_action_json}"
-            )
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
+                    f"{suggested_next_action_json}"
+                )
+            else:
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    f"{suggested_next_action_json}"
+                )
         return f"""{issue_text}
 {prev_text}
 {context_text}

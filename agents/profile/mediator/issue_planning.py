@@ -297,7 +297,7 @@ class MediatorIssuePlanning:
         ]
         conflict_ids = [
             s for s in source_ids
-            if s.startswith(("CF-", "CF-D", "NF-", "PAIR-"))
+            if s.startswith(("PAIR-", "MULTIPLE-"))
         ]
         requirement_ids = [
             s for s in source_ids
@@ -716,7 +716,7 @@ class MediatorIssuePlanning:
                 continue
             ag = c.get("agent", "?")
             resp = c.get("response") or {}
-            stmt = (resp.get("statement") or "").strip()
+            stmt = (resp.get("text") or "").strip()
             if stmt:
                 contrib_lines.append(f"- [{ag}] {stmt}")
         contrib_text = "\n".join(contrib_lines) if contrib_lines else "（無發言摘要）"
@@ -787,7 +787,8 @@ class MediatorIssuePlanning:
             parts.append(
                 "## 未回答的開放問題\n" + json.dumps(oqs, ensure_ascii=False, indent=2)
             )
-        models = artifact.get("system_models", {}).get("models", [])
+        system_models = artifact.get("system_models", [])
+        models = system_models if isinstance(system_models, list) else []
         if models:
             refs = []
             for m in models:
@@ -796,11 +797,11 @@ class MediatorIssuePlanning:
                 "## 系統模型已參照需求 id\n"
                 + json.dumps(list(set(refs)), ensure_ascii=False)
             )
-        domain_research = artifact.get("feedback", {}).get("domain_research")
-        if domain_research:
+        feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+        if feedback:
             parts.append(
-                "## 領域研究（Phase 0）\n"
-                + json.dumps(domain_research, ensure_ascii=False, indent=2)
+                "## Feedback（Phase 0）\n"
+                + json.dumps(feedback, ensure_ascii=False, indent=2)
             )
 
         if parts:

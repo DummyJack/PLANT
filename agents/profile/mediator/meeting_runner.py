@@ -528,7 +528,8 @@ class MeetingRunner:
             round_num=self.round_num,
             proposed_by=proposer,
         )
-        meeting_filename = f"R{self.round_num}-M{self.issue_idx}.md"
+        meeting_id = f"R{self.round_num}-M{self.issue_idx}"
+        meeting_filename = f"{meeting_id}.md"
         self.store.save_markdown(meeting_md, meeting_filename)
         self.record_action_substep_trace(
             stage=stage,
@@ -540,6 +541,7 @@ class MeetingRunner:
             },
             decision=markdown_decision,
             result={
+                "meeting_id": meeting_id,
                 "filename": meeting_filename,
                 "markdown_length": len(meeting_md),
             },
@@ -553,6 +555,7 @@ class MeetingRunner:
         issue_record = {
             "schema_version": issue.get("schema_version", "decision_issue.v1"),
             "id": issue.get("id"),
+            "meeting_id": meeting_id,
             "title": issue.get("title"),
             "description": issue.get("description", ""),
             "category": issue.get("category", ""),
@@ -567,6 +570,7 @@ class MeetingRunner:
         }
         self.round_discussions.append(
             {
+                "meeting_id": meeting_id,
                 "issue": issue_record,
                 "source_ids": issue.get("source_ids", []),
                 "contributions": [

@@ -2,23 +2,24 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from agents.profile.scenario import scenario_prompt_value
+
+
 class UserStakeholder:
     @staticmethod
     def scenario_context_text(value: Any) -> str:
-        if isinstance(value, dict):
-            return json.dumps(value, ensure_ascii=False, indent=2)
-        return str(value or "").strip()
+        return json.dumps(scenario_prompt_value(value), ensure_ascii=False, indent=2)
 
     def propose_stakeholders(self, rough_idea: Any) -> List[Dict]:
         opa = self.run_action_loop(
-            name="stakeholder_elicitation",
+            name="stakeholder_setup",
             context={
-                "stakeholder_action": "propose_stakeholders",
+                "action": "propose_stakeholders",
                 "rough_idea": rough_idea,
             },
-            build_observation=self.build_stakeholder_elicitation_observation,
-            decide_action=self.decide_stakeholder_elicitation_action,
-            execute_action=self.execute_stakeholder_elicitation_action,
+            build_observation=self.build_stakeholder_observation,
+            decide_action=self.decide_stakeholder_action,
+            execute_action=self.execute_stakeholder_action,
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
@@ -26,19 +27,19 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    def generate_stakeholder_requirements(
+    def generate_stakeholder_text(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         opa = self.run_action_loop(
-            name="stakeholder_elicitation",
+            name="stakeholder_text",
             context={
-                "stakeholder_action": "generate_stakeholder_requirements",
+                "action": "generate_stakeholder_text",
                 "rough_idea": rough_idea,
                 "selected_stakeholders": selected_stakeholders,
             },
-            build_observation=self.build_stakeholder_elicitation_observation,
-            decide_action=self.decide_stakeholder_elicitation_action,
-            execute_action=self.execute_stakeholder_elicitation_action,
+            build_observation=self.build_stakeholder_observation,
+            decide_action=self.decide_stakeholder_action,
+            execute_action=self.execute_stakeholder_action,
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
@@ -46,17 +47,17 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    def build_stakeholder_elicitation_observation(self, **kwargs) -> Dict:
+    def build_stakeholder_observation(self, **kwargs) -> Dict:
         selected = kwargs.get("selected_stakeholders") or []
         return {
-            "action": kwargs.get("stakeholder_action", ""),
+            "action": kwargs.get("action", ""),
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "has_rough_idea": bool(str(kwargs.get("rough_idea") or "").strip()),
             "selected_stakeholder_count": len(selected),
         }
 
-    def decide_stakeholder_elicitation_action(
+    def decide_stakeholder_action(
         self,
         *,
         observation: Dict,
@@ -76,7 +77,7 @@ class UserStakeholder:
             "reasoning": f"以 User agent 情境利害關係人視角執行：{action}。",
         }
 
-    def execute_stakeholder_elicitation_action(
+    def execute_stakeholder_action(
         self,
         *,
         decision: Dict,
@@ -86,8 +87,8 @@ class UserStakeholder:
         try:
             if action == "propose_stakeholders":
                 output = self.propose_stakeholders_via_llm(kwargs.get("rough_idea", ""))
-            elif action == "generate_stakeholder_requirements":
-                output = self.generate_stakeholder_requirements_via_llm(
+            elif action == "generate_stakeholder_text":
+                output = self.generate_stakeholder_text_via_llm(
                     kwargs.get("rough_idea", ""),
                     kwargs.get("selected_stakeholders") or [],
                 )
@@ -115,29 +116,23 @@ class UserStakeholder:
 # 產品情境
 {scenario_context}
 
-# 利害關係人分類
+# 分類
 - Primary Users：每天直接操作系統、輸入資料、接收通知或完成任務的人。
 - System Owners & Management：負責派工、監督流程、營運決策、權限、資料品質、系統穩定性、安全或維護的人。
 - External Parties：外部會影響或受影響的單位，例如客戶、供應商、第三方服務、稽核、主管機關或合作單位。
 
-# 選擇優先順序
-1. Primary Users
-2. System Owners & Management
-3. External Parties
-
-# 約束
+# 輸出規則
 - 三類都必須出現。
 - Primary Users 至少 3 位。
 - System Owners & Management 至少 3 位。
-- External Parties 至少 1 位，但必須是三類中數量最少的類別。
-- 輸出順序必須先列 Primary Users，再列 System Owners & Management，最後列 External Parties。
-- 每位利害關係人須有明確且不同的使用情境與責任邊界
-- 每位利害關係人必須直接存在於初始想法描述的產品情境中；不要加入和此產品無關的泛用企業角色
-- 避免使用情境重疊
-- name 只填名稱，不要用括號補充說明
-- type 只能是 Primary Users、System Owners & Management、External Parties
-- reason 選擇理由用一句話即可
-- 每位利害關係人需包含名稱、分類與理由。
+- External Parties 至少 1 位，且數量必須是三類中最少。
+- 輸出順序：Primary Users → System Owners & Management → External Parties。
+- 每位利害關係人必須直接存在於產品情境中。
+- 每位利害關係人的使用情境與責任邊界要明確且不同。
+- 避免使用情境重疊。
+- name 只填名稱，不要用括號補充說明。
+- type 只能是 Primary Users、System Owners & Management、External Parties。
+- reason 用一句話說明選擇理由。
 
 # 輸出 JSON
 {{{{
@@ -193,7 +188,7 @@ class UserStakeholder:
             raise ValueError("External Parties must be the smallest stakeholder type")
         return proposed
 
-    def generate_stakeholder_requirements_via_llm(
+    def generate_stakeholder_text_via_llm(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         scenario_context = self.scenario_context_text(rough_idea)
@@ -214,7 +209,7 @@ class UserStakeholder:
 # 利害關係人
 {stakeholder_list}
 
-# 背景
+# 產品情境
 {scenario_context}
 
 # 發言面向
@@ -223,11 +218,11 @@ class UserStakeholder:
 3. 期望功能
 4. 擔心的事
 
-# 限制
-- 每位 stakeholder 產生 3-5 條 text
-- 只根據該 stakeholder 的日常經驗
-- 不替未選中的角色發言
-- 每條 text 都必須能回扣背景中的產品情境
+# 輸出規則
+- 每位利害關係人產生 3-5 條 text。
+- 只根據該利害關係人的日常經驗。
+- 不替未選中的角色發言。
+- 每條 text 都必須能回扣產品情境。
 
 # 輸出 JSON
 {{{{

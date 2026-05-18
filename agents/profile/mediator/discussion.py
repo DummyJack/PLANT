@@ -50,13 +50,13 @@ class MediatorDiscussion:
         current_labels_by_id = contract.get("current_labels_by_id") or {}
         raw_reviews = response.get("pair_reviews") if isinstance(response, dict) else None
         if not isinstance(raw_reviews, list):
-            statement = str(response.get("statement") or "").strip()
+            text = str(response.get("text") or "").strip()
             try:
-                statement_payload = json.loads(statement)
+                text_payload = json.loads(text)
             except json.JSONDecodeError:
-                statement_payload = None
-            if isinstance(statement_payload, dict):
-                raw_reviews = statement_payload.get("pair_reviews")
+                text_payload = None
+            if isinstance(text_payload, dict):
+                raw_reviews = text_payload.get("pair_reviews")
         if not isinstance(raw_reviews, list):
             raise ValueError("pair_reviews must be a list")
 
@@ -188,7 +188,7 @@ class MediatorDiscussion:
             )
         return {
             "agent": getattr(agent, "name", ""),
-            "statement": result.get("statement", ""),
+            "text": result.get("text", ""),
             "pair_reviews": result.get("pair_reviews", []),
             "open_questions": result.get("open_questions", []),
             "oracle_action_type": result.get("oracle_action_type", ""),
@@ -196,6 +196,7 @@ class MediatorDiscussion:
             "oracle_revealed_ids": result.get("oracle_revealed_ids", []),
             "suggested_next_action": result.get("suggested_next_action"),
             "target_stakeholders": result.get("target_stakeholders", []),
+            "speaking_as": result.get("speaking_as", []),
             "opa_trace": opa.get("opa_trace", []),
         }
 
@@ -470,7 +471,7 @@ class MediatorDiscussion:
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
-                answer = resp.get("statement", "")
+                answer = resp.get("text", "")
                 contrib = {
                     "agent": agent_name,
                     "response": resp,
@@ -500,7 +501,7 @@ class MediatorDiscussion:
             if not from_agent:
                 continue
             q = resp.get("reply_to_question", "")
-            ans = resp.get("statement", "")
+            ans = resp.get("text", "")
             requester_qa.setdefault(from_agent, []).append((q, ans))
         result = []
         for requester_name, qa_list in requester_qa.items():
@@ -601,7 +602,7 @@ class MediatorDiscussion:
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
-                answer = resp.get("statement", "")
+                answer = resp.get("text", "")
                 contrib = {
                     "agent": target_name,
                     "response": resp,

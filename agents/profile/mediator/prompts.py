@@ -2,6 +2,8 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from agents.profile.scenario import scenario_prompt_value
+
 
 DECISION_ISSUE_DISCUSSION_MODE_GUIDE = """# 討論模式（discussion_mode）情境說明
 - **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：衝突再審查、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
@@ -125,7 +127,7 @@ def meeting_action_prompt(
     - 若某題在討論後已明確自然收斂，應直接 resolve_issue 整理結論。
     - formal meeting 題目經討論後仍無法收斂時，resolve_issue 會整理決策選項與 recommendation，接著必須 escalate_to_human 交由人類裁決，不交給 user agent。
     - 所有議題 save 完畢且 can_expand_decision_issues=true 時，應主動評估是否有新議題需補充討論（expand_decision_issues）；確認無追加需求才 finish_round
-    - 需要補專案事實時，遵守本輪 Tool Context
+    - 需要補專案事實時，遵守本輪工具使用資料
     - 一次只回一個動作
 
     # 輸出 JSON
@@ -150,96 +152,64 @@ def elicitation_plan_prompt(
 ) -> str:
     prev = previous_turn_summary or {}
     return f"""# 任務
-你是需求擷取會議主持人。請根據目前需求理解、已選定利害關係人、最近對話與上一輪摘要，安排本輪需求擷取會議。
+你是需求擷取會議主持人。請安排本輪需求擷取會議。
 
-你要決定：
-1. meeting_phase
-2. participants
-3. goal
-4. agent_actions
+你要決定 participants、goal、agent_actions、meeting_phase。
 
-# 本輪資訊
+# 可用資料
 - turn: {turn}/{max_turns}
 - default_participants: {default_participants}
 
-# 產品情境
-{json.dumps(scenario or {}, ensure_ascii=False, indent=2)}
+# scenario
+{json.dumps(scenario_prompt_value(scenario), ensure_ascii=False, indent=2)}
 
-# 目前需求範圍
+# scope
 {json.dumps(scope or {}, ensure_ascii=False, indent=2)}
 
-# 可詢問的利害關係人
+# stakeholders
 {json.dumps(stakeholder_names, ensure_ascii=False, indent=2)}
 
-# 目前已有需求或候選需求
+# current_user_requirements
 {json.dumps(current_requirements, ensure_ascii=False, indent=2)}
 
-# 上一輪摘要
+# previous_turn_summary
 {json.dumps(prev, ensure_ascii=False, indent=2)}
 
-# 最近幾輪正式提問與 user 回答
+# recent_questions_and_answers
 {json.dumps(recent_ask_history or [], ensure_ascii=False, indent=2)}
 
-# 會議階段
-meeting_phase 只能選：
-- initial_requirement：對齊目前需求理解，找出最能形成候選需求的核心缺口。
-- requirement_discussion：深入釐清流程、內容、互動、呈現、限制、例外或可接受標準。
-- conclusion：整理目前理解，請 user 確認是否正確或遺漏，或提議收束。
-
-# 發言模式
-本需求擷取會議固定使用 simultaneous。
-你不需要輸出 discussion_mode，也不要安排 speaking_order。
-各 agent 會從自身角色角度獨立提出一個問題，User simulator 會依每題指定的 stakeholder 身份逐題回答。
-
-# 訪談推進原則
-請像真實需求訪談主持人一樣，根據利害關係人已回答內容決定下一個最自然、最能補足需求理解的問題。不要為了覆蓋分類而硬問。
-
-請優先在需求範圍內(in_scope)推進訪談；不要安排範圍外(out_of_scope)方向的問題。
-
-goal 是本輪需求擷取的主題標題，根據產品情境、目前已有需求、前面討論內容與上一輪摘要，選出本輪最重要且尚未充分探索的方向。如果上一輪摘要已標記某方向為已確認、已關閉或不要重複，除非它仍阻礙需求成形，否則本輪應往不同但重要的方向推進。
-
-goal 應簡短、具體、可指導 agent 提問，例如「釐清尖峰時段點餐與結帳瓶頸」或「確認營運報表的即時資料需求」，避免寫成「繼續訪談」「了解更多需求」這種泛化目標。
-
-每輪問題必須互補，不要讓多個 agent 追問同一個缺口。安排 agent_actions 時，請先判斷目前最需要補的是哪幾類資訊，並讓不同 agent 各自負責不同角度：
-- analyst：需求文字能否成立、使用者目標、產出內容、優先級、成功標準、驗收條件。
-- modeler：實際操作流程、輸入/輸出、角色互動、狀態變化、例外流程、人工介入。
-- expert：外部限制、資料可信度、營運約束、合規/安全/風險底線、結果可接受性。
-
-請先補足需求主幹，再進入細節審查。需求主幹包含：
-- 使用者目標與需求成立原因。
-- 主要使用流程與任務完成方式。
-- 系統主要產出、回應或狀態改變。
-- 使用者判斷結果有用、正確、足夠或可接受的標準。
-- 資訊組織、呈現、互動或體驗偏好。
-- 必須具備與可以延後的能力。
-
-不要把「動機」當成預設必問項。只有當動機會改變需求內容、優先級、成功標準或範圍時，才安排追問；否則直接追問可形成需求候選的資訊。
-
-在需求主幹尚未清楚前，不要優先安排細節審查問題。只有在 user 主動提到，或該問題會直接改變主要需求、使用流程、產出結果、結果可用性或需求成立性時，才進入細節審查。
-
-如果 user 的回答自然帶到下一個方向，就順著回答追問；不要硬切換到尚未覆蓋但當下不重要的方向。
+# 規劃原則
+- 像真實需求訪談主持人一樣，根據已回答內容安排下一個最自然、最能補足需求理解的方向。
+- 優先在 scope.in_scope 內推進；不要安排 scope.out_of_scope 方向。
+- goal 是本輪需求擷取的主題標題，需簡短、具體、可指導 agent 提問；不要寫成「繼續訪談」「了解更多需求」。
+- 若 previous_turn_summary 已標記某方向為已確認、已關閉或不要重複，除非仍阻礙需求成形，否則本輪應往不同但重要的方向推進。
+- 先補足需求主幹，再進入細節審查；不要為了覆蓋分類而硬問。
+- 不要把「動機」當成預設必問項；只有當動機會改變需求內容、優先級、成功標準或範圍時才追問。
 
 # 角色分工
-- analyst 適合使用情境與目標、產出內容與優先級、呈現方式與使用判斷、收束確認。
-- modeler 適合使用流程與互動、角色互動、狀態變化、判斷點、例外流程與人工介入。
-- expert 只在風險或外部限制會影響需求成立、結果可信度或使用者接受度時深入。
-- 若某角色本輪沒有明確且不重複的有效缺口，不要勉強安排它提問；可改由其他角色提問，或在資訊足夠時 propose_finish。
+- analyst：使用者目標、需求文字是否成立、產出內容、優先級、成功標準。
+- modeler：主要流程、輸入/輸出、角色互動、狀態變化、例外流程、人工介入。
+- expert：外部限制、資料可信度、營運約束、合規/安全/風險底線、結果可接受性。
 
-# agent action
-你必須為每個非 user agent 指定 action：
+同一輪內，不同 agent 不可追問同一個需求缺口。
+每個被安排提問的 agent 都必須能問出可轉成候選 User Requirement、限制、流程邊界或待確認缺口的資訊。
+
+# action
 - ask_user：本輪主要向 user 問一個主問題。
 - supplement_question：從該角色角度補一個不重複的 user 問題。
 - propose_finish：提議結束需求擷取。
+
+# meeting_phase
+meeting_phase 只用來標示本輪狀態：
+- initial_requirement：找出最能形成候選需求的核心缺口。
+- requirement_discussion：深入釐清流程、內容、互動、呈現、限制、例外或可接受標準。
+- conclusion：確認目前理解是否正確或提議收束。
 
 # 規則
 - participants 只能從 default_participants 選，且必須包含 user。
 - participants 應包含 2-3 位非 user agent 與 user。
 - 除非本輪要 propose_finish，否則至少一個非 user agent 的 action 必須是 ask_user 或 supplement_question。
 - propose_finish 只能在資訊足夠收束時使用；若使用 propose_finish，該 agent 的發言只能輸出固定停止句。
-- 若上一輪已經確認某一方向，本輪應優先順著 user 回答推進到下一個自然缺口；若同一缺口仍重要，必須換成更具體但不誘導的問法。
-- 請根據 previous_turn_summary.confirmed_issues / closed_issues / do_not_repeat 避免重複；如果 user 說過不在意、已列過、已覆蓋，就換下一個未確認的大方向。
-- 同一輪內，不同 agent 不可追問同一個需求缺口；若 analyst 已問成功標準，modeler 應改問流程/例外，expert 應改問限制/可信度/風險。
-- 每個被安排提問的 agent 都必須能問出可轉成候選需求、驗收條件、限制、NFR、流程邊界或待確認缺口的資訊。
 - 僅輸出 JSON，不要附加說明。
 
 # 輸出 JSON
@@ -529,7 +499,7 @@ def closure_vote_prompt(
 {role_focus}
 
 # 產品情境
-{json.dumps(scenario or {}, ensure_ascii=False, indent=2)}
+{json.dumps(scenario_prompt_value(scenario), ensure_ascii=False, indent=2)}
 
 # 目前正式需求
 {json.dumps(requirements, ensure_ascii=False, indent=2)}
@@ -537,14 +507,14 @@ def closure_vote_prompt(
 # 本次需求擷取已整理出的候選需求
 {json.dumps(candidate_texts, ensure_ascii=False, indent=2)}
 
-# 最近幾輪正式提問與 user 回答
+# 最近幾輪正式提問與利害關係人回答
 {json.dumps(recent_ask_history or [], ensure_ascii=False, indent=2)}
 
 # 投票規則
 - 如果依你的角色判斷，目前資訊已足夠整理下一版 requirement set，vote 填 close。
 - 如果仍有一個會明顯影響需求正確性的關鍵問題沒問，vote 填 continue。
 - 不要因為還可以問更多細節就反對收束；只有缺口會影響需求正確性或可用性時才 vote continue。
-- 若 vote continue，missing_question 必須是一個可直接問 user 的單一主問題。
+- 若 vote continue，missing_question 必須是一個可直接問利害關係人的單一主問題。
 - 僅輸出 JSON，不要輸出 Markdown。
 
 # 輸出 JSON

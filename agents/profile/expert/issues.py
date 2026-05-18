@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from utils.language import current_output_language
 
-from agents.profile.conflict_review import conflict_review_statement_hint
+from agents.profile.conflict_review import conflict_review_text_hint
 from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
@@ -45,7 +45,7 @@ class ExpertIssues:
 
     def build_expert_issue_observation(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
-        research = ((artifact.get("feedback") or {}).get("domain_research") or {})
+        research = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         requirements = [
             row for row in requirement_discussion_pool(artifact) if isinstance(row, dict)
         ]
@@ -63,7 +63,7 @@ class ExpertIssues:
             "requirements": requirements,
             "open_questions": open_questions,
             "conflicts": conflicts,
-            "domain_research": research,
+            "feedback": research,
             "recent_discussions": artifact.get("recent_discussions", []),
             "existing_issue_proposals": artifact.get("issue_proposals", []),
             "decision_history": artifact.get("decisions", []),
@@ -85,7 +85,7 @@ class ExpertIssues:
         return {
             "action": "propose_domain_issues",
             "params": {},
-            "reasoning": "從外部義務、domain risk、evidence gap 與 acceptance boundary 角度提出需要會議處理的議題。",
+            "reasoning": "從外部義務、domain risk 與 evidence gap 角度提出需要會議處理的議題。",
         }
 
     def execute_expert_issue_action(
@@ -110,7 +110,7 @@ class ExpertIssues:
             "requirements": observation.get("requirements", []),
             "open_questions": observation.get("open_questions", []),
             "conflicts": observation.get("conflicts", []),
-            "domain_research": observation.get("domain_research", {}),
+            "feedback": observation.get("feedback", {}),
             "recent_discussions": observation.get("recent_discussions", []),
             "existing_issue_proposals": observation.get("existing_issue_proposals", []),
             "decision_history": observation.get("decision_history", []),
@@ -119,8 +119,8 @@ class ExpertIssues:
 提出本輪需要進入 issue proposal 的 domain / compliance / risk 議題。
 
 # 提案邊界
-- 只提出會影響 requirement、constraint、NFR、acceptance boundary、risk 或 evidence basis 的議題。
-- 可以根據既有 domain_research 的 derived_requirements / binding_obligations 提案，但必須說明適用範圍與需求影響。
+- 只提出會影響 requirement、constraint、risk 或 evidence basis 的議題。
+- 可以根據既有 feedback 的 constraints / risks / recommendations / open_items 提案，但必須說明適用範圍與需求影響。
 - 可以根據 open_questions 提案，但只有合規、標準、安全、外部義務、領域風險或 evidence gap 會改變需求時才提出。
 - 可以根據 requirements 主動發現問題，例如安全/合規/可用性/可靠性/NFR 沒有可驗證標準，或外部限制沒有證據。
 - 議題必須聚焦 domain / compliance / risk / evidence basis，不提出無外部限制或證據影響的一般需求議題。
@@ -284,7 +284,7 @@ class ExpertIssues:
         prev_text = ""
         if previous_responses:
             parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
                 for r in previous_responses
             ]
             prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
@@ -326,7 +326,7 @@ class ExpertIssues:
     - 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。"""
         elif category == "open_question":
             category_hint = """# 本議題特別要求（open_question）
-    - 優先回答可確認的 domain facts、外部限制與 evidence gap；只提出會影響 constraint、NFR、risk 或 acceptance boundary 的問題。"""
+    - 優先回答可確認的 domain facts、外部限制與 evidence gap；只提出會影響 constraint、risk 或 evidence basis 的問題。"""
         elif category == "new_requirement":
             category_hint = """# 本議題特別要求（new_requirement）
     - 說明此新增需求是否只是候選 constraint、NFR 或 risk mitigation，以及是否來自強制義務、最佳實務或 evidence gap。"""
@@ -334,12 +334,12 @@ class ExpertIssues:
             category_hint = ""
 
         response_contract = """# 回應契約
-    - statement 必須有依據，不可只表態或宣告最終決議。
+    - text 必須有依據，不可只表態或宣告最終決議。
     - open_questions 只放真正需要後續回答、且會影響限制/風險/驗收邊界的單一具體問題；沒有就輸出空陣列。"""
 
         next_action_contract = ""
         pair_reviews_json = ""
-        statement_hint = '"statement": "針對此議題的完整發言內容"'
+        text_hint = '"text": "針對此議題的完整發言內容"'
         suggested_next_action_json = ""
         if allow_suggested_next_action:
             suggested_next_action_json = """,
@@ -355,18 +355,22 @@ class ExpertIssues:
         if category == "conflict_discussion":
             pair_reviews_json = ""
             response_contract = """# 回應契約
-    - statement 必須有依據，不可只表態或宣告最終決議。"""
-            statement_hint = conflict_review_statement_hint()
-            output_fields = f"    {statement_hint}"
+    - text 必須有依據，不可只表態或宣告最終決議。"""
+            text_hint = conflict_review_text_hint()
+            output_fields = f"    {text_hint}"
         else:
-            target_json = ""
             if issue_id.startswith("ELICIT-"):
-                target_json = ',\n    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
-            output_fields = (
-                f"    {statement_hint}{target_json},\n"
-                '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
-                f"{suggested_next_action_json}{pair_reviews_json}"
-            )
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
+                    f"{suggested_next_action_json}{pair_reviews_json}"
+                )
+            else:
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    f"{suggested_next_action_json}{pair_reviews_json}"
+                )
 
         elicitation_hint = ""
         task_block = EXPERT_ISSUE_TASK

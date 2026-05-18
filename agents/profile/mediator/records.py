@@ -25,7 +25,7 @@ class MediatorRecords:
         ]
         for c in contributions:
             resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-            texts.append(resp.get("statement", ""))
+            texts.append(resp.get("text", ""))
         blob = "\n".join(t for t in texts if t)
         for m in re.findall(r"\b(?:FR|NFR|R|CF)-[A-Za-z0-9-]+\b", blob):
             ids.add(m)
@@ -275,9 +275,9 @@ class MediatorRecords:
             for c in main_contribs:
                 agent = c.get("agent", "?")
                 resp = c.get("response", {})
-                statement = clean_for_mom(resp.get("statement", ""))
+                text = clean_for_mom(resp.get("text", ""))
                 md += f"### {agent}\n\n"
-                md += f"{statement or '（本發言無可讀內容）'}\n\n"
+                md += f"{text or '（本發言無可讀內容）'}\n\n"
 
         oq_pairs = []
         for c in contributions:
@@ -287,7 +287,7 @@ class MediatorRecords:
             question = resp.get("reply_to_question", "")
             from_agent = resp.get("reply_to_agent", "?")
             reply_agent = c.get("agent", "?")
-            answer = clean_for_mom(resp.get("statement", ""))
+            answer = clean_for_mom(resp.get("text", ""))
             if question or answer:
                 oq_pairs.append((from_agent, question, reply_agent, answer))
         if oq_pairs:
@@ -310,12 +310,12 @@ class MediatorRecords:
     ) -> Dict[str, Any]:
         """將單一議題討論結果整理為 Design Rationale 單筆上下文。"""
         main_contribs = [c for c in contributions if not c.get("is_reply", False)]
-        statements = []
+        texts = []
         for c in main_contribs:
             resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-            st = (resp.get("statement") or "").strip()
+            st = (resp.get("text") or "").strip()
             if st:
-                statements.append({"agent": c.get("agent", "?"), "statement": st})
+                texts.append({"agent": c.get("agent", "?"), "text": st})
 
         unresolved_oq = []
         for q in issue_open_questions:
@@ -343,7 +343,7 @@ class MediatorRecords:
                 "source_ids": issue.get("source_ids", []),
             },
             "discussion": {
-                "statements": statements,
+                "texts": texts,
                 "open_issues": unresolved_oq,
             },
             "resolution": {

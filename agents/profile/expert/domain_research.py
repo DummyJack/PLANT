@@ -1,137 +1,61 @@
 # Expert domain research: optional skill context plus evidence gathering loop.
 import json
-from typing import Dict, Optional
 
-from agents.profile.analyst.requirements import requirement_discussion_pool
-from agents.profile.analyst.conflict_store import all_conflict_rows
+from agents.profile.scenario import scenario_prompt_value
 
-from .validation import domain_research_payload, research_result_payload
+from .validation import clean_domain_research, clean_research_result
 
 
-EXPERT_DOMAIN_RESEARCH_ACTIONS = [
+ACTIONS = [
     "research_issue",
     "update_findings",
-    "flag_compliance_risk",
     "done",
 ]
 
 
-class ExpertDomainResearch:
-    def get_optional_skill_context(
-        self, issue: Dict, artifact_context: Optional[Dict]
-    ) -> Optional[str]:
-        return super().get_optional_skill_context(issue, artifact_context)
+def research_requirement_candidates(artifact):
+    rows = []
+    for req in artifact.get("URL") or []:
+        if not isinstance(req, dict) or not str(req.get("text") or "").strip():
+            continue
+        row = {
+            "id": req.get("id"),
+            "text": req.get("text"),
+            "priority": req.get("priority"),
+            "source": req.get("source", ""),
+        }
+        rows.append(row)
+    return rows
 
-    def run_domain_research_loop(self, artifact, recent_discussions=None):
-        """Expert domain research 走共用 OPA loop；研究結果透過 context 傳遞，必要時在單輪內保證寫回 findings。"""
+
+class ExpertDomainResearch:
+    def run_domain_research_loop(self, artifact):
+        """Expert domain research 走共用 agent loop，研究結果寫回 feedback。"""
         result = self.run_action_loop(
             name="domain_research",
             context={
                 "artifact": artifact,
-                "recent_discussions": recent_discussions,
                 "research_results": [],
-                "force_update_after_research": False,
             },
             build_observation=self.build_domain_research_observation,
             decide_action=self.decide_domain_research_action,
             execute_action=self.execute_domain_research_loop_action,
         )
-        if (
-            isinstance(result, dict)
-            and not (artifact.get("feedback", {}) or {}).get("domain_research")
-            and result.get("opa_trace")
-        ):
-            research_results = [
-                row.get("result")
-                for row in result.get("opa_trace", [])
-                if isinstance(row, dict)
-                and isinstance(row.get("result"), dict)
-                and row.get("result", {}).get("action") == "research_issue"
-                and isinstance(row.get("result", {}).get("result"), dict)
-            ]
-            research_results = [row for row in research_results if isinstance(row, dict)]
-            if research_results:
-                merged = domain_research_payload(
-                    {
-                        "findings": [
-                            item
-                            for row in research_results
-                            for item in (row.get("findings") or [])
-                        ],
-                        "sources": [
-                            item
-                            for row in research_results
-                            for item in (row.get("sources") or [])
-                        ],
-                        "derived_requirements": [
-                            item
-                            for row in research_results
-                            for item in (row.get("derived_requirements") or [])
-                        ],
-                        "binding_obligations": [
-                            item
-                            for row in research_results
-                            for item in (row.get("binding_obligations") or [])
-                        ],
-                        "risk_notes": [
-                            item
-                            for row in research_results
-                            for item in (row.get("risk_notes") or [])
-                        ],
-                        "recommendations": [
-                            item
-                            for row in research_results
-                            for item in (row.get("recommendations") or [])
-                        ],
-                    }
-                )
-                if merged:
-                    artifact.setdefault("feedback", {})["domain_research"] = merged
         return result
 
-    def build_domain_research_state(
-        self, artifact, recent_discussions, actions_taken,
+    def build_research_observation(
+        self, artifact,
         research_results, iteration, max_iterations,
     ):
-        reqs = requirement_discussion_pool(artifact)
-        summary_reqs = [
-            {"id": r.get("id"), "type": r.get("type"),
-             "text": (r.get("text") or "")}
-            for r in reqs
-        ]
-        conflicts = [
-            {"id": c.get("id"),
-             "description": (c.get("description") or "")}
-            for c in all_conflict_rows(artifact)
-            if c.get("label") == "Conflict"
-        ]
-        neutrals = [
-            {"id": c.get("id"),
-             "description": (c.get("description") or "")}
-            for c in all_conflict_rows(artifact)
-            if c.get("label") == "Neutral"
-        ]
-        disc_summaries = []
-        for disc in (recent_discussions or []):
-            issue = disc.get("issue", {})
-            resolution = disc.get("resolution", {})
-            disc_summaries.append({
-                "issue_id": issue.get("id"),
-                "title": issue.get("title"),
-                "resolution": resolution.get("resolution"),
-                "summary": (resolution.get("summary") or ""),
-            })
-        existing = artifact.get("feedback", {}).get("domain_research", {})
+        URL = research_requirement_candidates(artifact)
+        existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+        scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
         return {
-            "requirements": summary_reqs,
-            "conflicts": conflicts,
-            "neutrals": neutrals,
+            "scenario": scenario_prompt_value(scenario_source),
             "scope": artifact.get("scope", {}),
+            "URL": URL,
             "has_existing_research": bool(existing),
-            "recent_discussions": disc_summaries,
-            "actions_taken": actions_taken,
             "research_results_count": len(research_results),
-            "available_tools": list(self.tools.keys()),
             "iteration": iteration + 1,
             "max_iterations": max_iterations,
         }
@@ -139,7 +63,7 @@ class ExpertDomainResearch:
     def execute_domain_research_action(
         self, action, params, artifact, research_results,
     ):
-        obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
+        obs: dict = {"action": action, "result": None, "error": None, "summary": ""}
 
         if action == "research_issue":
             query = params.get("query", "")
@@ -147,22 +71,35 @@ class ExpertDomainResearch:
                 obs["error"] = "query 參數為空"
                 obs["summary"] = "研究失敗：未提供研究問題"
                 return obs
+            scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
             context = {
-                "project_overview": (artifact.get("scope") or {}).get(
-                    "description", ""
-                ),
+                "scenario": scenario_prompt_value(scenario_source),
+                "scope": artifact.get("scope", {}),
+                "URL": research_requirement_candidates(artifact),
             }
             task = f"""針對以下問題進行領域研究：{query}
 
-    請依 `domain-research` skill 的最新 evidence-first contract 執行研究並輸出 JSON。
+    請依 `domain-research` skill 執行研究。
 
-    執行邊界：
-    - 需要證據時可使用本輪 Tool Context 中允許的工具。
-    - 研究結果預設作為 evidence，不直接形成正式 requirement。
-    - 僅當外部來源構成明確、可追溯、具約束力的 obligation 時，才可產生 derived requirement candidates。
-    - 不可把最佳實務、一般建議或風險提醒直接升格成 requirement。
+    只輸出本專案 feedback JSON。
 
-    只輸出 skill 規定的 JSON。"""
+    研究邊界：
+    - 根據產品情境、需求範圍與 User Requirements 判斷外部領域因素。
+    - feedback 只作為研究輔助資料，不產生需求。
+    - 需要證據時可使用本輪工具使用資料中允許的工具。
+    - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text 與 related_URL。
+    - related_URL 只能引用 User Requirements 中存在的 id；整體專案層級請輸出空陣列。
+    - 不要為了填欄位硬關聯需求。
+
+    輸出 JSON：
+    {{
+      "findings": [{{"text": "", "related_URL": []}}],
+      "sources": [],
+      "constraints": [{{"text": "", "related_URL": []}}],
+      "risks": [{{"text": "", "related_URL": []}}],
+      "recommendations": [{{"text": "", "related_URL": []}}],
+      "open_items": [{{"text": "", "related_URL": []}}]
+    }}"""
             messages = self.build_direct_messages(task, context=context)
             try:
                 raw = (
@@ -173,7 +110,7 @@ class ExpertDomainResearch:
                     if self.tools
                     else self.model.chat(messages)
                 )
-                result = research_result_payload(self.parse_first_json(raw))
+                result = clean_research_result(self.parse_first_json(raw))
                 research_results.append({"query": query, **result})
                 obs["result"] = result
                 obs["summary"] = (
@@ -189,39 +126,34 @@ class ExpertDomainResearch:
             if not research_results:
                 obs["summary"] = "無研究結果可更新"
                 return obs
-            existing = artifact.get("feedback", {}).get("domain_research", {})
+            existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
             context = {
                 "research_results": research_results,
                 "existing_research": existing,
             }
-            task = """綜合 Context.research_results 與 Context.existing_research，依 `domain-research` skill 輸出合併後的研究資料。
+            task = """綜合本輪研究結果與既有 feedback，整理成本專案 feedback 格式。
 
-    執行邊界：
-    - 合併 findings、sources、derived_requirements、compliance_risks、recommendations、gaps_for_further_research。
-    - derived_requirements 可保留來自研究結果中有明確依據的候選 requirement。
+    合併邊界：
+    - 只做合併、去重、保留來源與整理格式。
+    - 不新增 research_results / existing_research 以外的結論。
     - 不得捏造來源、法規、數值門檻或研究結論。
-    - 若 existing_research 與 research_results 有重複內容，請合併去重並保留較完整、較可追溯的版本。
+    - feedback 只作為研究輔助資料，不產生需求。
+    - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text 與 related_URL。
 
-    只輸出一個 JSON，鍵名為 `domain_research`。
-
-    建議 JSON shape：
+    輸出 JSON：
     {
-      "domain_research": {
-    "findings": ["..."],
-    "sources": ["..."],
-    "derived_requirements": [
-      {"text": "...", "source": "...", "category": "regulatory|best_practice|safety"}
-    ],
-    "compliance_risks": ["..."],
-    "recommendations": ["..."],
-    "gaps_for_further_research": ["..."]
-      }
+      "findings": [{"text": "", "related_URL": []}],
+      "sources": [],
+      "constraints": [{"text": "", "related_URL": []}],
+      "risks": [{"text": "", "related_URL": []}],
+      "recommendations": [{"text": "", "related_URL": []}],
+      "open_items": [{"text": "", "related_URL": []}]
     }"""
             try:
                 raw = self.invoke_skill("domain-research", task, context=context)
-                dr = domain_research_payload(self.parse_first_json(raw))
+                dr = clean_domain_research(self.parse_first_json(raw))
                 if dr:
-                    artifact.setdefault("feedback", {})["domain_research"] = dr
+                    artifact["feedback"] = dr
                     obs["summary"] = "已更新領域研究資料"
                 else:
                     obs["error"] = "解析失敗"
@@ -231,36 +163,19 @@ class ExpertDomainResearch:
                 obs["summary"] = f"更新失敗: {e}"
             return obs
 
-        if action == "flag_compliance_risk":
-            desc = (params.get("description") or "").strip()
-            if not desc:
-                obs["error"] = "description 為空"
-                return obs
-            artifact.setdefault("open_questions", []).append(
-                {
-                    "from_agent": "expert",
-                    "question": desc,
-                    "status": "pending",
-                    "type": "compliance_risk",
-                }
-            )
-            obs["summary"] = f"已標記合規風險: {desc}"
-            return obs
-
         obs["error"] = f"未知動作: {action}"
         return obs
 
-    def decide_next_domain_research_action(self, state, last_observation=None):
+    def decide_research_action(self, state, last_observation=None):
         state_text = json.dumps(state, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
 
         user_prompt = f"""# 任務
-    根據當前狀態與上一步結果，選下一個動作。
+    根據 scenario、scope、URL 與上一步結果，選下一個動作。
 
     # 動作
     - research_issue：{{"query":"具體研究問題"}}
     - update_findings：把已足夠的研究結果寫回 artifact
-    - flag_compliance_risk：{{"description":"風險描述"}}
     - done：結束
 
     # 當前狀態
@@ -270,12 +185,12 @@ class ExpertDomainResearch:
     {obs_text}
 
     # 規則
-    - 只有當 artifact 內證據不足，且外部資料會影響 requirement、constraint、risk 或 acceptance boundary 判斷時，才選 research_issue
-    - 若只是一般產品需求、一般流程問題、優先級取捨或已可由 artifact 判斷的內容，不要查外部資料
+    - 只有當外部領域知識可能影響候選需求理解、限制、風險或證據依據時，才選 research_issue。
+    - 研究問題必須來自 scenario、scope 或 URL 中的具體內容。
+    - 若問題可由利害關係人或既有專案資料回答，不要選 research_issue。
     - 每次 research_issue 只聚焦一個具體問題
-    - 工具使用邊界遵守本輪 Tool Context
+    - 工具使用邊界遵守本輪工具使用資料
     - 有足夠材料才 update_findings
-    - 有重大合規風險就 flag_compliance_risk
     - 無需再研究就選 done
     - reasoning 請使用一句繁體中文簡述。
 
@@ -289,7 +204,10 @@ class ExpertDomainResearch:
         messages = self.build_direct_messages(user_prompt)
         try:
             if "artifact_query" in self.tools:
-                raw = self.chat_with_tools(messages)
+                raw = self.chat_with_tools(
+                    messages,
+                    active_skill="domain-research",
+                )
                 response = self.parse_issue_response_json(raw)
             else:
                 response = self.chat_json(messages)
@@ -299,7 +217,7 @@ class ExpertDomainResearch:
             raise ValueError(f"Expert domain research 決策必須是 JSON object，收到 {type(response).__name__}")
 
         action = (response.get("action") or "").strip()
-        if action not in EXPERT_DOMAIN_RESEARCH_ACTIONS:
+        if action not in ACTIONS:
             raise ValueError(f"Expert domain research action 不合法: {action or '<empty>'}")
         out = {
             "action": action,

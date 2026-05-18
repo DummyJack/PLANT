@@ -6,11 +6,12 @@ ALLOWED_DIAGRAM_TYPES = {
     "context_diagram",
     "use_case_diagram",
     "activity_diagram",
-    "data_flow_diagram",
     "sequence_diagram",
-    "state_machine_diagram",
+    "state_machine",
     "class_diagram",
 }
+
+ALLOWED_MODEL_TYPES = ALLOWED_DIAGRAM_TYPES | {"use_case_text"}
 
 
 def clean_text(value: Any) -> str:
@@ -52,21 +53,27 @@ def diagram_types(values: Any) -> List[str]:
     return out
 
 
-def expected_maturity(diagram_type: str) -> str:
-    return "tentative" if diagram_type == "class_diagram" else "requirement_level"
+def model_types(values: Any) -> List[str]:
+    out: List[str] = []
+    for value in values or []:
+        model_type = clean_text(value)
+        if model_type in ALLOWED_MODEL_TYPES and model_type not in out:
+            out.append(model_type)
+    return out
 
 
-def plantuml_text(value: Any) -> str:
+def valid_plantuml(value: Any) -> str:
     text = clean_text(value)
     if "@startuml" not in text or "@enduml" not in text:
         return ""
     return text
 
 
-def diagram_payload(
+def parse_diagram_model(
     raw: Any,
     *,
     expected_type: Optional[str] = None,
+    source: str = "",
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("diagram output must be a JSON object")
@@ -77,65 +84,100 @@ def diagram_payload(
     if expected_type and diagram_type != expected_type:
         raise ValueError(f"diagram type must be {expected_type}, got {diagram_type}")
 
-    plantuml = plantuml_text(raw.get("plantuml"))
+    plantuml = valid_plantuml(raw.get("plantuml"))
     if not plantuml:
         raise ValueError("diagram plantuml must include @startuml and @enduml")
 
     name = clean_text(raw.get("name")) or diagram_type
-    maturity = clean_text(raw.get("maturity")) or expected_maturity(diagram_type)
-    if maturity not in {"requirement_level", "tentative"}:
-        maturity = expected_maturity(diagram_type)
-    if diagram_type == "class_diagram":
-        maturity = "tentative"
 
-    return {
+    row = {
         "name": name,
         "type": diagram_type,
         "plantuml": plantuml,
-        "to_confirm": clean_list(raw.get("to_confirm")),
-        "maturity": maturity,
     }
+    source_text = clean_text(raw.get("source") or source)
+    if source_text:
+        row["source"] = source_text
+    return row
 
 
-def model_artifact_payload(raw: Any) -> Dict[str, Any]:
-    source = raw if isinstance(raw, dict) else {}
-    models: List[Dict[str, Any]] = []
-    for row in source.get("models") or []:
-        try:
-            models.append(diagram_payload(row))
-        except ValueError:
+def parse_use_case_text(raw: Any, *, source: str = "") -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("use case text output must be a JSON object")
+    model_type = clean_text(raw.get("type")) or "use_case_text"
+    if model_type != "use_case_text":
+        raise ValueError(f"model type must be use_case_text, got {model_type}")
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for idx, item in enumerate(raw.get("text") or [], 1):
+        if not isinstance(item, dict):
             continue
-
-    return {
-        "model_summary": clean_text(source.get("model_summary")),
-        "to_confirm": clean_list(source.get("to_confirm")),
-        "assumptions": clean_list(source.get("assumptions")),
-        "model_revision_mode": clean_text(source.get("model_revision_mode")),
-        "revision_history": [
-            row for row in (source.get("revision_history") or [])
-            if isinstance(row, dict)
-        ],
-        "last_consistency_report": source.get("last_consistency_report")
-        if isinstance(source.get("last_consistency_report"), dict)
-        else {},
-        "models": models,
+        row = {
+            "id": clean_text(item.get("id")) or f"UC-{idx}",
+            "actor": clean_text(item.get("actor")),
+            "name": clean_text(item.get("name")),
+            "purpose": clean_text(item.get("purpose")),
+            "interface": clean_text(item.get("interface")),
+            "related_requirements": [
+                clean_text(value)
+                for value in (item.get("related_requirements") or [])
+                if clean_text(value)
+            ],
+        }
+        if not row["name"] or not row["purpose"]:
+            continue
+        key = (row["actor"], row["name"], row["purpose"])
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    if not rows:
+        raise ValueError("use_case_text must include text")
+    result = {
+        "type": "use_case_text",
+        "text": rows,
     }
+    source_text = clean_text(raw.get("source") or source)
+    if source_text:
+        result["source"] = source_text
+    return result
 
 
-def impact_assessment_payload(raw: Any) -> Dict[str, Any]:
+def parse_model(raw: Any, *, source: str = "") -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("model output must be a JSON object")
+    model_type = clean_text(raw.get("type"))
+    if model_type == "use_case_text":
+        return parse_use_case_text(raw, source=source)
+    return parse_diagram_model(raw, source=source)
+
+
+def parse_model_list(raw: Any, *, source: str = "") -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        raise ValueError("model output must be a JSON list")
+    models: List[Dict[str, Any]] = []
+    for idx, row in enumerate(raw, 1):
+        try:
+            models.append(parse_model(row, source=source))
+        except ValueError as exc:
+            raise ValueError(f"models[{idx}] invalid: {exc}") from exc
+    return models
+
+
+def parse_impact_assessment(raw: Any) -> Dict[str, Any]:
     source = raw if isinstance(raw, dict) else {}
     return {
-        "models_to_update": diagram_types(source.get("models_to_update")),
-        "models_to_create": diagram_types(source.get("models_to_create")),
+        "models_to_update": model_types(source.get("models_to_update")),
+        "models_to_create": model_types(source.get("models_to_create")),
         "impact_summary": clean_text(source.get("impact_summary")),
         "consistency_summary": clean_text(source.get("consistency_summary")),
         "gaps": clean_list(source.get("gaps")),
     }
 
 
-def plantuml_fix_payload(raw: Any) -> Dict[str, str]:
+def parse_plantuml_fix(raw: Any) -> Dict[str, str]:
     source = raw if isinstance(raw, dict) else {}
-    plantuml = plantuml_text(source.get("plantuml"))
+    plantuml = valid_plantuml(source.get("plantuml"))
     if not plantuml:
         raise ValueError("fixed PlantUML output must include @startuml and @enduml")
     return {"plantuml": plantuml}

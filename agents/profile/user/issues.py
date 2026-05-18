@@ -144,11 +144,11 @@ class UserIssues:
 
 # 提案邊界
 - 只提出會影響利害關係人目標、日常使用情境、痛點、操作底線、可接受條件或使用者回答缺口的議題。
-- 可以根據 Context.stakeholders 的需求與關切提案，但必須判斷該問題是否尚未被 requirements、existing_issue_proposals 或近期 decisions 覆蓋。
+- 可以根據利害關係人資料中的需求與關切提案，但必須判斷該問題是否尚未被 requirements、existing_issue_proposals 或近期 decisions 覆蓋。
 - 可以根據 open_questions_to_user 提案，但只有需要 User 或特定利害關係人回答才提出。
 - 可以提出 new_requirement 或 open_question；只有當利害關係人需求互相拉扯時才提出 tradeoff；只有從使用情境能看出需求互斥或重複時才提出 conflict_discussion。
 - 議題必須聚焦利害關係人情境、目標、痛點、使用底線或回答缺口，不提出缺乏使用者影響的一般討論。
-- 不要新增 Context.stakeholders 以外的角色，不要把產品轉成其他情境。
+- 不要新增利害關係人資料以外的角色，不要把產品轉成其他情境。
 - 不要重複 existing_issue_proposals 或近期已完成 decisions。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
@@ -365,25 +365,26 @@ class UserIssues:
             issue_category != "conflict_discussion"
             and not str(issue.get("id") or "").startswith("ELICIT-")
         )
+        is_elicitation = str(issue.get("id") or "").startswith("ELICIT-")
 
         # 多位時輸出要含 speaking_as；一位時不必
         need_speaking_as = len(self.stakeholders) > 1
         if need_speaking_as:
-            json_hint = (
-                '"speaking_as": ["本輪發言身份名稱"], '
-                '"statement": "完整發言內容", '
-                '"open_questions": [...]'
-            )
+            json_hint = '"speaking_as": ["本輪發言身份名稱"], "text": "完整發言內容"'
+            if not is_elicitation:
+                json_hint += ', "open_questions": [...]'
             if issue_category == "open_question":
                 flow_hint = "選擇適合回答的利害關係人，直接回答問題並補充必要情境。"
             else:
                 flow_hint = "選擇適合的 speaking_as，說明該身份在此議題上的立場、需求與底線。"
         else:
-            json_hint = '"statement": "針對此議題的完整發言內容", "open_questions": [...]'
+            json_hint = '"text": "針對此議題的完整發言內容"'
+            if not is_elicitation:
+                json_hint += ', "open_questions": [...]'
             flow_hint = "以第一人稱撰寫一段完整發言，說明立場、需求與底線。"
         if answer_all_questions:
             flow_hint = (
-                "逐題回答前面每一位 agent 提出的問題；statement 內請用「發問者 → 回答身份」分段，"
+                "逐題回答前面每一位 agent 提出的問題；text 內請用「發問者 → 回答身份」分段，"
                 "每題都要明確回答，不要只回最後一題。"
             )
 
@@ -418,6 +419,7 @@ class UserIssues:
         suggested_next_action_rules_text = "".join(
             f"- {rule}\n" for rule in suggested_next_action_rule
         )
+        open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，再放進 open_questions。\n"
         names_list_text = ", ".join(str(name) for name in names_list if str(name).strip())
 
         return f"""{stakeholder_contract}
@@ -433,13 +435,13 @@ class UserIssues:
 {flow_hint}
 
 # 規則
-- statement 要自然、口語、貼近日常使用情境。
+- text 要自然、口語、貼近日常使用情境。
 - 回答必須扣回原始產品情境與 speaking_as 指定身份。
 - 只表達需求、顧慮、底線與可接受條件；不要寫技術解法或最終 requirement wording。
-- 若需要他人補資訊，再放進 open_questions。
+{open_questions_rule.rstrip()}
 - 若資訊不足，可直接說明不確定之處。
 {suggested_next_action_rules_text}
-{('- 若前面有多位 agent 提問，statement 必須逐題回答每一題。' if answer_all_questions else '')}
+{('- 若前面有多位 agent 提問，text 必須逐題回答每一題。' if answer_all_questions else '')}
 {f'- speaking_as 的名稱必須從以下選一個或數個：{names_list_text}' if need_speaking_as else ''}
 
 # 輸出 JSON

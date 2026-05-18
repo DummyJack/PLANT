@@ -1,7 +1,7 @@
 ---
 name: domain-research
 description: Research domain knowledge for requirements engineering. Gathers best practices, regulatory requirements, and competitive insights.
-allowed-tools: artifact_query, file_parser, web_search
+allowed-tools: artifact_query, read_file, web_search
 ---
 
 # Domain Research Skill

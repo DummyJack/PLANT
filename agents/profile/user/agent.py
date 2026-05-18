@@ -73,14 +73,17 @@ class UserAgent(
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_for_issue_response(messages, temperature=1)
 
-        statement = response.get("statement", "")
-        open_questions = response.get("open_questions", [])
-        if response.get("error") or not str(statement or "").strip():
+        text = response.get("text", "")
+        issue_id = str(issue.get("id") or "")
+        open_questions = (
+            [] if issue_id.startswith("ELICIT-") else response.get("open_questions", [])
+        )
+        if response.get("error") or not str(text or "").strip():
             return {
                 "action": decision.get("action", ""),
                 "status": "failed",
-                "error": response.get("error") or "missing_statement",
-                "format_error": response.get("format_error") or "issue response must include statement",
+                "error": response.get("error") or "missing_text",
+                "format_error": response.get("format_error") or "issue response must include text",
                 "summary": "user issue_response 格式不合格",
             }
 
@@ -115,7 +118,7 @@ class UserAgent(
         return {
             "action": decision.get("action", ""),
             "status": "success",
-            "statement": statement,
+            "text": text,
             "open_questions": open_questions,
             "speaking_as": speaking_as,
             "summary": "完成 user issue_response",

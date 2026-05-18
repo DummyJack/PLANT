@@ -3,17 +3,17 @@ from typing import Any, Dict, List, Optional
 
 
 class IssueResponseSupport:
-    def clean_statement(self, text: Any) -> str:
-        statement = str(text or "").strip()
-        if statement in {"{}", "[]", "null", '""'}:
+    def clean_text(self, text: Any) -> str:
+        text = str(text or "").strip()
+        if text in {"{}", "[]", "null", '""'}:
             return ""
-        return statement
+        return text
 
     def issue_response_payload(self, payload: Any) -> Dict[str, Any]:
         data = dict(payload or {}) if isinstance(payload, dict) else {}
-        final_statement = self.clean_statement(data.get("statement"))
+        final_text = self.clean_text(data.get("text"))
         normalized = {
-            "statement": final_statement,
+            "text": final_text,
             "open_questions": (
                 data.get("open_questions")
                 if isinstance(data.get("open_questions"), list)
@@ -28,9 +28,9 @@ class IssueResponseSupport:
         for key, value in data.items():
             if key not in normalized:
                 normalized[key] = value
-        if not final_statement:
-            normalized["error"] = "missing_statement"
-            normalized["format_error"] = "issue response must include a non-empty statement field"
+        if not final_text:
+            normalized["error"] = "missing_text"
+            normalized["format_error"] = "issue response must include a non-empty text field"
         return normalized
 
     def chat_for_issue_response(
@@ -44,13 +44,13 @@ class IssueResponseSupport:
                     parsed = self.parse_issue_response_json(raw)
                 except ValueError as e:
                     return {
-                        "statement": "",
+                        "text": "",
                         "open_questions": [],
                         "error": "invalid_json",
                         "format_error": str(e),
                     }
                 return self.issue_response_payload(parsed)
-            return {"statement": "", "open_questions": [], "error": "invalid_issue_response_mode"}
+            return {"text": "", "open_questions": [], "error": "invalid_issue_response_mode"}
         action = kwargs.pop("action", f"{self.name}.issue.response")
         try:
             parsed = self.chat_json(messages, action=action, **kwargs)
@@ -58,7 +58,7 @@ class IssueResponseSupport:
         except Exception as e:
             self.logger.warning("%s issue.response JSON 解析失敗: %s", self.name, e)
             return {
-                "statement": "",
+                "text": "",
                 "open_questions": [],
                 "error": "invalid_json",
                 "format_error": str(e),
@@ -77,13 +77,13 @@ class IssueResponseSupport:
         for row in previous_responses:
             agent_name = row.get("agent", "?")
             response = row.get("response", {}) if isinstance(row.get("response"), dict) else {}
-            statement = response.get("statement", "")
+            text = response.get("text", "")
             speaking_as = response.get("speaking_as", [])
             if isinstance(speaking_as, str):
                 speaking_as = [speaking_as]
             speaking_as = [item for item in speaking_as if isinstance(item, str) and item.strip()]
             role_hint = f"（代表：{'、'.join(speaking_as)}）" if speaking_as else ""
-            parts.append(f"【{agent_name}{role_hint}】\n{statement}")
+            parts.append(f"【{agent_name}{role_hint}】\n{text}")
         return f"\n# {title}\n" + "\n\n".join(parts)
 
     def issue_response_observation(

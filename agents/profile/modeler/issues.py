@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from utils.language import current_output_language
 
-from agents.profile.conflict_review import conflict_review_statement_hint
+from agents.profile.conflict_review import conflict_review_text_hint
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import (
@@ -45,12 +45,11 @@ class ModelerIssues:
 
     def build_model_issue_signals(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         signals: List[Dict[str, Any]] = []
-        models = (artifact.get("system_models") or {}).get("models") or []
+        models = self.system_model_rows(artifact)
         baseline_candidate_types = {
             "context_diagram",
             "use_case_diagram",
             "activity_diagram",
-            "data_flow_diagram",
         }
         existing_types = {m.get("type") for m in models if m.get("type")}
         missing = sorted(list(baseline_candidate_types - existing_types))
@@ -61,28 +60,13 @@ class ModelerIssues:
                     "source_ids": [f"MODEL-GAP-{mtype}" for mtype in missing],
                     "missing_diagram_types": missing,
                     "summary": (
-                        "缺少可輔助需求理解的候選基礎圖型；只有在會影響需求理解、"
-                        "流程討論、資料流、系統邊界或追蹤性時才需要提案。"
+                        "目前沒有部分候選基礎模型；只有在缺少模型會阻礙需求討論、"
+                        "流程理解、系統邊界或追蹤性時才需要提案。"
                     ),
                     "suggested_category": "open_question",
                 }
             )
 
-        for m in models:
-            to_confirm = m.get("to_confirm") or []
-            if not to_confirm:
-                continue
-            mtype = (m.get("type") or "").strip()
-            signals.append(
-                {
-                    "kind": "model_to_confirm",
-                    "source_ids": [mtype] if mtype else [],
-                    "diagram_type": mtype,
-                    "model_name": str(m.get("name") or "").strip(),
-                    "summary": "；".join([str(x).strip() for x in to_confirm if str(x).strip()]),
-                    "suggested_category": "open_question",
-                }
-            )
         return signals
 
     def build_modeler_issue_observation(self, **kwargs: Any) -> Dict[str, Any]:
@@ -93,7 +77,7 @@ class ModelerIssues:
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
             "requirements": requirement_discussion_pool(artifact),
-            "current_models": (artifact.get("system_models") or {}).get("models", []),
+            "current_models": self.system_model_rows(artifact),
             "model_issue_signals": self.build_model_issue_signals(artifact),
             "open_questions": artifact.get("open_questions", []),
             "recent_discussions": artifact.get("recent_discussions", []),
@@ -151,11 +135,10 @@ class ModelerIssues:
 提出本輪需要進入 issue proposal 的需求建模議題。
 
 # 提案邊界
-- 只提出會影響 system boundary、actor/use case、user workflow、data flow、interaction order、state transition、model traceability 或模型 to_confirm 收斂的議題。
-- 可以使用 Context.model_issue_signals 作為候選，但你必須自行判斷是否真的需要成為 issue proposal；候選基礎圖型不是必產物。
-- Context.model_issue_signals 可能包含 baseline_candidate_gap 或 model_to_confirm；這些只是候選訊號，不代表一定要提案。
-- 若缺少候選圖型但不影響需求理解、流程討論、資料流、系統邊界或追蹤性，不要提案。
-- 若模型 to_confirm 已被 existing_issue_proposals 或近期 decisions 覆蓋，不要重複提案。
+- 只提出會影響 system boundary、actor/use case、user workflow、資料輸入/輸出、資料物件、interaction order、state transition 或 model traceability 的議題。
+- 可以使用模型議題候選訊號作為候選，但你必須自行判斷是否真的需要成為 issue proposal；候選基礎圖型不是必產物。
+- 模型議題候選訊號可能包含 baseline_candidate_gap；這些只是弱候選訊號，不代表一定要提案。
+- 若缺少候選圖型但不影響需求理解、流程討論、系統邊界或追蹤性，不要提案。
 - 議題必須聚焦模型影響、流程/資料/狀態缺口或模型追蹤性；不得從模型反推新增需求。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
@@ -315,7 +298,7 @@ class ModelerIssues:
         prev_text = ""
         if previous_responses:
             parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('statement', '')}"
+                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
                 for r in previous_responses
             ]
             prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
@@ -367,7 +350,7 @@ class ModelerIssues:
             rules_block = modeler_elicitation_action_rules(stop_phrase)
         suggested_next_action_json = ""
         pair_reviews_json = ""
-        statement_hint = '"statement": "針對此議題的完整發言內容"'
+        text_hint = '"text": "針對此議題的完整發言內容"'
         if allow_suggested_next_action:
             suggested_next_action_json = """,
     "suggested_next_action": {
@@ -378,17 +361,21 @@ class ModelerIssues:
     }"""
         if (issue.get("category") or "").strip() == "conflict_discussion":
             pair_reviews_json = ""
-            statement_hint = conflict_review_statement_hint()
-            output_fields = f"    {statement_hint}"
+            text_hint = conflict_review_text_hint()
+            output_fields = f"    {text_hint}"
         else:
-            target_json = ""
             if issue_id.startswith("ELICIT-"):
-                target_json = ',\n    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
-            output_fields = (
-                f"    {statement_hint}{target_json},\n"
-                '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
-                f"{suggested_next_action_json}{pair_reviews_json}"
-            )
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
+                    f"{suggested_next_action_json}{pair_reviews_json}"
+                )
+            else:
+                output_fields = (
+                    f"    {text_hint},\n"
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    f"{suggested_next_action_json}{pair_reviews_json}"
+                )
         return f"""{issue_text}
     {prev_text}
     {context_text}

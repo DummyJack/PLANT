@@ -144,8 +144,8 @@ class MediatorDecision:
         discussion_text = ""
         for c in main_contribs:
             agent = c.get("agent", "?")
-            statement = (c.get("response") or {}).get("statement", "")
-            discussion_text += f"\n【{agent}】\n{statement}\n"
+            text = (c.get("response") or {}).get("text", "")
+            discussion_text += f"\n【{agent}】\n{text}\n"
 
         user_prompt = convergence_prompt(issue=issue, discussion_text=discussion_text)
         messages = self.build_direct_messages(user_prompt)
@@ -167,7 +167,7 @@ class MediatorDecision:
         affected_conflict_ids = [
             sid for sid in (issue.get("source_ids") or [])
             if isinstance(sid, str)
-            and (sid.startswith("CF-") or sid.startswith("CF-D") or sid.startswith("NF-"))
+            and sid.startswith(("PAIR-", "MULTIPLE-"))
         ]
         affected_requirement_ids = [
             sid for sid in (issue.get("source_ids") or [])
@@ -198,8 +198,8 @@ class MediatorDecision:
         discussion_text = ""
         for c in main_contribs:
             agent = c.get("agent", "?")
-            statement = (c.get("response") or {}).get("statement", "")
-            discussion_text += f"\n【{agent}】\n{statement}\n"
+            text = (c.get("response") or {}).get("text", "")
+            discussion_text += f"\n【{agent}】\n{text}\n"
 
         user_prompt = decision_option_analysis_prompt(
             issue=issue,
@@ -225,8 +225,8 @@ class MediatorDecision:
         for c in contributions:
             agent = c.get("agent", "?")
             resp = c.get("response", {})
-            statement = resp.get("statement", "")
-            discussion_text += f"\n【{agent}】\n{statement}\n"
+            text = resp.get("text", "")
+            discussion_text += f"\n【{agent}】\n{text}\n"
 
         user_prompt = human_option_slates_prompt(
             issue=issue,

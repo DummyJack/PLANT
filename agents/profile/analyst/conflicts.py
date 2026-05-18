@@ -1,8 +1,12 @@
 # Analyst conflict logic: detect, recheck, sign off, and report requirement conflicts.
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from storage.markdown import clean_llm_output
+from agents.skills.base import get_skill
+from agents.profile.scenario import scenario_prompt_value
+from agents.profile.conflict_review import CONFLICT_REVIEW_LABEL_RULES
 
 from .conflict_store import (
     conflict_entries_count,
@@ -11,9 +15,67 @@ from .conflict_store import (
 )
 from .requirements import requirement_discussion_pool
 from .validation import conflict_records, signoff_decisions
+from .prompts import conflict_skill_subset
+
+
+CONFLICT_TYPE_VALUES = {
+    "logical",
+    "technical",
+    "resource",
+    "temporal",
+    "data",
+    "state",
+    "priority",
+    "scope",
+    "other",
+}
+
+
+def conflict_type_guidance_from_skill() -> str:
+    skill = get_skill("conflict-analyzer")
+    skill_dir = skill["path"].parent
+    patterns_path = skill_dir / "references" / "conflict_patterns.md"
+    try:
+        content = patterns_path.read_text(encoding="utf-8")
+    except OSError:
+        content = ""
+    rows: List[str] = []
+    for match in re.finditer(r"^## ([A-Za-z]+) Conflicts\s*$", content, flags=re.MULTILINE):
+        title = match.group(1).strip().lower()
+        if title not in CONFLICT_TYPE_VALUES:
+            continue
+        start = match.end()
+        next_match = re.search(r"^## ", content[start:], flags=re.MULTILINE)
+        section = content[start : start + next_match.start()] if next_match else content[start:]
+        desc_match = re.search(r"### Description\s*(.*?)(?:\n### |\Z)", section, flags=re.DOTALL)
+        description = ""
+        if desc_match:
+            description = " ".join(desc_match.group(1).strip().split())
+        if description:
+            rows.append(f"- {title}: {description}")
+    rows.append("- other: Confirmed Conflict that does not fit the eight skill-defined types.")
+    return "\n".join(rows)
+
+
+def normalize_conflict_type(value: Any, *, final_label: str) -> str:
+    if final_label != "Conflict":
+        return ""
+    conflict_type = str(value or "").strip().lower()
+    return conflict_type if conflict_type in CONFLICT_TYPE_VALUES else "other"
 
 
 class AnalystConflicts:
+    def invoke_conflict_skill(
+        self,
+        task: str,
+        *,
+        context: Any,
+        mode: str = "analysis",
+    ) -> str:
+        skill = conflict_skill_subset(get_skill("conflict-analyzer"), mode)
+        messages = self.build_skill_messages(skill, "conflict-analyzer", task, context=context)
+        return self.run_skill_messages("conflict-analyzer", messages)
+
     def run_conflict_analysis_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="conflict_analysis",
@@ -94,6 +156,8 @@ class AnalystConflicts:
                     recent_decisions_limit=kwargs.get("recent_decisions_limit"),
                     previous_report=kwargs.get("previous_report"),
                 )
+            elif action == "generate_conflict_resolutions":
+                output = self.build_conflict_resolutions(kwargs.get("artifact") or {})
             elif action == "get_resolution_options_for_issue":
                 output = self.fetch_resolution_options_for_issue(
                     kwargs.get("issue") or {},
@@ -147,6 +211,12 @@ class AnalystConflicts:
             previous_report=previous_report,
         )
 
+    def generate_conflict_resolutions(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        return self.run_conflict_analysis_loop(
+            "generate_conflict_resolutions",
+            artifact=artifact,
+        )
+
     def run_pair_conflict_detection(
         self,
         *,
@@ -170,7 +240,7 @@ class AnalystConflicts:
 
 只輸出一個 JSON 物件：{{"conflicts":[...]}}。勿輸出 Markdown 或其他文字。"""
         try:
-            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
             data = self.parse_issue_response_json(raw)
         except Exception as e:
             raise RuntimeError(f"{error_label}輸出格式不合格: {e}") from e
@@ -178,11 +248,21 @@ class AnalystConflicts:
             data.get("conflicts", []),
             pairwise_mode=True,
             pair_count=pair_count,
+            pair_requirements={
+                int(row.get("pair_index")): [
+                    str(req.get("id") or "").strip()
+                    for req in (row.get("requirements") or [])
+                    if isinstance(req, dict) and str(req.get("id") or "").strip()
+                ]
+                for row in pair_rows
+                if isinstance(row, dict)
+                and isinstance(row.get("pair_index"), int)
+            },
         )
 
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
         return [
-            req for req in (artifact.get("reqt_candidates") or [])
+            req for req in (artifact.get("URL") or [])
             if isinstance(req, dict)
             and str(req.get("id") or "").strip()
             and str(req.get("text") or "").strip()
@@ -193,39 +273,59 @@ class AnalystConflicts:
         artifact: Dict,
         requirements: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        context: Dict[str, Any] = {"requirements": requirements}
-        if artifact.get("stakeholders"):
-            context["stakeholders"] = artifact["stakeholders"]
+        context_requirements: List[Dict[str, Any]] = []
+        for req in requirements:
+            stakeholder = req.get("stakeholder")
+            stakeholder_name = (
+                str(stakeholder.get("name") or "").strip()
+                if isinstance(stakeholder, dict)
+                else str(stakeholder or "").strip()
+            )
+            row = {
+                "id": str(req.get("id") or "").strip(),
+                "text": str(req.get("text") or "").strip(),
+            }
+            if stakeholder_name:
+                row["stakeholder"] = stakeholder_name
+            context_requirements.append(row)
+
+        context: Dict[str, Any] = {}
+        scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
+        if scenario_source:
+            context["scenario"] = scenario_prompt_value(scenario_source)
         if artifact.get("scope"):
             context["scope"] = artifact["scope"]
+        context["requirements"] = context_requirements
         return context
 
     def conflict_detection_base_task(self) -> str:
-        return """依 conflict-analyzer skill，僅根據 Context.requirements（需求清單）辨識需求關係；本步不看系統模型或其他回饋。
+        return """僅根據輸入的 User Requirements 判斷 Conflict / Neutral；本步不看系統模型或其他回饋。
+
+本專案覆蓋規則：
+- 本步只做 requirement candidate conflict classification，不做報告或解決方案建議。
+- 不改寫需求、不要新增需求、不要提出解決方案、不要做 meeting decision。
+- 只輸出呼叫端指定的 JSON。
+- 產品情境與需求範圍只作為產品邊界背景；Conflict / Neutral 仍以 User Requirements 原文為主要依據。
 
 判斷任務：
 - label 只用英文 "Conflict" 或 "Neutral"。
+- 若 label 是 "Conflict"，必須輸出 type；type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- 若無法歸入前八類但仍是 Conflict，type 使用 other。
+- 若 label 是 "Neutral"，不要輸出 type。
 - 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
-
-Conflict 判準：
-- 需求必須處於同一主體與可比較範圍。
-- 只有在無法同時滿足，或一方成立會直接違反另一方時，才標為 Conflict。
-- 資訊不足、尚待澄清、一般取捨、範圍未明、角色不同或流程階段不同，不可直接升級為 Conflict。
-
-Neutral 判準：
-- 只有在可明確判定兩項需求不衝突、不重複，且沒有直接語義關係時，才標為 Neutral。
-- 若兩項需求是重述、細化、依賴、範圍重疊、同一流程相鄰步驟或同一輸出行為，不要標為 Neutral。
+- 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
 
 輸出要求：
-- Conflict：需包含 requirement_ids 或 related_requirements。
-- Neutral：可選填 requirement_ids。
-- requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。
+- 兩兩判斷：只需輸出 pair_index、label、reason；若 label 是 Conflict，再輸出 type。
+- 整體判斷：Conflict 需包含 requirement_ids 或 related_requirements。
+- 整體判斷的 requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。
 """
 
     def execute_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
-        """用 reqt_candidates 做相鄰兩兩需求衝突判斷。"""
+        """用 URL 做相鄰兩兩需求衝突判斷。"""
         requirements = [
-            req for req in (artifact.get("reqt_candidates") or [])
+            req for req in (artifact.get("URL") or [])
             if isinstance(req, dict)
             and str(req.get("id") or "").strip()
             and str(req.get("text") or "").strip()
@@ -242,9 +342,16 @@ Neutral 判準：
             pair_rows.append(
                 {
                     "pair_index": pair_index,
-                    "requirement_ids": [req_a.get("id"), req_b.get("id")],
-                    "requirement_a": req_a.get("text"),
-                    "requirement_b": req_b.get("text"),
+                    "requirements": [
+                        {
+                            "id": req_a.get("id"),
+                            "text": req_a.get("text"),
+                        },
+                        {
+                            "id": req_b.get("id"),
+                            "text": req_b.get("text"),
+                        },
+                    ],
                 }
             )
 
@@ -259,7 +366,7 @@ Neutral 判準：
                 "配對方式固定為需求順序 1 對 2、3 對 4、5 對 6；若最後剩一筆需求，不判斷。",
                 "每一個 pair 都必須輸出恰好一筆結果。",
                 "pair_index 必須與下列清單一致。",
-                "requirement_ids 必須使用下列 pair 的原始需求 id。",
+                "不需要輸出 requirement_ids，系統會根據 pair_index 自動對回 requirements。",
                 "不要輸出 3 條以上需求共同造成的群組衝突。",
             ],
             rows_label="指定 pairs",
@@ -293,7 +400,7 @@ Neutral 判準：
                     "只判斷下列 missing pair，pair 之間互相獨立。",
                     "每一個 missing pair 都必須輸出恰好一筆結果。",
                     "pair_index 必須與下列清單一致，不可重新編號。",
-                    "requirement_ids 必須使用下列 pair 的原始需求 id。",
+                    "不需要輸出 requirement_ids，系統會根據 pair_index 自動對回 requirements。",
                     "不要輸出清單以外的 pair。",
                     "不要輸出 3 條以上需求共同造成的群組衝突。",
                 ],
@@ -333,10 +440,10 @@ Neutral 判準：
         return set_pair_conflicts({**artifact}, pair_conflicts)
 
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
-        """用 reqt_candidates 做 3+ 需求群組衝突判斷，並附加到既有兩兩結果。"""
+        """用 URL 做 3+ 需求群組衝突判斷，並附加到既有兩兩結果。"""
         requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 3:
-            self.logger.info("整體衝突判斷")
+            self.logger.info("整體衝突判斷 0 組（Conflict: 0）")
             return artifact
         context = self.conflict_detection_context(artifact, requirements)
         base_task = self.conflict_detection_base_task()
@@ -351,8 +458,8 @@ Neutral 判準：
 
 只輸出一個 JSON 物件：{"conflicts":[...]}。勿輸出 Markdown 或其他文字。"""
         try:
-            holistic_raw = self.invoke_skill(
-                "conflict-analyzer", holistic_task, context=context
+            holistic_raw = self.invoke_conflict_skill(
+                holistic_task, context=context, mode="analysis"
             )
             holistic_data = self.parse_issue_response_json(holistic_raw)
         except Exception as e:
@@ -362,7 +469,11 @@ Neutral 判準：
             if row.get("label") == "Conflict"
             and len(row.get("requirement_ids") or []) >= 3
         ]
-        self.logger.info("整體衝突判斷")
+        self.logger.info(
+            "整體衝突判斷 %s 組（Conflict: %s）",
+            len(holistic_conflicts),
+            len(holistic_conflicts),
+        )
 
         multiple_rows: List[Dict[str, Any]] = []
         for idx, row in enumerate(holistic_conflicts, 1):
@@ -392,12 +503,7 @@ Neutral 判準：
             "- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。\n"
             "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirements 原文本身已足以明確推翻現標籤。\n"
             "- 若證據不足、理由不一致或沒有明確共識，維持 current_label。\n"
-            "- Conflict 只在兩項需求無法同時成立，或一方成立會直接違反另一方時成立。\n"
-            "- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也可裁定為 Conflict。\n"
-            "- Neutral 只在兩項需求既不衝突、也不重複，且沒有直接語義關係時成立。\n"
-            "- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。\n"
-            "- 若支持 Neutral 的 pair_reviews 主要以子集、細化、補充步驟或同流程關係作為理由，必須重新檢查是否其實已存在直接語義關係；若存在，不可僅因不互斥就維持 Neutral。\n"
-            "- 若 pair 呈現重複、近似重複、細化、範圍重疊，或同一需求槽位的措辭、限制、觸發條件、數量、頻率差異，需檢查是否必須合併、改寫、刪除或裁定；若是，不可維持 Neutral。\n"
+            f"{CONFLICT_REVIEW_LABEL_RULES}\n"
             "- 你必須對 proposal_list 中的每一個項目都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
             "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n"
             "- 請直接做最終裁定，不要重述整場會議。\n\n"
@@ -444,13 +550,27 @@ Neutral 判準：
         """Analyst 整理已定案的衝突再審查理由。"""
         if not decision_list:
             return [], ""
+        type_guidance = conflict_type_guidance_from_skill()
         prompt = (
             f"# 已定案項目\n{json.dumps(decision_list, ensure_ascii=False, indent=2)}\n\n"
             f"# 各 agent 逐筆理由\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
+            f"# 衝突類型指引（摘自 conflict-analyzer skill）\n{type_guidance}\n\n"
             "# 任務\n"
-            "請根據 final_label 與各 agent 逐筆理由，整理 description。\n\n"
+            "請為每個已定案項目整理 description；若 final_label 是 Conflict，也要根據討論後的主要衝突原因判定 final_type。\n\n"
+            "description 用來寫入 artifact/conflict.json，作為該項 final_label 的最終說明。\n"
+            "請根據 final_label 與各 agent 逐筆理由，整理出一段清楚、精簡、可追溯的裁定描述。\n\n"
+            "# 撰寫重點\n"
+            "- 若 final_label 是 Conflict：說明需求之間的主要衝突點，或為什麼需要合併、改寫、刪除或裁定。\n"
+            "- 若 final_label 是 Conflict：必須輸出 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。\n"
+            "- final_type 根據討論後的主要衝突原因決定，不必沿用 initial_type；若無法歸入前八類但仍是 Conflict，使用 other。\n"
+            "- 若 final_label 是 Neutral：說明為什麼需求之間不構成衝突。\n"
+            "- 若 final_label 是 Neutral：不要輸出 final_type。\n"
+            "- 使用各 agent 已提出的理由，不要加入新的需求解釋或新的判準。\n"
+            "- 不要逐一列出 agent 名稱或投票過程。\n"
+            "- 不要重述完整需求原文。\n\n"
             "# 輸出 JSON array\n"
-            '[{"id": "衝突ID", "description": "精簡裁定描述"}]'
+            '[{"id": "PAIR-1", "description": "Conflict 的最終裁定描述", "final_type": "scope"}, '
+            '{"id": "PAIR-2", "description": "Neutral 的最終裁定描述"}]'
         )
         messages = self.build_direct_messages(prompt)
         raw = (self.model.chat(messages, action="conflict_recheck_final_reason") or "").strip()
@@ -479,7 +599,16 @@ Neutral 判準：
             pair_id = str(row.get("id") or "").strip()
             description = str(row.get("description") or "").strip()
             if pair_id in valid_ids and description:
-                out.append({"id": pair_id, "reason": description})
+                decision = next(
+                    (item for item in decision_list if isinstance(item, dict) and str(item.get("id") or "").strip() == pair_id),
+                    {},
+                )
+                final_label = str(decision.get("new_label") or decision.get("final_label") or "").strip()
+                item = {"id": pair_id, "reason": description}
+                final_type = normalize_conflict_type(row.get("final_type") or row.get("type"), final_label=final_label)
+                if final_type:
+                    item["final_type"] = final_type
+                out.append(item)
         return out, raw
 
     def build_conflict_analysis_report(
@@ -489,59 +618,169 @@ Neutral 判準：
         recent_decisions_limit: Optional[int] = None,
         previous_report: Optional[str] = None,
     ) -> str:
-        """依 conflict-analyzer skill 與 assets/conflict_report_template.json 結構，從 artifact 產出需求 Conflict 分析報告（Markdown）；含所有 Conflict（含已解決）並標示是否已解決。"""
+        """根據已定案的 conflict report rows 產出 Markdown 報告。"""
         _ = recent_decisions_limit
-        conflict_payload = artifact.get("conflict", {}) or {}
-        conflict_rows = (
-            conflict_payload.get("report", [])
-            if isinstance(conflict_payload, dict)
-            else []
-        ) or []
+        conflict_rows = artifact.get("conflict_report", []) or []
         conflict_rows = [
             row for row in conflict_rows
             if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
         ]
         if not conflict_rows:
             return ""
-        context = conflict_rows
+        context: Any = {
+            "scenario": str(artifact.get("scenario") or "").strip(),
+            "conflict_report": conflict_rows,
+        }
         previous_report_text = (previous_report or "").strip()
         if previous_report_text:
             context = {
+                "scenario": str(artifact.get("scenario") or "").strip(),
                 "previous_conflict_report": previous_report_text,
-                "conflicts": conflict_rows,
+                "conflict_report": conflict_rows,
             }
-            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中），根據 Context.previous_conflict_report 與最新 Context 修訂需求衝突報告。
+            task = """根據 previous_conflict_report 與 conflict_report 修訂需求衝突 Markdown 報告。
 
-規則：
-- Context.conflicts 已經是完成衝突再審查後仍被判定為 Conflict 的項目。
-- 請直接整理成報告，不要重新分類、不新增衝突、不移除項目。
-- 每一筆 Context.conflicts 都要列入報告，並保留 id、涉及需求與 description。
-- Context.conflicts 中的 req_1、req_2、req_N 已經是需求原文。
-- 若 description 已足夠，直接使用；不足時只能基於該筆 req_N 原文補充說明。
-- 這是報告迭代修訂，不是從零重寫；保留上一版仍有效的章節與文字。
-- 若上一版內容已被最新 Context.conflicts 推翻，必須更新或移除。
-- 不要討論 Neutral、resolved、unresolved 統計。
-- 其餘章節依 report_template 結構整理。
+本專案約束：
+- 每筆 conflict_report 都要列入報告。
+- 保留上一版仍有效內容，移除與最新 conflict_report 不一致的內容。
+- 只渲染輸入資料，不重新分類、不新增或移除項目。
+- description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
+- 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
+- 不要產生 Executive Summary。
+- 不要產生整體 recommendations 區塊。
 
-只輸出 Markdown，勿輸出 JSON 或程式碼區塊。"""
+只輸出 Markdown。"""
         else:
-            task = """依本 skill 與 conflict_report_template.json（已在 skill 附件中）產出需求衝突報告。
+            task = """根據 conflict_report 產生需求衝突 Markdown 報告。
 
-規則：
-- Context 是一個 list，內容已經是完成衝突再審查後仍被判定為 Conflict 的項目。
-- 請直接整理成報告，不要重新分類、不新增衝突、不移除項目。
-- 每一筆 Context item 都要列入報告，並保留 id、涉及需求與 description。
-- Context item 中的 req_1、req_2、req_N 已經是需求原文。
-- 若 description 已足夠，直接使用；不足時只能基於該筆 req_N 原文補充說明。
-- 不要討論 Neutral、resolved、unresolved 統計。
-- 其餘章節依 report_template 結構整理。
+本專案約束：
+- 每筆輸入都要列入報告。
+- 只渲染輸入資料，不重新分類、不新增或移除項目。
+- description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
+- 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
+- 不要產生 Executive Summary。
+- 不要產生整體 recommendations 區塊。
 
-只輸出 Markdown，勿輸出 JSON 或程式碼區塊。"""
+只輸出 Markdown。"""
         try:
-            raw = self.invoke_skill("conflict-analyzer", task, context=context)
+            raw = self.invoke_conflict_skill(task, context=context, mode="report")
         except Exception as e:
             raise RuntimeError(f"conflict report 生成失敗: {e}") from e
         out = clean_llm_output(raw)
         if not out:
             raise RuntimeError("conflict report 無內容")
         return out
+
+    def build_conflict_resolutions(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """Use conflict skill resolution guidance to enrich conflict.report rows."""
+        conflict_payload = artifact.get("conflict", {}) or {}
+        report_rows = (
+            conflict_payload.get("report", [])
+            if isinstance(conflict_payload, dict)
+            else []
+        ) or []
+        conflict_rows = [
+            row for row in report_rows
+            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+        ]
+        if not conflict_rows:
+            return artifact
+        task = """根據單一已定案 Conflict 項目產生 resolution options。
+
+本專案約束：
+- 輸入資料已完成衝突辨識與衝突再審查。
+- 不重新分類、不新增衝突、不移除衝突。
+- label、type、description 視為定案內容。
+- type 只作為策略候選方向；實際 resolution 必須根據 requirements 與 description 決定。
+- 若 type 是 other，不要硬套特定衝突類型；請根據 requirements 與 description 產生可行 resolution。
+- 若本任務沒有提供 resolution strategy guidance，代表此 Conflict 無對應類型策略；請只根據 requirements 與 description 產生 resolution。
+- id 必須使用輸入 Conflict 項目的 id，不可自行產生 CONF-* 或 CR-*。
+- requirements id 與 text 只作為判斷依據，不可改寫。
+- 不要輸出 effort、impact 或輸出契約以外欄位。
+- 只輸出本任務指定的合法 JSON 格式。
+
+# 輸出 JSON
+{
+  "id": "Conflict 項目 id",
+  "resolution_options": [
+    {
+      "option": "A",
+      "strategy": "Resolution strategy name",
+      "description": "處理方式",
+      "pros": ["優點"],
+      "cons": ["限制或代價"],
+      "recommendation": true
+    }
+  ],
+  "recommended_resolution": "建議採用的 resolution 與理由"
+}"""
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for conflict_row in conflict_rows:
+            conflict_id = str(conflict_row.get("id") or "").strip()
+            if not conflict_id:
+                continue
+            conflict_type = str(conflict_row.get("type") or "").strip().lower() or "other"
+            try:
+                data = self.parse_issue_response_json(
+                    self.invoke_conflict_skill(
+                        task,
+                        context=conflict_row,
+                        mode=f"resolution:{conflict_type}",
+                    )
+                )
+            except Exception as e:
+                raise RuntimeError(f"conflict resolution 生成失敗: {conflict_id}: {e}") from e
+            if not isinstance(data, dict):
+                raise RuntimeError(f"conflict resolution 必須輸出 JSON object: {conflict_id}")
+            returned_id = str(data.get("id") or "").strip()
+            if returned_id != conflict_id:
+                raise RuntimeError(f"conflict resolution id 不一致: {conflict_id}")
+            resolution_options = data.get("resolution_options")
+            recommended_resolution = str(data.get("recommended_resolution") or "").strip()
+            if not isinstance(resolution_options, list) or not resolution_options:
+                raise RuntimeError(f"conflict resolution 缺少 resolution_options: {conflict_id}")
+            if not recommended_resolution:
+                raise RuntimeError(f"conflict resolution 缺少 recommended_resolution: {conflict_id}")
+            clean_options: List[Dict[str, Any]] = []
+            for option in resolution_options:
+                if not isinstance(option, dict):
+                    continue
+                clean_option = {
+                    "option": str(option.get("option") or "").strip(),
+                    "strategy": str(option.get("strategy") or "").strip(),
+                    "description": str(option.get("description") or "").strip(),
+                    "pros": [
+                        str(x).strip()
+                        for x in (option.get("pros") or [])
+                        if str(x).strip()
+                    ],
+                    "cons": [
+                        str(x).strip()
+                        for x in (option.get("cons") or [])
+                        if str(x).strip()
+                    ],
+                    "recommendation": bool(option.get("recommendation")),
+                }
+                if clean_option["option"] and clean_option["strategy"] and clean_option["description"]:
+                    clean_options.append(clean_option)
+            if not clean_options:
+                raise RuntimeError(f"conflict resolution 沒有有效 options: {conflict_id}")
+            by_id[conflict_id] = {
+                "resolution_options": clean_options,
+                "recommended_resolution": recommended_resolution,
+            }
+
+        updated = dict(artifact)
+        conflict_state = dict(conflict_payload)
+        updated_report: List[Dict[str, Any]] = []
+        for row in report_rows:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            conflict_id = str(item.get("id") or "").strip()
+            if conflict_id in by_id:
+                item.update(by_id[conflict_id])
+            updated_report.append(item)
+        conflict_state["report"] = updated_report
+        updated["conflict"] = conflict_state
+        return updated

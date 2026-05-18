@@ -12,20 +12,24 @@ def requirement_candidate(
     return out
 
 
+def candidate_pool(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return artifact.get("URL", []) or []
+
+
 def requirement_candidate_id(candidates: List[Dict[str, Any]]) -> str:
     max_num = 0
     for row in candidates or []:
         if not isinstance(row, dict):
             continue
         cid = str(row.get("id") or "").strip()
-        m = re.fullmatch(r"REQT-CAND-(\d+)", cid)
+        m = re.fullmatch(r"URL-(\d+)", cid)
         if not m:
             continue
         try:
             max_num = max(max_num, int(m.group(1)))
         except ValueError:
             continue
-    return f"REQT-CAND-{max_num + 1}"
+    return f"URL-{max_num + 1}"
 
 
 def ensure_requirement_candidate_ids(
@@ -41,7 +45,7 @@ def ensure_requirement_candidate_ids(
         if not text:
             continue
         cid = str(row.get("id") or "").strip()
-        if not re.fullmatch(r"REQT-CAND-\d+", cid) or cid in seen_ids:
+        if not re.fullmatch(r"URL-\d+", cid) or cid in seen_ids:
             cid = requirement_candidate_id(normalized)
         row["id"] = cid
         row["text"] = text
@@ -63,7 +67,7 @@ def requirement_discussion_pool(artifact: Dict[str, Any]) -> List[Dict[str, Any]
     seen = set()
     elicitation = artifact.get("elicitation") if isinstance(artifact.get("elicitation"), dict) else {}
     for rows in (
-        artifact.get("reqt_candidates", []) or [],
+        candidate_pool(artifact),
         elicitation.get("elicited_reqts", []) or [],
     ):
         for item in rows:
@@ -151,8 +155,16 @@ def assess_requirements_for_final_meeting(
             missing.append("id")
         if not str(req.get("text") or "").strip():
             missing.append("text")
-        if not str(req.get("acceptance_criteria") or "").strip():
-            missing.append("acceptance_criteria")
+        stakeholder = req.get("stakeholder")
+        stakeholder_name = (
+            str(stakeholder.get("name") or "").strip()
+            if isinstance(stakeholder, dict)
+            else str(stakeholder or "").strip()
+        )
+        if not stakeholder_name:
+            missing.append("stakeholder")
+        if not str(req.get("source") or "").strip():
+            missing.append("source")
         if rid in unresolved_conflict_req_ids:
             missing.append("unresolved_conflict")
         if rid in pending_decision_req_ids:

@@ -19,7 +19,7 @@ class DocumentorAgent(
 1. change_record、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
 2. 你只根據 Final meeting 後的正式 context 編寫，不自行補決策，不把討論過程寫入正式文件。
 3. SRS skill 是 IEEE 830 寫作指引；其中 FR/NFR ID、RTM、stakeholder sign-off 是範例或可選項，不得覆蓋本專案資料契約。
-4. 本專案需求 ID 必須保留 Context.requirements 內既有 REQ-*，不得改名成 FR-* 或 NFR-*。
+4. 本專案需求 ID 必須保留正式需求內既有 REQ-*，不得改名成 FR-* 或 NFR-*。
 5. 最終正式稿不得保留 template 的說明文字、提示語、註解、emoji、placeholder 指示或其他 authoring residue。
 6. 文件語氣必須像基線規格文件，不得寫成會議摘要、工作紀錄、討論整理或建議書。"""
 

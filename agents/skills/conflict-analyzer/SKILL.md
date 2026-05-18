@@ -1,296 +1,263 @@
 ---
-name: conflict-detection
-description: Conflict identification and resolution patterns for requirements, decisions, and plans
+name: conflict-analyzer
+description: Identifies and analyzes conflicts in software requirements including logical contradictions, technical incompatibilities, resource constraints, timeline issues, data conflicts, and stakeholder priority mismatches. Use when reviewing requirement sets, specifications, user stories, or project plans to detect conflicts that could block implementation or cause rework. Provides detailed conflict analysis with resolution strategies.
 allowed-tools: artifact_query
-triggers:
-  - conflict
-  - contradiction
-  - inconsistency
-  - incompatible
 ---
 
-# Conflict Detection Skill
+## Core Capabilities
 
-This skill provides patterns for detecting and resolving conflicts between requirements, decisions, and plans throughout the workflow.
+This skill enables you to:
 
-## Core Principles
+1. **Detect conflicts** - Identify 8 types of requirement conflicts
+2. **Recommend resolutions** - Suggest appropriate resolution strategies
+3. **Generate reports** - Create structured conflict analysis reports
 
-1. **Early Detection**: Catch conflicts as soon as they arise
-2. **Immediate Stop**: Halt workflow when conflict detected
-3. **User Resolution**: Never auto-resolve conflicts
-4. **Documented Rationale**: Record why resolutions were chosen
+## Analysis Workflow
 
-## Conflict Types
+Follow this process when analyzing requirements for conflicts:
 
-### Requirement vs Requirement
-Two requirements that cannot both be satisfied.
+### Step 1: Catalog All Requirements
 
-**Detection Point**: DISCUSS phase
-**Example**: "User wants real-time updates AND offline mode"
+Collect and organize all requirements:
+- Extract from documents, user stories, tickets
+- Assign unique IDs if not already present
+- Group by feature, component, or domain
+- Note stakeholder sources
 
-**Indicators**:
+### Step 2: Systematic Conflict Detection
+
+Use `references/conflict_patterns.md` to scan for 8 conflict types:
+
+**1. Logical Conflicts**
+- Direct contradictions (A says yes, B says no)
 - Mutually exclusive features
-- Resource contention
-- Contradictory behaviors
+- Opposite behaviors
+- Example: "Work offline" vs "Require continuous internet"
 
----
+**2. Technical Conflicts**
+- Platform incompatibilities
+- Technology stack conflicts
+- API/library version mismatches
+- Protocol incompatibilities
+- Example: "Support IE11" vs "Use ES2022 features"
 
-### Decision vs Decision
-A new decision contradicts an earlier decision.
+**3. Resource Conflicts**
+- Team capacity limitations
+- Budget constraints
+- Infrastructure limits
+- Bandwidth/performance limits
+- Example: "1000 concurrent streams" vs "1 Gbps bandwidth limit"
 
-**Detection Point**: DISCUSS phase
-**Example**: "Earlier said 'no database', now requesting PostgreSQL"
+**4. Temporal Conflicts**
+- Dependency deadline mismatches
+- Impossible timelines
+- Frequency conflicts
+- Processing time conflicts
+- Example: "Dashboard by March 1" depends on "Auth by March 15"
 
-**Indicators**:
-- Opposite stance on same issue
-- Changed constraints
-- Reversed priorities
+**5. Data Conflicts**
+- Format incompatibilities
+- Validation rule conflicts
+- Data type mismatches
+- Uniqueness conflicts
+- Retention policy conflicts
+- Example: "Email must be unique" vs "Allow multiple accounts per email"
 
----
+**6. State Conflicts**
+- Invalid state transitions
+- State definition overlaps
+- Circular state dependencies
+- Concurrent state conflicts
+- Example: "Processing orders can't be modified" vs "Processing orders can be cancelled"
 
-### New vs Existing Plan
-Proposed work conflicts with pending tasks.
+**7. Priority Conflicts**
+- Competing stakeholder priorities
+- Performance vs security trade-offs
+- UX vs compliance conflicts
+- Cost vs reliability tensions
+- Example: "Both features critical for v1" but "Only time for one"
 
-**Detection Point**: PLAN phase
-**Example**: "This change conflicts with TASK-003 in current ITEM-XXX.md"
+**8. Scope Conflicts**
+- Feature outside defined scope
+- Platform expansion beyond bounds
+- Integration beyond standalone scope
+- Component boundary violations
+- Example: "Web app only" vs "Upload from mobile app"
 
-**Indicators**:
-- Same files modified differently
-- Contradicting goals
-- Circular dependencies
+### Step 3: Recommend Resolution Strategies
 
----
+Use `references/resolution_strategies.md` to propose solutions:
 
-### Scope vs Timeline
-Requested features exceed achievable scope.
+**Strategy Selection Guide:**
 
-**Detection Point**: DISCUSS phase
-**Example**: "Features exceed what's achievable in stated timeline"
+| Conflict Type | Primary Strategies |
+|--------------|-------------------|
+| Logical | Prioritization, Conditional Logic, Stakeholder Negotiation |
+| Technical | Technical Solution, Decomposition, Scope Adjustment |
+| Resource | Prioritization, Sequencing, Parallel Tracks |
+| Temporal | Sequencing, Relaxation, Scope Adjustment |
+| Data | Technical Solution, Conditional Logic |
+| State | Decomposition, Conditional Logic, Technical Solution |
+| Priority | Stakeholder Negotiation, Prioritization, Compromise |
+| Scope | Scope Adjustment, Prioritization, Sequencing |
 
-**Indicators**:
-- Too many must-haves
-- Complex features with tight deadline
-- Dependencies on unavailable resources
+**For each conflict, provide:**
+1. **Multiple options** (2-3 resolution approaches)
+2. **Pros and cons** of each option
+3. **Implementation effort** (time, cost, complexity)
+4. **Trade-offs** (what's gained/lost)
+5. **Recommended approach** with rationale
 
----
-
-### Tech vs Requirement
-Chosen technology cannot support a requirement.
-
-**Detection Point**: PLAN phase
-**Example**: "Chosen tech doesn't support requested feature"
-
-**Indicators**:
-- Technical limitations
-- Incompatible versions
-- Missing capabilities
-
----
-
-## Detection Protocol
-
-### On Each New Input
+**Example:**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│              CONFLICT DETECTION FLOW                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. EXTRACT assertions from new input                           │
-│     ├─ Requirements stated                                      │
-│     ├─ Decisions made                                           │
-│     ├─ Constraints imposed                                      │
-│     └─ Priorities expressed                                     │
-│                                                                 │
-│  2. SCAN for contradictions                                     │
-│     ├─ Compare against ITEM-XXX.md decisions                    │
-│     ├─ Compare against ITEM-XXX.md requirements                 │
-│     ├─ Compare against existing tasks in ITEM-XXX.md            │
-│     └─ Check implicit assumptions                               │
-│                                                                 │
-│  3. IF CONFLICT DETECTED:                                       │
-│     ├─ STOP workflow immediately                                │
-│     ├─ Document conflict in ITEM-XXX.md                         │
-│     ├─ Present conflict clearly to user                         │
-│     └─ Wait for resolution before continuing                    │
-│                                                                 │
-│  4. IF NO CONFLICT:                                             │
-│     └─ Continue workflow normally                               │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+Conflict: CONF-001
+- REQ-001: "System must work offline"
+- REQ-005: "System requires continuous internet connection"
+
+Resolution Options:
+
+Option A: Prioritization - Choose Offline
+- Strategy: Prioritize offline capability, remove continuous connection requirement
+- Pros: Better mobile UX, works in low connectivity
+- Cons: Some features limited offline, sync complexity
+- Effort: Medium (implement local storage + sync)
+- Recommendation: ✓ RECOMMENDED
+
+Option B: Conditional Logic - Support Both Modes
+- Strategy: Online mode (full features) + Offline mode (core features)
+- Pros: Maximum flexibility, supports all users
+- Cons: High complexity, essentially building two systems
+- Effort: High (dual implementation + mode switching)
+- Recommendation: Not recommended unless both modes essential
+
+Option C: Compromise - Offline-First with Sync
+- Strategy: Core features work offline, sync when connected
+- Pros: Best of both worlds, graceful degradation
+- Cons: Conflict resolution needed, moderate complexity
+- Effort: Medium-High (offline core + background sync)
+- Recommendation: Consider if offline critical but connectivity available most of time
 ```
 
-### Comparison Matrix
+### Step 4: Create Conflict Report
 
-For each new assertion, check against:
-
-| Compare Against | Looking For |
-|-----------------|-------------|
-| Previous decisions | Contradictions |
-| Stated requirements | Incompatibilities |
-| Technical choices | Capability gaps |
-| Implicit assumptions | Hidden conflicts |
-| Pending tasks | Execution conflicts |
-
-## Conflict Documentation
-
-### In ITEM-XXX.md
+Structure findings for stakeholders:
 
 ```markdown
+# {Scenario}
+
 ## Conflicts
 
-### CONFLICT-001: [Descriptive Title]
-**Status**: ACTIVE | RESOLVED | DEFERRED
-**Detected**: [TIMESTAMP]
-**Type**: Requirement | Decision | Plan | Technical | Scope
+### CONF-001: Connectivity Model
+**Requirements:**
+- REQ-001: "System must work offline"
+- REQ-005: "System requires continuous internet connection"
 
-**What conflicts:**
-- A: [First item with reference]
-- B: [Second item with reference]
+**Conflict:** Mutually exclusive connectivity requirements
+**Type:** Logical Conflict
 
-**Why they conflict:**
-[Clear explanation of why both cannot coexist]
+**Resolution Options:**
+[As shown in Step 4 above]
 
-**Resolution options:**
-1. [Option 1 - description and implications]
-2. [Option 2 - description and implications]
-3. [Option 3 - description and implications]
+**Recommended Resolution:**
+Schedule stakeholder meeting within 3 days to decide on connectivity model.
+Recommended: Offline-first with sync when connected.
 
-**User choice**: [PENDING | Option N]
-**Rationale**: [Why user chose this option]
-**Resolved**: [TIMESTAMP]
-**Actions taken**: [What changed as a result]
+**Stakeholders to Involve:**
+- Product Manager (business requirements)
+- Engineering Lead (technical feasibility)
+- UX Designer (user experience)
+- Key customers (use cases)
+
+---
+
+### CONF-002: Resource Allocation
+**Requirements:**
+- REQ-020: "Deliver mobile app by March 1" (needs 3 devs, 8 weeks)
+- REQ-025: "Complete API redesign by March 1" (needs 3 devs, 8 weeks)
+
+**Conflict:** Same resource, same timeline
+**Type:** Resource Conflict
+
+**Resolution Options:**
+[Similar format]
+
+**Recommended Resolution:**
+Prioritize mobile app (customer-facing, competitive pressure).
+Reschedule API redesign to May 1 (internal, less urgent).
+
+---
+
 ```
 
-## Automatic Triggers
+## Output Formats
 
-The system MUST stop and present conflict when detecting:
+**Markdown Report** (default) - Comprehensive analysis for stakeholders
 
-### Contradictory Statements
-```
-Trigger: "You said X earlier, now saying not-X"
-Example: "Earlier you said no database needed, but now you're
-         asking for PostgreSQL integration"
-```
+When format not specified, provide Markdown report.
 
-### Mutually Exclusive Features
-```
-Trigger: "Feature A requires condition C, Feature B requires not-C"
-Example: "Real-time sync requires constant internet, but you also
-         want full offline functionality"
-```
+## Best Practices
 
-### Resource Conflicts
-```
-Trigger: "Both items need exclusive access to same resource"
-Example: "Two tasks both want to restructure the database schema
-         in incompatible ways"
-```
+1. **Scan systematically** - Check all requirement pairs, not just obvious ones
+2. **Check related requirements** - If another requirement changes the conflict interpretation, explain that relation in the conflict reason
+3. **Involve stakeholders early** - Don't resolve alone, collaborate
+4. **Document rationale** - Record why conflicts exist and why resolutions chosen
+5. **Track rationale** - Understand why each conflict exists and what decision it needs
+6. **Be specific** - Vague conflict descriptions don't help resolution
+7. **Propose solutions** - Don't just identify problems, suggest fixes
+8. **Follow up** - Verify resolutions actually work
 
-### Timeline Impossibilities
-```
-Trigger: "Features exceed reasonable scope for constraints"
-Example: "You're asking for 15 major features with a 2-week deadline"
-```
+## Common Pitfalls to Avoid
 
-### Technical Incompatibilities
+**Don't flag as conflicts when:**
+- Requirements are complementary, not contradictory
+- One requirement is subset of another (specialization)
+- Apparent conflict is due to unclear wording (ambiguity issue)
+- Requirements apply to different contexts or users
+- Timeline allows sequential implementation
+
+**Do flag as conflicts when:**
+- Literally impossible to satisfy both
+- Would require mutually exclusive technology choices
+- Same resource needed for multiple things simultaneously
+- Dependencies create impossible sequences
+- Stakeholders have incompatible expectations
+
+## Example Analysis
+
+**Input Requirements:**
+
 ```
-Trigger: "Technologies don't work together"
-Example: "You want to use Library A and Library B, but they have
-         conflicting peer dependencies"
-```
-
-## Resolution Options
-
-### Option 1: Prioritize One
-Choose one item over the other.
-
-```markdown
-Resolution: Prioritize A over B
-- A remains as requirement
-- B is removed or deferred
-- Rationale recorded
+REQ-001: Support 10,000 concurrent users
+REQ-002: Page load time under 1 second
+REQ-003: Display 500 products with high-res images per page
+REQ-004: Use free hosting tier (1 CPU, 512MB RAM)
+REQ-005: Launch in 2 weeks
 ```
 
-### Option 2: Modify One
-Adjust one item to remove conflict.
+**Conflicts Detected:**
 
-```markdown
-Resolution: Modify B to accommodate A
-- A remains unchanged
-- B is adjusted: [specific changes]
-- Both now compatible
-```
+**CONF-001:** Resource vs Performance
+- REQ-001 (10k users) + REQ-002 (<1s load) + REQ-004 (free tier)
+- Conflict: Free tier cannot handle 10k concurrent users with 1s response
+- Resolution: Upgrade hosting (paid tier) OR reduce user count OR relax timing
 
-### Option 3: Modify Both
-Adjust both items to find middle ground.
+**CONF-002:** Performance vs Features
+- REQ-002 (<1s load) + REQ-003 (500 items with images)
+- Conflict: Loading 500 hi-res images cannot complete in 1 second
+- Resolution: Reduce items per page OR lazy load OR relax timing
 
-```markdown
-Resolution: Adjust both for compromise
-- A adjusted: [changes]
-- B adjusted: [changes]
-- Trade-off documented
-```
+**CONF-003:** Timeline vs Scope
+- REQ-005 (2 weeks) vs complexity of all features
+- Conflict: Full implementation needs 6-8 weeks minimum
+- Resolution: MVP with core features in 2 weeks OR extend timeline
 
-### Option 4: Accept with Trade-off
-Keep both, document the trade-off.
+**Recommended Resolutions:**
+1. Upgrade hosting to support user load (CONF-001)
+2. Reduce to 50 items per page with lazy loading (CONF-002)
+3. Launch MVP in 2 weeks, full features in 6 weeks (CONF-003)
 
-```markdown
-Resolution: Accept both with trade-off
-- Both remain
-- Trade-off: [what is sacrificed]
-- Risk documented
-```
+## Resources
 
-### Option 5: Defer
-Postpone resolution.
-
-```markdown
-Resolution: Deferred
-- Marked as DEFERRED
-- Reason: [why can't resolve now]
-- Blocker for: [what can't proceed]
-- Revisit: [when/condition]
-```
-
-## Cross-Plan Verification
-
-Before creating tasks, verify:
-
-```markdown
-## Cross-Plan Verification Checklist
-
-**Against ITEM-XXX.md requirements:**
-- [ ] All requirements have at least one task
-- [ ] No tasks contradict requirements
-- [ ] Priority order respected
-- [ ] No requirements orphaned
-
-**Against ITEM-XXX.md decisions:**
-- [ ] Tasks align with recorded decisions
-- [ ] No tasks contradict decisions
-- [ ] Deferred items not accidentally included
-
-**Against existing tasks in ITEM-XXX.md:**
-- [ ] New tasks don't conflict with pending tasks
-- [ ] File modifications don't overlap dangerously
-- [ ] Dependency order preserved
-- [ ] No circular dependencies created
-
-**Against FLOW.md backlog:**
-- [ ] Tasks fit within item scope
-- [ ] No scope creep detected
-- [ ] Dependencies on other items documented
-
-**Conflicts found**: [List or "None"]
-```
-
-## Integration Points
-
-- **State Management**: Document conflicts in ITEM-XXX.md
-- **Exploration Tracking**: Flag areas with detected conflicts
-- **Interviewer Agent**: Stop and present conflicts during discussion
-- **Planner Agent**: Verify cross-plan consistency
-- **Workflow Orchestration**: Block phase transitions on active conflicts
-
-See `resolution.md` for detailed resolution strategies.
+- `references/conflict_patterns.md` - Comprehensive catalog of 8 conflict types with detection patterns
+- `references/resolution_strategies.md` - Detailed resolution strategies by conflict type
