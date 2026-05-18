@@ -20,8 +20,6 @@ def markdown_target_dir(artifact_dir: Path, output_dir: Path, filename: str) -> 
         return output_dir
     if filename.startswith("R") and filename.endswith(".md"):
         return artifact_dir / "MoM"
-    if filename.startswith("conflict_report_v") and filename.endswith(".md"):
-        return artifact_dir / "report"
     return artifact_dir
 
 

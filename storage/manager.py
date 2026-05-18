@@ -19,7 +19,7 @@ from .markdown import (
 )
 from .plantuml import (
     save_plantuml_files as plantuml_save_plantuml_files,
-    write_one_plantuml as plantuml_write_one_plantuml,
+    write_plantuml_file as plantuml_write_plantuml_file,
 )
 from .project import (
     create_project as project_create_project,
@@ -112,8 +112,8 @@ class Store:
 
     # PlantUML
 
-    def write_one_plantuml(self, model: Dict) -> Optional[str]:
-        return plantuml_write_one_plantuml(self.artifact_dir, model)
+    def write_plantuml_file(self, model: Dict) -> Optional[str]:
+        return plantuml_write_plantuml_file(self.artifact_dir, model)
 
     def save_plantuml_files(self, model_data: Dict[str, Any]):
         plantuml_save_plantuml_files(self.artifact_dir, model_data)

@@ -11,28 +11,6 @@ STAKEHOLDER_CATEGORY_LABELS = {
 
 class Collect:
     @staticmethod
-    def scenario_selection(scenarios: List[Dict[str, str]]) -> Dict[str, str]:
-        while True:
-            print("\n請選擇你想要做的情境：")
-            for i, scenario in enumerate(scenarios, 1):
-                title = str(scenario.get("title") or "").strip()
-                application_type = str(scenario.get("application_type") or "").strip()
-                suffix = f"（{application_type}）" if application_type else ""
-                print(f"{i}. {title}{suffix}")
-
-            user_input = input("\n請選擇情境編號：").strip()
-            if not user_input:
-                print("\n❌ 請選擇一個情境")
-                continue
-            try:
-                idx = int(user_input) - 1
-            except ValueError:
-                return {"title": user_input, "custom": True}
-            if 0 <= idx < len(scenarios):
-                return scenarios[idx]
-            print(f"\n⚠️ 編號 {user_input} 無效，請重新選擇")
-
-    @staticmethod
     def user_selection(
         proposed: List[Dict[str, str]], max_select: int = 5
     ) -> List[int]:

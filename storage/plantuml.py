@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-def write_one_plantuml(artifact_dir: Path, model: Dict[str, Any]) -> Optional[str]:
+def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[str]:
     plantuml_code = model.get("plantuml", "")
     if not plantuml_code:
         return None
@@ -24,8 +24,8 @@ def write_one_plantuml(artifact_dir: Path, model: Dict[str, Any]) -> Optional[st
     return filename
 
 
-def save_plantuml_files(artifact_dir: Path, model_data: Dict[str, Any]) -> None:
-    models = [m for m in model_data.get("models", []) if m.get("plantuml")]
+def save_plantuml_files(artifact_dir: Path, model_data: Any) -> None:
+    models = [m for m in (model_data or []) if isinstance(m, dict) and m.get("plantuml")]
     if not models:
         return
     models_dir = artifact_dir / "models"
@@ -34,7 +34,7 @@ def save_plantuml_files(artifact_dir: Path, model_data: Dict[str, Any]) -> None:
         old.unlink(missing_ok=True)
     max_workers = min(len(models), 8)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(write_one_plantuml, artifact_dir, m) for m in models]
+        futures = [executor.submit(write_plantuml_file, artifact_dir, m) for m in models]
         for future in as_completed(futures):
             try:
                 name = future.result()

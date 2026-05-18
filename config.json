@@ -5,7 +5,7 @@
   "elicitation_max_turns": 10,
   "enable_tools": {
     "web_search": true,
-    "file_parser": true,
+    "read_file": true,
     "plantuml_validate": true,
     "artifact_query": true
   },
