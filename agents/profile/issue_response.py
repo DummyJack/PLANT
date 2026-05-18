@@ -1,3 +1,5 @@
+import json
+
 # Issue response support shared by meeting-capable agents.
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +14,15 @@ class IssueResponseSupport:
     def issue_response_payload(self, payload: Any) -> Dict[str, Any]:
         data = dict(payload or {}) if isinstance(payload, dict) else {}
         final_text = self.clean_text(data.get("text"))
+        if not final_text and isinstance(data.get("pair_reviews"), list):
+            compact_payload = {"pair_reviews": data.get("pair_reviews")}
+            review_summary = self.clean_text(data.get("review_summary"))
+            if review_summary:
+                compact_payload = {
+                    "review_summary": review_summary,
+                    "pair_reviews": data.get("pair_reviews"),
+                }
+            final_text = json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"))
         normalized = {
             "text": final_text,
             "open_questions": (

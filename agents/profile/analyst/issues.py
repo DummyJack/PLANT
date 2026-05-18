@@ -491,8 +491,24 @@ class AnalystIssues:
         if allow_suggested_next_action:
             rules_block += "\n- 若此議題暴露需求缺口，可額外提供 suggested_next_action；它只能是需求工程後續處理建議，例如 direct_clarification 或 new_issue，不代表會議已決策。"
         if issue.get("category") == "conflict_discussion":
+            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+            known_pair_ids = [
+                str(pair_id).strip()
+                for pair_id in (contract.get("known_pair_ids") or [])
+                if str(pair_id).strip()
+            ]
             task_block = ANALYST_CONFLICT_ISSUE_TASK
-            rules_block = ANALYST_CONFLICT_ISSUE_RULES
+            rules_block = (
+                ANALYST_CONFLICT_ISSUE_RULES
+                + "\n- 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。"
+                + "\n- 外層只能有 text 欄位。"
+                + "\n- text 必須是 JSON object 字串，不是巢狀 object。"
+                + "\n- text JSON 結構必須為 {\"pair_reviews\":[...]}。"
+                + "\n- pair_reviews 必須逐筆涵蓋 response_contract.known_pair_ids 中每個 id，不能遺漏、不能新增未知 id。"
+                + "\n- 每筆 pair_reviews 都必須有 id、proposed_label、reason。"
+                + "\n- proposed_label 只能是 Conflict 或 Neutral。"
+                + "\n- 本輪必須涵蓋的 pair id：" + json.dumps(known_pair_ids, ensure_ascii=False)
+            )
         if issue_id.startswith("ELICIT-"):
             stop_phrase = (
                 "I have gathered enough information"

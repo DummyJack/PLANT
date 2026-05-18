@@ -2,6 +2,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from agents.profile.conflict_review import conflict_review_text_hint
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 
@@ -400,9 +401,23 @@ class UserIssues:
                 "直接回答問題；若資訊不足，說明缺少的情境、角色或使用條件。"
             )
         elif issue_category == "conflict_discussion":
+            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+            known_pair_ids = [
+                str(pair_id).strip()
+                for pair_id in (contract.get("known_pair_ids") or [])
+                if str(pair_id).strip()
+            ]
             category_hint = (
                 "\n# 本議題特別說明（conflict_discussion）\n"
-                "從實際使用情境說明兩項需求是否衝突、重複、可共存或資訊不足。"
+                "從實際使用情境說明兩項需求是否衝突、重複、可共存或資訊不足。\n"
+                "- 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。\n"
+                "- 外層只能有 text 欄位。\n"
+                "- text 必須是 JSON object 字串，不是巢狀 object。\n"
+                "- text JSON 結構必須為 {\"pair_reviews\":[...]}。\n"
+                "- pair_reviews 必須逐筆涵蓋 response_contract.known_pair_ids 中每個 id，不能遺漏、不能新增未知 id。\n"
+                "- 每筆 pair_reviews 都必須有 id、proposed_label、reason。\n"
+                "- proposed_label 只能是 Conflict 或 Neutral。\n"
+                f"- 本輪必須涵蓋的 pair id：{json.dumps(known_pair_ids, ensure_ascii=False)}"
             )
         suggested_next_action_rule = []
         suggested_next_action_json = ""
@@ -421,6 +436,9 @@ class UserIssues:
         )
         open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，再放進 open_questions。\n"
         names_list_text = ", ".join(str(name) for name in names_list if str(name).strip())
+        if issue_category == "conflict_discussion":
+            json_hint = conflict_review_text_hint()
+            suggested_next_action_json = ""
 
         return f"""{stakeholder_contract}
 

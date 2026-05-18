@@ -434,10 +434,36 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
         """解析工具迴圈輸出中的 JSON。"""
         if not raw or not isinstance(raw, str):
             return {}
+        text = raw.strip()
         try:
-            return json.loads(raw)
+            parsed = json.loads(text)
         except json.JSONDecodeError:
-            raise ValueError("Agent output must be a valid JSON object.")
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+        candidates = []
+        if "```" in text:
+            parts = text.split("```")
+            for part in parts:
+                value = part.strip()
+                if value.lower().startswith("json"):
+                    value = value[4:].strip()
+                if value.startswith("{") and value.endswith("}"):
+                    candidates.append(value)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise ValueError("Agent output must be a valid JSON object.")
 
     # ------------------------------------------------------------------
     # Core message helpers

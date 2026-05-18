@@ -353,9 +353,24 @@ class ExpertIssues:
             next_action_contract = """# suggested_next_action 規範
     - 可提供會後建議；它不會在會議中直接執行。無明確建議可省略或填 null。"""
         if category == "conflict_discussion":
+            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+            known_pair_ids = [
+                str(pair_id).strip()
+                for pair_id in (contract.get("known_pair_ids") or [])
+                if str(pair_id).strip()
+            ]
+            known_pair_ids_text = json.dumps(known_pair_ids, ensure_ascii=False)
             pair_reviews_json = ""
             response_contract = """# 回應契約
-    - text 必須有依據，不可只表態或宣告最終決議。"""
+    - 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。
+    - 外層只能有 text 欄位。
+    - text 必須是 JSON object 字串，不是巢狀 object。
+    - text JSON 結構必須為 {"pair_reviews":[...]}。
+    - pair_reviews 必須逐筆涵蓋 response_contract.known_pair_ids 中每個 id，不能遺漏、不能新增未知 id。
+    - 每筆 pair_reviews 都必須有 id、proposed_label、reason。
+    - proposed_label 只能是 Conflict 或 Neutral。
+    - reason 必須有依據，不可只表態或宣告最終決議。
+    - 本輪必須涵蓋的 pair id：""" + known_pair_ids_text
             text_hint = conflict_review_text_hint()
             output_fields = f"    {text_hint}"
         else:
