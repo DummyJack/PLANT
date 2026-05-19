@@ -17,9 +17,9 @@ from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 RESULTS_DIR = RQ3_DIR / "results"
 RESULT_PREFIX = "Baseline"
-SCENARIO_PATH = RQ3_DIR / "scenario.txt"
+SCENARIO_TEXT = """訂餐外送系統""".strip()
 
-# 實驗參數設置（"openai" 或 "gemini"，與 RQ2 Baseline 一致）
+# 實驗參數設置
 BASELINE_PROVIDER = "openai"
 MODEL_NAME = "gpt-4.1"
 TEMPERATURE = 0.0
@@ -28,18 +28,6 @@ def build_srs_prompt(scenario: str) -> list[dict[str, str]]:
     user = f"""請依據設置的情境：{scenario.strip()}，產生一份軟體需求規格書，以 Markdown 格式撰寫，請不要產生和規格書無關的內容。""".strip()
 
     return [{"role": "user", "content": user}]
-
-
-def load_scenario_text() -> str:
-    if SCENARIO_PATH.is_file():
-        return SCENARIO_PATH.read_text(encoding="utf-8").strip()
-    return ""
-
-
-def prompt_scenario_interactive() -> str:
-    """當找不到情境檔或內容為空時，改由使用者於終端機輸入。"""
-    print(f"找不到情境檔或內容為空：{SCENARIO_PATH}")
-    return input("請輸入情境說明：").strip()
 
 
 def messages_user_text(messages: list[dict[str, str]]) -> str:
@@ -179,9 +167,7 @@ def main() -> None:
             print("錯誤：未找到 GEMINI_API_KEY")
             sys.exit(1)
 
-    scenario = load_scenario_text()
-    if not scenario:
-        scenario = prompt_scenario_interactive()
+    scenario = SCENARIO_TEXT
     if not scenario:
         print("錯誤：未提供情境內容")
         sys.exit(1)

@@ -1,11 +1,11 @@
 {
   "model": "gpt-5.2",
   "n": 3,
-  "reference_example": "Restaurant Menu & Ordering System",
+  "reference_example": "SRS",
   "enable_reasoning": false,
   "enable_web_search_for_correctness": true,
   "enable_temperature": true,
   "temperature": 0,
-  "max_output_tokens": 120,
+  "max_output_tokens": 500,
   "reasoning_effort": "low"
 }

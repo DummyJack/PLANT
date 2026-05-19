@@ -9,21 +9,37 @@ Attached files:
 
 Evaluation Criteria:
 
-Correctness (1-5) - source-bounded faithfulness and non-hallucination.
+Correctness (1-5) - source-bounded faithfulness, non-hallucination, internal consistency, and validation quality of stated requirements.
 
-Evaluate whether the CandidateSRS avoids fabricated, contradictory, or externally false claims. ReferenceExample is only a source boundary and problem-framing aid. It is not a target answer, not a template, and not a completeness checklist. Do not penalize CandidateSRS merely because it omits something that appears in ReferenceExample. Missing coverage belongs to Completeness, not Correctness. New content in CandidateSRS is not automatically incorrect. Do not penalize the document merely for being ambitious, strongly phrased, or more specific than the reference, unless it becomes factually false, self-contradictory, or clearly hallucinatory.
+Evaluate whether the CandidateSRS avoids fabricated, contradictory, externally false, vague, unsupported, or non-verifiable final requirements. ReferenceExample is only a source boundary and problem-framing aid. It is not a target answer, not a template, and not a completeness checklist. Do not penalize CandidateSRS merely because it omits something that appears in ReferenceExample. Missing coverage belongs to Completeness, not Correctness. New content in CandidateSRS is not automatically incorrect when it is consistent with the system boundary and is a reasonable elaboration.
+
+Treat vague, non-verifiable, or weakly justified requirements as correctness weaknesses when they are presented as final SRS requirements, because final requirements should support validation and acceptance testing. Penalize requirements that use unclear terms without acceptance boundaries, mix multiple behaviors in one requirement, introduce unsupported assumptions, or state capabilities not justified by the scenario/reference/problem domain.
 
 If web search is available, use it only to verify external claims in CandidateSRS, such as whether a regulation, standard, third-party service capability, or external factual claim is real and correctly described. Do not use web search to invent missing requirements or to penalize omissions.
+
+Do not penalize CandidateSRS merely because a numeric quality target is ambitious, conservative, or different from ReferenceExample. Penalize such a target only if it is internally contradictory, impossible in context, or incorrectly presented as an external fact.
+
+
+Score Scale:
+
+5 = Excellent: stated requirements are accurate, justified, internally consistent, specific, and verifiable, with no meaningful contradictions or unsupported assumptions.
+4 = Good: mostly correct and verifiable, with only minor vagueness, weak assumptions, or validation-boundary issues.
+3 = Fair: generally plausible, but several requirements are vague, unsupported, hard to verify, or mix multiple behaviors without clear validation boundaries.
+2 = Weak: many requirements are vague, unjustified, contradictory, externally questionable, or not usable for validation.
+1 = Poor: largely unfaithful, incoherent, contradictory, or dominated by hallucinated or unsupported claims.
 
 
 Evaluation Steps:
 
-1. Read CandidateSRS carefully and identify its concrete factual, external, compliance, integration, security, payment, or service-capability claims.
+1. Read CandidateSRS carefully and identify its concrete requirements, factual claims, external claims, compliance claims, integration claims, security claims, payment claims, and service-capability claims.
 2. Use ReferenceExample only to understand the system boundary and problem framing.
-3. If web search is available, verify only external claims that need external evidence.
-4. Assign a score from 1 to 5 for correctness only.
+3. Check whether stated requirements are internally consistent, justified by the system boundary, specific enough to validate, and free from unsupported assumptions.
+4. If web search is available, verify only external claims that need external evidence.
+5. Assign a score from 1 to 5 for correctness only.
 
 
-Evaluation Form (scores ONLY):
+Evaluation Form:
 
 - Correctness:
+- Issues:
+- Rationale:

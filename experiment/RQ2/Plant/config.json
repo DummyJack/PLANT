@@ -5,6 +5,9 @@
     "user": false,
     "documentor": false
   },
+  "conflict_detection": {
+    "enable_batch_pair_discovery": false
+  },
   "agent_models": {
     "default": {
       "provider": "openai",

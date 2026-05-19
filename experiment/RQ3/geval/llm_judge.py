@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, Optional
 
 import tqdm
 from dotenv import load_dotenv
@@ -36,7 +36,7 @@ def resolve_path(raw: str, base_dir: Path) -> Path:
     return p
 
 
-def resolve_source_path(value: str, base_dir: Path) -> Path | None:
+def resolve_source_path(value: str, base_dir: Path) -> Optional[Path]:
     raw = (value or "").strip()
     if not raw:
         return None
@@ -57,7 +57,7 @@ def load_config(config_path: Path) -> dict:
         return json.load(f)
 
 
-def resolve_reference_example_path(config: dict) -> Path | None:
+def resolve_reference_example_path(config: dict) -> Optional[Path]:
     raw = str(config.get("reference_example", "") or "").strip()
     if not raw:
         return None
@@ -104,8 +104,14 @@ def upload_file_once(client: OpenAI, *, path: Path, cache: dict[Path, str]) -> s
     return created.id
 
 
-def parse_metric(output: str, metric_name: str) -> float | None:
-    matched = re.search(rf"{metric_name}\s*:\s*([1-5](?:\.\d+)?)", output, flags=re.IGNORECASE)
+def parse_metric(output: str, metric_name: str) -> Optional[float]:
+    escaped = re.escape(metric_name)
+    normalized = (output or "").replace("**", "")
+    matched = re.search(
+        rf"{escaped}\s*[:：]\s*([1-5](?:\.\d+)?)(?:\s*/\s*5)?(?:\s*\([^)]*\))?",
+        normalized,
+        flags=re.IGNORECASE,
+    )
     if not matched:
         return None
     try:
@@ -186,7 +192,7 @@ def response_texts(
     model: str,
     prompt_text: str,
     candidate_file_id: str,
-    reference_file_id: str | None,
+    reference_file_id: Optional[str],
     n: int,
     max_output_tokens: int,
     enable_temperature: bool,

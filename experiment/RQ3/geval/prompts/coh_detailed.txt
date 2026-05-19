@@ -12,6 +12,15 @@ Evaluation Criteria:
 Cohesiveness (1-5) - whether the CandidateSRS reads as a unified, coherent, problem-specific specification. Assess the CandidateSRS primarily on its own internal structure and consistency. Use ReferenceExample only as a loose qualitative benchmark for how concrete and problem-specific a good SRS can be. ReferenceExample is not a required template, and the CandidateSRS should not be penalized for using different sections, wording, or ordering.
 
 
+Score Scale:
+
+5 = Excellent: unified, coherent, problem-specific, and internally consistent.
+4 = Good: mostly coherent with only minor structural or terminology inconsistencies.
+3 = Fair: understandable but has noticeable fragmentation, generic sections, or inconsistent terminology.
+2 = Weak: poorly organized or frequently inconsistent across sections, roles, workflows, or requirements.
+1 = Poor: incoherent, generic, or not readable as one unified specification.
+
+
 Evaluation Steps:
 
 1. Read CandidateSRS carefully.
@@ -20,6 +29,8 @@ Evaluation Steps:
 4. Assign a score from 1 to 5 for cohesiveness only.
 
 
-Evaluation Form (scores ONLY):
+Evaluation Form:
 
 - Cohesiveness:
+- Issues:
+- Rationale:
