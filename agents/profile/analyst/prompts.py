@@ -154,11 +154,11 @@ def build_draft_prompt(*, is_revision: bool, version_note: str, version: int = 0
 # 章節寫作依據
 - 文件標題使用輸入中可辨識的系統名稱；優先採用情境名稱，若沒有明確名稱，請用初始想法或情境內容整理出中性的系統名稱，不要創造品牌名。
 - 系統概述請寫成一段自然描述，主要依據 scenario 與 scope.in_scope 撰寫；若 scenario 不完整或過於簡略，可參考 rough_idea 補足系統背景，但不得超出 scope 與 user_requirements 支持的內容。只描述目前資料已支持的系統目標；不要列出利害關係人，也不要加入需求或範圍中沒有出現的新功能。
-- 需求範圍只整理已給定的範圍內與範圍外內容；沒有資料時寫「目前無資料」。
+- 需求範圍只整理已給定的範圍內與範圍外內容；In Scope 或 Out of Scope 若沒有資料，省略該子節，不要寫「目前無資料」。
 - 系統利害關係人只根據已選定的利害關係人撰寫；類別與名稱要沿用輸入。關注重點以該利害關係人的文字敘述為主，並可參考同名利害關係人的使用者需求；對系統的核心需求以同名利害關係人的使用者需求為主，並可參考其文字敘述。不得拿其他利害關係人的需求補入本列；資料不足時寫「待確認」。
 - 使用者需求表要逐筆保留原始使用者需求；不要合併、拆分、改寫、重新命名或重新排序需求 ID。
-- 領域研究與限制摘要只整理領域研究已提供的發現、來源、限制、風險、建議與未決事項；建議要保持建議語氣，不要寫成系統必須做到的需求。每個項目若有 related_URL，請在句尾以「（來源：URL-1, URL-2）」標示；若 related_URL 為空但內容是整體專案層級，標示「（來源：整體專案）」。
-- 系統模型章節要先依模型 type 分組；每個 type 一個小節。若同一 type 只有一張模型，標題使用「type -- name」格式；若同一 type 有多張模型，type 作為小節標題，並使用 a.、b.、c. 依序列出「type -- name」與模型內容。有 image_path 就直接放圖；若沒有 image_path 但有 plantuml，改用 fenced code block 顯示 plantuml；若兩者都沒有，才不放模型圖內容。若模型有 description，放在圖片或 PlantUML 下方，沒有 description 就不要自行補寫。Use Case Text 只整理 use case diagram 已附帶的文字用例；不要從 PlantUML 反推出新需求。
+- 領域研究與限制摘要只整理領域研究已提供的發現、來源、限制、風險、建議與未決事項；沒有資料的子節直接省略，不要寫「目前無資料」。建議要保持建議語氣，不要寫成系統必須做到的需求。每個項目若有 related_URL，請在句尾以「（來源：URL-1, URL-2）」標示；若 related_URL 為空但內容是整體專案層級，標示「（來源：整體專案）」。
+- 系統模型章節要先依模型 type 分組；標題顯示使用 display_type，例如 use_case_diagram 顯示為 Use Case Diagram。只輸出實際存在的 model type，不得輸出 placeholder 或空 model section。context_diagram 與 use_case_diagram 的小節標題只使用 display_type，不加「-- name」；其他 type 若只有一張模型，標題使用「display_type -- name」格式；若同一 type 有多張模型，display_type 作為小節標題，並使用 a.、b.、c. 依序列出「name」與模型內容，不要在 a.、b. 重複 display_type。有 image_path 就直接放圖；若沒有 image_path 但有 plantuml，改用 fenced code block 顯示 plantuml；若兩者都沒有，才不放模型圖內容。除 use_case_diagram 外，若模型有 description，放在圖片或 PlantUML 下方，沒有 description 就不要自行補寫。Use Case Text 只整理 use case diagram 已附帶的文字用例；沒有 text/use_case_text 就省略 Use Case Text 表，不要從 PlantUML 反推出新需求。
 - 衝突紀錄、開放問題與會議紀錄只能用來標示待確認或已決議說明，不得轉成新的使用者需求。
 
 # 防止瞎編規則
@@ -171,7 +171,8 @@ def build_draft_prompt(*, is_revision: bool, version_note: str, version: int = 0
 - 若 NFR 缺少具體數值，請保留為待確認，不得自行補 TPS、延遲、可用性、RPO/RTO、安全標準或法規名稱。
 
 # 固定輸出格式
-請輸出以下固定 Markdown 結構，不得刪除或重新命名主要章節；若某節沒有資料，保留章節與表頭，填入「目前無資料」或 "-"。
+請輸出以下固定 Markdown 結構，不得刪除或重新命名主要章節；若主要章節沒有資料，保留章節與表頭，填入「目前無資料」或 "-"；但需求範圍中的 In Scope / Out of Scope 子節沒有資料時請直接省略。
+- 不得在文件標題後加入文件前言、版本聲明、用途說明、免責說明或流程說明；標題後請直接進入「## 1. 系統概述」。
 
 # {{系統名稱}}
 
@@ -180,7 +181,10 @@ def build_draft_prompt(*, is_revision: bool, version_note: str, version: int = 0
 
 ## 2. 需求範圍
 ### In Scope
+{{若 scope.in_scope 沒有資料，省略本子節。}}
+
 ### Out of Scope
+{{若 scope.out_of_scope 沒有資料，省略本子節。}}
 
 ## 3. 系統利害關係人
 | 類別 | 利害關係人 | 關注重點 | 對系統的核心需求 |
@@ -192,35 +196,47 @@ def build_draft_prompt(*, is_revision: bool, version_note: str, version: int = 0
 
 ## 5. 領域研究與限制摘要
 ### 1. Findings
+{{若 feedback.findings 沒有資料，省略本子節。}}
+
 ### 2. Sources
+{{若 feedback.sources 沒有資料，省略本子節。}}
+
 ### 3. Constraints
+{{若 feedback.constraints 沒有資料，省略本子節。}}
+
 ### 4. Risks
+{{若 feedback.risks 沒有資料，省略本子節。}}
+
 ### 5. Recommendations
+{{若 feedback.recommendations 沒有資料，省略本子節。}}
+
 ### 6. Open Items
+{{若 feedback.open_items 沒有資料，省略本子節。}}
 
 ## 6. 系統模型
-### 1. {{model type}} -- {{模型名稱}}
+### 1. {{display_type}}
+{{若 type 不是 context_diagram 或 use_case_diagram，且只有一張該 type 模型，標題才使用「display_type -- name」。}}
 
 {{若該模型提供 image_path，直接使用 Markdown 圖片語法引用該圖片；若沒有 image_path 但提供 plantuml，請用 ```plantuml fenced code block 顯示；若兩者都沒有，略過模型圖內容，不要寫 Image 欄位。}}
 
-{{若該模型提供 description，請放在圖片或 PlantUML 下方；若沒有 description，不要自行補寫。}}
+{{除 use_case_diagram 外，若該模型提供 description，請放在圖片或 PlantUML 下方；若沒有 description，不要自行補寫。}}
 
-若本 type 是 use_case_diagram 且包含 text/use_case_text，請接在同一 type 小節下。Use Case Text 需依 actor 分組，每個 actor 一個小節；小節標題格式為「I. {{actor}} Use Cases」、「II. {{actor}} Use Cases」依序編號。
+若本 type 是 use_case_diagram 且包含 text/use_case_text，請接在同一 type 小節下。沒有 text/use_case_text 時，不要輸出 Use Case Text。Use Case Text 需依 actor 分組，每個 actor 一個小節；小節標題格式為「I. {{actor}} Use Cases」、「II. {{actor}} Use Cases」依序編號。
 
 #### I. {{actor}} Use Cases
 | 編號 | Use Case | 目的／說明 | 介面 |
 |---|---|---|---|
 
-### 2. {{下一個 model type}}
+### 2. {{下一個 display_type}}
 若同一 type 有多張模型，請在該 type 小節中使用：
 
-a. {{model type}} -- {{模型名稱}}
+a. {{模型名稱}}
 
 {{圖片；若沒有圖片但有 plantuml，改放 PlantUML fenced code block}}
 
 {{description，如果有}}
 
-b. {{model type}} -- {{模型名稱}}
+b. {{模型名稱}}
 
 {{圖片；若沒有圖片但有 plantuml，改放 PlantUML fenced code block}}
 
@@ -289,6 +305,12 @@ def conflict_skill_guidance(content: str, mode: str) -> str:
             "",
             report_guidance,
             flags=re.DOTALL,
+        ).replace(
+            "## Conflicts",
+            "## 衝突需求（Conflicting Requirements）",
+        ).replace(
+            "### CONF-001: Connectivity Model",
+            "### CR-1: Connectivity Model",
         ).strip()
     if base_mode == "resolution":
         resolution_guidance = markdown_from_heading_until(

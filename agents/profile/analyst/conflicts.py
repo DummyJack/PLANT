@@ -916,6 +916,8 @@ class AnalystConflicts:
 - 只渲染輸入資料，不重新分類、不新增或移除項目。
 - description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
 - 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
+- 衝突清單章節標題使用「衝突需求（Conflicting Requirements）」。
+- 每筆衝突使用 id 作為顯示編號；source 只作為來源追蹤。
 - 不要產生 Executive Summary。
 - 不要產生整體 recommendations 區塊。
 
@@ -928,6 +930,8 @@ class AnalystConflicts:
 - 只渲染輸入資料，不重新分類、不新增或移除項目。
 - description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
 - 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
+- 衝突清單章節標題使用「衝突需求（Conflicting Requirements）」。
+- 每筆衝突使用 id 作為顯示編號；source 只作為來源追蹤。
 - 不要產生 Executive Summary。
 - 不要產生整體 recommendations 區塊。
 

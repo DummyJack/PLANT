@@ -286,6 +286,8 @@ class ModelerAgent(
                 }
                 if result.get("plantuml"):
                     new_row["plantuml"] = result.get("plantuml", "")
+                if result.get("description") and diagram_type != "use_case_diagram":
+                    new_row["description"] = result.get("description", "")
                 if result.get("text"):
                     new_row["text"] = result.get("text", [])
                 new_row["source"] = artifact.get("model_source") or self.model_source(

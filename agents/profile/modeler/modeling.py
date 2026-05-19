@@ -200,6 +200,14 @@ class ModelerModeling:
             diagram_layout_hint = """
     本專案限制：若狀態不明確，不要硬畫。"""
 
+
+        description_rule = ""
+        description_field = ""
+        if diagram_type != "use_case_diagram":
+            description_rule = """
+    - description 請說明這張圖用來釐清哪一個需求面向，以及圖中實際呈現的關鍵元素或關係。依圖型目的撰寫，例如：Context Diagram 說明系統邊界與外部互動，Activity Diagram 說明流程步驟與分支，Sequence Diagram 說明互動順序，State Machine 說明狀態與轉換，Class Diagram 說明需求層級概念與關係。只能描述圖中已呈現的內容，不得加入新需求；不要寫「未擴張、未臆測、未確認」這類自我辯護或否定句，只正向說明圖中呈現了什麼。"""
+            description_field = ', "description": "此圖釐清的需求面向與圖中已呈現的重點。"'
+
         if diagram_type == "use_case_text":
             models = self.system_model_rows(artifact_context)
             use_case_diagram = next(
@@ -278,7 +286,7 @@ class ModelerModeling:
     - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
     - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
     - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
-    - description 用 1 到 2 句依 UML 圖型目的描述此圖釐清的需求面向，例如系統邊界、actor 互動、流程、互動順序、狀態轉換或領域概念；只描述圖中已呈現的內容，不得加入新需求。
+{description_rule}
     - 不要輸出 source；source 由系統依建模來源補上。
     - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
@@ -298,7 +306,7 @@ class ModelerModeling:
     - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
     - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
     - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
-    - description 用 1 到 2 句依 UML 圖型目的描述此圖釐清的需求面向，例如系統邊界、actor 互動、流程、互動順序、狀態轉換或領域概念；只描述圖中已呈現的內容，不得加入新需求。
+{description_rule}
     - 不要輸出 source；source 由系統依建模來源補上。
     - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:

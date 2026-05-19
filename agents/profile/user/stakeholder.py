@@ -21,6 +21,8 @@ def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
         stakeholder_type = str(item.get("type") or "").strip()
         if not name:
             continue
+        if stakeholder_type not in STAKEHOLDER_CATEGORIES:
+            raise ValueError(f"利害關係人 type 不合法: {name} -> {stakeholder_type or '<empty>'}")
         records.append({"name": name, "type": stakeholder_type})
     return records
 

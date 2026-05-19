@@ -92,6 +92,14 @@ def draft_system_models(
     artifact: Dict[str, Any],
     artifact_dir: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
+    type_labels = {
+        "context_diagram": "Context Diagram",
+        "use_case_diagram": "Use Case Diagram",
+        "activity_diagram": "Activity Diagram",
+        "sequence_diagram": "Sequence Diagram",
+        "state_machine": "State Machine Diagram",
+        "class_diagram": "Class Diagram",
+    }
     artifact_path = Path(artifact_dir) if artifact_dir else None
     rows: List[Dict[str, Any]] = []
     for model in artifact.get("system_models", []) or []:
@@ -106,7 +114,13 @@ def draft_system_models(
             row["name"] = name
         if model_type:
             row["type"] = model_type
+            row["display_type"] = type_labels.get(
+                model_type,
+                model_type.replace("_", " ").title(),
+            )
         description = str(model.get("description") or "").strip()
+        if model_type == "use_case_diagram":
+            description = ""
         if description:
             row["description"] = description
         if model.get("text"):
@@ -331,13 +345,15 @@ class AnalystRequirements:
 - URL：目前已抽取的候選 User Requirements。
 
 # 判斷規則
-- in_scope 放本專案應處理的產品能力、使用情境、需求主題或限制。
+- in_scope 只能放輸入資料明確支持，且需要本系統直接提供或管理的產品能力、使用流程、資料處理、角色操作、外部介接或限制條件。
+- in_scope 不要放純粹的情緒、期待、抱怨、商業目標或抽象品質描述；必須能對應到至少一個 User Requirement 或 scenario 中的系統責任。
+- 若某內容只是風險、待確認問題或領域研究建議，不要放入 in_scope；除非 User Requirements 已明確支持它是本系統要處理的能力或限制。
 - out_of_scope 放明確不屬於本專案、不符合產品情境，或已被排除的內容。
-- 若輸入沒有明確排除項，仍可根據產品責任邊界列出合理 out_of_scope。
-- out_of_scope 只能包含本系統不直接負責、需第三方、線下或外部組織負責，或超出目前產品版本目標的內容。
+- out_of_scope 只能放兩類內容：輸入資料明確排除的內容；或明顯由第三方、線下實體流程、外部組織自行負責，且本系統最多只能提供紀錄、通知、查詢或介接的內容。
+- 不要只因為某內容看起來超出目前版本，就自行放入 out_of_scope；除非輸入資料有明確支持。
 - 不得加入與 scenario 無關的排除項。
 - 不確定是否排除時，不要放入 out_of_scope。
-- out_of_scope 以 3-7 筆為宜；若確實沒有合理邊界，才輸出空陣列。
+- out_of_scope 不需要湊數；若沒有明確或高度可判定的排除內容，輸出空陣列。
 - 不要加入 assumptions、unknowns、description、status 或 source。
 
 # 輸出 JSON

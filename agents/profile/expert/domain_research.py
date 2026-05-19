@@ -133,7 +133,7 @@ class ExpertDomainResearch:
     - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
     - 不要為了填欄位硬關聯需求。
     - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
-    - sources 只放來源名稱、文件名稱、標準名稱或 URL；不要在 sources 中寫長段分析。
+    - sources 優先放可追溯網址；若來源不是網頁，才放來源名稱、文件名稱或標準名稱；不要在 sources 中寫長段分析。
     - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
     - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
     - recommendations 是設計注意事項或後續確認建議，不是正式需求。
@@ -193,7 +193,7 @@ class ExpertDomainResearch:
     - 每筆 related_URL 必須盡可能保留或補上受影響的 user_requirements id；只能引用 research_results 或 existing_research 中已出現的 id，不得編造不存在的 URL-*。
     - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
     - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
-    - sources 只放來源名稱、文件名稱、標準名稱或 URL；不要在 sources 中寫長段分析。
+    - sources 優先保留可追溯網址；若來源不是網頁，才放來源名稱、文件名稱或標準名稱；不要在 sources 中寫長段分析。
     - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
     - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
     - recommendations 是設計注意事項或後續確認建議，不是正式需求。
@@ -231,7 +231,7 @@ class ExpertDomainResearch:
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
 
         user_prompt = f"""# 任務
-    根據 scenario、scope、stakeholders、open_questions、user_requirements（正式 requirements 優先，URL 候選需求 fallback）與上一步結果，選下一個動作。
+    根據 scenario、scope、stakeholders、open_questions、user_requirements（正式 requirements 優先，URL 候選需求 fallback）與上一步結果，規劃一次完整 domain research 流程。
 
     # 動作
     - research_issue：{{"query":"具體研究問題"}}
@@ -246,27 +246,35 @@ class ExpertDomainResearch:
 
     # 規則
     - 只有當外部領域知識可能影響候選需求理解、限制、風險或證據依據時，才選 research_issue。
+    - 一次完整 domain research 流程可以包含多個 research_issue，但最後必須包含 update_findings。
     - 研究問題必須來自 scenario、scope、stakeholders、open_questions 或 user_requirements 中的具體內容；URL 不是網站連結。
     - 若問題可由利害關係人或既有專案資料回答，不要選 research_issue。
-    - 選 done 前，請確認是否已檢查與本專案相關的外部限制面向：
+    - 規劃 research_issue 前，請檢查與本專案相關的外部限制面向：
       - 支付/金流安全與退款
       - 個資、隱私、資料保存與稽核
       - 消費者保護、客服與爭議處理
       - 即時定位、外送追蹤與個資遮蔽
       - 高峰流量、可用性與營運連續性
     - 若某面向與 user_requirements 無關，可略過，不需硬研究。
-    - 若尚未研究任何面向，且 user_requirements 涉及支付、個資、退款、定位、稽核或高可用，優先選 research_issue。
-    - 每次 research_issue 只聚焦一個具體問題
+    - 若尚未研究任何面向，且 user_requirements 涉及支付、個資、退款、定位、稽核或高可用，請建立 action_plan，放入 1 到 3 個最重要的 research_issue，最後放 update_findings。
+    - 每個 research_issue 只聚焦一個具體問題。
     - 工具使用邊界遵守本輪工具使用資料
-    - 有足夠材料才 update_findings
-    - 無需再研究就選 done
+    - 若已經有 research_results，且不需要更多研究，請回傳 update_findings。
+    - 若完全不需要研究且沒有 research_results，才選 done。
     - reasoning 請使用一句繁體中文簡述。
 
     # 輸出 JSON
     {{
-      "action": "動作名稱",
+      "action": "done",
       "params": {{}},
-      "reasoning": "一句說明"
+      "reasoning": "一句說明",
+      "action_plan": {{
+        "goal": "本輪 domain research 目標",
+        "steps": [
+          {{"action": "research_issue", "params": {{"query": "具體研究問題"}}}},
+          {{"action": "update_findings", "params": {{}}}}
+        ]
+      }}
     }}"""
 
         messages = self.build_direct_messages(user_prompt)
@@ -284,9 +292,53 @@ class ExpertDomainResearch:
         if not isinstance(response, dict):
             raise ValueError(f"Expert domain research 決策必須是 JSON object，收到 {type(response).__name__}")
 
+        action_plan = response.get("action_plan") if isinstance(response.get("action_plan"), dict) else {}
+        steps = action_plan.get("steps") if isinstance(action_plan.get("steps"), list) else []
+        clean_steps = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            step_action = str(step.get("action") or "").strip()
+            if step_action not in {"research_issue", "update_findings"}:
+                continue
+            params = step.get("params") if isinstance(step.get("params"), dict) else {}
+            if step_action == "research_issue" and not str(params.get("query") or "").strip():
+                continue
+            clean_steps.append({"action": step_action, "params": params})
+        if any(step.get("action") == "research_issue" for step in clean_steps) and not any(
+            step.get("action") == "update_findings" for step in clean_steps
+        ):
+            clean_steps.append({"action": "update_findings", "params": {}})
+        if clean_steps:
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": response.get("reasoning", ""),
+                "action_plan": {
+                    "goal": str(action_plan.get("goal") or "完成本輪 domain research 並寫回 feedback").strip(),
+                    "steps": clean_steps,
+                },
+            }
+
         action = (response.get("action") or "").strip()
         if action not in ACTIONS:
             raise ValueError(f"Expert domain research action 不合法: {action or '<empty>'}")
+        if action == "research_issue":
+            params = response.get("params") or {}
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": response.get("reasoning", ""),
+                "action_plan": {
+                    "goal": "完成本輪 domain research 並寫回 feedback",
+                    "steps": [
+                        {"action": "research_issue", "params": params},
+                        {"action": "update_findings", "params": {}},
+                    ],
+                },
+            }
+        if action == "done" and state.get("research_results_count", 0) > 0:
+            action = "update_findings"
         out = {
             "action": action,
             "params": response.get("params") or {},

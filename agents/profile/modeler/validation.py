@@ -96,6 +96,10 @@ def parse_diagram_model(
         "plantuml": plantuml,
     }
     description = clean_text(raw.get("description"))
+    if diagram_type == "use_case_diagram":
+        description = ""
+    elif not description:
+        raise ValueError("diagram description is required")
     if description:
         row["description"] = description
     source_text = clean_text(raw.get("source") or source)
