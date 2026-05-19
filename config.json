@@ -4,15 +4,15 @@
   "max_stakeholders": 7,
   "elicitation_max_turns": 5,
   "stage": {
-    "init": false,
-    "elicitation": false,
-    "conflict_detection": false,
+    "init": true,
+    "elicitation": true,
+    "conflict_detection": true,
     "domain_research": true,
-    "system_model": false,
+    "system_model": true,
     "draft": true,
-    "formal_meeting": false,
-    "final_meeting": false,
-    "SRS": false
+    "formal_meeting": true,
+    "final_meeting": true,
+    "SRS": true
   },
   "enable_tools": {
     "web_search": true,
