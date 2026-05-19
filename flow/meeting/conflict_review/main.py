@@ -13,6 +13,7 @@ from .support import (
     collect_reviews,
     consensus_decisions,
     collect_missing_reviews,
+    complete_missing_review_decisions,
     normalize_review_text,
 )
 # ---------- 衝突再審查主流程 ----------
@@ -368,6 +369,16 @@ def conflict_review(
         )
         extracted_pair_reviews = signoff_debug.get("extracted_pair_reviews", [])
         final_reason_contributions = contributions
+
+    missing_decision_debug: Dict[str, Any] = {}
+    decisions, missing_decision_debug = complete_missing_review_decisions(
+        coordinator,
+        decisions,
+        conflicts_by_id,
+        extracted_pair_reviews if isinstance(extracted_pair_reviews, list) else [],
+        final_reason_contributions,
+    )
+    signoff_debug["missing_decisions"] = missing_decision_debug
 
     final_reason_debug = finalize_review_reasons(
         coordinator,

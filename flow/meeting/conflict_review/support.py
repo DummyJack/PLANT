@@ -626,6 +626,97 @@ def finalize_review_reasons(
         "raw_final_reason_output": raw_outputs,
     }
 
+def complete_missing_review_decisions(
+    coordinator: Any,
+    decisions: List[Dict[str, Any]],
+    conflicts_by_id: Dict[str, Dict[str, Any]],
+    extracted_pair_reviews: List[Dict[str, Any]],
+    contributions: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    existing_ids = {
+        str(dec.get("id") or "").strip()
+        for dec in decisions or []
+        if isinstance(dec, dict) and str(dec.get("id") or "").strip()
+    }
+    missing_ids = [
+        cid for cid in conflicts_by_id.keys()
+        if cid not in existing_ids
+    ]
+    debug: Dict[str, Any] = {
+        "missing_decision_ids": missing_ids,
+        "missing_decision_count": len(missing_ids),
+    }
+    if not missing_ids:
+        debug["status"] = "skipped_no_missing_decisions"
+        return decisions, debug
+
+    discussion_rows, extracted_from_contributions = collect_reviews(
+        contributions,
+        known_pair_ids=list(conflicts_by_id.keys()),
+        current_labels_by_id={
+            cid: str(conflict.get("label") or "").strip()
+            for cid, conflict in conflicts_by_id.items()
+            if isinstance(conflict, dict)
+        },
+    )
+    reviews_for_prompt = (
+        extracted_pair_reviews
+        if isinstance(extracted_pair_reviews, list) and extracted_pair_reviews
+        else extracted_from_contributions
+    )
+    missing_set = set(missing_ids)
+    proposal_list = []
+    for cid in missing_ids:
+        conflict = conflicts_by_id.get(cid) or {}
+        proposal_list.append(
+            {
+                "id": cid,
+                "current_label": str(conflict.get("label") or "").strip(),
+                "requirements": list(conflict.get("requirements") or []),
+                "requirement_a": dict((conflict.get("requirement_a") or {})),
+                "requirement_b": dict((conflict.get("requirement_b") or {})),
+                "signoff_reason": "missing_review_decision",
+            }
+        )
+    reviews_for_missing = [
+        row for row in reviews_for_prompt or []
+        if isinstance(row, dict) and str(row.get("id") or "").strip() in missing_set
+    ]
+
+    coordinator.flow.logger.warning(
+        "衝突再審查缺少 decisions，啟動 Analyst 補裁定：%s",
+        ", ".join(missing_ids[:10]),
+    )
+    results, raw_output = coordinator.flow.analyst_agent.signoff_conflict_recheck(
+        proposal_list,
+        discussion_rows,
+        extracted_pair_reviews=reviews_for_missing,
+    )
+    debug["raw_missing_decision_output"] = raw_output
+    completed = []
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        cid = str(row.get("id") or "").strip()
+        if cid not in missing_set:
+            continue
+        row["decided_by"] = "analyst"
+        completed.append(row)
+    completed_ids = {
+        str(row.get("id") or "").strip()
+        for row in completed
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    still_missing = [cid for cid in missing_ids if cid not in completed_ids]
+    debug["completed_missing_decision_count"] = len(completed)
+    debug["completed_missing_decision_ids"] = sorted(completed_ids)
+    if still_missing:
+        debug["status"] = "failed_missing_after_agent_loop"
+        debug["still_missing_decision_ids"] = still_missing
+        raise RuntimeError(f"Analyst missing decision 補裁定後仍缺少 pair: {still_missing}")
+    debug["status"] = "ok"
+    return list(decisions or []) + completed, debug
+
 def collect_missing_reviews(
     coordinator: Any,
     issue: Dict[str, Any],

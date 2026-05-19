@@ -1,7 +1,12 @@
 # Support helpers for requirement elicitation meetings.
+import re
 from typing import Any, Dict, List, Optional
 
-from agents.profile.analyst.requirements import requirement_candidate, requirement_discussion_pool
+from agents.profile.analyst.requirements import (
+    requirement_candidate,
+    requirement_dedupe_key,
+    requirement_discussion_pool,
+)
 from agents.profile.scenario import scenario_prompt_value
 
 ELICITATION_PHASES = [
@@ -11,6 +16,30 @@ ELICITATION_PHASES = [
 ]
 QUESTION_AGENT_ACTIONS = {"ask_user", "supplement_question"}
 FINISH_AGENT_ACTION = "propose_finish"
+
+
+def split_text_by_speaking_as(text: str, names: List[str]) -> Dict[str, str]:
+    """Split a multi-role answer like 【顧客】...【平台管理者】... by role label."""
+    source = str(text or "").strip()
+    clean_names = [str(name or "").strip() for name in names or [] if str(name or "").strip()]
+    if not source or not clean_names:
+        return {}
+    escaped = "|".join(re.escape(name) for name in clean_names)
+    pattern = re.compile(rf"(?:^|\n)\s*【({escaped})】\s*")
+    matches = list(pattern.finditer(source))
+    if not matches:
+        return {name: source for name in clean_names}
+
+    parts: Dict[str, str] = {}
+    for index, match in enumerate(matches):
+        name = str(match.group(1) or "").strip()
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        body = source[start:end].strip()
+        body = re.sub(r"^\s*[-—]+\s*", "", body).strip()
+        if name and body:
+            parts[name] = body
+    return {name: parts.get(name, source) for name in clean_names}
 
 
 def run_closure_vote_loop(
@@ -243,10 +272,11 @@ def clean_elicited_reqts(
     for cand in candidates:
         if not isinstance(cand, dict):
             continue
-        text = str(cand.get("text") or "").strip().lower()
-        if not text or text in seen_texts:
+        text = str(cand.get("text") or "").strip()
+        marker = requirement_dedupe_key(text)
+        if not text or marker in seen_texts:
             continue
-        seen_texts.add(text)
+        seen_texts.add(marker)
         cand.update(requirement_candidate(cand))
         deduped.append(cand)
     return deduped
@@ -511,7 +541,14 @@ def extract_candidates(
         for row in artifact.get("stakeholders", []) or []
         if isinstance(row, dict) and str(row.get("name") or "").strip()
     }
+    stakeholder_types = {
+        str(row.get("name") or "").strip(): str(row.get("type") or "").strip()
+        for row in artifact.get("stakeholders", []) or []
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
     stakeholder_rows: List[Dict[str, str]] = []
+    row_index = 1
+    pending_question = False
     for c in contributions:
         if not isinstance(c, dict):
             continue
@@ -519,6 +556,9 @@ def extract_candidates(
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
         text = (resp.get("text") or "").strip()
         if not text:
+            continue
+        if agent != "user":
+            pending_question = True
             continue
         if agent == "user":
             speaking_as = resp.get("speaking_as")
@@ -531,8 +571,21 @@ def extract_candidates(
             ]
             if not names and len(allowed_stakeholders) == 1:
                 names = list(allowed_stakeholders)
-            for name in names:
-                stakeholder_rows.append({"name": name, "text": text})
+            if pending_question:
+                start_row_index = row_index
+                row_index += max(1, len(names))
+            else:
+                start_row_index = row_index
+            text_parts = split_text_by_speaking_as(text, names)
+            for offset, name in enumerate(names):
+                source_ref = f"elicit-{max(1, int(turn))}-{start_row_index + offset}"
+                stakeholder_rows.append({
+                    "name": name,
+                    "type": stakeholder_types.get(name, ""),
+                    "text": text_parts.get(name, text),
+                    "source_ref": source_ref,
+                })
+            pending_question = False
     if not stakeholder_rows:
         return []
 
@@ -557,7 +610,7 @@ def extract_candidates(
         existing_requirements=existing_requirements,
         mode=mode,
         scenario=scenario_prompt_value(artifact.get("scenario", {})),
-        source=f"elicitation_r{round_num}",
+        source=f"elicitation_r{max(1, int(round_num))}",
     )
     if not isinstance(raw, list):
         raise RuntimeError("elicited requirement extraction did not return a list")

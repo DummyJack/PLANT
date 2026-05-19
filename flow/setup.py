@@ -252,13 +252,13 @@ class Flow:
     def build_cost_summary(self) -> Optional[Dict[str, Any]]:
         cost_by_agent = {}
         for agent_name, model in self.agent_models.items():
-            if not hasattr(model, "getCostSummary"):
-                continue
-            summary = model.getCostSummary()
+            summary = None
+            if hasattr(model, "getCostSummary"):
+                summary = model.getCostSummary()
+            if not summary and hasattr(model, "costTracker"):
+                summary = model.costTracker.export_summary_dict()
             if summary:
                 cost_by_agent[agent_name] = summary
-        if not cost_by_agent:
-            return None
 
         total_input = sum(v.get("input_tokens", 0) for v in cost_by_agent.values())
         total_output = sum(v.get("output_tokens", 0) for v in cost_by_agent.values())
@@ -274,36 +274,5 @@ class Flow:
                 "total_tokens": total_tokens,
                 "run_time(s)": round(total_elapsed, 3),
                 "estimated_cost(USD)": round(total_cost, 8),
-            },
-        }
-
-    def build_agent_usage_summary(self) -> Dict[str, Any]:
-        agents_context: Dict[str, Any] = {}
-        total_in = total_out = total_all = 0
-        api_calls = 0
-        for agent_name, model in self.agent_models.items():
-            records = (
-                model.getUsageCallRecords()
-                if hasattr(model, "getUsageCallRecords")
-                else []
-            )
-            agents_context[agent_name] = {
-                "model": getattr(model, "model_name", ""),
-                "calls": records,
-            }
-            for r in records:
-                total_in += int(r.get("input_tokens", 0) or 0)
-                total_out += int(r.get("output_tokens", 0) or 0)
-                total_all += int(r.get("total_tokens", 0) or 0)
-                api_calls += 1
-
-        return {
-            "project_id": self.store.project_id,
-            "agents": agents_context,
-            "totals": {
-                "input_tokens": total_in,
-                "output_tokens": total_out,
-                "total_tokens": total_all,
-                "api_calls": api_calls,
             },
         }

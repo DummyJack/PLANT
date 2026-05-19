@@ -87,6 +87,7 @@ def save_meeting_preparation_outputs(
         previous_draft=previous_draft,
         conflict_report_md=conflict_report_md,
         meeting_record_md="",
+        artifact_dir=getattr(coordinator.flow.store, "artifact_dir", None),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.logger.info(
@@ -548,6 +549,7 @@ def post_round_pipeline(
         previous_draft=previous_draft,
         conflict_report_md=conflict_report_md,
         meeting_record_md=meeting_record_md,
+        artifact_dir=getattr(coordinator.flow.store, "artifact_dir", None),
     )
     coordinator.flow.store.save_draft(draft_md, version=draft_version)
     coordinator.flow.touch_artifact_meta(artifact, updated_by="flow.run_meeting_round", round_num=round_num)

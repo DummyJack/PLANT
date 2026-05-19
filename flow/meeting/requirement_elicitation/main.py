@@ -21,6 +21,7 @@ from .support import (
     find_finish_proposal,
     merge_turn_summary,
     clean_elicited_reqts,
+    split_text_by_speaking_as,
     turn_participants as normalized_turn_participants,
     user_questions,
     select_question,
@@ -54,17 +55,18 @@ def meeting_rows(
     def row_text(row: Dict[str, Any]) -> str:
         return str(row.get("text") or "").strip()
 
-    def answer_fields(row: Dict[str, Any]) -> Dict[str, str]:
+    def answer_rows(row: Dict[str, Any]) -> List[Dict[str, str]]:
         text = row_text(row)
         if not text:
-            return {}
+            return []
         speaking_as = row.get("speaking_as") or []
         if isinstance(speaking_as, str):
             speaking_as = [speaking_as]
         keys = [str(name).strip() for name in speaking_as if str(name).strip()]
         if not keys:
-            return {}
-        return {key: text for key in keys}
+            return []
+        parts = split_text_by_speaking_as(text, keys)
+        return [{key: parts.get(key, text)} for key in keys]
 
     for index, turn in enumerate(elicitation_trace or [], 1):
         if not isinstance(turn, dict):
@@ -99,13 +101,18 @@ def meeting_rows(
                     pending_question = {agent: text}
                     continue
                 if pending_question:
-                    rows.append(
-                        {
-                            "id": next_turn_row_id(),
-                            **pending_question,
-                            **answer_fields(contribution),
-                        }
-                    )
+                    answers = answer_rows(contribution)
+                    if answers:
+                        for answer in answers:
+                            rows.append(
+                                {
+                                    "id": next_turn_row_id(),
+                                    **pending_question,
+                                    **answer,
+                                }
+                            )
+                    else:
+                        rows.append({"id": next_turn_row_id(), **pending_question})
                     pending_question = None
             if pending_question:
                 rows.append({"id": next_turn_row_id(), **pending_question})
@@ -113,14 +120,14 @@ def meeting_rows(
         question = str(turn.get("judged_action") or "").strip()
         question_agent = str(turn.get("judged_action_agent") or "").strip()
         answer = ""
-        answer_fields_map: Dict[str, str] = {}
+        answer_row_maps: List[Dict[str, str]] = []
         for row in turn.get("contributions", []) or []:
             if not isinstance(row, dict):
                 continue
             if str(row.get("agent") or "").strip() != "user":
                 continue
             answer = row_text(row)
-            answer_fields_map = answer_fields(row)
+            answer_row_maps = answer_rows(row)
             break
         if bool(turn.get("judge_finish")) and not answer:
             agent = question_agent or "mediator"
@@ -128,12 +135,18 @@ def meeting_rows(
             continue
         if not question and not answer:
             continue
-        row = {"id": row_id(turn_no)}
-        if question_agent and question:
-            row[question_agent] = question
-        if answer_fields_map and answer:
-            row.update(answer_fields_map)
-        rows.append(row)
+        if answer_row_maps and answer:
+            for row_no, answer_map in enumerate(answer_row_maps, 1):
+                row = {"id": row_id(turn_no, row_no)}
+                if question_agent and question:
+                    row[question_agent] = question
+                row.update(answer_map)
+                rows.append(row)
+        else:
+            row = {"id": row_id(turn_no)}
+            if question_agent and question:
+                row[question_agent] = question
+            rows.append(row)
     return {round_key: rows}
 
 def valid_stakeholder_names(artifact: Dict[str, Any]) -> set[str]:
