@@ -135,15 +135,15 @@ def requirement_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
-    for key in ("id", "text", "priority", "stakeholder", "source"):
+    for key in ("id", "text", "priority", "stakeholder", "source", "source_ref"):
         value = row.get(key)
         if value not in (None, "", []):
             if key == "stakeholder" and isinstance(value, dict):
                 stakeholder = {
                     "name": str(value.get("name") or "").strip(),
-                    "text": str(value.get("text") or "").strip(),
+                    "type": str(value.get("type") or "").strip(),
                 }
-                if stakeholder["name"] or stakeholder["text"]:
+                if stakeholder["name"] or stakeholder["type"]:
                     payload[key] = stakeholder
             else:
                 payload[key] = value
@@ -805,6 +805,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     decisions = load_json_path(artifact_dir / "meeting" / "decisions.json", [])
     issues = load_json_path(artifact_dir / "meeting" / "issues.json", [])
     models = load_json_path(artifact_dir / "models" / "system_models.json", [])
+    stage_status = load_json_path(artifact_dir / "stage_status.json", {})
     issue_rows = []
     for item in issues if isinstance(issues, list) else []:
         if not isinstance(item, dict):
@@ -850,6 +851,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         "decisions": decisions if isinstance(decisions, list) else [],
         "issue_proposals": issue_rows,
         "system_models": models if isinstance(models, list) else [],
+        "stage_status": stage_status if isinstance(stage_status, dict) else {},
     }
     return artifact
 
@@ -870,6 +872,7 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_json_path(base_dir, data.get("decisions", []) or [], artifact_dir / "meeting" / "decisions.json")
     save_json_path(base_dir, issue_proposals_payload(data), artifact_dir / "meeting" / "issues.json")
     save_json_path(base_dir, models_payload(data), artifact_dir / "models" / "system_models.json")
+    save_json_path(base_dir, data.get("stage_status", {}) or {}, artifact_dir / "stage_status.json")
 
 
 def save_draft(artifact_dir: Path, content: str, version: int) -> None:
