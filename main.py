@@ -11,6 +11,7 @@ from utils import (
     Logger,
     ProjectManager,
     format_loaded_models_summary,
+    stage_enabled,
 )
 from utils.language import sync_output_language
 
@@ -42,25 +43,28 @@ def main():
         print(f"錯誤：{str(e)}")
         sys.exit(1)
 
-    # 由人類設定討論回合數，寫入 config
-    while True:
-        rounds_input = input("請輸入討論回合數：").strip()
-        if not rounds_input:
-            print("❌ 請輸入回合數")
-            continue
-        try:
-            rounds = int(rounds_input)
-            if rounds < 1:
-                print("❌ 回合數必須大於 0")
+    # 只有正式會議啟用時才需要由人類設定討論回合數。
+    if stage_enabled(config, "formal_meeting"):
+        while True:
+            rounds_input = input("請輸入討論回合數：").strip()
+            if not rounds_input:
+                print("❌ 請輸入回合數")
                 continue
-            print()
-            print(f"✓ 設定回合數：{rounds}")
-            break
-        except ValueError:
-            print("❌ 回合數必須是數字")
+            try:
+                rounds = int(rounds_input)
+                if rounds < 1:
+                    print("❌ 回合數必須大於 0")
+                    continue
+                print()
+                print(f"✓ 設定回合數：{rounds}")
+                break
+            except ValueError:
+                print("❌ 回合數必須是數字")
 
-    config["rounds"] = rounds
-    base_store.save_config(config)
+        config["rounds"] = rounds
+        base_store.save_config(config)
+    else:
+        config["rounds"] = 0
 
     store = Store(base_dir, session.project_id)
     logger = Logger(store.log_dir)

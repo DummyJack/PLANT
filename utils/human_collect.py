@@ -11,6 +11,27 @@ STAKEHOLDER_CATEGORY_LABELS = {
 
 class Collect:
     @staticmethod
+    def custom_stakeholder_type(name: str) -> str:
+        categories = [
+            ("Primary Users", "核心使用者"),
+            ("System Owners & Management", "系統所有者與管理者"),
+            ("External Parties", "外部相關單位"),
+        ]
+        while True:
+            print(f"\n請選擇「{name}」的類型：")
+            for i, (_, label) in enumerate(categories, 1):
+                print(f"{i}. {label}")
+            raw = input("請輸入類型編號：").strip()
+            try:
+                idx = int(raw) - 1
+            except ValueError:
+                print("❌ 類型編號必須是數字")
+                continue
+            if 0 <= idx < len(categories):
+                return categories[idx][0]
+            print("❌ 類型編號無效")
+
+    @staticmethod
     def user_selection(
         proposed: List[Dict[str, str]], max_select: int = 5
     ) -> List[int]:
@@ -47,7 +68,12 @@ class Collect:
                             break
                     except ValueError:
                         if part:
-                            proposed.append({"name": part, "reason": "使用者自訂"})
+                            stakeholder_type = Collect.custom_stakeholder_type(part)
+                            proposed.append({
+                                "name": part,
+                                "type": stakeholder_type,
+                                "reason": "使用者自訂",
+                            })
                             selected_indices.append(len(proposed) - 1)
 
                 if has_invalid_selection:

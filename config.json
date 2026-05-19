@@ -1,17 +1,18 @@
 {
   "rounds": 1,
   "issue_items": 5,
-  "max_stakeholders": 5,
-  "elicitation_max_turns": 20,
+  "max_stakeholders": 7,
+  "elicitation_max_turns": 5,
   "stage": {
-    "elicitation": true,
-    "conflict_detection": true,
+    "init": false,
+    "elicitation": false,
+    "conflict_detection": false,
     "domain_research": true,
-    "system_model": true,
+    "system_model": false,
     "draft": true,
-    "formal_meeting": true,
-    "final_meeting": true,
-    "SRS": true
+    "formal_meeting": false,
+    "final_meeting": false,
+    "SRS": false
   },
   "enable_tools": {
     "web_search": true,
