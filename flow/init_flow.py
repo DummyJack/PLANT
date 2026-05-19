@@ -24,7 +24,7 @@ from agents.profile.analyst.requirements import (
 def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     run_init = stage_enabled(flow.config, "init")
     if not run_init:
-        flow.logger.info("直接跳過初始化前置：執行時需要 artifact 內已有 scenario、stakeholders、scope 與 URL/requirements")
+        flow.logger.info("跳過初始化前置")
         require_stage_inputs(flow, artifact, "init")
     else:
         rough_idea = artifact["rough_idea"]
@@ -36,8 +36,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             proposed = flow.user_agent.propose_stakeholders(rough_idea)
 
             max_sh = flow.config.get("max_stakeholders", 5)
-            selected_indices = Collect.user_selection(proposed, max_select=max_sh)
-            selected = [proposed[i] for i in selected_indices]
+            selected = Collect.user_selection(proposed, max_select=max_sh)
             stakeholders = selected_stakeholders(selected)
             if not stakeholders:
                 raise RuntimeError(
@@ -106,7 +105,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     if not stage_enabled(flow.config, "elicitation"):
         flow.logger.info("=== 需求擷取會議 ===")
-        flow.logger.info("直接跳過需求擷取會議：執行時需要 artifact/project.json、artifact/scope.json、artifact/requirements.json，且 artifact 內已有 stakeholders 與 URL/requirements")
+        flow.logger.info("跳過需求擷取會議")
     elif stage_completed(artifact, "elicitation"):
         flow.logger.info("=== 需求擷取會議 ===")
         require_stage_inputs(flow, artifact, "elicitation")
@@ -133,7 +132,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.info("=== 需求衝突辨識 ===")
     if not stage_enabled(flow.config, "conflict_detection"):
-        flow.logger.info("直接跳過需求衝突辨識：執行時需要 artifact/requirements.json 且 artifact 內已有 URL/requirements")
+        flow.logger.info("跳過需求衝突辨識")
     elif stage_completed(artifact, "conflict_detection"):
         require_stage_inputs(flow, artifact, "conflict_detection")
         flow.logger.info("✓ 需求衝突辨識已完成，跳過重新執行")
@@ -153,23 +152,29 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.store.save_artifact(artifact)
 
     flow.logger.info("=== Expert: 領域研究 ===")
+    ran_domain_research = False
+    reused_domain_research = False
     if not stage_enabled(flow.config, "domain_research"):
-        flow.logger.info("直接跳過領域研究：執行時需要 artifact/project.json、artifact/scope.json、artifact/requirements.json")
+        flow.logger.info("跳過領域研究")
     elif has_feedback_payload(artifact) and artifact_path_non_empty(flow, "feedback.json"):
         flow.logger.info("✓ 領域研究已存在，跳過重新生成")
+        reused_domain_research = True
     else:
         require_stage_inputs(flow, artifact, "domain_research")
         review = flow.expert_agent.run_domain_research_loop(
             artifact,
         )
+        ran_domain_research = True
     flow.store.save_artifact(artifact)
     dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-    if dr and isinstance(dr, dict) and dr:
+    if ran_domain_research and not has_feedback_payload(artifact):
+        raise RuntimeError("Expert domain research 在 agent loop 後仍未產生有效 feedback")
+    if (ran_domain_research or reused_domain_research) and dr and isinstance(dr, dict) and dr:
         flow.logger.info("✓ 領域研究完成")
 
     flow.logger.info("=== Modeler: 系統模型 ===")
     if not stage_enabled(flow.config, "system_model"):
-        flow.logger.info("直接跳過系統模型：執行時需要 artifact/project.json、artifact/scope.json、artifact/requirements.json")
+        flow.logger.info("跳過系統模型")
         model_data = artifact.get("system_models", [])
     elif has_system_models_payload(artifact) and artifact_path_non_empty(flow, "models", "system_models.json"):
         model_data = artifact.get("system_models", [])
@@ -192,7 +197,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.info("=== Analyst: 草稿化 ===")
     if not stage_enabled(flow.config, "draft"):
-        flow.logger.info("直接跳過草稿化：執行時需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/models/system_models.json")
+        flow.logger.info("跳過草稿化")
     elif has_draft_payload(flow):
         flow.logger.info("✓ 需求草稿已存在，跳過重新生成")
     else:

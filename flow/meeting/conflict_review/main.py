@@ -42,11 +42,29 @@ def save_conflict_report(
     )
     report_artifact = {
         **artifact,
-        "conflict": payload,
+        "conflict": {
+            **payload,
+            "report": conflict_rows,
+        },
         "conflict_rows": conflict_rows,
     }
     report_artifact = coordinator.flow.analyst_agent.generate_conflict_resolutions(report_artifact)
-    report_payload = (report_artifact.get("conflict", {}) or {}).get("report", []) or []
+    report_payload = [
+        row for row in ((report_artifact.get("conflict", {}) or {}).get("report", []) or [])
+        if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+    ]
+    report_payload = [
+        {
+            **{
+                key: value
+                for key, value in row.items()
+                if key != "id"
+            },
+            "source": row.get("id"),
+            "id": f"CR-{idx}",
+        }
+        for idx, row in enumerate(report_payload, 1)
+    ]
     report_path = coordinator.flow.store.artifact_dir / "report" / f"conflict_report_v{round_num}.json"
     save_json_path(
         coordinator.flow.store.base_dir,
@@ -73,7 +91,7 @@ def save_conflict_report(
     )
     coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
     coordinator.flow.logger.info(
-        "需求衝突報告已產生：conflict_report.md",
+        "需求衝突報告已產生：artifact/report/conflict_report.md",
     )
 
 def run_conflict_review_round(

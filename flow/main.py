@@ -134,7 +134,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 
     if not run_formal:
         flow.logger.info("=== 正式會議 ===")
-        flow.logger.info("直接跳過正式會議：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過正式會議")
     elif _has_completed_formal_meeting(flow, artifact, rounds):
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
@@ -146,7 +146,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 
     flow.logger.info("=== Final ===")
     if not stage_enabled(flow.config, "final_meeting"):
-        flow.logger.info("直接跳過 Final：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過 Final")
     elif _has_completed_final_meeting(artifact):
         flow.logger.info("✓ Final 輸出已存在，跳過重新生成")
     else:
@@ -156,7 +156,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 
     flow.logger.info("=== 規格化 ===")
     if not stage_enabled(flow.config, "SRS"):
-        flow.logger.info("直接跳過 SRS：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過 SRS")
     elif _has_existing_srs(flow):
         require_srs_draft_inputs(flow)
         flow.logger.info("✓ SRS 已存在，跳過重新生成")
@@ -196,12 +196,10 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     if run_formal:
         artifact.setdefault("meta", {})["session_end_round"] = end_round
         flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
-    else:
-        flow.logger.info("繼續專案：正式會議未啟用，不設定討論回合數")
 
     if not run_formal:
         flow.logger.info("=== 正式會議 ===")
-        flow.logger.info("直接跳過正式會議：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過正式會議")
     elif _has_completed_formal_meeting(flow, artifact, end_round):
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
@@ -213,7 +211,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
 
     flow.logger.info("=== Final ===")
     if not stage_enabled(flow.config, "final_meeting"):
-        flow.logger.info("直接跳過 Final：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過 Final")
     elif _has_completed_final_meeting(artifact):
         flow.logger.info("✓ Final 輸出已存在，跳過重新生成")
     else:
@@ -223,7 +221,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
 
     flow.logger.info("=== 規格化 ===")
     if not stage_enabled(flow.config, "SRS"):
-        flow.logger.info("直接跳過 SRS：執行時需要 artifact/drafts/draft_v0.md 或更新版本")
+        flow.logger.info("跳過 SRS")
     elif _has_existing_srs(flow):
         require_srs_draft_inputs(flow)
         flow.logger.info("✓ SRS 已存在，跳過重新生成")

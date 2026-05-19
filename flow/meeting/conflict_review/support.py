@@ -821,7 +821,7 @@ def analyst_signoff(
         debug_info["decisions_preview"] = auto_decisions[:3]
         return auto_decisions, debug_info
     coordinator.flow.logger.info(
-        "需求衝突再審查裁定：待 Analyst 裁定 pairs=%s",
+        "需求衝突再審查裁定：待 Analyst 裁定 pairs=%s，預覽=%s",
         len(proposal_list),
         ", ".join([str(row.get("id") or "") for row in proposal_list[:5]]),
     )
