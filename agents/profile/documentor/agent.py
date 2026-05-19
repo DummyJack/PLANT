@@ -1,8 +1,7 @@
-# Documentor agent: generates final SRS through the shared action loop.
+# Documentor agent: generates SRS from the latest draft through the shared action loop.
 from typing import Any, Dict, Optional
 
 from agents.base import BaseAgent
-from agents.profile.analyst.conflict_store import conflict_entries_count
 
 from .srs import DocumentorSrs
 
@@ -13,15 +12,15 @@ class DocumentorAgent(
 ):
     name = "documentor"
 
-    system_prompt = """你是 SRS 撰寫專家，負責把 Final meeting 後的需求資料編寫成正式、可交付的軟體需求規格書。
+    system_prompt = """你是 SRS 撰寫專家，負責把最新需求草稿整理成可交付的軟體需求規格書。
 
 規則：
-1. change_record、pending_review、未回答 open_questions、未解 conflict 與未正式套用的變更，不得寫成已定案 requirement。
-2. 你只根據 Final meeting 後的正式 context 編寫，不自行補決策，不把討論過程寫入正式文件。
-3. SRS skill 是 IEEE 830 寫作指引；其中 FR/NFR ID、RTM、stakeholder sign-off 是範例或可選項，不得覆蓋本專案資料契約。
-4. 本專案需求 ID 必須保留正式需求內既有 REQ-*，不得改名成 FR-* 或 NFR-*。
-5. 最終正式稿不得保留 template 的說明文字、提示語、註解、emoji、placeholder 指示或其他 authoring residue。
-6. 文件語氣必須像基線規格文件，不得寫成會議摘要、工作紀錄、討論整理或建議書。"""
+1. 你只根據最新 draft 編寫，不自行補 draft 沒有的需求或決策。
+2. draft 中 pending、open、unresolved、待確認或待決議的內容，不得寫成已定案 requirement。
+3. SRS skill 是 IEEE 830 寫作指引；其中 FR/NFR ID 與 RTM 是範例或可選項，不得覆蓋本專案資料契約。
+4. 若 draft 有 REQ-*，使用 REQ-*；否則使用 draft 中的 SRC-*、FRC-*、NFRC-*，不得改名成新的 FR-* 或 NFR-*。
+5. 最終稿不得保留 template 的說明文字、提示語、註解、emoji、placeholder 指示或其他 authoring residue。
+6. 文件語氣必須像規格文件，不得寫成會議摘要、工作紀錄、討論整理或建議書。"""
 
     def __init__(
         self,
@@ -53,14 +52,10 @@ class DocumentorAgent(
         return (result.get("srs_markdown") or "").strip()
 
     def build_document_output_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        artifact = kwargs.get("artifact") or {}
         latest_version = self.store.get_draft_version()
         return {
             "draft_version": latest_version,
             "has_draft": latest_version >= 0,
-            "requirements_count": len(artifact.get("requirements", []) or []),
-            "decisions_count": len(artifact.get("decisions", []) or []),
-            "conflicts_count": conflict_entries_count(artifact),
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
         }
@@ -81,7 +76,7 @@ class DocumentorAgent(
         return {
             "action": "generate_srs",
             "params": {},
-            "reasoning": "Final meeting 已完成，生成正式 SRS。",
+            "reasoning": "最新 draft 已存在，生成 SRS。",
         }
 
     def execute_document_output_action(
@@ -90,7 +85,7 @@ class DocumentorAgent(
         decision: Dict[str, Any],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        srs = self.generate_srs_internal(kwargs.get("artifact"))
+        srs = self.generate_srs_from_latest_draft()
         return {
             "action": decision.get("action", ""),
             "status": "success",

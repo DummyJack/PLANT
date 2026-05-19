@@ -95,6 +95,9 @@ def parse_diagram_model(
         "type": diagram_type,
         "plantuml": plantuml,
     }
+    description = clean_text(raw.get("description"))
+    if description:
+        row["description"] = description
     source_text = clean_text(raw.get("source") or source)
     if source_text:
         row["source"] = source_text

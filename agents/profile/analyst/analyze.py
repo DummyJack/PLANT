@@ -1,8 +1,11 @@
 # Analyst requirements logic: scope, drafts, requirement records, and change candidates.
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agents.base import parse_json_array, parse_json_object
 from storage.markdown import clean_llm_output
+from storage.plantuml import plantuml_safe_name
 from agents.skills.base import get_skill
 from agents.profile.scenario import scenario_prompt_value
 
@@ -14,7 +17,11 @@ from .validation import (
     scope_payload,
 )
 from .requirements import requirement_discussion_pool
-from .prompts import requirements_skill_guidance, user_requirement_extraction_contract
+from .prompts import (
+    build_draft_prompt,
+    requirements_skill_guidance,
+    user_requirement_extraction_contract,
+)
 
 
 def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -29,6 +36,17 @@ def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         stakeholder_type = str(stakeholder.get("type") or "").strip()
         if stakeholder_type:
             row["type"] = stakeholder_type
+        text = stakeholder.get("text")
+        if isinstance(text, list):
+            clean_texts = [
+                str(item).strip()
+                for item in text
+                if str(item).strip()
+            ]
+            if clean_texts:
+                row["text"] = clean_texts
+        elif str(text or "").strip():
+            row["text"] = str(text).strip()
         rows.append(row)
     return rows
 
@@ -36,13 +54,20 @@ def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
 def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     clean: Dict[str, Any] = {}
-    for key in ("constraints", "risks", "recommendations", "open_items"):
+    for key in ("findings", "constraints", "risks", "recommendations", "open_items"):
         rows = [
             row for row in feedback.get(key, []) or []
             if isinstance(row, dict) and str(row.get("text") or "").strip()
         ]
         if rows:
             clean[key] = rows
+    sources = [
+        str(row or "").strip()
+        for row in feedback.get("sources", []) or []
+        if str(row or "").strip()
+    ]
+    if sources:
+        clean["sources"] = sources
     return clean
 
 
@@ -63,7 +88,11 @@ def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-def draft_system_models(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+def draft_system_models(
+    artifact: Dict[str, Any],
+    artifact_dir: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    artifact_path = Path(artifact_dir) if artifact_dir else None
     rows: List[Dict[str, Any]] = []
     for model in artifact.get("system_models", []) or []:
         if not isinstance(model, dict):
@@ -77,11 +106,28 @@ def draft_system_models(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
             row["name"] = name
         if model_type:
             row["type"] = model_type
+        description = str(model.get("description") or "").strip()
+        if description:
+            row["description"] = description
         if model.get("text"):
             row["text"] = model.get("text")
-        row["has_plantuml"] = bool(str(model.get("plantuml") or "").strip())
+        plantuml = str(model.get("plantuml") or "").strip()
+        row["has_plantuml"] = bool(plantuml)
+        if row["has_plantuml"] and artifact_path:
+            filename = f"{plantuml_safe_name(model)}.png"
+            if (artifact_path / "models" / filename).is_file():
+                row["image_path"] = f"../models/{filename}"
+        if row["has_plantuml"] and not row.get("image_path"):
+            row["plantuml"] = plantuml
         rows.append(row)
     return rows
+
+
+def draft_requirement_id_issues(md: str, expected_ids: set[str]) -> tuple[List[str], List[str]]:
+    draft_req_ids = set(re.findall(r"\bURL-\d+\b", md or ""))
+    unknown_ids = sorted(draft_req_ids - expected_ids)
+    missing_ids = sorted(expected_ids - draft_req_ids)
+    return unknown_ids, missing_ids
 
 
 class AnalystRequirements:
@@ -97,6 +143,7 @@ class AnalystRequirements:
         conflict_report_md: str = "",
         meeting_record_md: str = "",
         round_num: Optional[int] = None,
+        artifact_dir: Optional[Any] = None,
     ):
         """requirements-analyst skill 統一入口。
 
@@ -129,6 +176,7 @@ class AnalystRequirements:
                 "conflict_report_md": conflict_report_md,
                 "meeting_record_md": meeting_record_md,
                 "round_num": round_num,
+                "artifact_dir": artifact_dir,
             },
             build_observation=self.build_requirements_analysis_observation,
             decide_action=self.decide_requirements_analysis_action,
@@ -200,6 +248,7 @@ class AnalystRequirements:
                     conflict_report_md=kwargs.get("conflict_report_md") or "",
                     meeting_record_md=kwargs.get("meeting_record_md") or "",
                     round_num=kwargs.get("round_num"),
+                    artifact_dir=kwargs.get("artifact_dir"),
                 )
             elif action == "update_draft":
                 output = self.update_draft(kwargs.get("artifact") or {})
@@ -246,7 +295,7 @@ class AnalystRequirements:
   }
 }"""
         try:
-            data = self.invoke_direct_requirements_json(
+            data = self.invoke_direct_requirements_object_json(
                 task,
                 context,
                 action="requirements.scenario",
@@ -279,11 +328,16 @@ class AnalystRequirements:
 
 # 可用資料
 - scenario：產品情境。
-- URL：目前已整理出的 User Requirements。
+- URL：目前已抽取的候選 User Requirements。
 
 # 判斷規則
 - in_scope 放本專案應處理的產品能力、使用情境、需求主題或限制。
 - out_of_scope 放明確不屬於本專案、不符合產品情境，或已被排除的內容。
+- 若輸入沒有明確排除項，仍可根據產品責任邊界列出合理 out_of_scope。
+- out_of_scope 只能包含本系統不直接負責、需第三方、線下或外部組織負責，或超出目前產品版本目標的內容。
+- 不得加入與 scenario 無關的排除項。
+- 不確定是否排除時，不要放入 out_of_scope。
+- out_of_scope 以 3-7 筆為宜；若確實沒有合理邊界，才輸出空陣列。
 - 不要加入 assumptions、unknowns、description、status 或 source。
 
 # 輸出 JSON
@@ -294,7 +348,7 @@ class AnalystRequirements:
   }
 }"""
         try:
-            data = self.invoke_direct_requirements_json(
+            data = self.invoke_direct_requirements_object_json(
                 task,
                 context,
                 action="requirements.scope",
@@ -307,35 +361,65 @@ class AnalystRequirements:
     def analyze_requirements(self, stakeholders: List[Dict]) -> Dict[str, Any]:
         all_requirements = []
         for idx, one_sh in enumerate(stakeholders):
-            sh_label = one_sh.get("name") or one_sh.get("id") or f"利害關係人{idx + 1}"
+            sh_label = str(one_sh.get("name") or "").strip()
+            if not sh_label:
+                raise ValueError(f"stakeholder 缺少 name，無法進行需求分析: index={idx}")
             sh_texts = one_sh.get("text") or []
             if isinstance(sh_texts, list):
-                sh_text = "\n".join(str(text).strip() for text in sh_texts if str(text).strip())
+                source_texts = [str(text).strip() for text in sh_texts if str(text).strip()]
             else:
-                sh_text = str(sh_texts or "").strip()
-            context = {"stakeholders": [one_sh]}
-            task = f"""請依照 requirements-analyst skill，只根據輸入的單一利害關係人內容抽取 User Requirements。
+                source_text = str(sh_texts or "").strip()
+                source_texts = [source_text] if source_text else []
+            for source_idx, source_text in enumerate(source_texts, 1):
+                context = {
+                    "stakeholder": {
+                        "name": sh_label,
+                        "type": one_sh.get("type"),
+                        "source_text": source_text,
+                        "all_text": source_texts,
+                    }
+                }
+                task = f"""請依照 requirements-analyst skill，只根據目前這一條 source_text 抽取 User Requirements。
+
+完整 all_text 只作為理解語境的背景，不可從其他 all_text 條目產生需求。
 
 {user_requirement_extraction_contract()}
 """
-            try:
-                data = self.invoke_requirements_analyst_json(task, context, mode="analysis")
-            except Exception as e:
-                raise RuntimeError(f"需求分析失敗（{sh_label}）: {e}") from e
-            raw_rows = data if isinstance(data, list) else []
-            normalized_rows = [
-                row for row in requirement_records([
-                    {
-                        **row,
-                        "stakeholder": {"name": sh_label, "text": sh_text},
-                        "source": "initial",
-                    }
-                    for row in raw_rows
-                    if isinstance(row, dict)
-                ])
-                if row.get("stakeholder") and row.get("source")
-            ]
-            all_requirements.extend(normalized_rows)
+                try:
+                    data = self.invoke_requirements_analyst_array_json(task, context, mode="analysis")
+                except Exception as e:
+                    try:
+                        raw = self.invoke_requirements_analyst_text(task, context, mode="analysis")
+                        repair_task = f"""上一個回覆不是合法 JSON array。請只修正格式，不要重新分析、不要新增需求。
+
+輸出必須是 JSON array，每筆只包含 text、priority。
+
+原始回覆：
+{raw}"""
+                        data = self.invoke_direct_requirements_array_json(
+                            repair_task,
+                            context={},
+                            action="requirements.analysis.repair",
+                        )
+                    except Exception:
+                        raise RuntimeError(f"需求分析失敗（{sh_label}#{source_idx}）: {e}") from e
+                raw_rows = data if isinstance(data, list) else []
+                normalized_rows = [
+                    row for row in requirement_records([
+                        {
+                            **row,
+                            "stakeholder": {
+                                "name": sh_label,
+                                "type": one_sh.get("type"),
+                            },
+                            "source": "initial",
+                        }
+                        for row in raw_rows
+                        if isinstance(row, dict)
+                    ])
+                    if row.get("stakeholder") and row.get("source")
+                ]
+                all_requirements.extend(normalized_rows)
 
         return {"requirements": all_requirements}
 
@@ -347,6 +431,7 @@ class AnalystRequirements:
         conflict_report_md: str = "",
         meeting_record_md: str = "",
         round_num: Optional[int] = None,
+        artifact_dir: Optional[Any] = None,
     ) -> str:
         user_requirements = requirement_discussion_pool(artifact)
         for req in user_requirements:
@@ -355,16 +440,16 @@ class AnalystRequirements:
 
         scope = artifact.get("scope", {}) or {}
         context = {
+            "rough_idea": str(artifact.get("rough_idea") or "").strip(),
             "scenario": scenario_prompt_value(artifact.get("scenario", {}) or {}),
             "scope": scope,
             "stakeholders": draft_stakeholders(artifact),
             "user_requirements": user_requirements,
-            "URL": user_requirements,
             "conflict_report": (conflict_report_md or "").strip(),
             "meeting_record": (meeting_record_md or "").strip(),
             "feedback": draft_feedback(artifact),
             "open_questions": draft_open_questions(artifact),
-            "system_models": draft_system_models(artifact),
+            "system_models": draft_system_models(artifact, artifact_dir=artifact_dir),
             "version": draft_version if draft_version is not None else 0,
         }
         previous_draft_text = (previous_draft or "").strip()
@@ -376,66 +461,11 @@ class AnalystRequirements:
             version_note = f" 本稿版本: draft_v{draft_version}。"
         if round_num is not None:
             version_note += f" 對應輪次: Round {round_num}。"
-        if is_revision:
-            task = f"""請根據上一版需求草稿與最新輸入資料，將上一版需求草稿修訂為新的需求草稿 Markdown。{version_note}
-
-修訂方式：
-- 這是文字層面的迭代修訂，不是從零重寫；請保留上一版草稿的主要章節結構、可讀格式與已仍然有效的內容。
-- 本步驟不是需求抽取或需求分析；不得從 scenario、stakeholders、feedback、system_models、conflict_report 或 open_questions 推導新的使用者需求（User Requirements）。
-- 依最新使用者需求（User Requirements）、衝突報告與會議記錄更新內容；若上一版內容已過期，必須修正或移到待確認區。
-- 使用者需求（User Requirements）指輸入資料中的 user_requirements；URL 是舊欄位別名，不是網站連結。
-- 需求草稿條目只能來自使用者需求（User Requirements），並且必須逐筆保留原 id。
-- 不得重新編號、不得合併或拆分需求、不得改變需求語意。
-- 新增需求只能來自使用者需求（User Requirements）中已有 id 的條目；不得從上一版文字自行推導新需求。
-- 若使用者需求（User Requirements）已移除或不再包含某個 id，新的草稿不得保留該 id 作為需求草稿條目。
-
-需求分區：
-- 候選需求（Candidate Requirements）：只列使用者需求（User Requirements）中的候選需求。
-- 待決議事項 / 開放問題（Pending Decisions / Open Issues）：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
-
-需求表欄位：
-- 每一筆需求列必須包含：ID、Priority、Stakeholder、Requirement、Source。
-
-輔助資料使用方式：
-- feedback 只能用於限制、風險、建議或待確認整理，不可轉成需求。
-- system_models 只能用於追蹤、覆蓋檢查或模型摘要，不可轉成需求。
-- conflict_report 只能用於衝突與待決議整理。
-- open_questions 只能列為待確認問題，不可當成已確認需求。
-
-禁止事項：
-- 不得新增未定案內容、未被輸入資料支持的量化指標或外部依賴。
-- meeting_record 中尚未決議的問題、to_confirm、assumptions 必須保留為待確認內容，不得寫成已確認需求。
-- 不得保留上一版中已被最新會議記錄或使用者需求（User Requirements）推翻的內容。
-
-若有本輪決策，請更新精簡決策表。"""
-        else:
-            task = f"""請根據輸入資料產出需求草稿 Markdown，讓後續正式 SRS 能追蹤需求、決策與缺口。{version_note}
-
-草稿邊界：
-- 這是一份草稿，不是正式定版文件；只整理輸入資料內已有的需求、衝突、決議與開放問題。
-- 本步驟不是需求抽取或需求分析；不得從 scenario、stakeholders、feedback、system_models、conflict_report 或 open_questions 推導新的使用者需求（User Requirements）。
-- 使用者需求（User Requirements）指輸入資料中的 user_requirements；URL 是舊欄位別名，不是網站連結。
-- 需求草稿條目只能來自使用者需求（User Requirements），並且必須逐筆保留原 id。
-- 不得重新編號、不得合併或拆分需求、不得改變需求語意。
-
-需求分區：
-- 候選需求（Candidate Requirements）：只列使用者需求（User Requirements）中的候選需求。
-- 待決議事項 / 開放問題（Pending Decisions / Open Issues）：只列會議紀錄、未解衝突或待確認內容；不得混入候選需求。
-
-需求表欄位：
-- 每一筆需求列必須包含：ID、Priority、Stakeholder、Requirement、Source。
-
-輔助資料使用方式：
-- feedback 只能用於限制、風險、建議或待確認整理，不可轉成需求。
-- system_models 只能用於追蹤、覆蓋檢查或模型摘要，不可轉成需求。
-- conflict_report 只能用於衝突與待決議整理。
-- open_questions 只能列為待確認問題，不可當成已確認需求。
-
-禁止事項：
-- 不得新增未定案內容、未被輸入資料支持的量化指標或外部依賴。
-- meeting_record 中尚未決議的問題、to_confirm、assumptions 必須保留為待確認內容，不得寫成已確認需求。
-
-若有決策，請用精簡決策表呈現。"""
+        task = build_draft_prompt(
+            is_revision=is_revision,
+            version_note=version_note,
+            version=draft_version if draft_version is not None else 0,
+        )
         try:
             raw = self.invoke_requirements_analyst_text(task, context, mode="draft")
         except Exception as e:
@@ -446,13 +476,39 @@ class AnalystRequirements:
             for req in user_requirements
             if isinstance(req, dict) and str(req.get("id") or "").strip()
         }
-        draft_req_ids = set(re.findall(r"\bURL-\d+\b", md or ""))
-        unknown_ids = sorted(draft_req_ids - expected_ids)
-        missing_ids = sorted(expected_ids - draft_req_ids)
+        unknown_ids, missing_ids = draft_requirement_id_issues(md, expected_ids)
         if unknown_ids:
             self.logger.warning("draft 包含 User Requirements 以外的需求 ID: %s", unknown_ids)
         if missing_ids:
             self.logger.warning("draft 未保留部分 User Requirements ID: %s", missing_ids)
+        if unknown_ids or missing_ids:
+            repair_task = f"""上一版需求草稿 Markdown 的 URL-* 覆蓋不符合契約。請只修正 Markdown，不要重新分析，不要新增需求，不要改變原有需求語意。
+
+修正目標：
+- 移除或更正輸入 user_requirements 中不存在的 URL-*：{unknown_ids}
+- 補回缺少的 URL-*：{missing_ids}
+- 每個 URL-* 必須出現在「使用者需求」表。
+- 不得新增輸入資料以外的 URL-*。
+- 不得把 feedback、open_questions、system_models、conflict_report 或 meeting_record 直接轉成 User Requirements。
+
+原始草稿：
+{md}
+
+請只輸出修正後的完整 Markdown 草稿。"""
+            try:
+                repaired = self.invoke_requirements_analyst_text(
+                    repair_task,
+                    context,
+                    mode="draft",
+                )
+                md = clean_llm_output(repaired)
+                unknown_ids, missing_ids = draft_requirement_id_issues(md, expected_ids)
+            except Exception as e:
+                raise RuntimeError(f"draft 修復失敗: {e}") from e
+            if unknown_ids or missing_ids:
+                raise RuntimeError(
+                    f"draft 修復後仍不符合 URL 覆蓋契約；unknown={unknown_ids}; missing={missing_ids}"
+                )
 
         return md
 
@@ -474,13 +530,13 @@ class AnalystRequirements:
 5. 若只是推論，放到 open_questions/to_confirm，不要寫入 requirements。
 6. 已解決的 conflict 對應需求應與決策方向一致。
 7. 可整理 wording，但不得改變需求實質內容，也不得把未定案內容寫成已確認。
-8. 每筆需求只保留 id、text、priority、stakeholder、source。
-9. stakeholder 必須保留為 {"name":"...","text":"..."}，不得改成字串。
+8. 每筆需求只保留 id、text、priority、stakeholder、source；若原本有 source_ref 必須保留。
+9. stakeholder 必須保留為 {"name":"...","type":"..."}，不得改成字串，不得輸出 stakeholder.text。
 10. source 只表示來源階段，例如 initial 或 elicitation_r1；不得改成原話。
 
 只輸出一個 JSON 物件：{"requirements":[...]}。"""
         try:
-            data = self.invoke_direct_requirements_json(
+            data = self.invoke_direct_requirements_object_json(
                 task,
                 context,
                 action="requirements.update_draft",
@@ -535,14 +591,14 @@ class AnalystRequirements:
 3. 若候選需求重複或只是同一需求的細化，請合併成一筆正式需求。
 4. 若候選需求仍缺少支持、超出 scope.out_of_scope，或只是 open question，不要寫入正式 requirements。
 5. 每筆正式需求都要有 id，格式為 REQ-1、REQ-2、REQ-3；不要使用 URL-*。
-6. 每筆需求只輸出 text、priority、stakeholder、source。
-7. stakeholder 必須保留為 {"name":"...","text":"..."}，name 是利害關係人名稱，text 是其原話或具體情境片段。
+6. 每筆需求只輸出 text、priority、stakeholder、source；若候選需求有 source_ref 且仍可追溯，請保留 source_ref。
+7. stakeholder 必須保留為 {"name":"...","type":"..."}，name 是利害關係人名稱，type 是 stakeholder 類型；不得輸出 stakeholder.text。
 8. source 只表示來源階段，例如 initial 或 elicitation_r1；不得改成原話。
 9. priority 只能是 must、should 或 could；不收錄的項目不要輸出。
 
 只輸出一個 JSON 物件：{"requirements":[...]}。勿輸出 Markdown。"""
         try:
-            data = self.invoke_direct_requirements_json(
+            data = self.invoke_direct_requirements_object_json(
                 task,
                 context,
                 action="requirements.finalize",
@@ -677,11 +733,17 @@ class AnalystRequirements:
             return self.chat_with_tools(messages, active_skill="requirements-analyst")
         return self.model.chat(messages, action=self.usage_action("skill.requirements-analyst"))
 
-    def invoke_requirements_analyst_json(
+    def invoke_requirements_analyst_object_json(
         self, task: str, context: Dict[str, Any], *, mode: str = "analysis"
     ) -> Dict[str, Any]:
         raw = self.invoke_requirements_analyst_text(task, context, mode=mode)
-        return self.parse_issue_response_json(raw)
+        return parse_json_object(raw)
+
+    def invoke_requirements_analyst_array_json(
+        self, task: str, context: Dict[str, Any], *, mode: str = "analysis"
+    ) -> List[Any]:
+        raw = self.invoke_requirements_analyst_text(task, context, mode=mode)
+        return parse_json_array(raw)
 
     def invoke_direct_requirements_text(
         self, task: str, context: Dict[str, Any], *, action: str
@@ -689,8 +751,14 @@ class AnalystRequirements:
         messages = self.build_direct_messages(task, context=context)
         return self.model.chat(messages, action=self.usage_action(action))
 
-    def invoke_direct_requirements_json(
+    def invoke_direct_requirements_object_json(
         self, task: str, context: Dict[str, Any], *, action: str
     ) -> Dict[str, Any]:
         raw = self.invoke_direct_requirements_text(task, context, action=action)
-        return self.parse_issue_response_json(raw)
+        return parse_json_object(raw)
+
+    def invoke_direct_requirements_array_json(
+        self, task: str, context: Dict[str, Any], *, action: str
+    ) -> List[Any]:
+        raw = self.invoke_direct_requirements_text(task, context, action=action)
+        return parse_json_array(raw)

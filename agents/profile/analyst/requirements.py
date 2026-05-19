@@ -5,6 +5,13 @@ from typing import Any, Dict, List
 from .conflict_store import all_conflict_rows, requirement_ids
 
 
+def requirement_dedupe_key(text: str) -> str:
+    value = str(text or "").strip().lower()
+    value = re.sub(r"\s+", "", value)
+    value = re.sub(r"[。．.！!？?；;，,、]+$", "", value)
+    return value
+
+
 def requirement_candidate(
     candidate: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -76,7 +83,7 @@ def requirement_discussion_pool(artifact: Dict[str, Any]) -> List[Dict[str, Any]
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            marker = text.lower()
+            marker = requirement_dedupe_key(text)
             if marker in seen:
                 continue
             seen.add(marker)
@@ -97,6 +104,34 @@ def build_requirement_candidates_from_requirements(
         cand = requirement_candidate(row)
         candidates.append(cand)
     return ensure_requirement_candidate_ids(candidates)
+
+
+def attach_initial_source_refs(
+    requirements: List[Dict[str, Any]],
+    stakeholders: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    stakeholder_by_name = {
+        str(row.get("name") or "").strip(): str(row.get("id") or "").strip()
+        for row in stakeholders or []
+        if isinstance(row, dict)
+        and str(row.get("name") or "").strip()
+        and str(row.get("id") or "").strip()
+    }
+    out: List[Dict[str, Any]] = []
+    for req in requirements or []:
+        row = dict(req)
+        if str(row.get("source") or "").strip() == "initial" and not str(row.get("source_ref") or "").strip():
+            stakeholder = row.get("stakeholder")
+            stakeholder_name = (
+                str(stakeholder.get("name") or "").strip()
+                if isinstance(stakeholder, dict)
+                else str(stakeholder or "").strip()
+            )
+            source_ref = stakeholder_by_name.get(stakeholder_name)
+            if source_ref:
+                row["source_ref"] = source_ref
+        out.append(row)
+    return out
 
 
 def next_requirement_id(requirements: List[Dict[str, Any]]) -> str:

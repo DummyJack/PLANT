@@ -5,6 +5,52 @@ from typing import Any, Dict, List, Optional
 from agents.profile.scenario import scenario_prompt_value
 
 
+STAKEHOLDER_CATEGORIES = {
+    "Primary Users",
+    "System Owners & Management",
+    "External Parties",
+}
+
+
+def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for item in selected or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        stakeholder_type = str(item.get("type") or "").strip()
+        if not name:
+            continue
+        records.append({"name": name, "type": stakeholder_type})
+    return records
+
+
+def merge_stakeholder_inputs(
+    selected_records: List[Dict[str, Any]],
+    generated_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    generated_by_name = {
+        str(row.get("name") or "").strip(): row
+        for row in generated_rows or []
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
+    merged: List[Dict[str, Any]] = []
+    for index, base in enumerate(selected_records, 1):
+        row = dict(base)
+        row["id"] = str(row.get("id") or "").strip() or f"stakeholder-{index}"
+        generated = generated_by_name.get(row["name"], {})
+        text = generated.get("text") if isinstance(generated, dict) else []
+        if isinstance(text, str):
+            text = [line.strip() for line in text.splitlines() if line.strip()]
+        elif isinstance(text, list):
+            text = [str(line).strip() for line in text if str(line).strip()]
+        else:
+            text = []
+        row["text"] = text
+        merged.append(row)
+    return merged
+
+
 class UserStakeholder:
     @staticmethod
     def scenario_context_text(value: Any) -> str:
@@ -111,7 +157,7 @@ class UserStakeholder:
     def propose_stakeholders_via_llm(self, rough_idea: Any) -> List[Dict]:
         scenario_context = self.scenario_context_text(rough_idea)
         user_prompt = f"""# 任務
-根據以下產品情境，建議 7-9 位可能相關的利害關係人。
+根據以下產品情境，建議 10 位可能相關的利害關係人。
 
 # 產品情境
 {scenario_context}
@@ -123,9 +169,9 @@ class UserStakeholder:
 
 # 輸出規則
 - 三類都必須出現。
-- Primary Users 至少 3 位。
-- System Owners & Management 至少 3 位。
-- External Parties 至少 1 位，且數量必須是三類中最少。
+- Primary Users 必須剛好 4 位。
+- System Owners & Management 必須剛好 4 位。
+- External Parties 必須剛好 2 位。
 - 輸出順序：Primary Users → System Owners & Management → External Parties。
 - 每位利害關係人必須直接存在於產品情境中。
 - 每位利害關係人的使用情境與責任邊界要明確且不同。
@@ -172,20 +218,18 @@ class UserStakeholder:
             current_order = order
             counts[stakeholder_type] += 1
 
-        if len(proposed) < 7 or len(proposed) > 9:
-            raise ValueError("propose_stakeholders must return 7-9 stakeholders")
-        if counts["Primary Users"] < 3:
-            raise ValueError("Primary Users must include at least 3 stakeholders")
-        if counts["System Owners & Management"] < 3:
+        if len(proposed) != 10:
+            raise ValueError("propose_stakeholders must return exactly 10 stakeholders")
+        expected_counts = {
+            "Primary Users": 4,
+            "System Owners & Management": 4,
+            "External Parties": 2,
+        }
+        if counts != expected_counts:
             raise ValueError(
-                "System Owners & Management must include at least 3 stakeholders"
+                "propose_stakeholders must return exactly 4 Primary Users, "
+                "4 System Owners & Management, and 2 External Parties"
             )
-        if counts["External Parties"] < 1:
-            raise ValueError("External Parties must include at least 1 stakeholder")
-        if counts["External Parties"] >= min(
-            counts["Primary Users"], counts["System Owners & Management"]
-        ):
-            raise ValueError("External Parties must be the smallest stakeholder type")
         return proposed
 
     def generate_stakeholder_text_via_llm(
@@ -217,12 +261,16 @@ class UserStakeholder:
 2. 痛點與困擾
 3. 期望功能
 4. 擔心的事
+5. 最在意的限制、底線或不可接受情況
+6. 與其他角色可能產生取捨的地方
 
 # 輸出規則
 - 每位利害關係人產生 3-5 條 text。
 - 只根據該利害關係人的日常經驗。
 - 不替未選中的角色發言。
 - 每條 text 都必須能回扣產品情境。
+- 請自然描述該角色的目標、擔憂、限制、底線與可接受/不可接受的取捨。
+- 不要刻意製造衝突；只有在產品情境中合理時，才描述可能與其他角色目標拉扯的地方。
 
 # 輸出 JSON
 {{{{

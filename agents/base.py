@@ -42,6 +42,56 @@ def response_language_directive() -> str:
     return "請使用繁體中文回覆。"
 
 
+def parse_json_payload(raw: str) -> Any:
+    """Parse JSON from LLM output, including fenced blocks or surrounding prose."""
+    if not raw or not isinstance(raw, str):
+        return {}
+    text = raw.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    candidates = []
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            value = part.strip()
+            if value.lower().startswith("json"):
+                value = value[4:].strip()
+            if (
+                (value.startswith("{") and value.endswith("}"))
+                or (value.startswith("[") and value.endswith("]"))
+            ):
+                candidates.append(value)
+    for open_char, close_char in (("{", "}"), ("[", "]")):
+        start = text.find(open_char)
+        end = text.rfind(close_char)
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("Agent output must be a valid JSON object or array.")
+
+
+def parse_json_object(raw: str) -> Dict[str, Any]:
+    data = parse_json_payload(raw)
+    if not isinstance(data, dict):
+        raise ValueError("Agent output must be a valid JSON object.")
+    return data
+
+
+def parse_json_array(raw: str) -> List[Any]:
+    data = parse_json_payload(raw)
+    if not isinstance(data, list):
+        raise ValueError("Agent output must be a valid JSON array.")
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Base Agent
 # ---------------------------------------------------------------------------
@@ -432,38 +482,7 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
 
     def parse_issue_response_json(self, raw: str) -> Dict[str, Any]:
         """解析工具迴圈輸出中的 JSON。"""
-        if not raw or not isinstance(raw, str):
-            return {}
-        text = raw.strip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            return parsed
-
-        candidates = []
-        if "```" in text:
-            parts = text.split("```")
-            for part in parts:
-                value = part.strip()
-                if value.lower().startswith("json"):
-                    value = value[4:].strip()
-                if value.startswith("{") and value.endswith("}"):
-                    candidates.append(value)
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            candidates.append(text[start : end + 1])
-
-        for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-        raise ValueError("Agent output must be a valid JSON object.")
+        return parse_json_object(raw)
 
     # ------------------------------------------------------------------
     # Core message helpers

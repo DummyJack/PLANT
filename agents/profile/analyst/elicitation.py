@@ -143,7 +143,9 @@ class AnalystElicitation:
         stakeholder_rows = [
             {
                 "name": str(row.get("name") or "").strip(),
+                "type": str(row.get("type") or "").strip(),
                 "text": str(row.get("text") or "").strip(),
+                "source_ref": str(row.get("source_ref") or "").strip(),
             }
             for row in (stakeholders or [])
             if isinstance(row, dict)
@@ -227,8 +229,9 @@ class AnalystElicitation:
                     "priority": row.get("priority"),
                     "stakeholder": {
                         "name": stakeholder_row["name"],
-                        "text": stakeholder_row["text"],
+                        "type": stakeholder_row.get("type") or "",
                     },
                     "source": source or "elicitation",
+                    "source_ref": stakeholder_row.get("source_ref") or "",
                 })
         return validate_elicited_reqts(mapped)

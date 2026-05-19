@@ -64,9 +64,11 @@ def requirement_record(
     if isinstance(stakeholder, dict):
         out["stakeholder"] = {
             "name": clean_text(stakeholder.get("name")),
-            "text": clean_text(stakeholder.get("text")),
+            "type": clean_text(stakeholder.get("type")),
         }
     out["source"] = clean_text(source.get("source"))
+    if clean_text(source.get("source_ref")):
+        out["source_ref"] = clean_text(source.get("source_ref"))
     return out
 
 
@@ -110,8 +112,7 @@ def validate_elicited_reqts(
             continue
         stakeholder = row.get("stakeholder") if isinstance(row.get("stakeholder"), dict) else {}
         stakeholder_name = clean_text(stakeholder.get("name"))
-        stakeholder_text = clean_text(stakeholder.get("text"))
-        if not stakeholder_name or not stakeholder_text or not row.get("source"):
+        if not stakeholder_name or not row.get("source"):
             continue
         if allowed and stakeholder_name not in allowed:
             continue
@@ -173,7 +174,7 @@ def conflict_records(
         if label not in {"Conflict", "Neutral"}:
             continue
         rel_ids = clean_list(row.get("requirement_ids") or row.get("related_requirements"))
-        if label == "Conflict" and len(rel_ids) < 3:
+        if label == "Conflict" and len(rel_ids) < 2:
             continue
         entry: Dict[str, Any] = {"label": label}
         cid = clean_text(row.get("id"))
@@ -184,6 +185,9 @@ def conflict_records(
         reason = clean_text(row.get("reason"))
         if reason:
             entry["initial_reason"] = reason
+        related_pairs = clean_list(row.get("related_pairs"))
+        if related_pairs:
+            entry["related_pairs"] = related_pairs
         conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
         if label == "Conflict":
             entry["initial_type"] = conflict_type if conflict_type in CONFLICT_TYPES else "other"

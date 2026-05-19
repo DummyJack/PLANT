@@ -131,7 +131,36 @@ class ModelerModeling:
             model_artifact.get("system_models", []),
             source=model_artifact.get("model_source", ""),
         )
+        self.ensure_use_case_text(model_data, model_artifact)
         return self.validate_plantuml_models(model_data)
+
+    def ensure_use_case_text(
+        self,
+        model_data: list[Dict[str, Any]],
+        artifact_context: Dict[str, Any],
+    ) -> None:
+        """use_case_diagram 一定要附文字版 use case；缺少時在輸出前補齊。"""
+        use_case_diagram = next(
+            (
+                model for model in model_data
+                if model.get("type") == "use_case_diagram" and model.get("plantuml")
+            ),
+            None,
+        )
+        if not use_case_diagram or use_case_diagram.get("text"):
+            return
+
+        context = dict(artifact_context)
+        context["system_models"] = model_data
+        result = self.generate_or_update_model(
+            "use_case_text",
+            self.model_requirements(context),
+            artifact_context=context,
+        )
+        use_case_text = result.get("text", []) if isinstance(result, dict) else []
+        if not use_case_text:
+            raise RuntimeError("use_case_diagram 已生成，但 use_case_text 生成失敗")
+        use_case_diagram["text"] = use_case_text
 
     def generate_or_update_model(
         self, diagram_type, requirements,
@@ -153,7 +182,8 @@ class ModelerModeling:
         diagram_layout_hint = ""
         if diagram_type == "context_diagram":
             diagram_layout_hint = """
-    本專案限制：不可把未確認的 provider/API 畫成已定案外部系統；若來源未定，請使用抽象資料來源。"""
+    本專案限制：不可把未確認的 provider/API 畫成已定案外部系統；若來源未定，請使用抽象資料來源。
+    context_diagram 只呈現本系統與外部 actor / external systems 的互動；不得把本系統內部功能、子系統、管理模組或實作元件畫成外部系統。只有在 requirements 明確指出某項系統是既有外部系統或第三方服務時，才可畫成 external system。"""
         elif diagram_type == "use_case_diagram":
             diagram_layout_hint = """
     版面要求：actor 與 use case 的關聯要一目了然；若單圖連線過多，可精簡為核心用例或依角色拆分。"""
@@ -247,11 +277,12 @@ class ModelerModeling:
     - 若資訊不足，不可臆測，也不要硬畫未確認元素。
     - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
     - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
-    - name 必須依本圖實際表達的需求內容命名，格式為「主題 + 圖型」，不要只寫泛稱。
+    - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
+    - description 用 1 到 2 句依 UML 圖型目的描述此圖釐清的需求面向，例如系統邊界、actor 互動、流程、互動順序、狀態轉換或領域概念；只描述圖中已呈現的內容，不得加入新需求。
     - 不要輸出 source；source 由系統依建模來源補上。
     - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
-    {{"name": "依本圖內容命名的圖表標題", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+    {{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "description": "此圖釐清的需求面向與圖中已呈現的重點。"}}"""
         else:
             task = f"""根據以下需求產生 {type_name}。
 
@@ -266,11 +297,12 @@ class ModelerModeling:
     - 若資訊不足，不可臆測，也不要硬畫未確認元素。
     - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
     - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
-    - name 必須依本圖實際表達的需求內容命名，格式為「主題 + 圖型」，不要只寫泛稱。
+    - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
+    - description 用 1 到 2 句依 UML 圖型目的描述此圖釐清的需求面向，例如系統邊界、actor 互動、流程、互動順序、狀態轉換或領域概念；只描述圖中已呈現的內容，不得加入新需求。
     - 不要輸出 source；source 由系統依建模來源補上。
     - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
     輸出 JSON:
-    {{"name": "依本圖內容命名的圖表標題", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml"}}"""
+    {{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "description": "此圖釐清的需求面向與圖中已呈現的重點。"}}"""
 
         skill = uml_skill_subset(get_skill("UML"), "diagram", diagram_type)
         messages = self.build_skill_messages(skill, "UML", task)

@@ -208,9 +208,8 @@ class ModelerAgent(
     - 若既有模型已存在，這是帶有修訂脈絡的模型迭代；只標記受 model_revision_context 或 requirements 影響的圖表。
     - current_models.source 表示既有模型來源，例如 initial_modeling 或 R1-M1；只用於追蹤來源，不可改寫成新需求。
     - 未受影響的既有圖表不得列入 models_to_update。
-    - feedback 只包含 constraints、risks、open_items；constraints/risks 只作為限制或風險註記，不可擴張功能。
-    - feedback.open_items 只是不確定性提示，不可畫成已確認模型元素。
-    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
+    - feedback 只作為背景限制、風險、來源與未決事項參考；不得轉成新的 actor、use case、class、state 或流程步驟。
+    - 未決、建議或研究性內容不可畫成已確認模型元素；只能影響模型邊界、限制註記或缺口說明。
     輸出 JSON:
     {{
     "models_to_update": ["需更新的 diagram type"],
@@ -296,11 +295,22 @@ class ModelerAgent(
                     existing.clear()
                     existing.update(new_row)
                     existing["name"] = new_name
+                    target_row = existing
                 else:
                     models.append(new_row)
                     artifact["system_models"] = models
+                    target_row = new_row
+                if diagram_type == "use_case_diagram":
+                    use_case_text = self.generate_or_update_model(
+                        "use_case_text",
+                        reqs,
+                        artifact_context=artifact,
+                    )
+                    target_row["text"] = use_case_text.get("text", [])
                 label = "更新" if existing else "新建"
                 obs["summary"] = f"{diagram_type} 已{label}"
+                if diagram_type == "use_case_diagram":
+                    obs["summary"] += "，並已產生文字用例"
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"{diagram_type} 更新失敗: {e}"
@@ -409,7 +419,7 @@ class ModelerAgent(
                 item for item in target_types
                 if item not in {"use_case_diagram", "use_case_text"}
             ]
-            target_types = ["use_case_diagram", "use_case_text"] + target_types
+            target_types = ["use_case_diagram"] + target_types
         else:
             target_types = [
                 item for item in target_types

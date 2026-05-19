@@ -96,7 +96,6 @@ def requirements_skill_guidance(content: str, mode: str) -> str:
     headings_by_mode = {
         "draft": [
             "### Step 4: Documentation",
-            "### Requirement Specification Document",
             "### 4. Requirement Quality Criteria",
         ],
     }
@@ -113,9 +112,127 @@ def user_requirement_extraction_contract() -> str:
 - 只輸出 JSON array。
 - 每筆只包含 text、priority。
 - text 以利害關係人能做什麼或需要什麼來表達。
-- text 不要寫成系統功能規格。
+- text 不要寫成內部設計、技術實作或正式系統功能規格。
 - priority 只能是 must、should 或 could；不收錄的項目不要輸出。
-- 不要輸出其他欄位。"""
+- 不要輸出其他欄位。
+
+# 需求抽取規則
+1. 只抽取原文明確支持的系統能力或限制；不要輸出情緒、期待、抱怨或抽象品質描述。
+2. 若原文描述快速、方便、安全、穩定、信任、焦慮等感受，請改寫成具體系統行為，例如查詢、提示、通知、權限控管、狀態更新、異常處理或紀錄保存。
+3. 不得自行補入原文沒有支持的 SLA、法規、責任歸屬、補償方式或技術實作。
+4. 不得在 text 中把利害關係人改成「客戶、使用者、利害關係人」等泛稱；請沿用輸入中的利害關係人名稱。"""
+
+
+def build_draft_prompt(*, is_revision: bool, version_note: str, version: int = 0) -> str:
+    revision_rule = ""
+    if is_revision:
+        revision_rule = """
+修訂規則：
+- 這是文字層面的迭代修訂，不是從零重寫；請保留上一版草稿中仍有效的使用者需求、摘要與待確認內容。
+- 依最新 user_requirements、conflict_report 與 meeting_record 更新；若上一版內容已過期，必須修正或移到待確認區。
+- 若 user_requirements 已移除或不再包含某個 URL-*，新的草稿不得保留該 URL-*。
+- 不得保留上一版中已被最新會議記錄或 user_requirements 推翻的內容。
+"""
+
+    return f"""請根據輸入資料產出需求草稿 Markdown，讓後續正式會議能審查使用者需求、系統範圍、領域限制與系統模型。{version_note}
+{revision_rule}
+# Skill 使用方式
+- 使用 Documentation 原則，整理草稿文件、風險摘要、限制摘要與模型摘要。
+- 使用 Requirement Quality Criteria 檢查使用者需求是否清楚與可驗證；若缺少量化指標或驗收邊界，只能在摘要中標示待確認，不得自行補成已確認需求。
+
+# 草稿邊界
+- 這是一份草稿，不是正式定版文件；只整理輸入資料內已有的需求、衝突、決議與開放問題。
+- 本步驟不是需求抽取或需求分析；不得從 scenario、stakeholders、feedback、system_models、conflict_report 或 open_questions 推導新的 User Requirements。
+- user_requirements 是 User Requirements 表的唯一來源。
+- feedback、open_questions、system_models、conflict_report、meeting_record 只能產生摘要、風險、限制、模型覆蓋、待確認或已決議說明；不得直接產生新的 User Requirements。
+- User Requirements 表不得重新編號、合併、拆分或改寫 URL-*。
+
+# 角色使用規則
+- 不得新增輸入 stakeholders 以外的角色。
+- User Requirements 表中的 Stakeholder 必須使用輸入 user_requirements 的 stakeholder name，不得改名。
+
+# 章節寫作依據
+- 文件標題使用輸入中可辨識的系統名稱；優先採用情境名稱，若沒有明確名稱，請用初始想法或情境內容整理出中性的系統名稱，不要創造品牌名。
+- 系統概述請寫成一段自然描述，主要依據 scenario 與 scope.in_scope 撰寫；若 scenario 不完整或過於簡略，可參考 rough_idea 補足系統背景，但不得超出 scope 與 user_requirements 支持的內容。只描述目前資料已支持的系統目標；不要列出利害關係人，也不要加入需求或範圍中沒有出現的新功能。
+- 需求範圍只整理已給定的範圍內與範圍外內容；沒有資料時寫「目前無資料」。
+- 系統利害關係人只根據已選定的利害關係人撰寫；類別與名稱要沿用輸入。關注重點以該利害關係人的文字敘述為主，並可參考同名利害關係人的使用者需求；對系統的核心需求以同名利害關係人的使用者需求為主，並可參考其文字敘述。不得拿其他利害關係人的需求補入本列；資料不足時寫「待確認」。
+- 使用者需求表要逐筆保留原始使用者需求；不要合併、拆分、改寫、重新命名或重新排序需求 ID。
+- 領域研究與限制摘要只整理領域研究已提供的發現、來源、限制、風險、建議與未決事項；建議要保持建議語氣，不要寫成系統必須做到的需求。每個項目若有 related_URL，請在句尾以「（來源：URL-1, URL-2）」標示；若 related_URL 為空但內容是整體專案層級，標示「（來源：整體專案）」。
+- 系統模型章節要先依模型 type 分組；每個 type 一個小節。若同一 type 只有一張模型，標題使用「type -- name」格式；若同一 type 有多張模型，type 作為小節標題，並使用 a.、b.、c. 依序列出「type -- name」與模型內容。有 image_path 就直接放圖；若沒有 image_path 但有 plantuml，改用 fenced code block 顯示 plantuml；若兩者都沒有，才不放模型圖內容。若模型有 description，放在圖片或 PlantUML 下方，沒有 description 就不要自行補寫。Use Case Text 只整理 use case diagram 已附帶的文字用例；不要從 PlantUML 反推出新需求。
+- 衝突紀錄、開放問題與會議紀錄只能用來標示待確認或已決議說明，不得轉成新的使用者需求。
+
+# 防止瞎編規則
+- 草稿完整性來自輸入資料整理，不是來自自行補齊缺漏。
+- 所有摘要型欄位只能濃縮與改寫已出現的內容，不得補入新需求、新限制、新功能或新角色。
+- 不得為了讓草稿看起來完整而自行補功能、角色、流程、例外情境、法規、第三方服務、量化指標或驗收標準。
+- 若資料不足，請明確寫「待確認」，不要猜測。
+- 若某項內容只出現在 feedback、open_questions、system_models、conflict_report 或 meeting_record，不得寫入 User Requirements 表。
+- 若 system model 圖或 use_case_text 出現 user_requirements 未支持的元素，不得轉成需求。
+- 若 NFR 缺少具體數值，請保留為待確認，不得自行補 TPS、延遲、可用性、RPO/RTO、安全標準或法規名稱。
+
+# 固定輸出格式
+請輸出以下固定 Markdown 結構，不得刪除或重新命名主要章節；若某節沒有資料，保留章節與表頭，填入「目前無資料」或 "-"。
+
+# {{系統名稱}}
+
+## 1. 系統概述
+{{請以一段文字描述系統目標。}}
+
+## 2. 需求範圍
+### In Scope
+### Out of Scope
+
+## 3. 系統利害關係人
+| 類別 | 利害關係人 | 關注重點 | 對系統的核心需求 |
+|---|---|---|---|
+
+## 4. 使用者需求
+| ID | 優先級 | 利害關係人 | 使用者需求 | 來源 |
+|---|---|---|---|---|
+
+## 5. 領域研究與限制摘要
+### 1. Findings
+### 2. Sources
+### 3. Constraints
+### 4. Risks
+### 5. Recommendations
+### 6. Open Items
+
+## 6. 系統模型
+### 1. {{model type}} -- {{模型名稱}}
+
+{{若該模型提供 image_path，直接使用 Markdown 圖片語法引用該圖片；若沒有 image_path 但提供 plantuml，請用 ```plantuml fenced code block 顯示；若兩者都沒有，略過模型圖內容，不要寫 Image 欄位。}}
+
+{{若該模型提供 description，請放在圖片或 PlantUML 下方；若沒有 description，不要自行補寫。}}
+
+若本 type 是 use_case_diagram 且包含 text/use_case_text，請接在同一 type 小節下。Use Case Text 需依 actor 分組，每個 actor 一個小節；小節標題格式為「I. {{actor}} Use Cases」、「II. {{actor}} Use Cases」依序編號。
+
+#### I. {{actor}} Use Cases
+| 編號 | Use Case | 目的／說明 | 介面 |
+|---|---|---|---|
+
+### 2. {{下一個 model type}}
+若同一 type 有多張模型，請在該 type 小節中使用：
+
+a. {{model type}} -- {{模型名稱}}
+
+{{圖片；若沒有圖片但有 plantuml，改放 PlantUML fenced code block}}
+
+{{description，如果有}}
+
+b. {{model type}} -- {{模型名稱}}
+
+{{圖片；若沒有圖片但有 plantuml，改放 PlantUML fenced code block}}
+
+{{description，如果有}}
+
+其餘 type 依相同格式依序編號；不得把不同 type 合併成單一小節。
+
+# 完整性要求
+- 每個 URL-* 必須出現在「使用者需求」表。
+- 不得出現輸入資料以外的 URL-*。
+- 不得引用輸入中不存在的 image_path。
+- 未決議內容只能在相關摘要中標示待確認，不得寫成已確認需求。"""
 
 
 CONFLICT_ANALYSIS_HEADINGS = [

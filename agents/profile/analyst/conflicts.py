@@ -316,6 +316,127 @@ class AnalystConflicts:
             },
         )
 
+    def run_batch_pair_discovery(
+        self,
+        *,
+        base_task: str,
+        context: Dict[str, Any],
+        requirements: List[Dict[str, Any]],
+        existing_pairs: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        batch_size = 10
+        config_block = (
+            self.project_config.get("conflict_detection")
+            if isinstance(self.project_config.get("conflict_detection"), dict)
+            else {}
+        )
+        if config_block.get("enable_batch_pair_discovery") is False:
+            return []
+        try:
+            batch_size = int(config_block.get("batch_pair_size", batch_size) or batch_size)
+        except (TypeError, ValueError):
+            batch_size = 10
+        batch_size = max(3, batch_size)
+
+        known_pairs = {
+            frozenset(str(req_id).strip() for req_id in (row.get("requirement_ids") or []) if str(req_id).strip())
+            for row in existing_pairs
+            if isinstance(row, dict) and len(row.get("requirement_ids") or []) == 2
+        }
+        discovered: List[Dict[str, Any]] = []
+        discovered_keys = set(known_pairs)
+
+        for batch_start in range(0, len(requirements), batch_size):
+            batch = requirements[batch_start : batch_start + batch_size]
+            if len(batch) < 2:
+                continue
+            batch_rows = [
+                {
+                    "id": req.get("id"),
+                    "text": req.get("text"),
+                }
+                for req in batch
+            ]
+            existing_in_batch = [
+                sorted(pair_key)
+                for pair_key in known_pairs
+                if pair_key and pair_key.issubset({str(req.get("id") or "").strip() for req in batch})
+            ]
+            task = base_task + f"""
+
+【批次補找 Pair】
+- 這一步在固定相鄰 pair 判斷之後執行，用來找出同一批需求中「不相鄰但有衝突價值」的需求對。
+- 只輸出額外發現的 Conflict pair；不要輸出 Neutral。
+- 每筆 Conflict 的 requirement_ids 必須剛好 2 個需求 id。
+- 不要輸出已判斷過的 pair。
+- 若兩個需求不能直接同時定版，或需要補充規則、優先順序、條件邊界、責任歸屬、例外處理或人工裁定，標為 Conflict。
+- 若沒有額外 Conflict pair，輸出 {{"conflicts":[]}}。
+
+本批需求：
+{json.dumps(batch_rows, ensure_ascii=False, indent=2)}
+
+已判斷過的 pair：
+{json.dumps(existing_in_batch, ensure_ascii=False, indent=2)}
+
+只輸出一個 JSON 物件：{{"conflicts":[...]}}。勿輸出 Markdown 或其他文字。"""
+            raw = ""
+            try:
+                raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
+                data = self.parse_issue_response_json(raw)
+            except Exception as first_error:
+                repair_prompt = f"""上一輪批次補找 Pair 輸出不是合法 JSON object。請只修正格式，不要重新分析。
+
+# 必須輸出
+{{"conflicts":[...]}}
+
+# 欄位規則
+- conflicts 必須是 array。
+- 每筆必須包含 label="Conflict"、requirement_ids、reason。
+- requirement_ids 必須剛好 2 個需求 id，且只能來自本批需求。
+- 不要輸出 Neutral。
+
+# 本批需求
+{json.dumps(batch_rows, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{str(raw or "")[:12000]}"""
+                try:
+                    data = self.chat_json(
+                        self.build_direct_messages(repair_prompt, context=context),
+                        action=self.usage_action("conflict.repair_batch_pair_json"),
+                    )
+                except Exception as repair_error:
+                    raw_preview = str(raw or "").strip().replace("\n", "\\n")[:500]
+                    raise RuntimeError(
+                        f"批次補找 Pair 輸出格式不合格: {first_error}; "
+                        f"修復失敗: {repair_error}; raw_preview={raw_preview}"
+                    ) from repair_error
+
+            batch_ids = {str(req.get("id") or "").strip() for req in batch}
+            rows = conflict_records(data.get("conflicts", []))
+            for row in rows:
+                req_ids = [
+                    str(req_id).strip()
+                    for req_id in (row.get("requirement_ids") or [])
+                    if str(req_id).strip()
+                ]
+                pair_key = frozenset(req_ids)
+                if (
+                    row.get("label") != "Conflict"
+                    or len(req_ids) != 2
+                    or not pair_key.issubset(batch_ids)
+                    or pair_key in discovered_keys
+                ):
+                    continue
+                discovered_keys.add(pair_key)
+                discovered.append(row)
+
+        next_index = len(existing_pairs) + 1
+        for offset, row in enumerate(discovered):
+            row["id"] = f"PAIR-{next_index + offset}"
+            row["pair_source"] = "batch"
+        return discovered
+
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
         return [
             req for req in (artifact.get("requirements") or artifact.get("URL") or [])
@@ -488,6 +609,19 @@ class AnalystConflicts:
             if still_missing:
                 raise RuntimeError(f"兩兩 Conflict 分析仍缺少 pair_index: {still_missing}")
 
+        batch_conflicts = self.run_batch_pair_discovery(
+            base_task=base_task,
+            context=context,
+            requirements=requirements,
+            existing_pairs=pair_conflicts,
+        )
+        if batch_conflicts:
+            pair_conflicts = list(pair_conflicts) + batch_conflicts
+        self.logger.info(
+            "批次補找衝突 pair 完成（新增 Conflict: %s）",
+            len(batch_conflicts),
+        )
+
         return set_pair_conflicts({**artifact}, pair_conflicts)
 
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
@@ -497,14 +631,27 @@ class AnalystConflicts:
             self.logger.info("整體衝突判斷 0 組（Conflict: 0）")
             return artifact
         context = self.conflict_detection_context(artifact, requirements)
+        pair_conflicts = [
+            {
+                "id": row.get("id"),
+                "requirement_ids": row.get("requirement_ids"),
+                "type": row.get("initial_type"),
+                "reason": row.get("initial_reason"),
+            }
+            for row in ((artifact.get("conflict") or {}).get("pairs") or [])
+            if isinstance(row, dict) and row.get("label") == "Conflict"
+        ]
+        context["pairwise_conflicts"] = pair_conflicts
         base_task = self.conflict_detection_base_task()
         holistic_task = base_task + """
 
 【整體判斷】
-- 只找出需要 3 條以上需求同時成立才會產生的群組衝突。
-- 不要重複輸出兩兩 pair 已可判斷的衝突。
-- 每筆 Conflict 的 requirement_ids 必須包含 3 個以上需求 id。
-- 若沒有 3 條以上需求共同造成的衝突，輸出 {"conflicts": []}。
+- 根據 pairwise_conflicts 與 User Requirements，將圍繞同一個決策問題、規則邊界、流程狀態、資料一致性、優先順序或資源限制的衝突聚合成衝突主題。
+- 本步不是重新做兩兩判斷，而是把相關 pairwise conflicts 整理成可供會議討論的 group conflict。
+- 同一個 group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。
+- 每筆 Conflict 必須包含 related_pairs，記錄此 group 來源的 pair id，例如 ["PAIR-3","PAIR-8"]。
+- 若多個 pairwise conflicts 其實是同一個決策主題，請聚合成一筆 Conflict，不要逐 pair 重複輸出。
+- 若沒有可聚合的 pairwise conflict，輸出 {"conflicts": []}。
 - 本步只輸出 label="Conflict" 的項目，不需要輸出 Neutral。
 
 只輸出一個 JSON 物件：{"conflicts":[...]}。勿輸出 Markdown 或其他文字。"""
@@ -520,9 +667,10 @@ class AnalystConflicts:
 {{"conflicts":[...]}}
 
 # 規則
-- 若原始輸出沒有明確 3 條以上需求群組衝突，輸出 {{"conflicts":[]}}。
-- 每筆 Conflict 必須包含 label="Conflict" 與 requirement_ids。
-- requirement_ids 必須包含 3 個以上需求 id。
+- 若原始輸出沒有明確可聚合的 group conflict，輸出 {{"conflicts":[]}}。
+- 每筆 Conflict 必須包含 label="Conflict"、requirement_ids 與 related_pairs。
+- requirement_ids 必須包含至少 2 個需求 id。
+- related_pairs 必須包含至少 1 個 pair id。
 - 不要輸出 Markdown 或額外文字。
 
 # 原始輸出
@@ -541,7 +689,8 @@ class AnalystConflicts:
         holistic_conflicts = [
             row for row in conflict_records(holistic_data.get("conflicts", []))
             if row.get("label") == "Conflict"
-            and len(row.get("requirement_ids") or []) >= 3
+            and len(row.get("requirement_ids") or []) >= 2
+            and row.get("related_pairs")
         ]
         self.logger.info(
             "整體衝突判斷 %s 組（Conflict: %s）",

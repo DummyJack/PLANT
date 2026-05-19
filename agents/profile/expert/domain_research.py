@@ -128,8 +128,17 @@ class ExpertDomainResearch:
     - feedback 只作為領域研究輔助資料，不產生需求。
     - 需要證據時可使用本輪工具使用資料中允許的工具。
     - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text 與 related_URL。
-    - related_URL 只能引用 user_requirements 中存在的 id；整體專案層級請輸出空陣列。
+    - 每筆 related_URL 必須盡可能對應到受影響的 user_requirements id。
+    - related_URL 只能引用 user_requirements 中存在的 id；不得編造不存在的 URL-*。
+    - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
     - 不要為了填欄位硬關聯需求。
+    - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
+    - sources 只放來源名稱、文件名稱、標準名稱或 URL；不要在 sources 中寫長段分析。
+    - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
+    - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
+    - recommendations 是設計注意事項或後續確認建議，不是正式需求。
+    - recommendations 不得使用「系統必須」「平台必須」「使用者必須」這類定案語氣；除非法律明確適用且 related_URL 對應清楚。
+    - open_items 是仍需 stakeholder、analyst、法規範圍或第三方服務條款確認的問題；不得寫成已確認限制或需求。
 
     輸出 JSON：
     {{
@@ -181,6 +190,15 @@ class ExpertDomainResearch:
     - feedback 只作為領域研究輔助資料，不產生需求。
     - 若 skill 範例或研究資料包含 requirement_implications，本任務只能將其整理為 constraints、risks、recommendations 或 open_items，不得輸出正式 requirements。
     - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text 與 related_URL。
+    - 每筆 related_URL 必須盡可能保留或補上受影響的 user_requirements id；只能引用 research_results 或 existing_research 中已出現的 id，不得編造不存在的 URL-*。
+    - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
+    - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
+    - sources 只放來源名稱、文件名稱、標準名稱或 URL；不要在 sources 中寫長段分析。
+    - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
+    - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
+    - recommendations 是設計注意事項或後續確認建議，不是正式需求。
+    - recommendations 不得使用「系統必須」「平台必須」「使用者必須」這類定案語氣；除非法律明確適用且 related_URL 對應清楚。
+    - open_items 是仍需 stakeholder、analyst、法規範圍或第三方服務條款確認的問題；不得寫成已確認限制或需求。
 
     輸出 JSON：
     {
@@ -230,6 +248,14 @@ class ExpertDomainResearch:
     - 只有當外部領域知識可能影響候選需求理解、限制、風險或證據依據時，才選 research_issue。
     - 研究問題必須來自 scenario、scope、stakeholders、open_questions 或 user_requirements 中的具體內容；URL 不是網站連結。
     - 若問題可由利害關係人或既有專案資料回答，不要選 research_issue。
+    - 選 done 前，請確認是否已檢查與本專案相關的外部限制面向：
+      - 支付/金流安全與退款
+      - 個資、隱私、資料保存與稽核
+      - 消費者保護、客服與爭議處理
+      - 即時定位、外送追蹤與個資遮蔽
+      - 高峰流量、可用性與營運連續性
+    - 若某面向與 user_requirements 無關，可略過，不需硬研究。
+    - 若尚未研究任何面向，且 user_requirements 涉及支付、個資、退款、定位、稽核或高可用，優先選 research_issue。
     - 每次 research_issue 只聚焦一個具體問題
     - 工具使用邊界遵守本輪工具使用資料
     - 有足夠材料才 update_findings
