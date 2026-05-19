@@ -751,6 +751,8 @@ def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         }
         if model.get("plantuml"):
             row["plantuml"] = str(model.get("plantuml") or "").strip()
+        if model.get("description") and str(model.get("type") or "").strip() != "use_case_diagram":
+            row["description"] = str(model.get("description") or "").strip()
         if isinstance(model.get("text"), list):
             row["text"] = [
                 dict(item) for item in model.get("text", [])

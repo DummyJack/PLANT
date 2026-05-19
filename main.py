@@ -69,7 +69,6 @@ def main():
     store = Store(base_dir, session.project_id)
     logger = Logger(store.log_dir)
 
-    print()
     print("開始執行...")
     print()
 

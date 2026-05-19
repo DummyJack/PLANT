@@ -7,6 +7,7 @@ STAKEHOLDER_CATEGORY_LABELS = {
     "System Owners & Management": "系統所有者與管理者",
     "External Parties": "外部相關單位",
 }
+STAKEHOLDER_CATEGORY_VALUES = set(STAKEHOLDER_CATEGORY_LABELS.keys())
 
 
 class Collect:
@@ -34,7 +35,7 @@ class Collect:
     @staticmethod
     def user_selection(
         proposed: List[Dict[str, str]], max_select: int = 5
-    ) -> List[int]:
+    ) -> List[Dict[str, str]]:
         while True:
             print("\n建議選擇的利害關係人：")
             for i, sh in enumerate(proposed, 1):
@@ -53,41 +54,63 @@ class Collect:
                 continue
 
             try:
-                selected_indices = []
+                selected_records: List[Dict[str, str]] = []
+                seen_names = set()
                 has_invalid_selection = False
                 parts = [x.strip() for x in user_input.split(",")]
 
                 for part in parts:
+                    if not part:
+                        continue
                     try:
                         idx = int(part) - 1
                         if 0 <= idx < len(proposed):
-                            selected_indices.append(idx)
+                            row = proposed[idx]
+                            name = str(row.get("name") or "").strip()
+                            stakeholder_type = str(row.get("type") or "").strip()
+                            if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
+                                print(f"\n⚠️ 建議項目「{name or part}」缺少合法類型，請重新選擇或改用自訂名稱")
+                                has_invalid_selection = True
+                                break
+                            if name and name not in seen_names:
+                                selected_records.append(row)
+                                seen_names.add(name)
                         else:
                             print(f"\n⚠️ 編號 {part} 無效，請重新選擇")
                             has_invalid_selection = True
                             break
                     except ValueError:
-                        if part:
-                            stakeholder_type = Collect.custom_stakeholder_type(part)
-                            proposed.append({
-                                "name": part,
+                        name = part.strip()
+                        if name and name not in seen_names:
+                            stakeholder_type = Collect.custom_stakeholder_type(name)
+                            selected_records.append({
+                                "name": name,
                                 "type": stakeholder_type,
                                 "reason": "使用者自訂",
                             })
-                            selected_indices.append(len(proposed) - 1)
+                            seen_names.add(name)
 
                 if has_invalid_selection:
                     continue
 
-                if len(selected_indices) > max_select:
+                invalid_records = [
+                    row for row in selected_records
+                    if not str(row.get("name") or "").strip()
+                    or str(row.get("type") or "").strip() not in STAKEHOLDER_CATEGORY_VALUES
+                ]
+                if invalid_records:
+                    print("\n⚠️ 選擇結果包含格式不合法的利害關係人，請重新選擇")
+                    continue
+
+                if len(selected_records) > max_select:
                     print(f"\n⚠️ 選擇超過 {max_select} 個，請重新選擇")
                     continue
 
-                if len(selected_indices) == 0:
+                if len(selected_records) == 0:
                     print("\n❌ 至少需要選擇 1 個利害關係人")
                     continue
 
-                return selected_indices
+                return selected_records
 
             except Exception as e:
                 print(f"\n❌ 錯誤：{e}")
