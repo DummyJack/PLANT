@@ -405,7 +405,6 @@ def run_elicitation_meeting(
                 "請不要重複已有需求，專注驗證目前需求理解並擷取新的需求候選。\n"
                 "若本輪是逐一發言，User 必須最後回答；若本輪是同時發言，User 會逐題回答各 agent 的問題。"
             ),
-            "category": "open_question",
             "participants": turn_participants,
             "discussion_mode": turn_mode,
             "source_ids": [],

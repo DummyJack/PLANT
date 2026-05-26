@@ -221,6 +221,16 @@ class Flow:
         kwargs = {"temperature": temperature}
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
+        passthrough_keys = (
+            "base_url",
+            "api_key",
+            "json_response_format",
+        )
+        for key in passthrough_keys:
+            if per_agent.get(key) is not None:
+                kwargs[key] = per_agent[key]
+            elif default_cfg.get(key) is not None:
+                kwargs[key] = default_cfg[key]
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
     def run(self, rough_idea: str) -> Dict[str, Any]:

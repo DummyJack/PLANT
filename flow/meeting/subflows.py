@@ -103,7 +103,6 @@ def ingest_round_resolution_effects(
     *,
     round_num: int,
 ) -> None:
-    oq_pool = artifact.get("open_questions", []) or []
     new_candidates: List[Dict[str, Any]] = []
     resolution_effects = artifact.get("issue_resolution_effects", []) or []
     pending_decisions = artifact.get("pending_decisions", []) or []
@@ -117,21 +116,6 @@ def ingest_round_resolution_effects(
             continue
         issue = item.get("issue", {}) if isinstance(item.get("issue"), dict) else {}
         resolution = item.get("resolution", {}) if isinstance(item.get("resolution"), dict) else {}
-        source_ids = list(issue.get("source_ids", []) or [])
-        for oq in resolution.get("new_open_questions", []) or []:
-            if not isinstance(oq, dict):
-                continue
-            oq_pool.append(
-                {
-                    **oq,
-                    "issue_id": issue.get("id"),
-                    "status": oq.get("status") or "pending",
-                    "round": round_num,
-                }
-            )
-        if resolution.get("resolution_status") in {"agreed", "human_decision", "direct_clarification"}:
-            from .conflict_review import close_related_open_questions
-            close_related_open_questions(artifact, source_ids, round_num=round_num)
         affected_conflict_ids = resolution.get("affected_conflict_ids", []) or []
         decision_id = str(resolution.get("decision_id") or "").strip()
         if resolution.get("resolution_status") == "human_decision" and affected_conflict_ids and decision_id:
@@ -186,7 +170,7 @@ def ingest_round_resolution_effects(
                         "round": round_num,
                         "title": issue.get("title"),
                         "description": str(resolution.get("summary") or "").strip(),
-                        "category": "tradeoff",
+                        "category": "tradeoff_decision",
                         "source_ids": source_ids,
                         "status": "pending",
                         "needs_human": True,
@@ -252,7 +236,7 @@ def queue_issue_record(
             "id": f"{queue_prefix}-{index}",
             "title": (row.get("title") or "待處理事項").strip(),
             "description": (row.get("description") or "").strip(),
-            "category": row.get("category") or "open_question",
+            "category": row.get("category") or "srs_open_question",
             "participants": row.get("participants", []),
             "discussion_mode": row.get("discussion_mode", "sequential"),
             "speaking_order": row.get("speaking_order", []),
@@ -270,7 +254,7 @@ def queue_issue_record(
         "id": f"{queue_prefix}-{index}",
         "title": (row.get("title") or "待處理事項").strip(),
         "description": (row.get("description") or "").strip(),
-        "category": row.get("category") or "open_question",
+        "category": row.get("category") or "srs_open_question",
         "participants": row.get("participants", []),
         "discussion_mode": row.get("discussion_mode", "sequential"),
         "speaking_order": row.get("speaking_order", []),

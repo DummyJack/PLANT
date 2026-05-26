@@ -74,25 +74,36 @@ def save_meeting_preparation_outputs(
     round_num: int,
 ) -> None:
     coordinator.flow.store.save_artifact(artifact)
-    draft_version = round_num
-    previous_draft = (
-        coordinator.flow.store.load_draft(draft_version - 1)
-        if draft_version > 0
+    latest_version = coordinator.flow.store.get_draft_version()
+    latest_draft = (
+        coordinator.flow.store.load_draft(latest_version)
+        if latest_version >= 0
         else None
     )
-    conflict_report_md = coordinator.flow.store.load_markdown("conflict_report.md")
-    draft_md = coordinator.flow.analyst_agent.run_requirements_analyst(
-        "create_draft", artifact=artifact, draft_version=draft_version,
-        round_num=round_num,
-        previous_draft=previous_draft,
-        conflict_report_md=conflict_report_md,
-        meeting_record_md="",
-        artifact_dir=getattr(coordinator.flow.store, "artifact_dir", None),
-    )
-    coordinator.flow.store.save_draft(draft_md, version=draft_version)
+    if not latest_draft:
+        raise RuntimeError(
+            "正式會議缺少輸入；需要 artifact/drafts/draft_v0.md 或更新版本"
+        )
     coordinator.flow.logger.info(
-        "會議準備輸出：artifact + draft_v%s", draft_version,
+        "會議準備完成：使用 draft_v%s 作為本輪審查輸入", latest_version,
     )
+
+
+def build_formal_meeting_artifact(coordinator: Any, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """正式會議輸入只保留 latest draft、system models、latest conflict report 與 feedback。"""
+    latest_version = coordinator.flow.store.get_draft_version()
+    latest_draft = (
+        coordinator.flow.store.load_draft(latest_version)
+        if latest_version >= 0
+        else ""
+    )
+    conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+    return {
+        "latest_draft": latest_draft or "",
+        "system_models": artifact.get("system_models", []) if isinstance(artifact.get("system_models"), list) else [],
+        "conflict_report": conflict_state.get("report", []) if isinstance(conflict_state.get("report"), list) else [],
+        "feedback": artifact.get("feedback", {}) if isinstance(artifact.get("feedback"), dict) else {},
+    }
 
 
 # ---------- issue proposals ----------
@@ -600,8 +611,9 @@ def run_meeting_round_block(
             "round_num": round_num,
         },
     )
+    meeting_artifact = build_formal_meeting_artifact(coordinator, artifact)
     current_round_proposals = collect_issue_proposals(
-        coordinator, artifact, round_num=round_num,
+        coordinator, meeting_artifact, round_num=round_num,
     )
     existing_issue_proposals = artifact.get("issue_proposals", []) or []
     seen_issue_ids = {
@@ -621,10 +633,11 @@ def run_meeting_round_block(
     artifact["issue_proposals"] = existing_issue_proposals
     coordinator.flow.store.save_artifact(artifact)
 
+    meeting_artifact["issue_proposals"] = current_round_proposals
     runner = MeetingRunner(
         coordinator.flow.mediator_agent,
         coordinator.flow.registry,
-        artifact,
+        meeting_artifact,
         current_round_proposals,
         round_num,
         coordinator.flow.config,

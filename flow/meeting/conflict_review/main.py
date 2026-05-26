@@ -248,7 +248,7 @@ def conflict_review(
         "description": coordinator.flow.mediator_agent.conflict_review_description(
             conflict_summaries
         ),
-        "category": "conflict_discussion",
+        "category": "conflict_resolution",
         "participants": participants,
         "discussion_mode": discussion_mode,
         "source_ids": list(conflicts_by_id.keys()),
@@ -316,7 +316,7 @@ def conflict_review(
                 + "請各 agent 根據 requirement 原文與第一輪 pair_reviews 重新輸出 proposed_label；"
                 + "本輪結束後只看 proposed_label 是否一致。"
             ),
-            "category": "conflict_discussion",
+            "category": "conflict_resolution",
             "participants": participants,
             "discussion_mode": discussion_mode,
             "source_ids": list(second_conflicts_by_id.keys()),

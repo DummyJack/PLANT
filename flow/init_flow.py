@@ -176,7 +176,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     if not stage_enabled(flow.config, "system_model"):
         flow.logger.info("跳過系統模型")
         model_data = artifact.get("system_models", [])
-    elif has_system_models_payload(artifact) and artifact_path_non_empty(flow, "models", "system_models.json"):
+    elif has_system_models_payload(artifact) and artifact_path_non_empty(flow, "system_models.json"):
         model_data = artifact.get("system_models", [])
         flow.logger.info("✓ 系統模型已存在，跳過重新生成")
     else:

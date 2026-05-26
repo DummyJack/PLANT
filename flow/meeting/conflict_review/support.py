@@ -127,31 +127,6 @@ def normalize_review_text(
         separators=(",", ":"),
     )
 
-def close_related_open_questions(
-    artifact: Dict[str, Any],
-    source_ids: List[str],
-    *,
-    round_num: int,
-) -> None:
-    if not source_ids:
-        return
-    source_set = {str(s).strip() for s in source_ids if str(s).strip()}
-    for q in artifact.get("open_questions", []) or []:
-        if q.get("status") == "answered":
-            continue
-        q_source_ids = {
-            str(s).strip()
-            for s in (q.get("source_ids") or [])
-            if str(s).strip()
-        }
-        source_conflict = str(q.get("source_conflict_id") or "").strip()
-        if source_conflict:
-            q_source_ids.add(source_conflict)
-        if not (source_set & q_source_ids):
-            continue
-        q["status"] = "answered"
-        q["answered_round"] = round_num
-
 def append_change_record(
     artifact: Dict[str, Any],
     change_candidates: List[Dict[str, Any]],

@@ -75,7 +75,7 @@ def run_final(
                 "id": "FRD-01",
                 "title": proposal.get("title", "最終需求收斂確認"),
                 "description": proposal.get("description", ""),
-                "category": proposal.get("category", "open_question"),
+                "category": proposal.get("category", "srs_open_question"),
                 "participants": proposal.get("participants", []),
                 "discussion_mode": proposal.get("discussion_mode", "sequential"),
                 "speaking_order": proposal.get("speaking_order", []),
