@@ -12,6 +12,7 @@ PROVIDER_API_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "claude": "ANTHROPIC_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "local": None,
 }
 
 
@@ -20,7 +21,7 @@ def providers_from_agent_models(config: Dict[str, Any]) -> set:
     providers = set()
     for agent_cfg in agent_models.values():
         if isinstance(agent_cfg, dict) and agent_cfg.get("provider"):
-            providers.add(agent_cfg["provider"])
+            providers.add(str(agent_cfg["provider"]).strip().lower())
     return providers
 
 
@@ -33,8 +34,10 @@ def validate_provider_api_keys(config: Dict[str, Any]) -> None:
 
     for used_provider in providers_to_check:
         required_key = PROVIDER_API_KEY_ENV.get(used_provider)
-        if not required_key:
+        if used_provider not in PROVIDER_API_KEY_ENV:
             raise ValueError(f"不支援的 provider: {used_provider}")
+        if not required_key:
+            continue
         if not os.getenv(required_key):
             raise ValueError(
                 f"找不到 {required_key} 環境變數（provider={used_provider}）\n"
@@ -144,6 +147,7 @@ class BaseLLM(ABC):
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:
     from .claude import ClaudeModel
     from .gemini import GeminiModel
+    from .local import LocalModel
     from .openai import OpenAIModel
 
     key = provider.lower()
@@ -151,6 +155,7 @@ def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:
         "openai": OpenAIModel,
         "claude": ClaudeModel,
         "gemini": GeminiModel,
+        "local": LocalModel,
     }
     if key not in providers:
         raise ValueError(
