@@ -806,7 +806,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     discussions = load_json_path(artifact_dir / "meeting" / "discussions.json", {})
     decisions = load_json_path(artifact_dir / "meeting" / "decisions.json", [])
     issues = load_json_path(artifact_dir / "meeting" / "issues.json", [])
-    models = load_json_path(artifact_dir / "models" / "system_models.json", [])
+    models = load_json_path(artifact_dir / "system_models.json", [])
     stage_status = load_json_path(artifact_dir / "stage_status.json", {})
     issue_rows = []
     for item in issues if isinstance(issues, list) else []:
@@ -873,7 +873,7 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_json_path(base_dir, discussions_payload(data), artifact_dir / "meeting" / "discussions.json")
     save_json_path(base_dir, data.get("decisions", []) or [], artifact_dir / "meeting" / "decisions.json")
     save_json_path(base_dir, issue_proposals_payload(data), artifact_dir / "meeting" / "issues.json")
-    save_json_path(base_dir, models_payload(data), artifact_dir / "models" / "system_models.json")
+    save_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
     save_json_path(base_dir, data.get("stage_status", {}) or {}, artifact_dir / "stage_status.json")
 
 

@@ -200,13 +200,13 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
         if (
             has_project_scope_requirements(flow, artifact)
             and artifact_json_non_empty(flow, "feedback.json")
-            and artifact_json_non_empty(flow, "models", "system_models.json")
+            and artifact_json_non_empty(flow, "system_models.json")
             and has_feedback_payload(artifact)
             and has_system_models_payload(artifact)
         ):
             return
         raise RuntimeError(
-            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/models/system_models.json"
+            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/system_models.json"
         )
     if stage_name == "SRS":
         if has_draft_payload(flow):

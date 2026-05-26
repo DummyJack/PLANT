@@ -4,15 +4,15 @@
   "max_stakeholders": 7,
   "elicitation_max_turns": 5,
   "stage": {
-    "init": true,
-    "elicitation": true,
-    "conflict_detection": true,
-    "domain_research": true,
-    "system_model": true,
-    "draft": true,
+    "init": false,
+    "elicitation": false,
+    "conflict_detection": false,
+    "domain_research": false,
+    "system_model": false,
+    "draft": false,
     "formal_meeting": true,
-    "final_meeting": true,
-    "SRS": true
+    "final_meeting": false,
+    "SRS": false
   },
   "enable_tools": {
     "web_search": true,
@@ -25,7 +25,7 @@
     "conflict_review": true,
     "conflict_discussion": true,
     "open_question": true,
-    "new_requirement": false,
+    "new_requirement": true,
     "tradeoff": true
   },
   "enable_agents": {
