@@ -161,7 +161,7 @@ class MediatorDiscussion:
         }
         loop_name = (
             "conflict_review"
-            if str(issue.get("category") or "").strip() == "conflict_discussion"
+            if str(issue.get("category") or "").strip() == "conflict_resolution"
             else "agent_response"
         )
         opa = agent.run_action_loop(

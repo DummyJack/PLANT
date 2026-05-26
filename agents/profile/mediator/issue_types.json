@@ -1,22 +1,22 @@
 [
   {
-    "id": "conflict_discussion",
-    "label": "衝突討論",
-    "description": "需要跨角色協調、投票或人工裁決，且無法透過直接釐清或保守更新解決的需求衝突"
+    "id": "conflict_resolution",
+    "label": "衝突決議",
+    "description": "latest conflict report 中仍會阻礙 SRS 定稿的需求衝突，需要形成可寫入草稿或決策紀錄的解法"
   },
   {
-    "id": "open_question",
-    "label": "待決開放問題",
-    "description": "需要正式多人討論才能回答，且答案會影響後續需求、衝突判定、決策或範圍收斂的開放問題"
+    "id": "requirement_revision",
+    "label": "需求修訂",
+    "description": "latest draft 中需求語意、邊界、責任、優先級或可驗證性不足，需要修正既有需求，而不是新增未支持需求"
   },
   {
-    "id": "new_requirement",
-    "label": "提出新需求",
-    "description": "新增能力、限制或必要條件，且納入與否會影響現有需求、範圍或後續決策"
+    "id": "srs_open_question",
+    "label": "SRS 待確認問題",
+    "description": "latest draft、system models、conflict report 或 feedback 顯示仍有阻礙 SRS 生成的未決問題，需要正式會議確認"
   },
   {
-    "id": "tradeoff",
-    "label": "需求取捨",
-    "description": "兩項以上目標、限制或偏好無法同時完全滿足，需明確取捨或界定可接受折衷"
+    "id": "tradeoff_decision",
+    "label": "取捨決策",
+    "description": "多個需求、限制、品質目標或外部限制無法同時完全滿足，需要決定可接受折衷並讓 SRS 能明確描述"
   }
 ]

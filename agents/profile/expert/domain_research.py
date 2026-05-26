@@ -127,7 +127,8 @@ class ExpertDomainResearch:
     - 根據 scenario、scope、stakeholders、open_questions 與 user_requirements 判斷外部領域因素；user_requirements 優先使用正式 requirements，若尚無正式 requirements 才使用 URL 候選需求；URL 是舊欄位名稱，不是網站連結。
     - feedback 只作為領域研究輔助資料，不產生需求。
     - 需要證據時可使用本輪工具使用資料中允許的工具。
-    - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text 與 related_URL。
+    - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text、related_URL 與 source。
+    - source 記錄此項 feedback 的流程來源；初始領域研究使用 "initial"，若來自正式會議則使用該會議 ID。
     - 每筆 related_URL 必須盡可能對應到受影響的 user_requirements id。
     - related_URL 只能引用 user_requirements 中存在的 id；不得編造不存在的 URL-*。
     - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
@@ -142,12 +143,12 @@ class ExpertDomainResearch:
 
     輸出 JSON：
     {{
-      "findings": [{{"text": "", "related_URL": []}}],
+      "findings": [{{"text": "", "related_URL": [], "source": "initial"}}],
       "sources": [],
-      "constraints": [{{"text": "", "related_URL": []}}],
-      "risks": [{{"text": "", "related_URL": []}}],
-      "recommendations": [{{"text": "", "related_URL": []}}],
-      "open_items": [{{"text": "", "related_URL": []}}]
+      "constraints": [{{"text": "", "related_URL": [], "source": "initial"}}],
+      "risks": [{{"text": "", "related_URL": [], "source": "initial"}}],
+      "recommendations": [{{"text": "", "related_URL": [], "source": "initial"}}],
+      "open_items": [{{"text": "", "related_URL": [], "source": "initial"}}]
     }}"""
             messages = self.build_direct_messages(task, context=context)
             try:
@@ -159,7 +160,10 @@ class ExpertDomainResearch:
                     if self.tools
                     else self.model.chat(messages)
                 )
-                result = clean_research_result(self.parse_first_json(raw))
+                result = clean_research_result(
+                    self.parse_first_json(raw),
+                    default_source="initial",
+                )
                 research_results.append({"query": query, **result})
                 obs["result"] = result
                 obs["summary"] = (
@@ -189,7 +193,8 @@ class ExpertDomainResearch:
     - 不得捏造來源、法規、數值門檻或研究結論。
     - feedback 只作為領域研究輔助資料，不產生需求。
     - 若 skill 範例或研究資料包含 requirement_implications，本任務只能將其整理為 constraints、risks、recommendations 或 open_items，不得輸出正式 requirements。
-    - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text 與 related_URL。
+    - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text、related_URL 與 source。
+    - source 記錄此項 feedback 的流程來源；初始領域研究使用 "initial"，若來自正式會議則保留該會議 ID。
     - 每筆 related_URL 必須盡可能保留或補上受影響的 user_requirements id；只能引用 research_results 或 existing_research 中已出現的 id，不得編造不存在的 URL-*。
     - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
     - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
@@ -202,16 +207,19 @@ class ExpertDomainResearch:
 
     輸出 JSON：
     {
-      "findings": [{"text": "", "related_URL": []}],
+      "findings": [{"text": "", "related_URL": [], "source": "initial"}],
       "sources": [],
-      "constraints": [{"text": "", "related_URL": []}],
-      "risks": [{"text": "", "related_URL": []}],
-      "recommendations": [{"text": "", "related_URL": []}],
-      "open_items": [{"text": "", "related_URL": []}]
+      "constraints": [{"text": "", "related_URL": [], "source": "initial"}],
+      "risks": [{"text": "", "related_URL": [], "source": "initial"}],
+      "recommendations": [{"text": "", "related_URL": [], "source": "initial"}],
+      "open_items": [{"text": "", "related_URL": [], "source": "initial"}]
     }"""
             try:
                 raw = self.invoke_skill("domain-research", task, context=context)
-                dr = clean_domain_research(self.parse_first_json(raw))
+                dr = clean_domain_research(
+                    self.parse_first_json(raw),
+                    default_source="initial",
+                )
                 if dr:
                     artifact["feedback"] = dr
                     obs["summary"] = "已更新領域研究資料"

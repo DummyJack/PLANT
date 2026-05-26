@@ -15,11 +15,14 @@ DEFAULT_ONLINE_SERVER = "https://www.plantuml.com/plantuml"
 
 class PlantUMLValidatorTool(BaseTool):
     name = "plantuml_validate"
-    description = "驗證 PlantUML 語法是否正確，回傳驗證結果與錯誤訊息"
+    description = (
+        "驗證 PlantUML 語法是否正確，回傳驗證結果與錯誤訊息。"
+        "必須填 plantuml_code，內容必須包含 @startuml 與 @enduml。"
+    )
     parameters = {
         "plantuml_code": {
             "type": "string",
-            "description": "要驗證的 PlantUML 程式碼（須含 @startuml 與 @enduml）",
+            "description": "必填。要驗證的 PlantUML 程式碼，須含 @startuml 與 @enduml。",
             "required": True,
         }
     }

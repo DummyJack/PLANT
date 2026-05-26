@@ -67,30 +67,15 @@ class UserIssues:
 
     def build_user_issue_observation(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
-        open_questions = [
-            row for row in (artifact.get("open_questions") or []) if isinstance(row, dict)
-        ]
-        user_open_questions = []
-        for row in open_questions:
-            if row.get("status") == "answered":
-                continue
-            to_agent = str(row.get("to") or "").strip().lower()
-            from_agent = str(row.get("from_agent") or "").strip().lower()
-            if to_agent == "user" or from_agent == "user":
-                user_open_questions.append(row)
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
-            "rough_idea": artifact.get("rough_idea", ""),
-            "scope": artifact.get("scope", {}),
-            "stakeholders": self.stakeholders or artifact.get("stakeholders", []),
-            "requirements": requirement_discussion_pool(artifact),
-            "open_questions_to_user": user_open_questions,
-            "recent_discussions": artifact.get("recent_discussions", []),
-            "existing_issue_proposals": artifact.get("issue_proposals", []),
-            "decisions": artifact.get("decisions", []),
+            "latest_draft": artifact.get("latest_draft", ""),
+            "system_models": artifact.get("system_models", []),
+            "conflict_report": artifact.get("conflict_report", []),
+            "feedback": artifact.get("feedback", {}),
         }
 
     def decide_user_issue_action(
@@ -131,32 +116,25 @@ class UserIssues:
         max_items = int(observation.get("max_items") or 2)
         context = {
             "round_num": observation.get("round_num"),
-            "rough_idea": observation.get("rough_idea", ""),
-            "scope": observation.get("scope", {}),
-            "stakeholders": observation.get("stakeholders", []),
-            "requirements": observation.get("requirements", []),
-            "open_questions_to_user": observation.get("open_questions_to_user", []),
-            "recent_discussions": observation.get("recent_discussions", []),
-            "existing_issue_proposals": observation.get("existing_issue_proposals", []),
-            "decisions": observation.get("decisions", []),
+            "latest_draft": observation.get("latest_draft", ""),
+            "system_models": observation.get("system_models", []),
+            "conflict_report": observation.get("conflict_report", []),
+            "feedback": observation.get("feedback", {}),
         }
         prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的使用者 / 利害關係人議題。
+提出本輪需要進入 issue proposal 的使用者 / 利害關係人議題。目標是讓 latest draft 更 SRS-ready。
 
 # 提案邊界
-- 只提出會影響利害關係人目標、日常使用情境、痛點、操作底線、可接受條件或使用者回答缺口的議題。
-- 可以根據利害關係人資料中的需求與關切提案，但必須判斷該問題是否尚未被 requirements、existing_issue_proposals 或近期 decisions 覆蓋。
-- 可以根據 open_questions_to_user 提案，但只有需要 User 或特定利害關係人回答才提出。
-- 可以提出 new_requirement 或 open_question；只有當利害關係人需求互相拉扯時才提出 tradeoff；只有從使用情境能看出需求互斥或重複時才提出 conflict_discussion。
+- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
+- 只提出最能讓 draft 更 SRS-ready 的使用者語意、使用邊界、責任歸屬、可接受條件或待確認議題。
+- 可以提出 requirement_revision 或 srs_open_question；只有當利害關係人需求互相拉扯時才提出 tradeoff_decision；只有從使用情境能看出需求互斥或重複時才提出 conflict_resolution。
 - 議題必須聚焦利害關係人情境、目標、痛點、使用底線或回答缺口，不提出缺乏使用者影響的一般討論。
-- 不要新增利害關係人資料以外的角色，不要把產品轉成其他情境。
-- 不要重複 existing_issue_proposals 或近期已完成 decisions。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
 # 每筆 issue schema
 - title：issue proposal 的短標籤，供 triage 參考；正式會議標題由 Mediator 另行命名
 - description：說明要釐清或補充的使用者情境、需求、顧慮或底線，以及它如何影響需求收斂
-- category：只能是 open_question、new_requirement、tradeoff、conflict_discussion 其中之一
+- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一
 - participants：從 user、analyst、expert、modeler 挑選，必須包含 user；需要需求整理時加入 analyst，需要 domain 風險時加入 expert，需要流程/互動釐清時加入 modeler
 - discussion_mode：sequential 或 simultaneous
 - speaking_order：必須與 participants 成員一致
@@ -206,10 +184,10 @@ class UserIssues:
             raise ValueError("User issue proposal 必須包含 issues list")
 
         allowed_categories = {
-            "conflict_discussion",
-            "open_question",
-            "new_requirement",
-            "tradeoff",
+            "conflict_resolution",
+            "requirement_revision",
+            "srs_open_question",
+            "tradeoff_decision",
         }
         allowed_participants = {"user", "analyst", "expert", "modeler"}
         allowed_modes = {"sequential", "simultaneous"}
@@ -363,7 +341,7 @@ class UserIssues:
         if artifact_context:
             context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
         allow_suggested_next_action = (
-            issue_category != "conflict_discussion"
+            issue_category != "conflict_resolution"
             and not str(issue.get("id") or "").startswith("ELICIT-")
         )
         is_elicitation = str(issue.get("id") or "").startswith("ELICIT-")
@@ -374,7 +352,7 @@ class UserIssues:
             json_hint = '"speaking_as": ["本輪發言身份名稱"], "text": "完整發言內容"'
             if not is_elicitation:
                 json_hint += ', "open_questions": [...]'
-            if issue_category == "open_question":
+            if issue_category == "srs_open_question":
                 flow_hint = "選擇適合回答的利害關係人，直接回答問題並補充必要情境。"
             else:
                 flow_hint = "選擇適合的 speaking_as，說明該身份在此議題上的立場、需求與底線。"
@@ -390,17 +368,17 @@ class UserIssues:
             )
 
         category_hint = ""
-        if issue_category == "new_requirement":
+        if issue_category == "requirement_revision":
             category_hint = (
-                "\n# 本議題特別說明（new_requirement）\n"
+                "\n# 本議題特別說明（requirement_revision）\n"
                 "可提出新需求，也可指出既有需求需要調整、補限制、改優先順序或移除。"
             )
-        elif issue_category == "open_question":
+        elif issue_category == "srs_open_question":
             category_hint = (
-                "\n# 本議題特別說明（open_question）\n"
+                "\n# 本議題特別說明（srs_open_question）\n"
                 "直接回答問題；若資訊不足，說明缺少的情境、角色或使用條件。"
             )
-        elif issue_category == "conflict_discussion":
+        elif issue_category == "conflict_resolution":
             contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
             known_pair_ids = [
                 str(pair_id).strip()
@@ -408,7 +386,7 @@ class UserIssues:
                 if str(pair_id).strip()
             ]
             category_hint = (
-                "\n# 本議題特別說明（conflict_discussion）\n"
+                "\n# 本議題特別說明（conflict_resolution）\n"
                 "從實際使用情境說明兩項需求是否衝突、重複、可共存或資訊不足。\n"
                 "- 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。\n"
                 "- 外層只能有 text 欄位。\n"
@@ -434,9 +412,9 @@ class UserIssues:
         suggested_next_action_rules_text = "".join(
             f"- {rule}\n" for rule in suggested_next_action_rule
         )
-        open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，再放進 open_questions。\n"
+        open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，只把當下最重要、會影響決策的一個問題放進 open_questions。\n"
         names_list_text = ", ".join(str(name) for name in names_list if str(name).strip())
-        if issue_category == "conflict_discussion":
+        if issue_category == "conflict_resolution":
             json_hint = conflict_review_text_hint()
             suggested_next_action_json = ""
 

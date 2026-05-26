@@ -78,7 +78,7 @@ def requirement_refs(values: Any) -> List[str]:
     return refs
 
 
-def research_items(values: Any) -> List[Dict[str, Any]]:
+def research_items(values: Any, *, default_source: str = "") -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
     for value in compact_list(values):
@@ -90,11 +90,17 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
                 "text": text,
                 "related_URL": requirement_refs(value.get("related_URL")),
             }
+            source = clean_text(value.get("source")) or clean_text(default_source)
+            if source:
+                row["source"] = source
         else:
             text = clean_text(value)
             if not text:
                 continue
             row = {"text": text, "related_URL": []}
+            source = clean_text(default_source)
+            if source:
+                row["source"] = source
 
         key = json.dumps(row, ensure_ascii=False, sort_keys=True)
         if key not in seen:
@@ -103,20 +109,20 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-def clean_research_result(raw: Any) -> Dict[str, Any]:
+def clean_research_result(raw: Any, *, default_source: str = "") -> Dict[str, Any]:
     source = raw if isinstance(raw, dict) else {}
     result: Dict[str, Any] = {}
 
-    result["findings"] = research_items(source.get("findings"))
+    result["findings"] = research_items(source.get("findings"), default_source=default_source)
     result["sources"] = compact_list(source.get("sources"))
-    result["constraints"] = research_items(source.get("constraints"))
-    result["risks"] = research_items(source.get("risks"))
-    result["recommendations"] = research_items(source.get("recommendations"))
-    result["open_items"] = research_items(source.get("open_items"))
+    result["constraints"] = research_items(source.get("constraints"), default_source=default_source)
+    result["risks"] = research_items(source.get("risks"), default_source=default_source)
+    result["recommendations"] = research_items(source.get("recommendations"), default_source=default_source)
+    result["open_items"] = research_items(source.get("open_items"), default_source=default_source)
     return result if has_research_content(result) else {}
 
 
-def clean_domain_research(raw: Any) -> Dict[str, Any]:
+def clean_domain_research(raw: Any, *, default_source: str = "") -> Dict[str, Any]:
     if isinstance(raw, dict):
         if not raw:
             return {}
@@ -126,7 +132,7 @@ def clean_domain_research(raw: Any) -> Dict[str, Any]:
 
     for field in RESEARCH_FIELDS:
         if field in TRACEABLE_RESEARCH_FIELDS:
-            result[field] = research_items(raw.get(field))
+            result[field] = research_items(raw.get(field), default_source=default_source)
         else:
             result[field] = compact_list(raw.get(field))
 

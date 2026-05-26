@@ -39,6 +39,7 @@ class WebSearchTool(BaseTool):
     name = "web_search"
     description = (
         "搜尋網路上的法規、標準、技術文件、最佳實務等公開資訊。"
+        "必須填 query 與 max_results，max_results 必須是大於 0 的整數。"
         "可選填 user_question 傳入使用者原始問題，以便判斷是否已累積足夠內容可作答。"
         "同一對話回合內若觸發停止條件，後續呼叫會直接拒絕搜尋（請改整理答案）。"
     )
@@ -50,8 +51,8 @@ class WebSearchTool(BaseTool):
         },
         "max_results": {
             "type": "integer",
-            "description": "選填。此次搜尋要回傳的結果筆數；不填則用預設。",
-            "required": False,
+            "description": "必填。此次搜尋要回傳的結果筆數，必須是大於 0 的整數。",
+            "required": True,
         },
         "user_question": {
             "type": "string",
@@ -63,18 +64,11 @@ class WebSearchTool(BaseTool):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        max_results: int = 3,
         *,
         stop_config: Optional[Dict[str, Any]] = None,
     ):
         self.api_key = api_key
-        self.max_results = max(1, int(max_results))
         self.parameters = copy.deepcopy(type(self).parameters)
-        self.parameters["max_results"][
-            "description"
-        ] = (
-            f"選填。此次搜尋要回傳的結果筆數；不填則用預設 {self.max_results}。"
-        )
         self.client = None
         cfg = stop_config or {}
         self.thr_redundant_query = float(cfg.get("redundant_query_jaccard", 0.58))
@@ -232,10 +226,9 @@ class WebSearchTool(BaseTool):
             )
 
         n = kwargs.get("max_results")
-        if n is not None and isinstance(n, int) and n >= 1:
-            max_results = n
-        else:
-            max_results = self.max_results
+        if not isinstance(n, int) or n < 1:
+            return "錯誤: max_results 為必填且必須是大於 0 的整數"
+        max_results = n
 
         try:
             client = self.get_client()

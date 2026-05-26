@@ -12,7 +12,7 @@ COMMON_ELICITATION_CONTEXT_RULES = """# Requirement Elicitation Interview
 def elicitation_action_task(stop_phrase: str) -> str:
     return (
         "依本輪 action 發言。若 action 是 ask_user 或 supplement_question，"
-        "先用 1 句重述目前理解或缺口，再輸出對利害關係人的一個主問題（總長 2-4 句）；"
+        "先用 1 句重述目前理解或缺口，再提出當下最重要、最能推進需求確認的一個問題（總長 2-4 句）；"
         "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求擷取，則 text 請只輸出以下固定句"
         f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
     )
@@ -21,10 +21,9 @@ def elicitation_action_task(stop_phrase: str) -> str:
 def elicitation_action_rules(stop_phrase: str) -> str:
     return f"""- 輸出停止句不是單方結束會議，只是進入三方收束投票。
 - 若本輪 action 是 propose_finish，text 必須只輸出停止句：{stop_phrase}
-- 若本輪 action 是 ask_user 或 supplement_question，只能問 1 個主問題，不可合併多題。
+- 若本輪 action 是 ask_user 或 supplement_question，只提出當下最重要的一個問題；不要合併多題。
 - 若本輪 action 是 ask_user 或 supplement_question，必須輸出 target_stakeholders，從已選利害關係人中選擇一位或多位。
-- 問題必須可回答、可抽取，且回答後應能形成或修正一條 User Requirement、限制、流程邊界或待確認缺口。
-- 問題應以 probe 為主，直接詢問利害關係人的需要、期待、工作方式、判斷標準或可接受條件；避免用「目前不清楚 / it is unclear / could you clarify」作為主要問法。
+- 問題必須可回答，且答案會明顯影響需求文字、範圍、限制、流程邊界或是否收束。
 - 提問前必須避開 closed_issues 與 do_not_repeat；不要重問利害關係人已回答、已說不在意、或已表示 covered 的方向。
 - 避免使用「還有什麼需求」「請多說一點」等泛問。
 - 提問應承接目前理解，避免孤立訪談題。"""

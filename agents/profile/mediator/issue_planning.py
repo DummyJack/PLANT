@@ -47,7 +47,7 @@ class MediatorIssuePlanning:
                     "decisions、models 與 stakeholder understanding 是否足以交給 Documentor "
                     "生成正式 SRS。"
                 ),
-                "category": "open_question",
+                "category": "srs_open_question",
                 "participants": ["analyst", "expert", "modeler", "user"],
                 "discussion_mode": "sequential",
                 "speaking_order": ["analyst", "expert", "modeler", "user"],
@@ -99,30 +99,30 @@ class MediatorIssuePlanning:
         elif routing_preference in ("direct_apply", "direct_clarification"):
             action = routing_preference
             reason = "proposal_requested_direct_routing"
-        elif category == "open_question":
+        elif category == "srs_open_question":
             if impact == "high" or deferred_rounds >= 1 or multi_party:
                 action = "formal_meeting"
-                reason = "open_question_requires_group_resolution"
+                reason = "srs_open_question_requires_group_resolution"
             else:
                 action = "direct_clarification"
-                reason = "single_point_open_question"
-        elif category == "new_requirement":
+                reason = "single_point_srs_open_question"
+        elif category == "requirement_revision":
             if impact in {"low", "medium"} and not multi_party and len(source_ids) <= 1:
                 action = "direct_clarification"
-                reason = "new_requirement_needs_scope_check_only"
+                reason = "requirement_revision_needs_scope_check_only"
             else:
                 action = "formal_meeting"
-                reason = "new_requirement_affects_scope"
-        elif category == "conflict_discussion":
+                reason = "requirement_revision_affects_srs"
+        elif category == "conflict_resolution":
             action = "formal_meeting"
-            reason = "conflict_discussion_requires_group_recheck"
-        elif category == "tradeoff":
+            reason = "conflict_resolution_requires_group_recheck"
+        elif category == "tradeoff_decision":
             if multi_party or impact == "high":
                 action = "formal_meeting"
-                reason = "tradeoff_requires_group_decision"
+                reason = "tradeoff_decision_requires_group_decision"
             else:
                 action = "direct_clarification"
-                reason = "tradeoff_not_material_yet"
+                reason = "tradeoff_decision_not_material_yet"
         return {"action": action, "reason": reason}
 
     @staticmethod
@@ -304,9 +304,9 @@ class MediatorIssuePlanning:
             if s.startswith(("REQ-", "FR-", "NFR-", "R-", "ELICIT-"))
         ]
         issue_id = str(proposal.get("issue_id") or "").strip()
-        if category == "conflict_discussion" and conflict_ids:
+        if category == "conflict_resolution" and conflict_ids:
             return (category, "conflict", tuple(sorted(conflict_ids)))
-        if category in {"open_question", "new_requirement", "tradeoff"} and requirement_ids:
+        if category in {"srs_open_question", "requirement_revision", "tradeoff_decision"} and requirement_ids:
             return (category, "requirements", tuple(sorted(requirement_ids)))
         if source_ids:
             return (category, "sources", tuple(sorted(source_ids)))
@@ -749,64 +749,41 @@ class MediatorIssuePlanning:
             return "## 最新需求草稿（Markdown，issue 唯一依據）\n" + dm
 
         parts = []
-        scope = artifact.get("scope") or {}
-        if (
-            scope.get("description")
-            or scope.get("in_scope")
-            or scope.get("out_of_scope")
-        ):
-            parts.append(
-                "## 專案範圍\n" + json.dumps(scope, ensure_ascii=False, indent=2)
-            )
-        requirements = requirement_discussion_pool(artifact)
-        if requirements:
-            req_summary = [
-                {"id": r.get("id"), "type": r.get("type", "FR")}
-                for r in requirements
-                if r.get("id")
-            ]
-            parts.append(
-                "## 需求摘要（id 與 type，供判斷 NFR 競合等）\n"
-                + json.dumps(req_summary, ensure_ascii=False, indent=2)
-            )
         conflicts = [
             c
-            for c in all_conflict_rows(artifact)
-            if c.get("id", "") not in skip_source_ids
+            for c in (artifact.get("conflict_report", []) or [])
+            if isinstance(c, dict) and c.get("id", "") not in skip_source_ids
         ]
         if conflicts:
             parts.append(
-                "## Conflict\n" + json.dumps(conflicts, ensure_ascii=False, indent=2)
-            )
-        oqs = [
-            q
-            for q in artifact.get("open_questions", [])
-            if q.get("status") != "answered"
-        ]
-        if oqs:
-            parts.append(
-                "## 未回答的開放問題\n" + json.dumps(oqs, ensure_ascii=False, indent=2)
+                "## 最新衝突報告\n" + json.dumps(conflicts, ensure_ascii=False, indent=2)
             )
         system_models = artifact.get("system_models", [])
-        models = system_models if isinstance(system_models, list) else []
+        models = [
+            {
+                "name": m.get("name"),
+                "type": m.get("type"),
+                "source": m.get("source"),
+                "has_plantuml": bool(m.get("plantuml")),
+                "has_text": bool(m.get("text")),
+            }
+            for m in (system_models if isinstance(system_models, list) else [])
+            if isinstance(m, dict)
+        ]
         if models:
-            refs = []
-            for m in models:
-                refs.extend(m.get("requirement_refs", []))
             parts.append(
-                "## 系統模型已參照需求 id\n"
-                + json.dumps(list(set(refs)), ensure_ascii=False)
+                "## 系統模型\n" + json.dumps(models, ensure_ascii=False, indent=2)
             )
         feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         if feedback:
             parts.append(
-                "## Feedback（Phase 0）\n"
+                "## 領域研究回饋\n"
                 + json.dumps(feedback, ensure_ascii=False, indent=2)
             )
 
         if parts:
             return (
-                "## 專案狀態摘要（無可用需求草稿檔時之後備依據）\n"
+                "## 正式會議輸入摘要（無可用需求草稿檔時之後備依據）\n"
                 + "\n\n".join(parts)
             )
         return ""
@@ -818,10 +795,10 @@ class MediatorIssuePlanning:
         registered: List[str],
     ) -> List[Dict[str, Any]]:
         """
-        將多個 open_question 決策議題合併為單一議題，避免逐題拆散討論。
-        需求：只要有 open_question，就由相關 agent 在同一題集中回覆。
+        將多個 srs_open_question 決策議題合併為單一議題，避免逐題拆散討論。
+        需求：只要有 srs_open_question，就由相關 agent 在同一題集中回覆。
         """
-        open_items = [it for it in items if (it.get("category") or "").strip() == "open_question"]
+        open_items = [it for it in items if (it.get("category") or "").strip() == "srs_open_question"]
         if not open_items:
             return items
 
@@ -863,7 +840,7 @@ class MediatorIssuePlanning:
             if title:
                 titles.append(title)
             if description:
-                descriptions.append(f"- {title or 'open_question'}: {description}")
+                descriptions.append(f"- {title or 'srs_open_question'}: {description}")
             for sid in (it.get("source_ids", []) or []):
                 if not sid or sid in seen_ids:
                     continue
@@ -880,14 +857,14 @@ class MediatorIssuePlanning:
         if descriptions:
             body_parts.append("來源議題：\n" + "\n".join(descriptions))
         if escalated_questions:
-            body_parts.append("待回覆 open_questions：\n" + "\n".join(escalated_questions))
+            body_parts.append("待回覆 SRS 待確認問題：\n" + "\n".join(escalated_questions))
         if not body_parts:
-            body_parts.append("本議題缺少具體 open_questions；請先確認來源 proposal 是否可補齊。")
+            body_parts.append("本議題缺少具體 SRS 待確認問題；請先確認來源 proposal 是否可補齊。")
 
         merged_item = {
             "title": merged_title,
             "description": "\n\n".join(body_parts),
-            "category": "open_question",
+            "category": "srs_open_question",
             "participants": participants,
             "discussion_mode": "simultaneous",
             "speaking_order": participants,
@@ -898,7 +875,7 @@ class MediatorIssuePlanning:
         merged: List[Dict[str, Any]] = []
         inserted = False
         for it in items:
-            if (it.get("category") or "").strip() == "open_question":
+            if (it.get("category") or "").strip() == "srs_open_question":
                 if not inserted:
                     merged.append(merged_item)
                     inserted = True

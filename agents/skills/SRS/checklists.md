@@ -127,7 +127,7 @@ For each functional requirement, verify:
 
 ### Description
 - [ ] Uses "shall" for mandatory requirements
-- [ ] Single requirement per text
+- [ ] Single requirement per statement
 - [ ] Active voice used
 - [ ] No implementation details included
 

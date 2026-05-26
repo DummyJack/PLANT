@@ -45,28 +45,15 @@ class ExpertIssues:
 
     def build_expert_issue_observation(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
-        research = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-        requirements = [
-            row for row in requirement_discussion_pool(artifact) if isinstance(row, dict)
-        ]
-        open_questions = [
-            row for row in (artifact.get("open_questions") or []) if isinstance(row, dict)
-        ]
-        conflicts = [
-            row for row in all_conflict_rows(artifact) if isinstance(row, dict)
-        ]
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
-            "requirements": requirements,
-            "open_questions": open_questions,
-            "conflicts": conflicts,
-            "feedback": research,
-            "recent_discussions": artifact.get("recent_discussions", []),
-            "existing_issue_proposals": artifact.get("issue_proposals", []),
-            "decision_history": artifact.get("decisions", []),
+            "latest_draft": artifact.get("latest_draft", ""),
+            "system_models": artifact.get("system_models", []),
+            "conflict_report": artifact.get("conflict_report", []),
+            "feedback": artifact.get("feedback", {}) if isinstance(artifact.get("feedback"), dict) else {},
         }
 
     def decide_expert_issue_action(
@@ -107,31 +94,26 @@ class ExpertIssues:
         max_items = int(observation.get("max_items") or 2)
         context = {
             "round_num": observation.get("round_num"),
-            "requirements": observation.get("requirements", []),
-            "open_questions": observation.get("open_questions", []),
-            "conflicts": observation.get("conflicts", []),
+            "latest_draft": observation.get("latest_draft", ""),
+            "system_models": observation.get("system_models", []),
+            "conflict_report": observation.get("conflict_report", []),
             "feedback": observation.get("feedback", {}),
-            "recent_discussions": observation.get("recent_discussions", []),
-            "existing_issue_proposals": observation.get("existing_issue_proposals", []),
-            "decision_history": observation.get("decision_history", []),
         }
         prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的 domain / compliance / risk 議題。
+提出本輪需要進入 issue proposal 的 domain / compliance / risk 議題。目標是讓 latest draft 更 SRS-ready。
 
 # 提案邊界
-- 只提出會影響 requirement、constraint、risk 或 evidence basis 的議題。
+- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
+- 只提出最能讓 draft 更 SRS-ready 的外部限制、風險、證據缺口或待確認議題。
 - 可以根據既有 feedback 的 constraints / risks / recommendations / open_items 提案，但必須說明適用範圍與需求影響。
-- feedback 是領域研究輔助資料，不是正式需求；不得直接把 recommendations 升格成 new_requirement，除非明確需要 stakeholder 或 analyst 確認。
-- 可以根據 open_questions 提案，但只有合規、標準、安全、外部義務、領域風險或 evidence gap 會改變需求時才提出。
-- 可以根據 requirements 主動發現問題，例如安全/合規/可用性/可靠性/NFR 沒有可驗證標準，或外部限制沒有證據。
+- feedback 是領域研究輔助資料，不是正式需求；不得直接把 recommendations 升格成 requirement_revision，除非明確需要 stakeholder 或 analyst 確認。
 - 議題必須聚焦 domain / compliance / risk / evidence basis，不提出無外部限制或證據影響的一般需求議題。
-- 不要重複 existing_issue_proposals 或近期已完成決策。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
 # 每筆 issue schema
 - title：issue proposal 的短標籤，供 triage 參考；正式會議標題由 Mediator 另行命名
 - description：說明 domain risk / obligation / evidence gap，以及會影響哪些需求內容
-- category：只能是 open_question、new_requirement、tradeoff、conflict_discussion 其中之一
+- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一
 - participants：從 expert、analyst、modeler、user 挑選，必須包含 expert；若需要 user 確認適用性或風險接受度，加入 user
 - discussion_mode：sequential 或 simultaneous
 - speaking_order：必須與 participants 成員一致
@@ -181,10 +163,10 @@ class ExpertIssues:
             raise ValueError("Expert issue proposal 必須包含 issues list")
 
         allowed_categories = {
-            "conflict_discussion",
-            "open_question",
-            "new_requirement",
-            "tradeoff",
+            "conflict_resolution",
+            "requirement_revision",
+            "srs_open_question",
+            "tradeoff_decision",
         }
         allowed_participants = {"expert", "analyst", "modeler", "user"}
         allowed_modes = {"sequential", "simultaneous"}
@@ -316,20 +298,20 @@ class ExpertIssues:
             skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
         category = (issue.get("category") or "").strip()
         allow_suggested_next_action = (
-            category != "conflict_discussion"
+            category != "conflict_resolution"
             and not issue_id.startswith("ELICIT-")
         )
 
-        if category == "conflict_discussion":
+        if category == "conflict_resolution":
             category_hint = EXPERT_CONFLICT_ISSUE_RULES
-        elif category == "tradeoff":
-            category_hint = """# 本議題特別要求（tradeoff）
+        elif category == "tradeoff_decision":
+            category_hint = """# 本議題特別要求（tradeoff_decision）
     - 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。"""
-        elif category == "open_question":
-            category_hint = """# 本議題特別要求（open_question）
+        elif category == "srs_open_question":
+            category_hint = """# 本議題特別要求（srs_open_question）
     - 優先回答可確認的領域事實、外部限制與證據缺口；只提出會影響限制、風險或證據依據的問題。"""
-        elif category == "new_requirement":
-            category_hint = """# 本議題特別要求（new_requirement）
+        elif category == "requirement_revision":
+            category_hint = """# 本議題特別要求（requirement_revision）
     - 說明此新增需求是否只是候選限制、非功能需求或風險緩解方向，以及是否來自強制義務、最佳實務或證據缺口。"""
         else:
             category_hint = ""
@@ -353,7 +335,7 @@ class ExpertIssues:
         if allow_suggested_next_action:
             next_action_contract = """# suggested_next_action 規範
     - 可提供會後建議；它不會在會議中直接執行。無明確建議可省略或填 null。"""
-        if category == "conflict_discussion":
+        if category == "conflict_resolution":
             contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
             known_pair_ids = [
                 str(pair_id).strip()
@@ -384,7 +366,7 @@ class ExpertIssues:
             else:
                 output_fields = (
                     f"    {text_hint},\n"
-                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "當下最重要、會影響決策的問題"}]'
                     f"{suggested_next_action_json}{pair_reviews_json}"
                 )
 

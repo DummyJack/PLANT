@@ -49,7 +49,7 @@ class ModelerModeling:
             ]
             if meeting_ids:
                 return ",".join(dict.fromkeys(meeting_ids))
-        return "initial_modeling"
+        return "initial"
 
     @staticmethod
     def system_model_rows(artifact: Any) -> list[Dict[str, Any]]:
@@ -205,7 +205,7 @@ class ModelerModeling:
         description_field = ""
         if diagram_type != "use_case_diagram":
             description_rule = """
-    - description 請說明這張圖用來釐清哪一個需求面向，以及圖中實際呈現的關鍵元素或關係。依圖型目的撰寫，例如：Context Diagram 說明系統邊界與外部互動，Activity Diagram 說明流程步驟與分支，Sequence Diagram 說明互動順序，State Machine 說明狀態與轉換，Class Diagram 說明需求層級概念與關係。只能描述圖中已呈現的內容，不得加入新需求；不要寫「未擴張、未臆測、未確認」這類自我辯護或否定句，只正向說明圖中呈現了什麼。"""
+    - description 請說明這張圖用來釐清哪一個需求面向，以及圖中實際呈現的關鍵元素或關係。描述重點必須符合該 UML 圖型本身的用途。只能描述圖中已呈現的內容，不得加入新需求；不要寫「未擴張、未臆測、未確認」這類自我辯護或否定句，只正向說明圖中呈現了什麼。"""
             description_field = ', "description": "此圖釐清的需求面向與圖中已呈現的重點。"'
 
         if diagram_type == "use_case_text":

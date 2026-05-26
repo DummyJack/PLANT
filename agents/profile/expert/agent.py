@@ -96,7 +96,7 @@ class ExpertAgent(
             )
         if "web_search" in self.tools:
             lines.append(
-                "- web_search 只用於補外部法規、標準、官方文件、最佳實務或外部風險依據；不得覆蓋 artifact 內已知事實；呼叫時 max_results 設為 20。"
+                "- web_search 只用於補外部法規、標準、官方文件、最佳實務或外部風險依據；不得覆蓋 artifact 內已知事實。"
             )
         lines.append(
             "- 區分強制義務、最佳實務、風險提醒與 evidence gap；外部研究結果預設只是候選依據。"

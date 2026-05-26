@@ -496,14 +496,15 @@ class ReadFileTool(BaseTool):
         "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .pdf, .docx）。"
         "索引：.md 依 markdown-it-py 標題斷點（失敗則啟發式）、.txt 依啟發式標題／段落；"
         ".json 依頂層結構；.pdf 依頁；.docx 依段落；過長再細切。"
-        "建議流程：action=search_chunks 用 query 檢索相關片段 → 再用 action=read_chunks 帶 chunk_ids 讀全文片段 → 最後由你綜合（Synthesize）。"
-        "只有已知檔名且檔案不大時，才建議用 action=read_full（或省略 action）一次讀整檔。"
+        "必須明確填 action。建議流程：action=search_chunks 用 query 與 top_k 檢索相關片段 → "
+        "再用 action=read_chunks 帶 chunk_ids 讀全文片段 → 最後由你綜合（Synthesize）。"
+        "只有已知檔名且檔案不大時，才用 action=read_full 一次讀整檔。"
     )
     parameters = {
         "action": {
             "type": "string",
-            "description": "read_full | search_chunks | read_chunks；省略則等同 read_full",
-            "required": False,
+            "description": "必填。read_full | search_chunks | read_chunks",
+            "required": True,
         },
         "file_path": {
             "type": "string",
@@ -522,7 +523,7 @@ class ReadFileTool(BaseTool):
         },
         "top_k": {
             "type": "integer",
-            "description": "search_chunks 回傳筆數上限（預設 8）",
+            "description": "search_chunks 必填。回傳筆數上限，必須是大於 0 的整數",
             "required": False,
         },
         "output_format": {
@@ -661,9 +662,10 @@ class ReadFileTool(BaseTool):
         return None
 
     def execute(self, **kwargs) -> str:
-        action = (kwargs.get("action") or "read_full").strip().lower()
-        if action in ("", "read", "read_file"):
-            action = "read_full"
+        raw_action = kwargs.get("action")
+        if not isinstance(raw_action, str) or not raw_action.strip():
+            return "錯誤：read_file 請明確提供 action：read_full、search_chunks 或 read_chunks。"
+        action = raw_action.strip().lower()
 
         if action == "search_chunks":
             return self.execute_search_chunks(kwargs)
@@ -716,7 +718,7 @@ class ReadFileTool(BaseTool):
         if top_k is not None and isinstance(top_k, int) and top_k >= 1:
             k = top_k
         else:
-            k = 8
+            return "錯誤：search_chunks 請提供 top_k，且必須是大於 0 的整數。"
 
         q_tokens = tokenize(query)
         ranked: List[Tuple[float, Dict[str, Any]]] = []

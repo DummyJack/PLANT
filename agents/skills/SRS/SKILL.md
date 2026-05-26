@@ -1,7 +1,7 @@
 ---
 name: srs-documentation
 description: Software Requirements Specification documentation following IEEE 830 standard. Use when generating formal SRS documents or compiling gathered requirements into structured documentation.
-allowed-tools: artifact_query
+allowed-tools: Read, Write, Glob
 ---
 
 # SRS Documentation Skill
@@ -162,7 +162,7 @@ Each requirement should be:
 - Be specific and quantitative
 - Use consistent terminology
 - Write in active voice
-- One requirement per text
+- One requirement per statement
 
 **DON'T:**
 - Use vague terms (fast, user-friendly, flexible)
@@ -241,9 +241,9 @@ CON-TECH-XXX: Technical constraints
 
 ### Requirement Tables
 ```markdown
-| ID | Description | Priority | Source |
-|----|-------------|----------|--------|
-| FR-001 | User login | M | Stakeholder Meeting 2024-01-15 |
+| ID | Description | Priority | Status | Source |
+|----|-------------|----------|--------|--------|
+| FR-001 | User login | M | Approved | Stakeholder Meeting 2024-01-15 |
 ```
 
 ### Cross-References

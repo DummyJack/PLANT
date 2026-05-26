@@ -649,7 +649,7 @@ class AnalystConflicts:
 - 根據 pairwise_conflicts 與 User Requirements，將圍繞同一個決策問題、規則邊界、流程狀態、資料一致性、優先順序或資源限制的衝突聚合成衝突主題。
 - 本步不是重新做兩兩判斷，而是把相關 pairwise conflicts 整理成可供會議討論的 group conflict。
 - 同一個 group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。
-- 每筆 Conflict 必須包含 related_pairs，記錄此 group 來源的 pair id，例如 ["PAIR-3","PAIR-8"]。
+- 每筆 Conflict 必須包含 related_pairs，記錄此 group 來源的 pair id 清單。
 - 若多個 pairwise conflicts 其實是同一個決策主題，請聚合成一筆 Conflict，不要逐 pair 重複輸出。
 - 若沒有可聚合的 pairwise conflict，輸出 {"conflicts": []}。
 - 本步只輸出 label="Conflict" 的項目，不需要輸出 Neutral。

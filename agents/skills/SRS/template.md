@@ -228,6 +228,7 @@ This document is organized as follows:
 | **Description** | {The system shall...} |
 | **Priority** | Must / Should / Could |
 | **Source** | {Stakeholder/Document} |
+| **Status** | Proposed / Approved / Implemented / Verified |
 
 **Inputs:**
 - {Input 1}
@@ -312,9 +313,9 @@ This document is organized as follows:
 
 ## 3.4 Design Constraints
 
-| ID | Constraint |
-|----|------------|
-| CON-001 | {CONSTRAINT} |
+| ID | Constraint | Rationale |
+|----|------------|-----------|
+| CON-001 | {CONSTRAINT} | {RATIONALE} |
 
 ## 3.5 Other Requirements
 

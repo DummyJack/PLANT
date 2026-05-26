@@ -63,7 +63,7 @@ class ModelerIssues:
                         "目前沒有部分候選基礎模型；只有在缺少模型會阻礙需求討論、"
                         "流程理解、系統邊界或追蹤性時才需要提案。"
                     ),
-                    "suggested_category": "open_question",
+                    "suggested_category": "srs_open_question",
                 }
             )
 
@@ -76,13 +76,10 @@ class ModelerIssues:
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 2),
-            "requirements": requirement_discussion_pool(artifact),
-            "current_models": self.system_model_rows(artifact),
-            "model_issue_signals": self.build_model_issue_signals(artifact),
-            "open_questions": artifact.get("open_questions", []),
-            "recent_discussions": artifact.get("recent_discussions", []),
-            "existing_issue_proposals": artifact.get("issue_proposals", []),
-            "decisions": artifact.get("decisions", []),
+            "latest_draft": artifact.get("latest_draft", ""),
+            "system_models": artifact.get("system_models", []),
+            "conflict_report": artifact.get("conflict_report", []),
+            "feedback": artifact.get("feedback", {}),
         }
 
     def decide_modeler_issue_action(
@@ -123,29 +120,24 @@ class ModelerIssues:
         max_items = int(observation.get("max_items") or 2)
         context = {
             "round_num": observation.get("round_num"),
-            "requirements": observation.get("requirements", []),
-            "current_models": observation.get("current_models", []),
-            "model_issue_signals": observation.get("model_issue_signals", []),
-            "open_questions": observation.get("open_questions", []),
-            "recent_discussions": observation.get("recent_discussions", []),
-            "existing_issue_proposals": observation.get("existing_issue_proposals", []),
-            "decisions": observation.get("decisions", []),
+            "latest_draft": observation.get("latest_draft", ""),
+            "system_models": observation.get("system_models", []),
+            "conflict_report": observation.get("conflict_report", []),
+            "feedback": observation.get("feedback", {}),
         }
         prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的需求建模議題。
+提出本輪需要進入 issue proposal 的需求建模議題。目標是讓 latest draft 更 SRS-ready。
 
 # 提案邊界
-- 只提出會影響 system boundary、actor/use case、user workflow、資料輸入/輸出、資料物件、interaction order、state transition 或 model traceability 的議題。
-- 可以使用模型議題候選訊號作為候選，但你必須自行判斷是否真的需要成為 issue proposal；候選基礎圖型不是必產物。
-- 模型議題候選訊號可能包含 baseline_candidate_gap；這些只是弱候選訊號，不代表一定要提案。
-- 若缺少候選圖型但不影響需求理解、流程討論、系統邊界或追蹤性，不要提案。
+- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
+- 只提出最能讓 draft 更 SRS-ready 的模型一致性、系統邊界、actor/use case、流程、資料或狀態缺口。
 - 議題必須聚焦模型影響、流程/資料/狀態缺口或模型追蹤性；不得從模型反推新增需求。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
 # 每筆 issue schema
 - title：issue proposal 的短標籤，供 triage 參考；正式會議標題由 Mediator 另行命名
 - description：說明要釐清的模型缺口、受影響模型元素，以及它如何影響需求理解或追蹤性
-- category：只能是 open_question、tradeoff、conflict_discussion 其中之一；不得從模型反推新增需求
+- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一；不得從模型反推新增需求
 - participants：從 modeler、analyst、expert、user 挑選，必須包含 modeler；需要使用者確認流程/資料/狀態時加入 user
 - discussion_mode：sequential 或 simultaneous
 - speaking_order：必須與 participants 成員一致
@@ -195,9 +187,10 @@ class ModelerIssues:
             raise ValueError("Modeler issue proposal 必須包含 issues list")
 
         allowed_categories = {
-            "conflict_discussion",
-            "open_question",
-            "tradeoff",
+            "conflict_resolution",
+            "requirement_revision",
+            "srs_open_question",
+            "tradeoff_decision",
         }
         allowed_participants = {"analyst", "expert", "modeler", "user"}
         allowed_modes = {"sequential", "simultaneous"}
@@ -327,7 +320,7 @@ class ModelerIssues:
         if skill_context:
             skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
         allow_suggested_next_action = (
-            (issue.get("category") or "").strip() != "conflict_discussion"
+            (issue.get("category") or "").strip() != "conflict_resolution"
             and not issue_id.startswith("ELICIT-")
         )
 
@@ -336,7 +329,7 @@ class ModelerIssues:
         rules_block = MODELER_ISSUE_RULES
         if allow_suggested_next_action:
             rules_block += "\n- 若你認為本議題討論結束後應由外層流程安排下一步，可額外提供 suggested_next_action；這只是建議，不會在會議中直接執行。"
-        if (issue.get("category") or "").strip() == "conflict_discussion":
+        if (issue.get("category") or "").strip() == "conflict_resolution":
             contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
             known_pair_ids = [
                 str(pair_id).strip()
@@ -375,7 +368,7 @@ class ModelerIssues:
         "target_ids": ["可選，相關 requirement/conflict/issue id"],
         "urgency": "low | medium | high"
     }"""
-        if (issue.get("category") or "").strip() == "conflict_discussion":
+        if (issue.get("category") or "").strip() == "conflict_resolution":
             pair_reviews_json = ""
             text_hint = conflict_review_text_hint()
             output_fields = f"    {text_hint}"
@@ -389,7 +382,7 @@ class ModelerIssues:
             else:
                 output_fields = (
                     f"    {text_hint},\n"
-                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "當下最重要、會影響決策的問題"}]'
                     f"{suggested_next_action_json}{pair_reviews_json}"
                 )
         return f"""{issue_text}

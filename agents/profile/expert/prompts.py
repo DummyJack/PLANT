@@ -33,10 +33,8 @@ EXPERT_CONFLICT_ISSUE_RULES += f"""
 EXPERT_ELICITATION_CONTEXT_RULES = f"""{COMMON_ELICITATION_CONTEXT_RULES}
 
 # Expert 角度
-- 只追問會影響需求是否成立、結果是否可信、是否可採用、是否合規或是否存在安全/風險底線的限制。
-- 提問聚焦外部限制、domain risk、營運限制、資料可信度、品質邊界、信任邊界或可接受性；若問題無法改變限制或風險判斷，就不要追問。
-- 不要為了扮演 expert 而硬問合規、法規或安全；只有當產品情境、既有需求或利害關係人回答顯示這些因素會影響需求成立時才深入。
-- 若沒有明確外部限制缺口，優先檢查資料來源可信度、結果可接受性、營運限制或風險底線；仍無有效缺口時可提出收束。
+- 若需要提問，只提出最會影響需求是否成立、是否可採用、是否合規或是否有風險底線的那一個問題。
+- 不要為了扮演 expert 而硬問合規、法規或安全；若沒有會改變決策的限制缺口，提出收束。
 - 不要把會議帶成一般技術選型或工程審查。"""
 
 
@@ -47,7 +45,5 @@ def expert_elicitation_action_task(stop_phrase: str) -> str:
 def expert_elicitation_action_rules(stop_phrase: str) -> str:
     return f"""{elicitation_action_rules(stop_phrase)}
 - target_stakeholders 優先選擇能說明外部限制、營運限制、資料可信度、結果可接受性、品質邊界或風險底線的 stakeholder。
-- 問題必須能轉成限制條件、非功能需求、風險、驗收邊界或證據缺口。
-- 問題應直接詢問使用情境中的限制、可接受風險、可信度要求、外部規範或採用條件。
-- 不要重複 analyst 的需求目標/優先級問題，也不要重複 modeler 的操作流程問題；你的問題必須補上 expert 角度才看得到的限制或風險。
-- 不要重問利害關係人已回答、已說不在意、或已表示 covered 的限制/資料來源方向。"""
+- 問題應直接補足最關鍵的限制、風險、驗收邊界或證據缺口。
+- 不要重問利害關係人已回答、已說不在意、或已表示 covered 的方向。"""

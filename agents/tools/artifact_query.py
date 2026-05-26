@@ -25,21 +25,29 @@ def conflict_req_values(item: Dict[str, Any]) -> List[str]:
 
 class ArtifactQueryTool(BaseTool):
     name = "artifact_query"
-    description = "查詢目前專案 artifact 中的需求、衝突、決議、議題、模型與研究資料。唯讀，不修改 artifact。"
+    description = (
+        "查詢目前專案 artifact 中的需求、衝突、決議、議題、模型與研究資料。唯讀，不修改 artifact。\n"
+        "用法：\n"
+        "- summarize：只回摘要，可只填 mode；若要摘要單一區塊，再填 section。\n"
+        "- get_section：必填 section。若該 section 是列表，必填 limit 與 compact；若是單一區塊，例如 conflict，不需要 limit/compact。\n"
+        "- find_items：必填 section、非空 filters、limit、compact。沒有查詢條件時不要用 find_items，改用 get_section。\n"
+        "- related_context：必填 item_id 與 compact。\n"
+        "建議：一般查詢使用 compact=true；只有需要完整欄位時才用 compact=false。\n"
+    )
     parameters = {
         "mode": {
             "type": "string",
-            "description": "查詢模式：get_section / find_items / related_context / summarize",
+            "description": "查詢模式：get_section / find_items / related_context / summarize。查列表用 get_section，條件搜尋用 find_items，查關聯脈絡用 related_context，只看數量用 summarize。",
             "required": True,
         },
         "section": {
             "type": "string",
-            "description": "artifact 區塊名稱，例如 requirements/conflict/conflict_report/conflict_pairs/conflict_multiple/decisions/open_questions",
+            "description": "artifact 區塊名稱，例如 requirements/conflict/conflict_report/conflict_pairs/conflict_multiple/decisions/open_questions。get_section/find_items 必填；summarize 可選。",
             "required": False,
         },
         "filters": {
             "type": "object",
-            "description": "條件過濾，例如 id/status/label/type/requirement_id/conflict_id/keyword",
+            "description": "find_items 必填。條件過濾，例如 id/status/label/type/requirement_id/conflict_id/keyword",
             "required": False,
         },
         "item_id": {
@@ -50,17 +58,17 @@ class ArtifactQueryTool(BaseTool):
         "fields": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "只保留指定欄位",
+            "description": "選填。只保留指定欄位；不確定需要哪些欄位時可省略。",
             "required": False,
         },
         "limit": {
             "type": "integer",
-            "description": "最多回傳幾筆",
+            "description": "回傳列表時必填。最多回傳幾筆",
             "required": False,
         },
         "compact": {
             "type": "boolean",
-            "description": "是否回傳精簡欄位",
+            "description": "回傳列表或 related_context 時必填。是否回傳精簡欄位",
             "required": False,
         },
     }
@@ -90,22 +98,22 @@ class ArtifactQueryTool(BaseTool):
                 section=str(kwargs.get("section") or "").strip(),
                 fields=kwargs.get("fields"),
                 limit=kwargs.get("limit"),
-                compact=bool(kwargs.get("compact", False)),
+                compact=kwargs.get("compact"),
             )
         elif mode == "find_items":
             result = self.find_items(
                 artifact,
                 section=str(kwargs.get("section") or "").strip(),
-                filters=kwargs.get("filters") or {},
+                filters=kwargs.get("filters"),
                 fields=kwargs.get("fields"),
                 limit=kwargs.get("limit"),
-                compact=bool(kwargs.get("compact", False)),
+                compact=kwargs.get("compact"),
             )
         elif mode == "related_context":
             result = self.related_context(
                 artifact,
                 item_id=str(kwargs.get("item_id") or "").strip(),
-                compact=bool(kwargs.get("compact", False)),
+                compact=kwargs.get("compact"),
             )
         else:
             result = self.summarize(
@@ -138,11 +146,16 @@ class ArtifactQueryTool(BaseTool):
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
-    def limit_value(self, limit: Any) -> int:
+    def parse_limit(self, limit: Any) -> Optional[int]:
         try:
             return max(1, int(limit))
         except (TypeError, ValueError):
-            return 20
+            return None
+
+    def parse_compact(self, compact: Any) -> Optional[bool]:
+        if isinstance(compact, bool):
+            return compact
+        return None
 
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
@@ -204,10 +217,9 @@ class ArtifactQueryTool(BaseTool):
         return True
 
     def post_process(
-        self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, limit: Any
+        self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, max_n: int
     ) -> List[Dict[str, Any]]:
         out = []
-        max_n = self.limit_value(limit)
         for item in items[:max_n]:
             row = self.compact_item(section, item) if compact else dict(item)
             row = self.select_fields(row, fields)
@@ -229,7 +241,13 @@ class ArtifactQueryTool(BaseTool):
                 "summary": "conflict 為單一區塊",
             }
         if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
-            items = self.post_process(section, self.as_list(artifact, section), fields, compact, limit)
+            max_n = self.parse_limit(limit)
+            compact_value = self.parse_compact(compact)
+            if max_n is None:
+                return {"ok": False, "error": "get_section 回傳列表時需要 limit，且必須是大於 0 的整數"}
+            if compact_value is None:
+                return {"ok": False, "error": "get_section 回傳列表時需要 compact，且必須是 boolean"}
+            items = self.post_process(section, self.as_list(artifact, section), fields, compact_value, max_n)
             return {
                 "ok": True,
                 "mode": "get_section",
@@ -240,7 +258,13 @@ class ArtifactQueryTool(BaseTool):
             }
         raw = artifact.get(section)
         if isinstance(raw, list):
-            items = self.post_process(section, raw, fields, compact, limit)
+            max_n = self.parse_limit(limit)
+            compact_value = self.parse_compact(compact)
+            if max_n is None:
+                return {"ok": False, "error": "get_section 回傳列表時需要 limit，且必須是大於 0 的整數"}
+            if compact_value is None:
+                return {"ok": False, "error": "get_section 回傳列表時需要 compact，且必須是 boolean"}
+            items = self.post_process(section, raw, fields, compact_value, max_n)
             return {
                 "ok": True,
                 "mode": "get_section",
@@ -258,12 +282,20 @@ class ArtifactQueryTool(BaseTool):
         }
 
     def find_items(
-        self, artifact: Dict[str, Any], *, section: str, filters: Dict[str, Any], fields: Any, limit: Any, compact: bool
+        self, artifact: Dict[str, Any], *, section: str, filters: Any, fields: Any, limit: Any, compact: Any
     ) -> Dict[str, Any]:
         if not section:
             return {"ok": False, "error": "find_items 需要 section"}
+        if not isinstance(filters, dict) or not filters:
+            return {"ok": False, "error": "find_items 需要非空 filters"}
+        max_n = self.parse_limit(limit)
+        compact_value = self.parse_compact(compact)
+        if max_n is None:
+            return {"ok": False, "error": "find_items 需要 limit，且必須是大於 0 的整數"}
+        if compact_value is None:
+            return {"ok": False, "error": "find_items 需要 compact，且必須是 boolean"}
         rows = [it for it in self.as_list(artifact, section) if self.match_filters(it, filters)]
-        items = self.post_process(section, rows, fields, compact, limit)
+        items = self.post_process(section, rows, fields, compact_value, max_n)
         return {
             "ok": True,
             "mode": "find_items",
@@ -273,9 +305,12 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 符合條件 {len(items)} 筆",
         }
 
-    def related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: bool) -> Dict[str, Any]:
+    def related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: Any) -> Dict[str, Any]:
         if not item_id:
             return {"ok": False, "error": "related_context 需要 item_id"}
+        compact_value = self.parse_compact(compact)
+        if compact_value is None:
+            return {"ok": False, "error": "related_context 需要 compact，且必須是 boolean"}
         req = next((r for r in self.as_list(artifact, "requirements") if r.get("id") == item_id), None)
         conflict_rows = self.as_list(artifact, "conflict_pairs") + self.as_list(artifact, "conflict_multiple")
         conflict = next((c for c in conflict_rows if c.get("id") == item_id), None)
@@ -326,7 +361,7 @@ class ArtifactQueryTool(BaseTool):
                 if r.get("id") in rel_ids or str(r.get("text") or "").strip() in rel_values
             ]
 
-        if compact:
+        if compact_value:
             target = self.compact_item(target_section, target) if target_section else dict(target)
             if isinstance(req, dict):
                 req = self.compact_item("requirements", req)

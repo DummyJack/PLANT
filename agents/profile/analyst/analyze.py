@@ -51,26 +51,6 @@ def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
-    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-    clean: Dict[str, Any] = {}
-    for key in ("findings", "constraints", "risks", "recommendations", "open_items"):
-        rows = [
-            row for row in feedback.get(key, []) or []
-            if isinstance(row, dict) and str(row.get("text") or "").strip()
-        ]
-        if rows:
-            clean[key] = rows
-    sources = [
-        str(row or "").strip()
-        for row in feedback.get("sources", []) or []
-        if str(row or "").strip()
-    ]
-    if sources:
-        clean["sources"] = sources
-    return clean
-
-
 def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for question in artifact.get("open_questions", []) or []:
@@ -463,7 +443,6 @@ class AnalystRequirements:
             "user_requirements": user_requirements,
             "conflict_report": (conflict_report_md or "").strip(),
             "meeting_record": (meeting_record_md or "").strip(),
-            "feedback": draft_feedback(artifact),
             "open_questions": draft_open_questions(artifact),
             "system_models": draft_system_models(artifact, artifact_dir=artifact_dir),
             "version": draft_version if draft_version is not None else 0,
@@ -505,7 +484,7 @@ class AnalystRequirements:
 - 補回缺少的 URL-*：{missing_ids}
 - 每個 URL-* 必須出現在「使用者需求」表。
 - 不得新增輸入資料以外的 URL-*。
-- 不得把 feedback、open_questions、system_models、conflict_report 或 meeting_record 直接轉成 User Requirements。
+- 不得把 open_questions、system_models、conflict_report 或 meeting_record 直接轉成 User Requirements。
 
 原始草稿：
 {md}
@@ -548,7 +527,7 @@ class AnalystRequirements:
 7. 可整理 wording，但不得改變需求實質內容，也不得把未定案內容寫成已確認。
 8. 每筆需求只保留 id、text、priority、stakeholder、source；若原本有 source_ref 必須保留。
 9. stakeholder 必須保留為 {"name":"...","type":"..."}，不得改成字串，不得輸出 stakeholder.text。
-10. source 只表示來源階段，例如 initial 或 elicitation_r1；不得改成原話。
+10. source 只表示來源階段代碼；不得改成原話。
 
 只輸出一個 JSON 物件：{"requirements":[...]}。"""
         try:
@@ -609,7 +588,7 @@ class AnalystRequirements:
 5. 每筆正式需求都要有 id，格式為 REQ-1、REQ-2、REQ-3；不要使用 URL-*。
 6. 每筆需求只輸出 text、priority、stakeholder、source；若候選需求有 source_ref 且仍可追溯，請保留 source_ref。
 7. stakeholder 必須保留為 {"name":"...","type":"..."}，name 是利害關係人名稱，type 是 stakeholder 類型；不得輸出 stakeholder.text。
-8. source 只表示來源階段，例如 initial 或 elicitation_r1；不得改成原話。
+8. source 只表示來源階段代碼；不得改成原話。
 9. priority 只能是 must、should 或 could；不收錄的項目不要輸出。
 
 只輸出一個 JSON 物件：{"requirements":[...]}。勿輸出 Markdown。"""

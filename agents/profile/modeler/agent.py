@@ -206,7 +206,7 @@ class ModelerAgent(
     - models_to_create：需新建的 model type 列表
     - use_case_text 由流程在 use_case_diagram 後自動產生；不要單獨把 use_case_text 放入 models_to_update 或 models_to_create。
     - 若既有模型已存在，這是帶有修訂脈絡的模型迭代；只標記受 model_revision_context 或 requirements 影響的圖表。
-    - current_models.source 表示既有模型來源，例如 initial_modeling 或 R1-M1；只用於追蹤來源，不可改寫成新需求。
+    - current_models.source 表示既有模型來源代碼；只用於追蹤來源，不可改寫成新需求。
     - 未受影響的既有圖表不得列入 models_to_update。
     - feedback 只作為背景限制、風險、來源與未決事項參考；不得轉成新的 actor、use case、class、state 或流程步驟。
     - 未決、建議或研究性內容不可畫成已確認模型元素；只能影響模型邊界、限制註記或缺口說明。

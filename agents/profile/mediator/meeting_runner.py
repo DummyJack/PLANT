@@ -87,6 +87,13 @@ class MeetingRunner:
         self.all_open_questions: List[Dict] = []
         self.issue_idx = 0
 
+    def latest_draft_markdown(self) -> Optional[str]:
+        latest_draft = self.artifact.get("latest_draft") if isinstance(self.artifact, dict) else {}
+        if isinstance(latest_draft, str) and latest_draft.strip():
+            return latest_draft.strip()
+        latest_version = self.store.get_draft_version()
+        return self.store.load_draft(latest_version) if latest_version >= 0 else None
+
     def issue_open_questions(self, issue_id: str) -> List[Dict]:
         return [q for q in self.all_open_questions if q.get("issue_id") == issue_id]
 
@@ -401,7 +408,7 @@ class MeetingRunner:
                     }
                 )
             options = {"best_options": best_options, "compromise": {}}
-        if issue.get("category") in ("conflict_discussion",) and self.registry:
+        if issue.get("category") in ("conflict_resolution",) and self.registry:
             analyst = self.registry.get("analyst")
             if analyst and hasattr(analyst, "get_resolution_options_for_issue"):
                 options = options or analyst.get_resolution_options_for_issue(issue, self.artifact)
@@ -704,8 +711,7 @@ class MeetingRunner:
                     for sid in td.get("source_ids", []):
                         skip.add(sid)
             max_items = self.config.get("issue_items", 5)
-            latest_version = self.store.get_draft_version()
-            draft_md = self.store.load_draft(latest_version) if latest_version >= 0 else None
+            draft_md = self.latest_draft_markdown()
             self.issues = self.mediator.generate_decision_issues(
                 self.artifact,
                 registry=self.registry,
@@ -758,8 +764,7 @@ class MeetingRunner:
                 for sid in rd.get("source_ids", []):
                     skip.add(sid)
             max_items = issue_limit - len(self.issues)
-            latest_version = self.store.get_draft_version()
-            draft_md = self.store.load_draft(latest_version) if latest_version >= 0 else None
+            draft_md = self.latest_draft_markdown()
             new_items = self.mediator.generate_decision_issues(
                 self.artifact,
                 registry=self.registry,

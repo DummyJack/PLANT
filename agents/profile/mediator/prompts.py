@@ -6,23 +6,23 @@ from agents.profile.scenario import scenario_prompt_value
 
 
 DECISION_ISSUE_DISCUSSION_MODE_GUIDE = """# 討論模式（discussion_mode）情境說明
-- **sequential（逐一發言）**：適合需要「依序陳述並回應前一位」的議題。例如：衝突再審查、決策取捨、開放問題釐清、需求取捨（NFR 競合）。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
-- **simultaneous（同時發言）**：適合「先各自表態、再比較差異」的議題。例如：腦力激盪、多方案並列、各自提出對某議題的立場或建議，不需即時回應前一位。每人只看到議題與專案狀態，不看同輪其他人的發言。
+- **sequential（逐一發言）**：適合需要依序表態、回應前一位發言並逐步收斂的議題。後發言者會看到前面所有人的發言，可針對性回應，討論感較強。
+- **simultaneous（同時發言）**：適合需要先獨立提出觀點，再比較差異的議題，不需即時回應前一位。每人只看到議題與專案狀態，不看同輪其他人的發言。
 請依議題性質選擇其一。"""
 
 
 DECISION_ISSUE_TITLE_RULES = """# 標題與描述撰寫要求（重要）
-- **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，例如寫出涉及的對象、需求或 Conflict 重點，勿只寫類型名稱（如勿只寫「Conflict 討論」「需求取捨」）。
+- **title（標題）**：一句話、具體、讓人一眼知道「要討論什麼」。要與本專案內容掛鉤，指出涉及的對象、需求或 Conflict 重點，勿只寫類型名稱。
 - **description（描述）**：簡短說明「為什麼要開這個議題、要解決什麼」。可提及相關需求 id 或 Conflict id，並用一兩句話說明討論重點。
-- 範例：標題可為「CF-01 付款失敗處理與退款責任協調」而非「Conflict 討論」；描述可為「請協調相關需求的實作邊界、責任分工與可驗收決策」。"""
+- 標題與描述都應直接服務於後續討論收斂，不要加入未在 artifact 中出現的新事實。"""
 
 
 DECISION_ISSUE_CATEGORY_RULES = """# 決策議題類型與開題
-- **conflict_discussion**：當有 label 為 Conflict 且需要協調可執行解法時，應考慮開此類議題。Neutral label 再審查不進一般正式會議。
-- **open_question**：當草稿（或摘要）中有待處理開放問題（含需求描述模糊、邊界待確認）時，可開此類。
-- **open_question**：若同輪有多個 open_question，執行層會自動合併為單一「集中回覆」議題，讓相關 agent 一次回答；因此可先正常產生 open_question，無需刻意拆得很細。
-- **new_requirement**：當草稿（或摘要）中出現「提出新功能、新限制、新例外情境、新需求」時，**應考慮開此類**，勿忽略；此外，若有跡象顯示既有需求需要修正（例如描述不準確、優先順序變動、邊界條件改變），也可用此類議題讓 User 檢視並調整既有需求。
-- **tradeoff**：當需求摘要中有多個非功能需求，或 Conflict 涉及效能、可用性、成本等非功能面向之間的競合取捨時，**應考慮開此類**。
+- **conflict_resolution**：latest conflict report 中仍有會阻礙 SRS 定稿的 Conflict，且需要形成可寫入草稿或決策紀錄的解法時使用。
+- **requirement_revision**：latest draft 中既有需求語意、邊界、責任、優先級或可驗證性不足，需要修正既有需求時使用；不得用來新增未被輸入支持的新需求。
+- **srs_open_question**：latest draft、system models、conflict report 或 feedback 顯示仍有阻礙 SRS 生成的未決問題，需要正式會議確認時使用。
+- **srs_open_question**：若同輪有多個 SRS 待確認問題，執行層會自動合併為單一集中回覆議題，讓相關 agent 一次回答。
+- **tradeoff_decision**：多個需求、限制、品質目標或外部限制無法同時完全滿足，需要決定可接受折衷並讓 SRS 能明確描述時使用。
 - 其餘依專案狀態與優先順序判斷，無強制對應。"""
 
 
@@ -51,8 +51,9 @@ def decision_issues_prompt(
     limit: int,
 ) -> str:
     return f"""# 任務
-    你是需求調解主持人。請根據下方「決策議題排程依據」與「已討論過項目」，自行判斷本輪應處理哪些決策議題。
-    若有提供**最新需求草稿**，該草稿為**唯一依據**（含其中的需求表、Conflict、開放問題等章節——開放問題應已寫在草稿內）；請依草稿內文與 id 撰寫 issue 標題與描述。若僅有專案摘要（無草稿檔），則依該摘要判斷。
+    你是需求正式會議主持人。本輪 issue proposal 的明確目標是：找出最值得討論、且能讓 latest draft 更 SRS-ready 的決策議題。
+    SRS-ready 指草稿足以讓後續 Documentor 轉成正式 SRS：需求清楚、邊界明確、衝突可決議、模型與需求一致、外部限制不會被誤寫成未確認需求。
+    若有提供**最新需求草稿**，該草稿是主要依據；system_models、latest conflict_report 與 feedback 只能用來判斷草稿是否需要修正、補決策或標示待確認。請依這些輸入撰寫 issue 標題與描述。
     決策議題類型必須從下方「決策議題類型定義」中選擇，每個決策議題需決定：標題、描述、類型、參與者、討論模式、發言順序。
 
     # 決策議題類型定義（category 必須為以下 id 之一）
@@ -75,6 +76,9 @@ def decision_issues_prompt(
 
     # 約束
     - 最多排入 {limit} 個決策議題。請依你判斷的優先順序排列。
+    - 優先選擇會阻礙 SRS 生成品質的議題：需求語意不清、範圍或責任邊界不明、Conflict 尚未形成可落地決策、系統模型與草稿不一致、feedback 指出但草稿尚未正確吸收或標示待確認的限制。
+    - 不要為了補齊文件而新增輸入沒有支持的新需求；若需要確認，只開待確認或決策議題。
+    - 不要討論純排版、措辭美化或不影響 SRS-ready 的小問題。
     - 若無需討論的議題，請回傳空陣列
     - category 只能是上述類型定義中的 id
     - discussion_mode 依上表情境選擇 "sequential" 或 "simultaneous"

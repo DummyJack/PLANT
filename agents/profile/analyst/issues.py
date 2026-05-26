@@ -88,7 +88,7 @@ class AnalystIssues:
                         "kind": "unresolved_conflict",
                         "source_ids": [cid] + list(c.get("requirement_ids", []) or []),
                         "summary": str(c.get("description") or "").strip(),
-                        "suggested_category": "conflict_discussion",
+                        "suggested_category": "conflict_resolution",
                     }
                 )
 
@@ -99,12 +99,12 @@ class AnalystIssues:
             if question:
                 signals.append(
                     {
-                        "kind": "unanswered_open_question",
+                        "kind": "unanswered_srs_open_question",
                         "source_ids": [
                             str(oq.get("source_conflict_id") or "").strip()
                         ] if str(oq.get("source_conflict_id") or "").strip() else [],
                         "summary": question,
-                        "suggested_category": "open_question",
+                        "suggested_category": "srs_open_question",
                     }
                 )
 
@@ -128,7 +128,7 @@ class AnalystIssues:
                         "source_ids": [rid],
                         "summary": text,
                         "issues": issues,
-                        "suggested_category": "open_question",
+                        "suggested_category": "requirement_revision",
                     }
                 )
 
@@ -149,7 +149,7 @@ class AnalystIssues:
                             f"change_type={rc.get('change_type') or 'unknown'}, "
                             f"field={rc.get('field') or 'requirement'}, status={status}"
                         ),
-                        "suggested_category": "new_requirement",
+                        "suggested_category": "requirement_revision",
                     }
                 )
         return signals
@@ -161,15 +161,10 @@ class AnalystIssues:
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 3),
-            "scope": artifact.get("scope", {}),
-            "requirements": requirement_discussion_pool(artifact),
-            "open_questions": artifact.get("open_questions", []),
-            "conflicts": all_conflict_rows(artifact),
-            "change_record": artifact.get("change_record", []),
-            "recent_discussions": artifact.get("recent_discussions", []),
-            "existing_issue_proposals": artifact.get("issue_proposals", []),
-            "decisions": artifact.get("decisions", []),
-            "requirement_issue_signals": self.build_requirement_issue_signals(artifact),
+            "latest_draft": artifact.get("latest_draft", ""),
+            "system_models": artifact.get("system_models", []),
+            "conflict_report": artifact.get("conflict_report", []),
+            "feedback": artifact.get("feedback", {}),
         }
 
     def decide_analyst_issue_action(
@@ -210,32 +205,26 @@ class AnalystIssues:
         max_items = int(observation.get("max_items") or 3)
         context = {
             "round_num": observation.get("round_num"),
-            "scope": observation.get("scope", {}),
-            "requirements": observation.get("requirements", []),
-            "open_questions": observation.get("open_questions", []),
-            "conflicts": observation.get("conflicts", []),
-            "change_record": observation.get("change_record", []),
-            "requirement_issue_signals": observation.get("requirement_issue_signals", []),
-            "recent_discussions": observation.get("recent_discussions", []),
-            "existing_issue_proposals": observation.get("existing_issue_proposals", []),
-            "decisions": observation.get("decisions", []),
+            "latest_draft": observation.get("latest_draft", ""),
+            "system_models": observation.get("system_models", []),
+            "conflict_report": observation.get("conflict_report", []),
+            "feedback": observation.get("feedback", {}),
         }
         prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的需求工程議題。
+提出本輪需要進入 issue proposal 的需求工程議題。目標是讓 latest draft 更 SRS-ready。
 
 # 提案邊界
-- 只提出會影響需求品質、需求範圍、驗收條件、來源追蹤、未決問題收斂或需求變更的議題。
-- 可以使用需求議題候選訊號作為候選，但你必須自行判斷是否真的需要成為 issue proposal，可合併相似議題。
-- 可以提出 conflict_discussion，但焦點必須是需求語意、範圍、條件、互斥點或可驗證性；外部依據不足時列為風險或待確認事項。
+- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
+- 只提出最能讓 draft 更 SRS-ready 的議題：需求語意、範圍、驗收條件、來源追蹤、衝突決議或需求修訂。
+- 可以提出 conflict_resolution，但焦點必須是需求語意、範圍、條件、互斥點或可驗證性；外部依據不足時列為待確認事項。
 - 議題必須聚焦需求品質、可驗證性、來源追蹤或需求收斂，不提出缺乏需求影響的一般討論。
 - 不要替 user 發明新的偏好或需求。
-- 不要重複 existing_issue_proposals 或近期已完成 decisions。
 - 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
 
 # 每筆 issue schema
 - title：短標題
 - description：說明要解決的需求品質或收斂問題，以及會影響哪些 requirement 欄位
-- category：只能是 open_question、new_requirement、tradeoff、conflict_discussion 其中之一
+- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一
 - participants：從 analyst、expert、modeler、user 挑選，必須包含 analyst；需要使用者回答時加入 user
 - discussion_mode：sequential 或 simultaneous
 - speaking_order：必須與 participants 成員一致
@@ -285,10 +274,10 @@ class AnalystIssues:
             raise ValueError("Analyst issue proposal 必須包含 issues list")
 
         allowed_categories = {
-            "conflict_discussion",
-            "open_question",
-            "new_requirement",
-            "tradeoff",
+            "conflict_resolution",
+            "requirement_revision",
+            "srs_open_question",
+            "tradeoff_decision",
         }
         allowed_participants = {"analyst", "expert", "modeler", "user"}
         allowed_modes = {"sequential", "simultaneous"}
@@ -390,7 +379,7 @@ class AnalystIssues:
         self, issue: Dict, artifact: Dict[str, Any]
     ) -> Optional[Dict]:
         """議題為 Conflict 協調時，整理需求層級處理選項；Analyst 不裁決商業方案。"""
-        if issue.get("category") not in ("conflict_discussion",):
+        if issue.get("category") not in ("conflict_resolution",):
             return None
         if "conflict-analyzer" not in self.skill_names:
             return None
@@ -481,7 +470,7 @@ class AnalystIssues:
         if skill_context:
             skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
         allow_suggested_next_action = (
-            issue.get("category") != "conflict_discussion"
+            issue.get("category") != "conflict_resolution"
             and not issue_id.startswith("ELICIT-")
         )
 
@@ -490,7 +479,7 @@ class AnalystIssues:
         rules_block = ANALYST_ISSUE_RULES
         if allow_suggested_next_action:
             rules_block += "\n- 若此議題暴露需求缺口，可額外提供 suggested_next_action；它只能是需求工程後續處理建議，例如 direct_clarification 或 new_issue，不代表會議已決策。"
-        if issue.get("category") == "conflict_discussion":
+        if issue.get("category") == "conflict_resolution":
             contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
             known_pair_ids = [
                 str(pair_id).strip()
@@ -527,7 +516,7 @@ class AnalystIssues:
         "target_ids": ["可選，相關 requirement/conflict/issue id"],
         "urgency": "low | medium | high"
     }"""
-        if issue.get("category") == "conflict_discussion":
+        if issue.get("category") == "conflict_resolution":
             text_hint = conflict_review_text_hint()
             output_fields = f"    {text_hint}"
         else:
@@ -541,7 +530,7 @@ class AnalystIssues:
             else:
                 output_fields = (
                     f"    {text_hint},\n"
-                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "問題"}]'
+                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "當下最重要、會影響決策的問題"}]'
                     f"{suggested_next_action_json}"
                 )
         return f"""{issue_text}
