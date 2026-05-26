@@ -10,8 +10,8 @@
   },
   "agent_models": {
     "default": {
-      "provider": "openai",
-      "model": "gpt-4.1",
+      "provider": "local",
+      "model": "gemma4:latest",
       "temperature": 0
     }
   }

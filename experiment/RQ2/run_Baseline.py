@@ -212,13 +212,67 @@ def build_baseline_cost_payload(model: BaselineModel) -> dict:
     return dict(model.cost_tracker.export_summary_dict())
 
 
-# 載入資料集；limit > 0 時只取前 N 筆。
-def load_cn_pairs(csv_path: Path, limit: int) -> list[dict]:
+# 載入資料集；可依 types 過濾，limit > 0 時只取前 N 筆。
+def load_cn_pairs(
+    csv_path: Path,
+    limit: int,
+    *,
+    scenarios: Optional[list[str]] = None,
+) -> list[dict]:
     with csv_path.open(encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
+    selected = [str(s).strip() for s in (scenarios or []) if str(s).strip()]
+    if selected:
+        selected_set = set(selected)
+        rows = [
+            row for row in rows
+            if (str(row.get("types") or "Unknown").strip() or "Unknown") in selected_set
+        ]
     if limit > 0:
         return rows[:limit]
     return rows
+
+
+def choose_scenarios(csv_path: Path) -> Optional[list[str]]:
+    try:
+        rows = load_cn_pairs(csv_path, 0)
+    except OSError as e:
+        print(f"錯誤：無法載入資料檔以列出情境：{e}")
+        sys.exit(1)
+
+    scenario_counts: dict[str, int] = {}
+    for row in rows:
+        scenario = str(row.get("types") or "Unknown").strip() or "Unknown"
+        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+
+    if not scenario_counts:
+        print("錯誤：資料集中沒有可執行的情境")
+        sys.exit(1)
+
+    scenarios = list(scenario_counts.keys())
+    print("可選情境：")
+    for idx, scenario in enumerate(scenarios, 1):
+        print(f"  {idx}. {scenario}（{scenario_counts[scenario]} 筆）")
+
+    raw_scenario = input("請選擇要執行的情境（Enter: 全部，可輸入 1,3,5）：").strip()
+    if not raw_scenario:
+        return None
+    tokens = [token.strip() for token in raw_scenario.split(",") if token.strip()]
+    if not tokens or any(not token.isdigit() for token in tokens):
+        print("錯誤：請輸入情境編號；多個情境請使用 1,3,5 格式")
+        sys.exit(1)
+    selected: list[str] = []
+    seen: set[int] = set()
+    for token in tokens:
+        selected_idx = int(token)
+        if selected_idx < 1 or selected_idx > len(scenarios):
+            print("錯誤：情境編號超出範圍")
+            sys.exit(1)
+        if selected_idx in seen:
+            continue
+        seen.add(selected_idx)
+        selected.append(scenarios[selected_idx - 1])
+    return selected
 
 
 # 單筆資料推論，回傳索引、預測與紀錄。
@@ -276,10 +330,11 @@ def run_conflict(
     count: int = 0,
     *,
     paths: dict[str, Path],
+    scenarios: Optional[list[str]] = None,
 ) -> dict:
     # 執行一次完整衝突辨識並輸出 result/record/cost。
     csv_path = RQ2_DIR / CN_PAIRS_CSV
-    data = load_cn_pairs(csv_path, count)
+    data = load_cn_pairs(csv_path, count, scenarios=scenarios)
     total = len(data)
     if total == 0:
         print(f"錯誤：沒有資料可跑（檢查 {CN_PAIRS_CSV} 或 count）")
@@ -321,6 +376,7 @@ def run_conflict(
     result = {
         "model": str(model.model_name),
         "total": total,
+        "scenarios": scenarios or [],
         "count": {
             "conflict": n_conflict,
             "neutral": n_neutral,
@@ -344,19 +400,9 @@ def run_conflict(
 
 if __name__ == "__main__":
     print(f"Baseline provider={BASELINE_PROVIDER} model={BASELINE_MODEL}")
-
-    raw_count = input("請輸入要執行的任務數量（Enter: 全做）：").strip()
-    if not raw_count:
-        count = 0
-    else:
-        try:
-            count = int(raw_count)
-        except ValueError:
-            print("錯誤：任務數量必須是整數")
-            sys.exit(1)
-        if count < 0:
-            print("錯誤：任務數量不可為負數")
-            sys.exit(1)
+    csv_path = RQ2_DIR / CN_PAIRS_CSV
+    scenarios = choose_scenarios(csv_path)
+    count = 0
 
     runs: Optional[int] = None
     if PROMPT_FOR_RUNS:
@@ -398,7 +444,7 @@ if __name__ == "__main__":
             "record": RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json",
             "cost": RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json",
         }
-        result = run_conflict(model, count=count, paths=paths)
+        result = run_conflict(model, count=count, paths=paths, scenarios=scenarios)
         run_scalar_metrics.append(scalar_metrics_for_summary(result))
         cost_payload = build_baseline_cost_payload(model)
         run_costs_usd.append(float(cost_payload.get("estimated_cost(USD)", 0.0) or 0.0))
