@@ -36,10 +36,6 @@ def save_markdown(
     filepath = target_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
-    if filename.startswith("conflict_report"):
-        for legacy_path in (artifact_dir / filename, artifact_dir / "MoM" / filename, output_dir / filename):
-            if legacy_path.exists():
-                legacy_path.unlink()
 
 
 def load_markdown(artifact_dir: Path, output_dir: Path, filename: str) -> str:

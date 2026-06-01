@@ -14,10 +14,8 @@ from .config import (
     has_stakeholder_text,
     has_system_models_payload,
     human_setting,
-    mark_stage_completed,
     meeting_setting,
     require_stage_inputs,
-    stage_completed,
     stage_enabled,
 )
 from .cost import CostTracker, model_has_token_pricing
@@ -48,11 +46,9 @@ __all__ = [
     "is_likely_english",
     "json_dump_no_scientific",
     "json_dumps_no_scientific",
-    "mark_stage_completed",
     "model_has_token_pricing",
     "meeting_setting",
     "require_stage_inputs",
-    "stage_completed",
     "stage_enabled",
     "sync_output_language",
 ]

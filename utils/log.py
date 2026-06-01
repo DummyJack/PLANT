@@ -27,6 +27,9 @@ class Logger:
         """同 logging.info，支援格式化參數。"""
         self.logger.info(msg, *args, **kwargs)
 
+    def debug(self, msg, *args, **kwargs):
+        self.logger.debug(msg, *args, **kwargs)
+
     def warning(self, msg, *args, **kwargs):
         self.logger.warning(msg, *args, **kwargs)
 

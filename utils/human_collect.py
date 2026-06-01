@@ -1,4 +1,5 @@
 # Human input helpers for project choices and topic decisions.
+import re
 from typing import Dict, List
 
 
@@ -118,6 +119,10 @@ class Collect:
 
     @staticmethod
     def human_decision_on_issue(issue: Dict, options) -> Dict:
+        def clean_option_title(value) -> str:
+            title = str(value or "").strip()
+            return re.sub(r"^[A-Z]\s*[:：]\s*", "", title)
+
         print(f"\n{'=' * 60}")
         print(f"需要人類裁決: {issue.get('title', '')}")
         print(f"議題描述: {issue.get('description', '')}")
@@ -138,23 +143,30 @@ class Collect:
         for opt in best_options:
             if not isinstance(opt, dict):
                 continue
-            idx = opt.get("id", len(all_options) + 1)
-            print(f"\n  方案 {idx}. {opt.get('title', '')}")
+            idx = len(all_options) + 1
+            option = dict(opt)
+            title = clean_option_title(opt.get("title", ""))
+            option["id"] = idx
+            option["title"] = title
+            print(f"\n  {idx}. {title}")
             print(f"     來源: {opt.get('source', '?')}")
             print(f"     內容: {opt.get('description', '')}")
-            all_options.append(opt)
+            all_options.append(option)
 
         if isinstance(compromise, dict) and compromise:
-            idx = compromise.get("id", len(all_options) + 1)
-            print(f"\n  方案 {idx}. [折衷] {compromise.get('title', '')}")
+            idx = len(all_options) + 1
+            option = dict(compromise)
+            option["id"] = idx
+            option.setdefault("source", "compromise")
+            print(f"\n  {idx}. [折衷] {compromise.get('title', '')}")
             print(f"     內容: {compromise.get('description', '')}")
             print(f"     理由: {compromise.get('rationale', '')}")
-            all_options.append(compromise)
+            all_options.append(option)
 
         print(f"\n{'─' * 40}")
         print("  0. 自行輸入裁決")
 
-        user_input = input("\n請選擇方案編號（或 Enter 跳過）：").strip()
+        user_input = input("\n請選擇方案編號(或 Enter 跳過)：").strip()
         if not user_input:
             return {
                 "resolution": "unresolved",
@@ -209,7 +221,7 @@ class Collect:
                 "chosen_option_title": "",
             }
 
-        title = chosen.get("title", "")
+        title = clean_option_title(chosen.get("title", ""))
         desc = chosen.get("description", "")
         source = chosen.get("source", "方案")
         return {

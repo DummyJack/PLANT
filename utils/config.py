@@ -49,20 +49,6 @@ def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bo
     return bool(value)
 
 
-def stage_completed(artifact: Dict[str, Any], stage_name: str) -> bool:
-    """讀取 artifact/stage_status.json 載入後的 stage completion marker。"""
-    stage_status = artifact.get("stage_status") if isinstance(artifact.get("stage_status"), dict) else {}
-    return stage_status.get(stage_name) == "completed"
-
-
-def mark_stage_completed(artifact: Dict[str, Any], stage_name: str) -> None:
-    """標記 stage 已完成；由 storage 層保存為 artifact/stage_status.json。"""
-    if stage_name not in {"elicitation", "conflict_detection"}:
-        return
-    stage_status = artifact.setdefault("stage_status", {})
-    stage_status[stage_name] = "completed"
-
-
 def artifact_path_non_empty(flow: Any, *parts: str) -> bool:
     artifact_dir = getattr(flow.store, "artifact_dir", None)
     if artifact_dir is None:
@@ -109,7 +95,7 @@ def has_draft_payload(flow: Any) -> bool:
 
 
 def has_candidate_requirements(artifact: Dict[str, Any]) -> bool:
-    return bool(artifact.get("URL") or artifact.get("requirements"))
+    return bool(artifact.get("URL"))
 
 
 def has_stakeholder_text(artifact: Dict[str, Any]) -> bool:
@@ -136,7 +122,7 @@ def has_feedback_payload(artifact: Dict[str, Any]) -> bool:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     return any(
         bool(feedback.get(key))
-        for key in ("findings", "sources", "constraints", "risks", "recommendations", "open_items")
+        for key in ("findings", "sources", "constraints", "risks", "recommendations")
     )
 
 
@@ -167,7 +153,7 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
         ):
             return
         raise RuntimeError(
-            "stage.init 缺少輸入；需要 artifact 內已有 scenario、stakeholders、scope 與 URL/requirements"
+            "stage.init 缺少輸入；需要 artifact 內已有 scenario、stakeholders、scope 與 requirements"
         )
     if stage_name == "elicitation":
         if (
@@ -176,13 +162,13 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
         ):
             return
         raise RuntimeError(
-            "stage.elicitation 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json，且 artifact 內已有 stakeholders 與 URL/requirements"
+            "stage.elicitation 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json，且 artifact 內已有 stakeholders 與 requirements"
         )
     if stage_name == "conflict_detection":
         if artifact_json_non_empty(flow, "requirements.json") and has_candidate_requirements(artifact):
             return
         raise RuntimeError(
-            "stage.conflict_detection 缺少輸入；需要 artifact/requirements.json 且 artifact 內已有 URL/requirements"
+            "stage.conflict_detection 缺少輸入；需要 artifact/requirements.json 且 artifact 內已有 requirements"
         )
     if stage_name == "domain_research":
         if has_project_scope_requirements(flow, artifact):

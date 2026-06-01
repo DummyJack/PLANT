@@ -82,3 +82,7 @@ def save_plantuml_files(artifact_dir: Path, model_data: Any) -> None:
                     print(f"✓ 儲存 PlantUML 輸出: {name}")
             except Exception as e:
                 print(f"儲存 PlantUML 失敗: {e}")
+    for model in models:
+        filename = f"{plantuml_safe_name(model)}.png"
+        if (models_dir / filename).exists():
+            model["image_path"] = f"../models/{filename}"
