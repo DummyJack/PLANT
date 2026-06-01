@@ -60,7 +60,7 @@ def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]
     for tlog in (per_task.get("elicitation_trace", []) or []):
         if not isinstance(tlog, dict):
             continue
-        for row in (tlog.get("contributions", []) or []):
+        for row in (tlog.get("record", []) or []):
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()
@@ -378,11 +378,11 @@ def build_task_record(
         if not isinstance(tlog, dict):
             continue
         turn_no = safe_turn_no(tlog.get("turn"))
-        contributions = tlog.get("contributions", []) or []
+        record = tlog.get("record", []) or []
 
         role_parts: Dict[str, List[str]] = {"analyst": [], "expert": [], "modeler": []}
         user_parts: List[str] = []
-        for row in contributions:
+        for row in record:
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()

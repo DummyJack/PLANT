@@ -246,16 +246,17 @@ def extract_conflict_review_details(
             nl = str(d.get("new_label") or "").strip()
             rs = str(d.get("reason") or "").strip()
             cf = conflicts_by_id.get(cid, {})
-            pm = cf.get("conflict_review") if isinstance(cf.get("conflict_review"), dict) else {}
+            from_label = str(cf.get("initial_label") or "").strip()
+            to_label = str(cf.get("final_label") or nl).strip()
             decision_rows.append(
                 {
                     "id": cid,
                     "new_label": nl,
                     "reason": rs,
-                    "from_label": str(pm.get("from_label") or ""),
-                    "to_label": str(pm.get("to_label") or nl),
-                    "result": str(pm.get("result") or ""),
-                    "status": str(pm.get("status") or ""),
+                    "from_label": from_label,
+                    "to_label": to_label,
+                    "result": "modify" if from_label and to_label and from_label != to_label else "keep",
+                    "status": str(cf.get("status") or ""),
                     "requirement_ids": list(cf.get("requirement_ids") or []),
                     "pair_index": cf.get("pair_index"),
                     "description": str(cf.get("description") or ""),
@@ -292,10 +293,9 @@ def build_pair_changed_flags(artifact: Dict[str, Any], n_pairs: int) -> List[boo
         if final_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
-        pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
-        from_label = str(pm.get("from_label") or "").strip()
-        to_label = str(pm.get("to_label") or "").strip()
-        changed = bool(pm.get("result") == "modify" or (from_label and to_label and from_label != to_label))
+        from_label = str(c.get("initial_label") or "").strip()
+        to_label = str(c.get("final_label") or final_label).strip()
+        changed = bool(from_label and to_label and from_label != to_label)
 
         by_k[ik] = changed
 
@@ -329,19 +329,16 @@ def build_pair_review_details(
         if ik < 0 or ik >= n_pairs:
             continue
 
-        pm = c.get("conflict_review") if isinstance(c.get("conflict_review"), dict) else {}
         final_label = str(c.get("label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
-        meeting_rows = c.get("meeting") if isinstance(c.get("meeting"), list) else []
-        if not meeting_rows or not isinstance(meeting_rows[0], dict):
+        details = c.get("meeting")
+        if not isinstance(details, dict):
             raise RuntimeError(f"RQ2 pair 缺少 conflict meeting: PAIR-{ik + 1}")
-        review_row = meeting_rows[0]
-        initial_label = str(review_row.get("initial_label") or "").strip()
-        review_final_label = str(review_row.get("final_label") or "").strip()
-        description = str(review_row.get("description") or "").strip()
-        details = review_row.get("details")
+        initial_label = str(c.get("initial_label") or "").strip()
+        review_final_label = str(c.get("final_label") or "").strip()
+        description = str(c.get("description") or "").strip()
         if initial_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"RQ2 pair initial_label 不合法: PAIR-{ik + 1}")
         if review_final_label not in {"Conflict", "Neutral"}:
@@ -351,7 +348,7 @@ def build_pair_review_details(
         if not isinstance(details, dict) or not details:
             raise RuntimeError(f"RQ2 pair 缺少 details: PAIR-{ik + 1}")
         details_by_k[ik] = {
-            "status": str(review_row.get("status") or pm.get("status") or "").strip(),
+            "status": str(c.get("status") or "").strip(),
             "initial_label": initial_label,
             "final_label": review_final_label,
             "reason": description,

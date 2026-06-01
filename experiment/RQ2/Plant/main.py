@@ -79,7 +79,7 @@ def run_type_group_batch(
     updated = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
     if not isinstance(updated, dict):
         raise TypeError(
-            "flow.analyst_agent.run_pairwise_conflict_detection 必須回傳 dict，"
+            "flow.analyst_agent.detect_pair_conflicts 必須回傳 dict，"
             f"實得 {type(updated).__name__}"
         )
     analyst_preds, missing_before_review = extract_pair_preds_with_missing(updated, n)

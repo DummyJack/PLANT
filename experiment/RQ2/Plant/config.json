@@ -1,5 +1,5 @@
 {
-  "enable_human_escalation": false,
+  "enable_human_judgment": false,
   "enable_conflict_report": false,
   "enable_agents": {
     "user": false,
@@ -10,8 +10,8 @@
   },
   "agent_models": {
     "default": {
-      "provider": "local",
-      "model": "gemma4:latest",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "temperature": 0
     }
   }

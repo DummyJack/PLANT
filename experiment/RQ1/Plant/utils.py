@@ -71,7 +71,6 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         ],
         "scope": {"in_scope": [], "out_of_scope": []},
         "URL": [],
-        "requirements": [],
         "feedback": {},
         "system_models": [],
         "open_questions": [],
@@ -237,7 +236,7 @@ def run_one_task(
     oracle_user.set_task(task)
 
     flow.user_agent.stakeholders = artifact["stakeholders"]
-    req_before = len(artifact["requirements"])
+    req_before = len(artifact["URL"])
 
     logger_verbose = getattr(flow.logger, "verbose", None)
     if logger_verbose is not None:
@@ -252,7 +251,7 @@ def run_one_task(
             flow.logger.verbose = logger_verbose
     flow.logger.info("[需求擷取會議結束]")
 
-    req_after = len(artifact["requirements"])
+    req_after = len(artifact["URL"])
     elicitation_trace = artifact.get("elicitation_trace", []) or []
     oracle_revealed_ids = {
         str(rid)
