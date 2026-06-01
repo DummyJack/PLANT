@@ -7,6 +7,7 @@ from agents.profile.analyst.requirements import (
     requirement_dedupe_key,
     requirement_discussion_pool,
 )
+from agents.profile.analyst.validation import requirement_record as url_requirement_record
 from agents.profile.scenario import scenario_prompt_value
 
 ELICITATION_PHASES = [
@@ -18,7 +19,7 @@ QUESTION_AGENT_ACTIONS = {"ask_user", "supplement_question"}
 FINISH_AGENT_ACTION = "propose_finish"
 
 
-def split_text_by_speaking_as(text: str, names: List[str]) -> Dict[str, str]:
+def split_text_by_speaking_as(text: str, names: List[str], *, require_labels: bool = False) -> Dict[str, str]:
     """Split a multi-role answer like 【顧客】...【平台管理者】... by role label."""
     source = str(text or "").strip()
     clean_names = [str(name or "").strip() for name in names or [] if str(name or "").strip()]
@@ -28,6 +29,8 @@ def split_text_by_speaking_as(text: str, names: List[str]) -> Dict[str, str]:
     pattern = re.compile(rf"(?:^|\n)\s*【({escaped})】\s*")
     matches = list(pattern.finditer(source))
     if not matches:
+        if require_labels and len(clean_names) > 1:
+            return {}
         return {name: source for name in clean_names}
 
     parts: Dict[str, str] = {}
@@ -39,6 +42,8 @@ def split_text_by_speaking_as(text: str, names: List[str]) -> Dict[str, str]:
         body = re.sub(r"^\s*[-—]+\s*", "", body).strip()
         if name and body:
             parts[name] = body
+    if require_labels:
+        return {name: parts[name] for name in clean_names if name in parts}
     return {name: parts.get(name, source) for name in clean_names}
 
 
@@ -137,14 +142,14 @@ def build_sequential_order(
     return order
 
 def without_finish_proposals(
-    contributions: List[Dict[str, Any]],
+    conversation: List[Dict[str, Any]],
     stop_phrase: str,
 ) -> List[Dict[str, Any]]:
     filtered: List[Dict[str, Any]] = []
-    for c in contributions or []:
+    for c in conversation or []:
         if not isinstance(c, dict):
             continue
-        if c.get("agent") != "user" and stop_phrase in get_contribution_text(c):
+        if c.get("agent") != "user" and stop_phrase in get_conversation_text(c):
             continue
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
         if c.get("agent") != "user" and str(resp.get("action") or "").strip().lower() == FINISH_AGENT_ACTION:
@@ -162,12 +167,12 @@ def elicitation_phase_for_turn(turn: int, max_turns: int) -> str:
         return "initial_requirement"
     return "requirement_discussion"
 
-def collect_user_summary(contributions: List[Dict[str, Any]]) -> str:
+def collect_user_summary(conversation: List[Dict[str, Any]]) -> str:
     parts: List[str] = []
-    for c in contributions or []:
+    for c in conversation or []:
         if not isinstance(c, dict) or c.get("agent") != "user":
             continue
-        text = get_contribution_text(c)
+        text = get_conversation_text(c)
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
@@ -203,7 +208,7 @@ def build_recent_ask_history(
         user_response = ""
         user_action_type = str(log.get("user_action_type") or "").strip()
         missing_signal = ""
-        for row in (log.get("contributions") or []):
+        for row in (log.get("conversation") or []):
             if not isinstance(row, dict):
                 continue
             agent = str(row.get("agent") or "").strip()
@@ -239,10 +244,10 @@ def build_recent_ask_history(
     return rows
 
 def find_finish_proposal(
-    contributions: List[Dict[str, Any]],
+    conversation: List[Dict[str, Any]],
     stop_phrase: str,
 ) -> tuple[str, str]:
-    for c in contributions or []:
+    for c in conversation or []:
         if not isinstance(c, dict):
             continue
         agent = str(c.get("agent") or "").strip()
@@ -252,7 +257,7 @@ def find_finish_proposal(
         agent_action = str(resp.get("action") or "").strip().lower()
         if agent_action == FINISH_AGENT_ACTION:
             return agent, stop_phrase
-        text = get_contribution_text(c)
+        text = get_conversation_text(c)
         if text and stop_phrase in text:
             return agent, stop_phrase
     return "", ""
@@ -289,14 +294,22 @@ def turn_participants(values: List[str]) -> List[str]:
             participants.append(name)
     return participants
 
-def user_questions(contributions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def user_questions(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     questions: List[Dict[str, Any]] = []
-    for c in contributions or []:
+    for c in conversation or []:
         if not isinstance(c, dict) or c.get("agent") == "user":
             continue
         resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-        agent_action = str(resp.get("action") or "").strip().lower()
-        if agent_action in QUESTION_AGENT_ACTIONS:
+        action_values = []
+        if isinstance(resp.get("actions"), list):
+            action_values.extend(resp.get("actions") or [])
+        action_values.append(resp.get("action"))
+        agent_actions = {
+            str(value or "").strip().lower()
+            for value in action_values
+            if str(value or "").strip()
+        }
+        if agent_actions & QUESTION_AGENT_ACTIONS:
             questions.append(c)
     return questions
 
@@ -390,11 +403,11 @@ def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[s
             append_unique(closed, "workflow detail discussion")
             append_unique(do_not_repeat, "do not re-ask workflow details already rejected or covered")
 
-    if has_any("exception", "error", "fallback", "manual", "edge case", "例外", "錯誤", "失敗", "人工", "特殊情況"):
+    if has_any("exception", "error", "manual", "edge case", "例外", "錯誤", "失敗", "人工", "特殊情況"):
         if confirmed_signal:
-            append_unique(confirmed, "exception handling or fallback expectation")
+            append_unique(confirmed, "exception handling expectation")
         if user_not_care:
-            append_unique(closed, "exception or fallback detail")
+            append_unique(closed, "exception handling detail")
             append_unique(do_not_repeat, "do not re-ask exception handling unless it blocks a requirement")
 
     if has_any("constraint", "limit", "policy", "rule", "risk", "compliance", "quality", "限制", "規則", "風險", "合規", "品質", "條件"):
@@ -421,20 +434,20 @@ def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[s
         "do_not_repeat": do_not_repeat,
     }
 
-def get_contribution_text(contribution: Dict[str, Any]) -> str:
-    if not isinstance(contribution, dict):
+def get_conversation_text(conversation: Dict[str, Any]) -> str:
+    if not isinstance(conversation, dict):
         return ""
-    resp = contribution.get("response", {}) if isinstance(contribution.get("response"), dict) else {}
+    resp = conversation.get("response", {}) if isinstance(conversation.get("response"), dict) else {}
     return str(resp.get("text") or "").strip()
 
-def select_question(contributions: List[Dict[str, Any]]) -> tuple[str, str]:
-    for c in contributions or []:
+def select_question(conversation: List[Dict[str, Any]]) -> tuple[str, str]:
+    for c in conversation or []:
         if not isinstance(c, dict):
             continue
         agent = str(c.get("agent") or "").strip()
         if not agent or agent == "user":
             continue
-        text = get_contribution_text(c)
+        text = get_conversation_text(c)
         if not text:
             continue
         if "?" in text or "？" in text:
@@ -488,7 +501,7 @@ def collect_closure_votes(
             role=role,
             proposer_role=proposer_role,
             role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
-            scenario=artifact.get("scenario", {}),
+            scenario=artifact.get("scenario", ""),
             requirements=requirements,
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history or [],
@@ -529,7 +542,7 @@ def collect_closure_votes(
 
 def extract_candidates(
     coordinator: Any,
-    contributions: List[Dict[str, Any]],
+    conversation: List[Dict[str, Any]],
     artifact: Dict[str, Any],
     *,
     round_num: int,
@@ -549,7 +562,8 @@ def extract_candidates(
     stakeholder_rows: List[Dict[str, str]] = []
     row_index = 1
     pending_question = False
-    for c in contributions:
+    pending_targets: List[str] = []
+    for c in conversation:
         if not isinstance(c, dict):
             continue
         agent = c.get("agent", "?")
@@ -559,6 +573,14 @@ def extract_candidates(
             continue
         if agent != "user":
             pending_question = True
+            raw_targets = resp.get("target_stakeholders")
+            if isinstance(raw_targets, str):
+                raw_targets = [raw_targets]
+            pending_targets = [
+                str(name).strip()
+                for name in (raw_targets or [])
+                if str(name).strip() in allowed_stakeholders
+            ]
             continue
         if agent == "user":
             speaking_as = resp.get("speaking_as")
@@ -569,6 +591,8 @@ def extract_candidates(
                 for name in (speaking_as or [])
                 if str(name).strip() in allowed_stakeholders
             ]
+            if not names and len(pending_targets) == 1:
+                names = list(pending_targets)
             if not names and len(allowed_stakeholders) == 1:
                 names = list(allowed_stakeholders)
             if pending_question:
@@ -576,16 +600,25 @@ def extract_candidates(
                 row_index += max(1, len(names))
             else:
                 start_row_index = row_index
-            text_parts = split_text_by_speaking_as(text, names)
+            text_parts = split_text_by_speaking_as(
+                text,
+                names,
+                require_labels=len(names) > 1,
+            )
+            if len(names) > 1 and len(text_parts) < len(names):
+                fallback_name = names[0] if names else ""
+                text_parts = {fallback_name: text} if fallback_name else {}
+                names = [fallback_name] if fallback_name else []
             for offset, name in enumerate(names):
-                source_ref = f"elicit-{max(1, int(turn))}-{start_row_index + offset}"
+                source_id = f"elicit-{max(1, int(turn))}-{start_row_index + offset}"
                 stakeholder_rows.append({
                     "name": name,
                     "type": stakeholder_types.get(name, ""),
                     "text": text_parts.get(name, text),
-                    "source_ref": source_ref,
+                    "source_id": source_id,
                 })
             pending_question = False
+            pending_targets = []
     if not stakeholder_rows:
         return []
 
@@ -598,7 +631,6 @@ def extract_candidates(
         {
             "id": str(r.get("id") or "").strip(),
             "text": str(r.get("text") or "").strip(),
-            "priority": str(r.get("priority") or "").strip(),
             "stakeholder": r.get("stakeholder"),
             "source": str(r.get("source") or "").strip(),
         }
@@ -609,7 +641,7 @@ def extract_candidates(
         stakeholders=stakeholder_rows,
         existing_requirements=existing_requirements,
         mode=mode,
-        scenario=scenario_prompt_value(artifact.get("scenario", {})),
+        scenario=scenario_prompt_value(artifact.get("scenario", "")),
         source=f"elicitation_r{max(1, int(round_num))}",
     )
     if not isinstance(raw, list):
@@ -622,8 +654,7 @@ def extract_candidates(
         text = str(cand.get("text") or "").strip()
         if not text or text.lower() in existing_texts:
             continue
-        from agents.profile.analyst import AnalystAgent
-        normalized = AnalystAgent.requirement_record(cand)
+        normalized = url_requirement_record(cand)
         normalized = requirement_candidate(normalized)
         results.append(normalized)
     return results

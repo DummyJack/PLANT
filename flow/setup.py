@@ -1,5 +1,4 @@
 # Flow setup: instantiate agents, tools, store, policy, and runtime services.
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from agents.base import AgentRegistry
 from agents.tools.policy import AgentSkillToolPolicy
@@ -27,6 +26,25 @@ from .finalize_flow import (
 from storage import Store
 from utils import Logger, human_setting
 from agents.tools import ToolRegistry
+
+
+MEETING_TYPE_ALIASES = {
+    "new_requirement": [
+        "clarify_requirement",
+        "define_boundary",
+        "align_model",
+    ],
+    "open_question": [
+        "clarify_requirement",
+    ],
+    "conflict_discussion": [
+        "tradeoff",
+    ],
+    "tradeoff": ["tradeoff"],
+    "clarify_requirement": ["clarify_requirement"],
+    "define_boundary": ["define_boundary"],
+    "align_model": ["align_model"],
+}
 
 
 class Flow:
@@ -117,16 +135,20 @@ class Flow:
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
 
-        self.mediator_agent.enable_human_escalation = bool(
-            human_setting(config, "enable_human_escalation", True)
+        self.mediator_agent.enable_human_judgment = bool(
+            human_setting(config, "enable_human_judgment", True)
         )
 
         eat = config.get("enable_meeting")
         if isinstance(eat, dict):
-            self.mediator_agent.enabled_issue_type_ids = [
-                k for k, v in eat.items()
-                if v and k not in {"elicitation", "conflict_review"}
-            ]
+            enabled_types = []
+            for key, enabled in eat.items():
+                if not enabled or key in {"elicitation", "conflict_review"}:
+                    continue
+                for issue_type_id in MEETING_TYPE_ALIASES.get(key, [key]):
+                    if issue_type_id not in enabled_types:
+                        enabled_types.append(issue_type_id)
+            self.mediator_agent.enabled_issue_type_ids = enabled_types or None
         self.meeting = MeetingCoordinator(self)
 
     def validate_policy_assignments(self) -> None:
@@ -154,29 +176,21 @@ class Flow:
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """集中初始化 artifact 目前需要的最小欄位。"""
         artifact.setdefault("URL", [])
-        artifact.setdefault("change_record", artifact.get("change_record", []))
         elicitation = artifact.setdefault("elicitation", {})
         elicitation.setdefault("plan", {})
         elicitation.setdefault("meeting", {})
         elicitation.setdefault("elicited_reqts", [])
         elicitation.setdefault("elicitation_stop_reason", "")
         artifact.setdefault("elicitation_trace", [])
-        artifact.setdefault("candidate_review_log", [])
         return artifact
 
     @staticmethod
     def touch_artifact_meta(
         artifact: Dict[str, Any],
         *,
-        updated_by: str,
         round_num: Optional[int] = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
         meta = artifact.setdefault("meta", {})
-        meta.setdefault("schema_version", 1)
-        meta.setdefault("created_at", now)
-        meta["updated_at"] = now
-        meta["updated_by"] = updated_by
         if round_num is not None:
             meta["last_round"] = round_num
 

@@ -1,9 +1,12 @@
 # Project flow orchestration: run init, meeting rounds, and finalization.
-from datetime import datetime, timezone
 from typing import Any, Dict
 import os
+import re
 
 from utils import stage_enabled
+
+
+MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
 
 
 def sync_project_output_language(artifact: Dict[str, Any]) -> None:
@@ -23,13 +26,8 @@ def run_one_round(
     flow,
     artifact: Dict[str, Any],
     round_num: int,
-    *,
-    is_retry: bool = False,
 ) -> Dict[str, Any]:
-    if is_retry:
-        flow.logger.info(f"=== Round {round_num}: 開會（Final meeting 後補充討論） ===")
-    else:
-        flow.logger.info(f"=== Round {round_num}: 開會 ===")
+    flow.logger.info(f"=== Round {round_num}: 開會 ===")
     artifact = flow.run_meeting_round(artifact, round_num)
     flow.store.save_artifact(artifact)
     flow.logger.info(f"Round {round_num} 完成")
@@ -45,16 +43,53 @@ def require_latest_draft(flow, stage_name: str) -> None:
     )
 
 
-def require_formal_meeting_inputs(flow) -> None:
-    require_latest_draft(flow, "formal_meeting")
+def require_formal_meeting_inputs(artifact: Dict[str, Any]) -> None:
+    requirements = artifact.get("URL")
+    if isinstance(requirements, list) and requirements:
+        return
+    raise RuntimeError(
+        "正式會議缺少輸入；需要 artifact/requirements.json 中的 requirements"
+    )
 
 
-def require_final_meeting_inputs(flow) -> None:
-    require_latest_draft(flow, "final_meeting")
+def require_formal_meeting_stage_inputs(flow, artifact: Dict[str, Any]) -> None:
+    require_formal_meeting_inputs(artifact)
+    default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
+    general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
+    if general_enabled and not default_enabled:
+        require_latest_draft(flow, "general_formal_meeting")
 
 
 def require_srs_draft_inputs(flow) -> None:
     require_latest_draft(flow, "SRS")
+
+
+def formal_meeting_stage_enabled(config: Dict[str, Any]) -> bool:
+    return (
+        stage_enabled(config, "default_formal_meeting", True)
+        or stage_enabled(config, "general_formal_meeting", True)
+    )
+
+
+def next_meeting_round_from_mom(flow) -> int:
+    completed_rounds = completed_meeting_rounds_from_mom(flow)
+    return max(completed_rounds) + 1 if completed_rounds else 1
+
+
+def completed_meeting_rounds_from_mom(flow) -> set[int]:
+    artifact_dir = getattr(flow.store, "artifact_dir", None)
+    if artifact_dir is None:
+        return set()
+    mom_dir = artifact_dir / "MoM"
+    if not mom_dir.exists() or not mom_dir.is_dir():
+        return set()
+    completed_rounds: set[int] = set()
+    for path in mom_dir.glob("R*-M*.md"):
+        match = MOM_ROUND_FILE.match(path.name)
+        if not match:
+            continue
+        completed_rounds.add(int(match.group(1)))
+    return completed_rounds
 
 
 def _artifact_file_non_empty(flow, *parts: str) -> bool:
@@ -66,20 +101,8 @@ def _artifact_file_non_empty(flow, *parts: str) -> bool:
 
 
 def _has_completed_formal_meeting(flow, artifact: Dict[str, Any], end_round: int) -> bool:
-    draft_version = flow.store.get_draft_version() if hasattr(flow.store, "get_draft_version") else -1
-    discussions = [
-        row for row in (artifact.get("discussions", []) or [])
-        if isinstance(row, dict)
-    ]
-    return draft_version >= int(end_round) and len(discussions) >= int(end_round)
-
-
-def _has_completed_final_meeting(artifact: Dict[str, Any]) -> bool:
-    return any(
-        bool(row.get("is_final_meeting"))
-        for row in (artifact.get("discussions", []) or [])
-        if isinstance(row, dict)
-    )
+    completed_rounds = completed_meeting_rounds_from_mom(flow)
+    return all(round_num in completed_rounds for round_num in range(1, int(end_round) + 1))
 
 
 def _has_existing_srs(flow) -> bool:
@@ -96,36 +119,24 @@ def save_cost_summary(flow) -> None:
 
 
 def run_project(flow, rough_idea: str) -> Dict[str, Any]:
-    run_formal = stage_enabled(flow.config, "formal_meeting")
+    run_formal = formal_meeting_stage_enabled(flow.config)
     rounds = int(flow.config.get("rounds", 1) or 1) if run_formal else 0
-    now = datetime.now(timezone.utc).isoformat()
     artifact = {
         "rough_idea": rough_idea,
         "stakeholders": [],
         "scope": {"in_scope": [], "out_of_scope": []},
-        "requirements": [],
+        "URL": [],
         "feedback": {},
         "system_models": [],
-        "discussions": [],
-        "decisions": [],
-        "open_questions": [],
         "meta": {
-            "schema_version": 1,
-            "created_at": now,
-            "updated_at": now,
-            "updated_by": "flow.run.init",
             "last_round": 0,
         },
     }
     artifact = flow.ensure_artifact_contract(artifact)
     sync_project_output_language(artifact)
-    flow.touch_artifact_meta(
-        artifact,
-        updated_by="flow.run.init",
-        round_num=0,
-    )
+    flow.touch_artifact_meta(artifact, round_num=0)
     if run_formal:
-        artifact.setdefault("meta", {})["session_end_round"] = int(rounds)
+        artifact.setdefault("meta", {})["meeting_end_round"] = int(rounds)
     flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 初始階段 ===")
@@ -139,19 +150,9 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
     else:
-        require_formal_meeting_inputs(flow)
+        require_formal_meeting_stage_inputs(flow, artifact)
         for round_num in range(1, rounds + 1):
             artifact = run_one_round(flow, artifact, round_num)
-        flow.store.save_artifact(artifact)
-
-    flow.logger.info("=== Final ===")
-    if not stage_enabled(flow.config, "final_meeting"):
-        flow.logger.info("跳過 Final")
-    elif _has_completed_final_meeting(artifact):
-        flow.logger.info("✓ Final 輸出已存在，跳過重新生成")
-    else:
-        require_final_meeting_inputs(flow)
-        artifact = flow.meeting.run_final(artifact)
         flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
@@ -159,7 +160,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         flow.logger.info("跳過 SRS")
     elif _has_existing_srs(flow):
         require_srs_draft_inputs(flow)
-        flow.logger.info("✓ SRS 已存在，跳過重新生成")
+        flow.logger.info("SRS 已存在，不重新產生")
     else:
         require_srs_draft_inputs(flow)
         flow.finalize(artifact)
@@ -178,10 +179,6 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     artifact.setdefault("meta", {})
     artifact = flow.ensure_artifact_contract(artifact)
     sync_project_output_language(artifact)
-    flow.touch_artifact_meta(
-        artifact,
-        updated_by="flow.run_continue.init",
-    )
 
     flow.user_agent.stakeholders = artifact.get("stakeholders", [])
 
@@ -189,12 +186,12 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
 
-    run_formal = stage_enabled(flow.config, "formal_meeting")
+    run_formal = formal_meeting_stage_enabled(flow.config)
     rounds = int(flow.config.get("rounds", 1) or 1) if run_formal else 0
-    start_round = len(artifact.get("discussions", [])) + 1
+    start_round = next_meeting_round_from_mom(flow)
     end_round = start_round + int(rounds) - 1
     if run_formal:
-        artifact.setdefault("meta", {})["session_end_round"] = end_round
+        artifact.setdefault("meta", {})["meeting_end_round"] = end_round
         flow.logger.info(f"繼續專案 Round {start_round}，共 {rounds} 輪")
 
     if not run_formal:
@@ -204,19 +201,9 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
     else:
-        require_formal_meeting_inputs(flow)
+        require_formal_meeting_stage_inputs(flow, artifact)
         for round_num in range(start_round, start_round + rounds):
             artifact = run_one_round(flow, artifact, round_num)
-        flow.store.save_artifact(artifact)
-
-    flow.logger.info("=== Final ===")
-    if not stage_enabled(flow.config, "final_meeting"):
-        flow.logger.info("跳過 Final")
-    elif _has_completed_final_meeting(artifact):
-        flow.logger.info("✓ Final 輸出已存在，跳過重新生成")
-    else:
-        require_final_meeting_inputs(flow)
-        artifact = flow.meeting.run_final(artifact)
         flow.store.save_artifact(artifact)
 
     flow.logger.info("=== 規格化 ===")
@@ -224,7 +211,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.logger.info("跳過 SRS")
     elif _has_existing_srs(flow):
         require_srs_draft_inputs(flow)
-        flow.logger.info("✓ SRS 已存在，跳過重新生成")
+        flow.logger.info("SRS 已存在，不重新產生")
     else:
         require_srs_draft_inputs(flow)
         flow.finalize(artifact)
