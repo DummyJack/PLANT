@@ -16,6 +16,17 @@ from utils import (
 from utils.language import sync_output_language
 
 
+def formal_meeting_enabled(config):
+    return (
+        stage_enabled(config, "default_formal_meeting", True)
+        or stage_enabled(config, "general_formal_meeting", True)
+    )
+
+
+def general_formal_meeting_enabled(config):
+    return stage_enabled(config, "general_formal_meeting", True)
+
+
 def main():
     print("=" * 60)
     print("PLANT 系統")
@@ -43,8 +54,8 @@ def main():
         print(f"錯誤：{str(e)}")
         sys.exit(1)
 
-    # 只有正式會議啟用時才需要由人類設定討論回合數。
-    if stage_enabled(config, "formal_meeting"):
+    # 只有一般正式會議啟用時才需要由人類設定討論回合數；預設正式會議固定跑 1 輪。
+    if general_formal_meeting_enabled(config):
         while True:
             rounds_input = input("請輸入討論回合數：").strip()
             if not rounds_input:
@@ -62,6 +73,9 @@ def main():
                 print("❌ 回合數必須是數字")
 
         config["rounds"] = rounds
+        base_store.save_config(config)
+    elif formal_meeting_enabled(config):
+        config["rounds"] = 1
         base_store.save_config(config)
     else:
         config["rounds"] = 0
