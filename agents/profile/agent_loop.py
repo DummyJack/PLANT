@@ -201,9 +201,8 @@ class AgentLoop:
                     break
 
                 self.logger.info(
-                    "%s %s [%s/%s]: %s",
+                    "%s [%s/%s]: %s",
                     self.__class__.__name__.replace("Agent", ""),
-                    name,
                     i + 1,
                     effective_max,
                     action,
@@ -232,7 +231,7 @@ class AgentLoop:
                                     f"{e}\n\n"
                                     "# 請在本輪修正\n"
                                     "- 只輸出合法 JSON。\n"
-                                    "- 必須符合本議題的 response_contract。\n"
+                                    "- 必須符合本議題的輸出格式要求。\n"
                                     "- 不要解釋格式錯誤。"
                                 ),
                             }

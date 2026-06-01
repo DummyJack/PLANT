@@ -1,10 +1,11 @@
 # Analyst elicitation logic: extract requirement candidates from elicitation meeting turns.
+from agents.profile.prompt_catalog import render_prompt
 import json
 from typing import Any, Dict, List, Optional
 
 from agents.profile.scenario import scenario_prompt_value
 
-from .prompts import user_requirement_extraction_contract
+from .prompts import url_extraction_rules
 from .validation import validate_elicited_reqts
 
 
@@ -53,7 +54,7 @@ class AnalystElicitation:
                 "stakeholders": stakeholders,
                 "existing_requirements": existing_requirements,
                 "mode": mode,
-                "scenario": scenario or {},
+                "scenario": scenario or "",
                 "source": source,
             },
             build_observation=self.build_elicitation_observation,
@@ -112,7 +113,7 @@ class AnalystElicitation:
                 kwargs.get("stakeholders") or [],
                 kwargs.get("existing_requirements") or [],
                 mode=kwargs.get("mode", "oracle"),
-                scenario=kwargs.get("scenario") or {},
+                scenario=kwargs.get("scenario") or "",
                 source=kwargs.get("source") or "",
             )
         except Exception as e:
@@ -145,7 +146,7 @@ class AnalystElicitation:
                 "name": str(row.get("name") or "").strip(),
                 "type": str(row.get("type") or "").strip(),
                 "text": str(row.get("text") or "").strip(),
-                "source_ref": str(row.get("source_ref") or "").strip(),
+                "source_id": str(row.get("source_id") or "").strip(),
             }
             for row in (stakeholders or [])
             if isinstance(row, dict)
@@ -156,7 +157,6 @@ class AnalystElicitation:
             {
                 "id": str(row.get("id") or "").strip(),
                 "text": str(row.get("text") or "").strip(),
-                "priority": str(row.get("priority") or "").strip(),
                 "stakeholder": (
                     str((row.get("stakeholder") or {}).get("name") or "").strip()
                     if isinstance(row.get("stakeholder"), dict)
@@ -167,7 +167,7 @@ class AnalystElicitation:
             for row in (existing_requirements or [])
             if isinstance(row, dict) and str(row.get("text") or "").strip()
         ]
-        rules = f"{user_requirement_extraction_contract()}\n\n"
+        rules = f"{url_extraction_rules()}\n\n"
         mapped: List[Dict[str, Any]] = []
         for stakeholder_row in stakeholder_rows:
             prompt = (
@@ -182,7 +182,9 @@ class AnalystElicitation:
                 f"# 執行來源\n{mode_name}\n\n"
                 f"{rules}"
                 "# 去重\n"
-                "- 若回答只是重述、同義改寫或細化目前已有候選需求，且沒有形成新的可獨立追蹤 User Requirement，回傳空陣列。\n\n"
+                "- 若回答只是重述、同義改寫或細化目前已有候選需求，且沒有形成新的 stakeholder goal、need、constraint 或責任邊界，回傳空陣列。\n"
+                "- 若回答補充的條件、例外、處理方式、SOP 或量化門檻會改變 stakeholder goal、need、constraint、責任邊界或可接受/不可接受情況，必須抽成粗粒度 User Requirement。\n"
+                "- 若只是單純補欄位、單一步驟、單一 UI 細節或驗收方式，且不形成新的需求目標或限制，才不要新增 User Requirement。\n\n"
                 '# 輸出 JSON\n[...]'
             )
             raw_text = self.invoke_requirements_analyst_text(
@@ -193,22 +195,7 @@ class AnalystElicitation:
             try:
                 raw = parse_json_array_text(raw_text)
             except ValueError as first_error:
-                repair_prompt = f"""上一輪 elicitation extraction 輸出不是合法 JSON array。請只修正格式，不要重新分析、不要新增需求。
-
-# 必須輸出
-[
-  {{"text":"候選 User Requirement","priority":"must|should|could"}}
-]
-
-# 規則
-- 只能輸出 JSON array。
-- 每筆只包含 text、priority。
-- priority 只能是 must、should 或 could。
-- 如果原始輸出沒有可抽取的新需求，輸出 []。
-- 不要輸出 Markdown、程式碼區塊、前言或額外文字。
-
-# 原始輸出
-{str(raw_text or "")[:12000]}"""
+                repair_prompt = render_prompt('agents_profile_analyst_elicitation_repair_prompt_2', **locals())
                 repaired = self.model.chat(
                     self.build_direct_messages(repair_prompt),
                     action="elicitation_extraction_repair",
@@ -226,12 +213,11 @@ class AnalystElicitation:
                     continue
                 mapped.append({
                     "text": row.get("text"),
-                    "priority": row.get("priority"),
                     "stakeholder": {
                         "name": stakeholder_row["name"],
                         "type": stakeholder_row.get("type") or "",
                     },
                     "source": source or "elicitation",
-                    "source_ref": stakeholder_row.get("source_ref") or "",
+                    "source_id": stakeholder_row.get("source_id") or "",
                 })
         return validate_elicited_reqts(mapped)

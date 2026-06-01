@@ -1,22 +1,22 @@
 [
   {
-    "id": "conflict_resolution",
-    "label": "衝突決議",
-    "description": "latest conflict report 中仍會阻礙 SRS 定稿的需求衝突，需要形成可寫入草稿或決策紀錄的解法"
+    "id": "clarify_requirement",
+    "label": "釐清需求",
+    "description": "聚焦需求語意、觸發條件、成功結果、例外情境與驗收方式。用於讓模糊需求變得明確、可測試、可追溯；不處理單純補欄位、格式或命名。"
   },
   {
-    "id": "requirement_revision",
-    "label": "需求修訂",
-    "description": "latest draft 中需求語意、邊界、責任、優先級或可驗證性不足，需要修正既有需求，而不是新增未支持需求"
+    "id": "define_boundary",
+    "label": "界定邊界",
+    "description": "聚焦系統、外部服務、人工流程與角色責任的邊界。用於釐清能力是否屬於本系統、第三方、人工處理或特定利害關係人責任。"
   },
   {
-    "id": "srs_open_question",
-    "label": "SRS 待確認問題",
-    "description": "latest draft、system models、conflict report 或 feedback 顯示仍有阻礙 SRS 生成的未決問題，需要正式會議確認"
+    "id": "tradeoff",
+    "label": "方案取捨",
+    "description": "聚焦多個可行方案的比較、取捨與推薦。用於體驗、成本、風險、營運、合規或實作複雜度之間必須選擇折衷的情況。"
   },
   {
-    "id": "tradeoff_decision",
-    "label": "取捨決策",
-    "description": "多個需求、限制、品質目標或外部限制無法同時完全滿足，需要決定可接受折衷並讓 SRS 能明確描述"
+    "id": "align_model",
+    "label": "對齊模型",
+    "description": "聚焦模型揭露的流程、狀態、actor、use case、資料物件或權限不一致。用於讓模型與需求互相校正，並把缺口回寫成需求或 open question。"
   }
 ]

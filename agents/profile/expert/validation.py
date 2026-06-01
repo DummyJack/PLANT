@@ -1,5 +1,6 @@
 # Expert validation: keep domain research payloads consistent before artifact writes.
 import json
+import re
 from typing import Any, Dict, List
 
 
@@ -9,7 +10,6 @@ RESEARCH_FIELDS = (
     "constraints",
     "risks",
     "recommendations",
-    "open_items",
 )
 
 TRACEABLE_RESEARCH_FIELDS = (
@@ -17,18 +17,30 @@ TRACEABLE_RESEARCH_FIELDS = (
     "constraints",
     "risks",
     "recommendations",
-    "open_items",
 )
-
-
-def has_research_content(payload: Dict[str, Any]) -> bool:
-    return any(bool(payload.get(field)) for field in RESEARCH_FIELDS)
 
 
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def clean_source_text(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    text = re.sub(
+        r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+        lambda m: f"{m.group(1).strip()}: {m.group(2).strip()}",
+        text,
+    )
+    text = text.replace("<", "").replace(">", "")
+    return text.strip()
+
+
+def has_research_content(payload: Dict[str, Any]) -> bool:
+    return any(bool(payload.get(field)) for field in RESEARCH_FIELDS)
 
 
 def compact_list(values: Any) -> List[Any]:
@@ -51,7 +63,7 @@ def compact_list(values: Any) -> List[Any]:
                 rows.append(row)
                 seen.add(key)
             continue
-        text = clean_text(value)
+        text = clean_source_text(value)
         if not text or text in seen:
             continue
         rows.append(text)
@@ -86,19 +98,21 @@ def research_items(values: Any, *, default_source: str = "") -> List[Dict[str, A
             text = clean_text(value.get("text") or value.get("finding") or value.get("note"))
             if not text:
                 continue
+            source = clean_source_text(value.get("source"))
+            if not source:
+                source = clean_source_text(default_source) or "initial"
             row = {
                 "text": text,
-                "related_URL": requirement_refs(value.get("related_URL")),
+                "related_requirement_ids": requirement_refs(value.get("related_requirement_ids")),
             }
-            source = clean_text(value.get("source")) or clean_text(default_source)
             if source:
                 row["source"] = source
         else:
             text = clean_text(value)
             if not text:
                 continue
-            row = {"text": text, "related_URL": []}
-            source = clean_text(default_source)
+            row = {"text": text, "related_requirement_ids": []}
+            source = clean_source_text(default_source) or "initial"
             if source:
                 row["source"] = source
 
@@ -118,7 +132,6 @@ def clean_research_result(raw: Any, *, default_source: str = "") -> Dict[str, An
     result["constraints"] = research_items(source.get("constraints"), default_source=default_source)
     result["risks"] = research_items(source.get("risks"), default_source=default_source)
     result["recommendations"] = research_items(source.get("recommendations"), default_source=default_source)
-    result["open_items"] = research_items(source.get("open_items"), default_source=default_source)
     return result if has_research_content(result) else {}
 
 

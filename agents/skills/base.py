@@ -236,7 +236,7 @@ class SkillSupport:
             "title": issue.get("title"),
             "description": issue.get("description"),
             "category": issue.get("category"),
-            "source_ids": issue.get("source_ids") or [],
+            "trace": issue.get("trace") or {},
         }
         policy_text = self.skill_usage_policy().strip()
         policy_section = (

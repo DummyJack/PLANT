@@ -1,4 +1,5 @@
 # User stakeholder helpers: derive stakeholder voices and initial requirements.
+from agents.profile.prompt_catalog import render_prompt
 import json
 from typing import Any, Dict, List, Optional
 
@@ -75,13 +76,13 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    def generate_stakeholder_text(
+    def write_stakeholders(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_text",
             context={
-                "action": "generate_stakeholder_text",
+                "action": "write_stakeholders",
                 "rough_idea": rough_idea,
                 "selected_stakeholders": selected_stakeholders,
             },
@@ -135,8 +136,8 @@ class UserStakeholder:
         try:
             if action == "propose_stakeholders":
                 output = self.propose_stakeholders_via_llm(kwargs.get("rough_idea", ""))
-            elif action == "generate_stakeholder_text":
-                output = self.generate_stakeholder_text_via_llm(
+            elif action == "write_stakeholders":
+                output = self.write_stakeholders_via_llm(
                     kwargs.get("rough_idea", ""),
                     kwargs.get("selected_stakeholders") or [],
                 )
@@ -158,36 +159,7 @@ class UserStakeholder:
 
     def propose_stakeholders_via_llm(self, rough_idea: Any) -> List[Dict]:
         scenario_context = self.scenario_context_text(rough_idea)
-        user_prompt = f"""# 任務
-根據以下產品情境，建議 10 位可能相關的利害關係人。
-
-# 產品情境
-{scenario_context}
-
-# 分類
-- Primary Users：每天直接操作系統、輸入資料、接收通知或完成任務的人。
-- System Owners & Management：負責派工、監督流程、營運決策、權限、資料品質、系統穩定性、安全或維護的人。
-- External Parties：外部會影響或受影響的單位，例如客戶、供應商、第三方服務、稽核、主管機關或合作單位。
-
-# 輸出規則
-- 三類都必須出現。
-- Primary Users 必須剛好 4 位。
-- System Owners & Management 必須剛好 4 位。
-- External Parties 必須剛好 2 位。
-- 輸出順序：Primary Users → System Owners & Management → External Parties。
-- 每位利害關係人必須直接存在於產品情境中。
-- 每位利害關係人的使用情境與責任邊界要明確且不同。
-- 避免使用情境重疊。
-- name 只填名稱，不要用括號補充說明。
-- type 只能是 Primary Users、System Owners & Management、External Parties。
-- reason 用一句話說明選擇理由。
-
-# 輸出 JSON
-{{{{
-    "proposed_stakeholders": [
-        {{{{"name": "利害關係人名稱", "type": "Primary Users | System Owners & Management | External Parties", "reason": "一句話選擇理由"}}}}
-    ]
-}}}}"""
+        user_prompt = render_prompt('agents_profile_user_stakeholder_user_prompt_21', **locals())
 
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_json(messages, temperature=1)
@@ -234,7 +206,7 @@ class UserStakeholder:
             )
         return proposed
 
-    def generate_stakeholder_text_via_llm(
+    def write_stakeholders_via_llm(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         scenario_context = self.scenario_context_text(rough_idea)
@@ -249,40 +221,7 @@ class UserStakeholder:
             stakeholder_rows.append(f"{i}. {name}")
         stakeholder_list = "\n".join(stakeholder_rows)
 
-        user_prompt = f"""# 任務
-模擬以下利害關係人，以第一人稱、口語方式從各自角度提出需求。
-
-# 利害關係人
-{stakeholder_list}
-
-# 產品情境
-{scenario_context}
-
-# 發言面向
-1. 日常使用情境
-2. 痛點與困擾
-3. 期望功能
-4. 擔心的事
-5. 最在意的限制、底線或不可接受情況
-6. 與其他角色可能產生取捨的地方
-
-# 輸出規則
-- 每位利害關係人產生 3-5 條 text。
-- 只根據該利害關係人的日常經驗。
-- 不替未選中的角色發言。
-- 每條 text 都必須能回扣產品情境。
-- 請自然描述該角色的目標、擔憂、限制、底線與可接受/不可接受的取捨。
-- 不要刻意製造衝突；只有在產品情境中合理時，才描述可能與其他角色目標拉扯的地方。
-
-# 輸出 JSON
-{{{{
-    "stakeholders": [
-        {{{{
-            "name": "...",
-            "text": ["...", "..."]
-        }}}}
-    ]
-}}}}"""
+        user_prompt = render_prompt('agents_profile_user_stakeholder_user_prompt_22', **locals())
 
         try:
             messages = self.build_direct_messages(user_prompt)

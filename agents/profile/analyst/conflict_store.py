@@ -5,21 +5,43 @@ from typing import Any, Dict, List
 def requirement_ids(row: Dict[str, Any]) -> List[str]:
     ids = [
         str(item).strip()
-        for item in (row.get("requirement_ids") or row.get("reqs") or [])
+        for item in (row.get("requirement_ids") or [])
         if str(item).strip()
     ]
+    if ids:
+        return ids
+    for req in row.get("requirements") or []:
+        if not isinstance(req, dict):
+            continue
+        req_id = str(req.get("id") or "").strip()
+        if req_id:
+            ids.append(req_id)
     idx = 1
     while True:
-        value = str(row.get(f"req_{idx}") or "").strip()
-        if not value:
+        key = f"req_{idx}"
+        if key not in row:
             break
-        if value not in ids:
-            ids.append(value)
+        req_id = str(row.get(key) or "").strip()
+        if req_id:
+            ids.append(req_id)
         idx += 1
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 def is_multiple_conflict(row: Dict[str, Any]) -> bool:
+    row_id = str(row.get("id") or "").strip()
+    if row_id.startswith("MULTIPLE-"):
+        return True
+    conflict_scope = str(
+        row.get("scope")
+        or row.get("kind")
+        or row.get("conflict_scope")
+        or ""
+    ).strip().lower()
+    if conflict_scope in {"group", "multiple", "set", "group_conflict"}:
+        return True
+    if row.get("related_pairs"):
+        return True
     return len(requirement_ids(row)) >= 3
 
 
@@ -52,30 +74,82 @@ def all_conflict_rows(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def normalize_conflict_state(artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact["conflict"] = conflict_state(artifact)
-    artifact.pop("conflicts", None)
     return artifact
 
 
 def set_pair_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = conflict_state(artifact)
-    state["pairs"] = [dict(row) for row in rows if isinstance(row, dict)]
+    existing_by_signature = {
+        tuple(sorted(requirement_ids(row))): row
+        for row in state.get("pairs", [])
+        if isinstance(row, dict) and requirement_ids(row)
+    }
+    preserved_keys = (
+        "meeting",
+        "initial_label",
+        "initial_type",
+        "initial_reason",
+        "final_label",
+        "final_type",
+        "description",
+        "status",
+    )
+    next_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        current_label = str(item.get("label") or item.get("initial_label") or "").strip()
+        existing = existing_by_signature.get(tuple(sorted(requirement_ids(item)))) or {}
+        for key in preserved_keys:
+            if current_label in {"Conflict", "Neutral"} and key in {"final_label", "final_type", "description", "status"}:
+                continue
+            if key not in item and existing.get(key) not in (None, "", [], {}):
+                item[key] = existing[key]
+        next_rows.append(item)
+    state["pairs"] = next_rows
     artifact["conflict"] = state
-    artifact.pop("conflicts", None)
     return artifact
 
 
 def set_multiple_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = conflict_state(artifact)
-    state["multiple"] = [dict(row) for row in rows if isinstance(row, dict)]
+    existing_by_signature = {
+        tuple(sorted(requirement_ids(row))): row
+        for row in state.get("multiple", [])
+        if isinstance(row, dict) and requirement_ids(row)
+    }
+    preserved_keys = (
+        "meeting",
+        "initial_label",
+        "initial_type",
+        "initial_reason",
+        "final_label",
+        "final_type",
+        "description",
+        "status",
+    )
+    next_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        current_label = str(item.get("label") or item.get("initial_label") or "").strip()
+        existing = existing_by_signature.get(tuple(sorted(requirement_ids(item)))) or {}
+        for key in preserved_keys:
+            if current_label in {"Conflict", "Neutral"} and key in {"final_label", "final_type", "description", "status"}:
+                continue
+            if key not in item and existing.get(key) not in (None, "", [], {}):
+                item[key] = existing[key]
+        next_rows.append(item)
+    state["multiple"] = next_rows
     artifact["conflict"] = state
-    artifact.pop("conflicts", None)
     return artifact
 
 
 def set_conflict_entries(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = split_conflict_rows([dict(row) for row in rows if isinstance(row, dict)])
     artifact["conflict"] = state
-    artifact.pop("conflicts", None)
     return artifact
 
 

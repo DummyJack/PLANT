@@ -4,11 +4,14 @@ from typing import Any, Dict, List, Optional
 
 from utils.language import current_output_language
 
+from agents.profile.issue_proposal_prompt import build_issue_proposal_prompt
 from agents.profile.conflict_review import conflict_review_text_hint
+from agents.profile.issue_response_prompt import READY_TO_CLOSE_QUALITY_GATE, STANCE_RESPONSE_TEXT_RULES
 from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import (
+    EXPERT_CONFLICT_RESOLUTION_RULES,
     EXPERT_CONFLICT_ISSUE_RULES,
     EXPERT_ELICITATION_CONTEXT_RULES,
     EXPERT_ISSUE_RULES,
@@ -24,7 +27,7 @@ class ExpertIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 2,
+        max_items: int = 5,
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="expert_issue_proposal",
@@ -49,11 +52,9 @@ class ExpertIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 2),
+            "max_items": kwargs.get("max_items", 5),
             "latest_draft": artifact.get("latest_draft", ""),
-            "system_models": artifact.get("system_models", []),
-            "conflict_report": artifact.get("conflict_report", []),
-            "feedback": artifact.get("feedback", {}) if isinstance(artifact.get("feedback"), dict) else {},
+            "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
 
     def decide_expert_issue_action(
@@ -70,7 +71,7 @@ class ExpertIssues:
                 "reasoning": "上一輪 Expert issue proposal 已符合格式契約，結束提案。",
             }
         return {
-            "action": "propose_domain_issues",
+            "action": "propose_issues",
             "params": {},
             "reasoning": "從外部義務、domain risk 與 evidence gap 角度提出需要會議處理的議題。",
         }
@@ -83,7 +84,7 @@ class ExpertIssues:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
-        if action != "propose_domain_issues":
+        if action != "propose_issues":
             return {
                 "action": action,
                 "status": "failed",
@@ -91,42 +92,32 @@ class ExpertIssues:
                 "format_error": f"Expert issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 2)
+        max_items = int(observation.get("max_items") or 5)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
-            "system_models": observation.get("system_models", []),
-            "conflict_report": observation.get("conflict_report", []),
-            "feedback": observation.get("feedback", {}),
+            "proposal_context": observation.get("proposal_context") or {},
         }
-        prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的 domain / compliance / risk 議題。目標是讓 latest draft 更 SRS-ready。
-
-# 提案邊界
-- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
-- 只提出最能讓 draft 更 SRS-ready 的外部限制、風險、證據缺口或待確認議題。
-- 可以根據既有 feedback 的 constraints / risks / recommendations / open_items 提案，但必須說明適用範圍與需求影響。
-- feedback 是領域研究輔助資料，不是正式需求；不得直接把 recommendations 升格成 requirement_revision，除非明確需要 stakeholder 或 analyst 確認。
-- 議題必須聚焦 domain / compliance / risk / evidence basis，不提出無外部限制或證據影響的一般需求議題。
-- 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
-
-# 每筆 issue schema
-- title：issue proposal 的短標籤，供 triage 參考；正式會議標題由 Mediator 另行命名
-- description：說明 domain risk / obligation / evidence gap，以及會影響哪些需求內容
-- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一
-- participants：從 expert、analyst、modeler、user 挑選，必須包含 expert；若需要 user 確認適用性或風險接受度，加入 user
-- discussion_mode：sequential 或 simultaneous
-- speaking_order：必須與 participants 成員一致
-- source_ids：相關 requirement/conflict/open question/research id；沒有就空陣列
-- priority_hint：high / medium / low
-- impact_level：high / medium / low
-- why_now：說明為何本輪需要處理，而不是延後
-- requires_multi_party：true/false
-- blocks_decision：true/false
-- routing_preference：direct_clarification / formal_meeting / human_decision
-
-# 輸出 JSON
-{{"issues": []}}"""
+        prompt = build_issue_proposal_prompt(
+            agent_label="domain / compliance / risk",
+            focus="外部限制、風險、證據缺口或待確認議題",
+            common_problem_examples=[
+                "同一合規限制或資料保存規則影響多筆需求",
+                "安全、隱私、稽核、外部服務限制或證據缺口會改變需求定稿",
+                "一組需求需要確認是否轉成 constraint、NFR、risk 或 open question",
+            ],
+            value_gate=[
+                "會阻礙需求規格的外部限制、合規/安全風險、證據依據、品質底線或待確認義務定稿。",
+                "需要正式會議確認適用範圍、風險取捨、是否轉成需求或是否交由人類裁決；若只是研究建議或可直接寫入 feedback，不要提出。",
+            ],
+            reject_rule=(
+                "不要提出：一般最佳實務提醒、無明確適用範圍的法規猜測、低影響風險、"
+                "可由 research_domain 直接更新 feedback 的事項。若單一限制或風險會影響一組需求、"
+                "驗收底線或是否能寫入 SRS，可以提出，但 reason 必須說清楚共同領域問題。"
+            ),
+            max_items=max_items,
+            proposal_context=context["proposal_context"],
+        )
         try:
             data = self.chat_json(self.build_direct_messages(prompt, context=context))
             proposals = self.expert_issue_proposals_payload(
@@ -156,96 +147,54 @@ class ExpertIssues:
         round_num: int,
         max_items: int,
     ) -> List[Dict[str, Any]]:
-        if not isinstance(data, dict):
-            raise ValueError("Expert issue proposal 必須輸出 JSON object")
-        raw_issues = data.get("issues")
+        raw_issues = data
+        if isinstance(raw_issues, dict):
+            raw_issues = raw_issues.get("issues") or raw_issues.get("proposals") or []
         if not isinstance(raw_issues, list):
-            raise ValueError("Expert issue proposal 必須包含 issues list")
+            raise ValueError("Expert issue proposal 必須直接輸出 issues list")
 
-        allowed_categories = {
-            "conflict_resolution",
-            "requirement_revision",
-            "srs_open_question",
-            "tradeoff_decision",
-        }
-        allowed_participants = {"expert", "analyst", "modeler", "user"}
-        allowed_modes = {"sequential", "simultaneous"}
-        allowed_priority = {"high", "medium", "low"}
-        allowed_routing = {
-            "direct_clarification",
-            "formal_meeting",
-            "human_decision",
-        }
+        allowed_importance = {"high", "medium", "low"}
         proposals: List[Dict[str, Any]] = []
         seen = set()
         for idx, row in enumerate(raw_issues, 1):
             if not isinstance(row, dict):
                 raise ValueError(f"issues[{idx}] 必須是 object")
             title = str(row.get("title") or "").strip()
-            description = str(row.get("description") or "").strip()
-            category = str(row.get("category") or "").strip()
-            why_now = str(row.get("why_now") or "").strip()
-            if not title or not description or not why_now:
-                raise ValueError(f"issues[{idx}] 缺少 title/description/why_now")
-            if category not in allowed_categories:
-                raise ValueError(f"issues[{idx}] category 不合法: {category or '<empty>'}")
+            if not title:
+                raise ValueError(f"issues[{idx}] 缺少 title")
+            expect_outcome = str(row.get("expect_outcome") or "").strip()
+            sources = []
+            for source in row.get("sources") or []:
+                if not isinstance(source, dict):
+                    continue
+                artifact = str(source.get("artifact") or "").strip()
+                ids = [
+                    str(x).strip()
+                    for x in (source.get("ids") or [])
+                    if str(x).strip()
+                ]
+                evidence = str(source.get("evidence") or "").strip()
+                if artifact and evidence:
+                    sources.append({"artifact": artifact, "ids": list(dict.fromkeys(ids)), "evidence": evidence})
+            reason = str(row.get("reason") or "").strip()
+            if not expect_outcome or not sources or not reason:
+                raise ValueError(f"issues[{idx}] 缺少 expect_outcome/sources/reason")
 
-            participants = [
-                str(x).strip()
-                for x in (row.get("participants") or [])
-                if str(x).strip()
-            ]
-            participants = list(dict.fromkeys(participants))
-            if not participants or any(p not in allowed_participants for p in participants):
-                raise ValueError(f"issues[{idx}] participants 不合法")
-            if "expert" not in participants:
-                raise ValueError(f"issues[{idx}] participants 必須包含 expert")
+            importance = str(row.get("importance") or "").strip().lower()
+            if importance not in allowed_importance:
+                raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
 
-            mode = str(row.get("discussion_mode") or "").strip()
-            if mode not in allowed_modes:
-                raise ValueError(f"issues[{idx}] discussion_mode 不合法: {mode or '<empty>'}")
-            speaking_order = [
-                str(x).strip()
-                for x in (row.get("speaking_order") or [])
-                if str(x).strip()
-            ]
-            if set(speaking_order) != set(participants):
-                raise ValueError(f"issues[{idx}] speaking_order 必須與 participants 成員一致")
-
-            priority = str(row.get("priority_hint") or "").strip().lower()
-            impact = str(row.get("impact_level") or "").strip().lower()
-            if priority not in allowed_priority:
-                raise ValueError(f"issues[{idx}] priority_hint 不合法: {priority or '<empty>'}")
-            if impact not in allowed_priority:
-                raise ValueError(f"issues[{idx}] impact_level 不合法: {impact or '<empty>'}")
-            routing = str(row.get("routing_preference") or "").strip()
-            if routing not in allowed_routing:
-                raise ValueError(f"issues[{idx}] routing_preference 不合法: {routing or '<empty>'}")
-
-            source_ids = [
-                str(x).strip()
-                for x in (row.get("source_ids") or [])
-                if str(x).strip()
-            ]
-            key = (category, title, tuple(source_ids))
+            key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:
                 continue
             seen.add(key)
             proposals.append(
                 {
                     "title": title,
-                    "description": description,
-                    "category": category,
-                    "participants": participants,
-                    "discussion_mode": mode,
-                    "speaking_order": speaking_order,
-                    "source_ids": list(dict.fromkeys(source_ids)),
-                    "priority_hint": priority,
-                    "impact_level": impact,
-                    "why_now": why_now,
-                    "requires_multi_party": bool(row.get("requires_multi_party")),
-                    "blocks_decision": bool(row.get("blocks_decision")),
-                    "routing_preference": routing,
+                    "expect_outcome": expect_outcome,
+                    "sources": sources,
+                    "importance": importance,
+                    "reason": reason,
                     "proposed_by": "expert",
                     "round": round_num,
                 }
@@ -263,6 +212,11 @@ class ExpertIssues:
     ) -> str:
         issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
         issue_id = str(issue.get("id") or "")
+        target_stakeholders = [
+            str(name).strip()
+            for name in (issue.get("target_stakeholders") or [])
+            if str(name).strip()
+        ]
 
         prev_text = ""
         if previous_responses:
@@ -274,7 +228,7 @@ class ExpertIssues:
 
         context_text = ""
         if artifact_context:
-            context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
+            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
 
         recent_ask_history_text = ""
         recent_ask_history = issue.get("recent_ask_history") or []
@@ -283,60 +237,68 @@ class ExpertIssues:
                 "\n# 最近幾輪正式提問摘要\n"
                 + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
             )
-        my_action_text = ""
-        agent_actions = issue.get("agent_actions") if isinstance(issue.get("agent_actions"), dict) else {}
-        my_action = agent_actions.get("expert") if isinstance(agent_actions.get("expert"), dict) else {}
-        if my_action:
-            my_action_text = (
-                "\n# 本輪你的 action\n"
-                + json.dumps(my_action, ensure_ascii=False, indent=2)
-            )
-
         skill_section = ""
         skill_context = self.get_optional_skill_context(issue, artifact_context)
         if skill_context:
-            skill_section = f"\n# Skill 參考（本輪由 agent 自行判斷使用）\n{skill_context}\n"
+            skill_section = f"\n# 可用技能參考（本輪自行判斷使用）\n{skill_context}\n"
         category = (issue.get("category") or "").strip()
-        allow_suggested_next_action = (
-            category != "conflict_resolution"
-            and not issue_id.startswith("ELICIT-")
-        )
+        contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+        expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
+        expert_expected = expected_actions.get("expert")
+        expert_expected_actions = []
+        if isinstance(expert_expected, str):
+            expert_expected_actions = [str(expert_expected).strip()]
+        elif isinstance(expert_expected, list):
+            expert_expected_actions = [str(a).strip() for a in expert_expected]
 
-        if category == "conflict_resolution":
+        is_pair_review = (
+            category == "resolve_conflict"
+            and str(contract.get("type") or "").strip() == "pair_reviews"
+        )
+        if is_pair_review:
             category_hint = EXPERT_CONFLICT_ISSUE_RULES
-        elif category == "tradeoff_decision":
-            category_hint = """# 本議題特別要求（tradeoff_decision）
+        elif category == "resolve_conflict":
+            category_hint = EXPERT_CONFLICT_RESOLUTION_RULES
+        elif category == "tradeoff":
+            category_hint = """# 本議題特別要求（tradeoff）
     - 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。"""
-        elif category == "srs_open_question":
-            category_hint = """# 本議題特別要求（srs_open_question）
-    - 優先回答可確認的領域事實、外部限制與證據缺口；只提出會影響限制、風險或證據依據的問題。"""
-        elif category == "requirement_revision":
-            category_hint = """# 本議題特別要求（requirement_revision）
-    - 說明此新增需求是否只是候選限制、非功能需求或風險緩解方向，以及是否來自強制義務、最佳實務或證據缺口。"""
+        elif category == "clarify_requirement":
+            category_hint = """# 本議題特別要求（clarify_requirement）
+    - 說明需求語意、驗收邊界或風險條件是否需要外部證據支撐。"""
+        elif category == "define_boundary":
+            category_hint = """# 本議題特別要求（define_boundary）
+    - 說明本系統、第三方服務、人工流程或角色責任的外部限制與風險邊界。"""
+        elif category == "align_model":
+            category_hint = """# 本議題特別要求（align_model）
+    - 說明模型揭露的流程、資料、狀態或角色責任是否受到外部限制或風險影響。"""
         else:
             category_hint = ""
 
         response_contract = """# 回應契約
     - text 必須有依據，不可只表態或宣告最終決議。
-    - open_questions 只放真正需要後續回答、且會影響限制/風險/驗收邊界的單一具體問題；沒有就輸出空陣列。"""
+    - 若本輪已產生或更新 feedback，text 必須引用本輪 feedback 結果說明它如何影響本議題的限制、風險、證據強度、驗收邊界或可接受方案；不要只說已更新 feedback。
+    - 若本輪沒有更新 feedback，但當前專案資料已有與本議題相關的 feedback.json 內容，可以引用既有 findings、constraints、risks 或 recommendations 來支撐發言；若引用既有 feedback，需明確說出引用的是哪一類內容與它支持或揭露的需求點。
+    - 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以 Expert 觀點回答。
+    - open_questions 只放真正需要後續回答、且會相關限制/風險/驗收邊界的單一具體問題；沒有就輸出空陣列。
+    - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。
+    - 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的領域限制、風險或處理方案。
+""" + READY_TO_CLOSE_QUALITY_GATE + "\n\n" + STANCE_RESPONSE_TEXT_RULES
+        if issue_id == "OQ":
+            response_contract = """# 回應契約
+    - 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
+    - 回答需保持 Expert 視角，聚焦領域限制、法規/標準、風險、證據強度或 evidence gap。
+    - 不更新專案資料，不輸出 stance。
+    - open_questions 預設輸出空陣列；只有問題本身無法回答且需要一個關鍵澄清時，才提出一個 open question。"""
+        if target_stakeholders:
+            response_contract += (
+                "\n    - 若 open_questions 的 to 是 user，問題必須是問議題規劃指定的利害關係人："
+                + "、".join(target_stakeholders)
+                + "；不得改問其他利害關係人。"
+            )
 
-        next_action_contract = ""
         pair_reviews_json = ""
-        text_hint = '"text": "針對此議題的完整發言內容"'
-        suggested_next_action_json = ""
-        if allow_suggested_next_action:
-            suggested_next_action_json = """,
-    "suggested_next_action": {
-        "type": "direct_clarification | new_issue",
-        "reason": "為何建議會後安排這一步",
-        "target_ids": ["可選，相關 requirement/conflict/issue id"],
-        "urgency": "low | medium | high"
-    }"""
-        if allow_suggested_next_action:
-            next_action_contract = """# suggested_next_action 規範
-    - 可提供會後建議；它不會在會議中直接執行。無明確建議可省略或填 null。"""
-        if category == "conflict_resolution":
-            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+        text_hint = '"text": "依領域/風險/限制立場對此議題的自然會議發言"'
+        if is_pair_review:
             known_pair_ids = [
                 str(pair_id).strip()
                 for pair_id in (contract.get("known_pair_ids") or [])
@@ -345,30 +307,34 @@ class ExpertIssues:
             known_pair_ids_text = json.dumps(known_pair_ids, ensure_ascii=False)
             pair_reviews_json = ""
             response_contract = """# 回應契約
-    - 外層只能輸出合法 JSON object；不要 Markdown、不要 ```json 程式碼區塊、不要額外說明文字。
-    - 外層只能有 text 欄位。
+    - 外層輸出只包含 text 欄位的 JSON object。
     - text 必須是 JSON object 字串，不是巢狀 object。
     - text JSON 結構必須為 {"pair_reviews":[...]}。
-    - pair_reviews 必須逐筆涵蓋 response_contract.known_pair_ids 中每個 id，不能遺漏、不能新增未知 id。
+    - pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。
     - 每筆 pair_reviews 都必須有 id、proposed_label、reason。
     - proposed_label 只能是 Conflict 或 Neutral。
     - reason 必須有依據，不可只表態或宣告最終決議。
     - 本輪必須涵蓋的 pair id：""" + known_pair_ids_text
             text_hint = conflict_review_text_hint()
             output_fields = f"    {text_hint}"
+        elif issue_id == "OQ":
+            output_fields = (
+                '    "text": "直接回答問題",\n'
+                '    "open_questions": []'
+            )
+        elif issue_id.startswith("ELICIT-"):
+            output_fields = (
+                f"    {text_hint},\n"
+                '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
+                f"{pair_reviews_json}"
+            )
         else:
-            if issue_id.startswith("ELICIT-"):
-                output_fields = (
-                    f"    {text_hint},\n"
-                    '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
-                    f"{suggested_next_action_json}{pair_reviews_json}"
-                )
-            else:
-                output_fields = (
-                    f"    {text_hint},\n"
-                    '    "open_questions": [{"to": "目標 agent 名稱", "question": "當下最重要、會影響決策的問題"}]'
-                    f"{suggested_next_action_json}{pair_reviews_json}"
-                )
+            output_fields = (
+                f"    {text_hint},\n"
+                '    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "當下最重要、會相關決策的問題"}]'
+                ',\n    "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
+                f"{pair_reviews_json}"
+            )
 
         elicitation_hint = ""
         task_block = EXPERT_ISSUE_TASK
@@ -386,14 +352,11 @@ class ExpertIssues:
     {prev_text}
     {context_text}
     {recent_ask_history_text}
-    {my_action_text}
     {skill_section}
     {category_hint}
     {elicitation_hint}
 
     {response_contract}
-
-    {next_action_contract}
 
     # 任務
     {task_block}

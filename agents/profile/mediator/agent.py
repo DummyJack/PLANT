@@ -3,7 +3,10 @@ from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
 
-from .prompts import closure_vote_prompt as build_closure_vote_prompt
+from .prompts import (
+    MEDIATOR_SYSTEM_PROMPT,
+    closure_vote_prompt as build_closure_vote_prompt,
+)
 from .issue_planning import MediatorIssuePlanning
 from .discussion import MediatorDiscussion
 from .records import MediatorRecords
@@ -14,13 +17,13 @@ class MediatorAgentSupport:
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
             "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
-            "請先根據每個項目的 requirements 原文獨立重判，"
+            "請先根據每個項目的 User Requirements（URL-*）原文獨立重判，"
             "並將重判結果填入 proposed_label（Conflict 或 Neutral）。\n"
-            "你必須同時做兩層檢視：\n"
-            "1) 整體檢視：說明你對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
+            "必須同時做兩層檢視：\n"
+            "1) 整體檢視：說明對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
             "2) 逐筆檢視：每個 [PAIR-xxx] 或 [MULTIPLE-xxx] 都必須明確寫出：\n"
-            "   - proposed_label: 你重判後建議採用的標籤（Conflict 或 Neutral）\n"
-            "   - reason: 一句到兩句審查理由，需說明你的獨立判斷依據\n"
+            "   - proposed_label: 重判後建議採用的標籤（Conflict 或 Neutral）\n"
+            "   - reason: 一句到兩句審查理由，需說明獨立判斷依據\n"
             "reason 只能填純理由文字，不要包含 id、proposed_label 或欄位名稱。\n"
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
@@ -31,11 +34,17 @@ class MediatorAgentSupport:
         question: str,
         from_agent: str,
         follow_up_hint: str,
+        target_stakeholders=None,
     ) -> Dict[str, Any]:
         return {
             "id": "OQ",
             "title": f"回答 {from_agent} 的問題",
             "description": f"{question}\n\n{follow_up_hint}",
+            "target_stakeholders": [
+                str(name).strip()
+                for name in (target_stakeholders or [])
+                if str(name).strip()
+            ],
         }
 
     @staticmethod
@@ -50,15 +59,10 @@ class MediatorAgentSupport:
         new_open_questions: Optional[List[Dict[str, Any]]] = None,
         affected_conflict_ids: Optional[List[str]] = None,
         affected_requirement_ids: Optional[List[str]] = None,
-        requirement_impact: Optional[Dict[str, Any]] = None,
-        needs_approval: bool = False,
-        change_record: Optional[List[Dict[str, Any]]] = None,
-        suggested_next_actions: Optional[List[Dict[str, Any]]] = None,
+        url_updates: Optional[List[Dict[str, Any]]] = None,
         needs_human: bool = False,
         options: Optional[List[Dict[str, Any]]] = None,
         recommendation: Optional[Dict[str, Any]] = None,
-        needs_user_confirmation: bool = False,
-        confirmation_status: str = "",
     ) -> Dict[str, Any]:
         """統一 issue_result schema。"""
         resolution_status = (resolution_status or "").strip() or "unresolved"
@@ -83,56 +87,31 @@ class MediatorAgentSupport:
             rid.strip() for rid in (affected_requirement_ids or [])
             if isinstance(rid, str) and rid.strip()
         ]
-        requirement_impact = requirement_impact or {}
-        if not isinstance(requirement_impact, dict):
-            requirement_impact = {}
-        requirement_impact = {
-            "level": str(requirement_impact.get("level") or "none").strip() or "none",
-            "notes": str(requirement_impact.get("notes") or "").strip(),
-        }
-        change_record = [
-            row for row in (change_record or []) if isinstance(row, dict)
-        ]
-        suggested_next_actions = [
-            row for row in (suggested_next_actions or []) if isinstance(row, dict)
+        url_updates = [
+            row for row in (url_updates or [])
+            if isinstance(row, dict) and str(row.get("action") or "").strip()
         ]
         options = [row for row in (options or []) if isinstance(row, dict)]
         recommendation = recommendation if isinstance(recommendation, dict) else {}
-        confirmation_status = (
-            confirmation_status
-            or ("pending" if needs_user_confirmation else "not_required")
-        )
-        dod_complete = bool(
-            decision
-            and (resolution_status not in {"agreed", "human_decision"}
-                 or affected_requirement_ids)
-        )
         result = {
-            "schema_version": "issue_result.v1",
-            "resolution": resolution_status,
             "summary": summary,
             "decision": decision,
             "resolution_status": resolution_status,
-            "decision_summary": summary,
             "agreed_points": agreed_points,
             "unresolved_points": unresolved_points,
             "new_open_questions": new_open_questions,
-            "affected_conflict_ids": affected_conflict_ids,
-            "affected_requirement_ids": affected_requirement_ids,
-            "requirement_impact": requirement_impact,
-            "change_record": change_record,
-            "suggested_next_actions": suggested_next_actions,
             "needs_human": bool(needs_human),
             "options": options,
             "recommendation": recommendation,
-            "needs_user_confirmation": bool(needs_user_confirmation),
-            "confirmation_status": confirmation_status,
-            "dod_complete": dod_complete,
         }
+        if affected_conflict_ids:
+            result["affected_conflict_ids"] = affected_conflict_ids
+        if affected_requirement_ids:
+            result["affected_requirement_ids"] = affected_requirement_ids
+        if url_updates:
+            result["url_updates"] = url_updates
         if mediator_compromise and any(str(v or "").strip() for v in mediator_compromise.values()):
             result["mediator_compromise"] = mediator_compromise
-        if needs_approval:
-            result["needs_approval"] = True
         return result
 
 class MediatorAgent(
@@ -145,17 +124,10 @@ class MediatorAgent(
 ):
     name = "mediator"
 
-    system_prompt = """你是需求調解主持人，負責 triage、主持討論、形成收斂結果。
-
-規則：
-1. 根據 proposal pool、queue、open conflicts、open questions 與本輪容量分流議題；不得憑空新增議題來源。
-2. 優先走 direct clarification / direct apply / human decision；只有真的需要協調時才進 formal meeting。
-3. 未自然收斂時，整理可選方案、影響與 recommendation，交由人類裁決；不得由代理人或 user agent 替人類定案。
-4. 保持中立，輸出可追蹤的 issue_result。
-5. 無法形成明確建議時，升級至人類裁決。"""
+    system_prompt = MEDIATOR_SYSTEM_PROMPT
 
     enabled_issue_type_ids: Optional[List[str]] = None
-    enable_human_escalation: bool = True
+    enable_human_judgment: bool = True
 
     def __init__(
         self,
@@ -200,8 +172,11 @@ class MediatorAgent(
             "state_summary": state_summary,
             "issues_count": len(state_summary.get("issues") or []),
             "open_issues_count": len(state_summary.get("open_issues") or []),
-            "queue_pending_count": int(state_summary.get("queue_pending_count") or 0),
-            "can_expand_decision_issues": bool(state_summary.get("can_expand_decision_issues")),
+            "human_decision_pending_count": int(
+                (state_summary.get("human_decision_status") or {}).get("human_decision_queue_count")
+                or 0
+            ),
+            "can_add_issues": bool(state_summary.get("can_add_issues")),
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
         }
@@ -237,7 +212,7 @@ class MediatorAgent(
         return {
             "action": decision.get("action", "finish_round"),
             "status": "planned",
-            "summary": f"decision issue action selected: {decision.get('action', 'finish_round')}",
+            "summary": f"meeting issue action selected: {decision.get('action', 'finish_round')}",
             "params": decision.get("params") or {},
         }
 
@@ -258,5 +233,4 @@ class MediatorAgent(
         )
         trace = opa.get("opa_trace") or []
         decision = dict((trace[-1].get("decision") if trace else {}) or {})
-        decision["opa_trace"] = opa.get("opa_trace", [])
         return decision

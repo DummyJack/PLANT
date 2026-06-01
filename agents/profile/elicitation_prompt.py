@@ -3,7 +3,7 @@
 
 COMMON_ELICITATION_CONTEXT_RULES = """# Requirement Elicitation Interview
 - 這是同一場需求擷取會議的接續發言，不是自由提問。
-- 你必須遵守本輪 action：ask_user/supplement_question 代表向利害關係人提問；propose_finish 只能輸出固定停止句。
+- 必須遵守本輪 action：ask_user/supplement_question 代表向利害關係人提問；propose_finish 只能輸出固定停止句。
 - 問題必須承接目前需求理解、前面發言、利害關係人已回答內容與上一輪摘要。
 - 不要重複問已確認、已拒絕、利害關係人說不在意、或已被記錄成候選需求的內容。
 - 若目前理解已足夠，可以提出收束；停止句只代表提議收束，系統會再進入收束投票流程決定是否真的結束。"""
@@ -13,7 +13,7 @@ def elicitation_action_task(stop_phrase: str) -> str:
     return (
         "依本輪 action 發言。若 action 是 ask_user 或 supplement_question，"
         "先用 1 句重述目前理解或缺口，再提出當下最重要、最能推進需求確認的一個問題（總長 2-4 句）；"
-        "若你判斷目前已蒐集到足夠資訊、可以收束本輪需求擷取，則 text 請只輸出以下固定句"
+        "若判斷目前已蒐集到足夠資訊、可以收束本輪需求擷取，則 text 請只輸出以下固定句"
         f"（勿加引號、勿改寫、勿額外說明）：{stop_phrase}"
     )
 
@@ -23,6 +23,8 @@ def elicitation_action_rules(stop_phrase: str) -> str:
 - 若本輪 action 是 propose_finish，text 必須只輸出停止句：{stop_phrase}
 - 若本輪 action 是 ask_user 或 supplement_question，只提出當下最重要的一個問題；不要合併多題。
 - 若本輪 action 是 ask_user 或 supplement_question，必須輸出 target_stakeholders，從已選利害關係人中選擇一位或多位。
+- 問題內容必須對應 target_stakeholders 的立場、責任、痛點、利益或限制；不得把其他 stakeholder 的情境直接拿來問。
+- 若同一主題要問不同 stakeholder，必須改寫成該 stakeholder 會關心的影響與判斷點，不得複製同一題。
 - 問題必須可回答，且答案會明顯影響需求文字、範圍、限制、流程邊界或是否收束。
 - 提問前必須避開 closed_issues 與 do_not_repeat；不要重問利害關係人已回答、已說不在意、或已表示 covered 的方向。
 - 避免使用「還有什麼需求」「請多說一點」等泛問。

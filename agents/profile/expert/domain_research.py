@@ -1,4 +1,5 @@
 # Expert domain research: optional skill context plus evidence gathering loop.
+from agents.profile.prompt_catalog import render_prompt
 import json
 
 from agents.profile.scenario import scenario_prompt_value
@@ -7,15 +8,16 @@ from .validation import clean_domain_research, clean_research_result
 
 
 ACTIONS = [
+    "read_reference_docs",
     "research_issue",
-    "update_findings",
+    "update_feedback",
     "done",
 ]
 
 
 def research_requirement_candidates(artifact):
     rows = []
-    for req in artifact.get("requirements") or artifact.get("URL") or []:
+    for req in artifact.get("URL") or []:
         if not isinstance(req, dict) or not str(req.get("text") or "").strip():
             continue
         row = {
@@ -62,9 +64,20 @@ def research_open_questions(artifact):
     return rows
 
 
+def research_source(artifact):
+    issue = artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {}
+    meeting_id = str(issue.get("meeting_id") or "").strip()
+    if meeting_id:
+        return meeting_id
+    issue_id = str(issue.get("id") or "").strip()
+    if issue_id:
+        return issue_id
+    return "initial"
+
+
 class ExpertDomainResearch:
     def run_domain_research_loop(self, artifact):
-        """Expert domain research 走共用 agent loop，研究結果寫回 feedback。"""
+        """Expert domain research 走共用 agent loop，由 Expert 判斷是否寫回 feedback。"""
         result = self.run_action_loop(
             name="domain_research",
             context={
@@ -81,18 +94,21 @@ class ExpertDomainResearch:
         self, artifact,
         research_results, iteration, max_iterations,
     ):
-        URL = research_requirement_candidates(artifact)
+        user_requirements = research_requirement_candidates(artifact)
         existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
         return {
+            "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
             "scenario": scenario_prompt_value(scenario_source),
             "scope": artifact.get("scope", {}),
-            "URL": URL,
-            "user_requirements": URL,
+            "user_requirements": user_requirements,
             "stakeholders": research_stakeholders(artifact),
             "open_questions": research_open_questions(artifact),
             "has_existing_research": bool(existing),
             "research_results_count": len(research_results),
+            "document_evidence_count": len(artifact.get("document_evidence", []) or []),
+            "has_read_file": "read_file" in self.tools,
+            "has_web_search": "web_search" in self.tools,
             "iteration": iteration + 1,
             "max_iterations": max_iterations,
         }
@@ -102,6 +118,76 @@ class ExpertDomainResearch:
     ):
         obs: dict = {"action": action, "result": None, "error": None, "summary": ""}
 
+        if action == "read_reference_docs":
+            if "read_file" not in self.tools:
+                obs["summary"] = "read_file 工具不可用，略過文件讀取"
+                obs["result"] = {"document_evidence": [], "gaps": ["read_file 工具不可用"]}
+                return obs
+            query = str(params.get("query") or params.get("topic") or "").strip()
+            if not query:
+                obs["error"] = "query 參數為空"
+                obs["summary"] = "文件讀取失敗：未提供查詢問題"
+                return obs
+            scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
+            context = {
+                "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
+                "scenario": scenario_prompt_value(scenario_source),
+                "scope": artifact.get("scope", {}),
+                "user_requirements": research_requirement_candidates(artifact),
+                "stakeholders": research_stakeholders(artifact),
+                "open_questions": research_open_questions(artifact),
+                "existing_document_evidence": artifact.get("document_evidence", []) or [],
+            }
+            task = f"""# 任務
+針對以下研究問題，先查找 doc/ 內專案參考文件並整理文件證據。
+
+# 研究問題
+{query}
+
+# 規則
+- 必須使用 read_file 搜尋或讀取相關文件片段。
+- 只整理和研究問題、source requirements 或目前議題直接相關的文件證據。
+- 若文件沒有相關內容，document_evidence 輸出空陣列，並在 gaps 說明缺口。
+- 每筆 document_evidence 必須包含 source；source 要能追蹤到文件名稱、路徑或片段位置。
+- related_requirement_ids 只能引用輸入 user_requirements 中存在的 id；不能編造 URL-*。
+- 不要根據文件證據產生正式需求；只做 evidence summary。
+
+# 輸出 JSON
+{{
+  "document_evidence": [
+    {{
+      "source": "doc/...",
+      "section": "章節或片段位置",
+      "summary": "文件證據摘要",
+      "related_requirement_ids": ["URL-1"]
+    }}
+  ],
+  "gaps": []
+}}"""
+            try:
+                raw = self.chat_with_tools(
+                    self.build_direct_messages(task, context=context),
+                    active_skill="domain-research",
+                )
+                data = self.parse_first_json(raw)
+                evidence = self.clean_document_evidence(data.get("document_evidence"))
+                gaps = [
+                    str(item).strip()
+                    for item in (data.get("gaps") or [])
+                    if str(item).strip()
+                ]
+                artifact["document_evidence"] = self.merge_document_evidence(
+                    artifact.get("document_evidence", []),
+                    evidence,
+                )
+                obs["result"] = {"document_evidence": evidence, "gaps": gaps}
+                obs["context_updates"] = {"artifact": artifact}
+                obs["summary"] = f"文件證據 {len(evidence)} 筆，缺口 {len(gaps)} 筆"
+            except Exception as e:
+                obs["error"] = str(e)
+                obs["summary"] = f"文件讀取失敗: {e}"
+            return obs
+
         if action == "research_issue":
             query = params.get("query", "")
             if not query:
@@ -110,46 +196,16 @@ class ExpertDomainResearch:
                 return obs
             scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
             context = {
+                "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": scenario_prompt_value(scenario_source),
                 "scope": artifact.get("scope", {}),
-                "URL": research_requirement_candidates(artifact),
                 "user_requirements": research_requirement_candidates(artifact),
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
+                "document_evidence": artifact.get("document_evidence", []) or [],
             }
-            task = f"""針對以下問題進行領域研究：{query}
-
-    請使用 `domain-research` skill 的研究方法與證據蒐集準則；若 skill 範例與本任務輸出格式不同，必須以本任務的 feedback JSON 結構為準。
-
-    只輸出本專案 feedback JSON。
-
-    研究邊界：
-    - 根據 scenario、scope、stakeholders、open_questions 與 user_requirements 判斷外部領域因素；user_requirements 優先使用正式 requirements，若尚無正式 requirements 才使用 URL 候選需求；URL 是舊欄位名稱，不是網站連結。
-    - feedback 只作為領域研究輔助資料，不產生需求。
-    - 需要證據時可使用本輪工具使用資料中允許的工具。
-    - findings、constraints、risks、recommendations、open_items 的每個 item 請輸出 text、related_URL 與 source。
-    - source 記錄此項 feedback 的流程來源；初始領域研究使用 "initial"，若來自正式會議則使用該會議 ID。
-    - 每筆 related_URL 必須盡可能對應到受影響的 user_requirements id。
-    - related_URL 只能引用 user_requirements 中存在的 id；不得編造不存在的 URL-*。
-    - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
-    - 不要為了填欄位硬關聯需求。
-    - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
-    - sources 優先放可追溯網址；若來源不是網頁，才放來源名稱、文件名稱或標準名稱；不要在 sources 中寫長段分析。
-    - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
-    - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
-    - recommendations 是設計注意事項或後續確認建議，不是正式需求。
-    - recommendations 不得使用「系統必須」「平台必須」「使用者必須」這類定案語氣；除非法律明確適用且 related_URL 對應清楚。
-    - open_items 是仍需 stakeholder、analyst、法規範圍或第三方服務條款確認的問題；不得寫成已確認限制或需求。
-
-    輸出 JSON：
-    {{
-      "findings": [{{"text": "", "related_URL": [], "source": "initial"}}],
-      "sources": [],
-      "constraints": [{{"text": "", "related_URL": [], "source": "initial"}}],
-      "risks": [{{"text": "", "related_URL": [], "source": "initial"}}],
-      "recommendations": [{{"text": "", "related_URL": [], "source": "initial"}}],
-      "open_items": [{{"text": "", "related_URL": [], "source": "initial"}}]
-    }}"""
+            source_ref = research_source(artifact)
+            task = render_prompt('agents_profile_expert_domain_research_task_24', **locals())
             messages = self.build_direct_messages(task, context=context)
             try:
                 raw = (
@@ -162,7 +218,7 @@ class ExpertDomainResearch:
                 )
                 result = clean_research_result(
                     self.parse_first_json(raw),
-                    default_source="initial",
+                    default_source=source_ref,
                 )
                 research_results.append({"query": query, **result})
                 obs["result"] = result
@@ -175,7 +231,7 @@ class ExpertDomainResearch:
                 obs["summary"] = f"研究失敗: {e}"
             return obs
 
-        if action == "update_findings":
+        if action == "update_feedback":
             if not research_results:
                 obs["summary"] = "無研究結果可更新"
                 return obs
@@ -183,42 +239,15 @@ class ExpertDomainResearch:
             context = {
                 "research_results": research_results,
                 "existing_research": existing,
+                "document_evidence": artifact.get("document_evidence", []) or [],
             }
-            task = """綜合本輪 research_results 與 existing_research（artifact.feedback 既有領域研究），整理成本專案 feedback 格式。
-
-    合併邊界：
-    - 只做合併、去重、保留來源與整理格式。
-    - existing_research 只可作為合併與去重依據，不可當成新的外部證據，也不可自行延伸新結論。
-    - 不新增 research_results / existing_research 以外的結論。
-    - 不得捏造來源、法規、數值門檻或研究結論。
-    - feedback 只作為領域研究輔助資料，不產生需求。
-    - 若 skill 範例或研究資料包含 requirement_implications，本任務只能將其整理為 constraints、risks、recommendations 或 open_items，不得輸出正式 requirements。
-    - findings、constraints、risks、recommendations、open_items 的每個 item 保持 text、related_URL 與 source。
-    - source 記錄此項 feedback 的流程來源；初始領域研究使用 "initial"，若來自正式會議則保留該會議 ID。
-    - 每筆 related_URL 必須盡可能保留或補上受影響的 user_requirements id；只能引用 research_results 或 existing_research 中已出現的 id，不得編造不存在的 URL-*。
-    - 若內容是整體專案層級或確實無法對應單一需求，related_URL 才可輸出空陣列。
-    - findings 是領域研究發現或外部事實，只提供背景與依據，不代表系統需求或決策。
-    - sources 優先保留可追溯網址；若來源不是網頁，才放來源名稱、文件名稱或標準名稱；不要在 sources 中寫長段分析。
-    - constraints 是會限制系統行為、資料處理、合規、流程或外部整合的約束；只有具明確約束力或強限制效果的內容才放入 constraints。
-    - risks 是若需求未處理或規則未釐清時可能造成的合規、安全、營運、使用者權益或資料風險。
-    - recommendations 是設計注意事項或後續確認建議，不是正式需求。
-    - recommendations 不得使用「系統必須」「平台必須」「使用者必須」這類定案語氣；除非法律明確適用且 related_URL 對應清楚。
-    - open_items 是仍需 stakeholder、analyst、法規範圍或第三方服務條款確認的問題；不得寫成已確認限制或需求。
-
-    輸出 JSON：
-    {
-      "findings": [{"text": "", "related_URL": [], "source": "initial"}],
-      "sources": [],
-      "constraints": [{"text": "", "related_URL": [], "source": "initial"}],
-      "risks": [{"text": "", "related_URL": [], "source": "initial"}],
-      "recommendations": [{"text": "", "related_URL": [], "source": "initial"}],
-      "open_items": [{"text": "", "related_URL": [], "source": "initial"}]
-    }"""
+            source_ref = research_source(artifact)
+            task = render_prompt('agents_profile_expert_domain_research_task_25', **locals())
             try:
                 raw = self.invoke_skill("domain-research", task, context=context)
                 dr = clean_domain_research(
                     self.parse_first_json(raw),
-                    default_source="initial",
+                    default_source=source_ref,
                 )
                 if dr:
                     artifact["feedback"] = dr
@@ -238,52 +267,7 @@ class ExpertDomainResearch:
         state_text = json.dumps(state, ensure_ascii=False, indent=2)
         obs_text = json.dumps(last_observation or {}, ensure_ascii=False, indent=2)
 
-        user_prompt = f"""# 任務
-    根據 scenario、scope、stakeholders、open_questions、user_requirements（正式 requirements 優先，URL 候選需求 fallback）與上一步結果，規劃一次完整 domain research 流程。
-
-    # 動作
-    - research_issue：{{"query":"具體研究問題"}}
-    - update_findings：把已足夠的研究結果寫回 artifact
-    - done：結束
-
-    # 當前狀態
-    {state_text}
-
-    # 上一步結果
-    {obs_text}
-
-    # 規則
-    - 只有當外部領域知識可能影響候選需求理解、限制、風險或證據依據時，才選 research_issue。
-    - 一次完整 domain research 流程可以包含多個 research_issue，但最後必須包含 update_findings。
-    - 研究問題必須來自 scenario、scope、stakeholders、open_questions 或 user_requirements 中的具體內容；URL 不是網站連結。
-    - 若問題可由利害關係人或既有專案資料回答，不要選 research_issue。
-    - 規劃 research_issue 前，請檢查與本專案相關的外部限制面向：
-      - 支付/金流安全與退款
-      - 個資、隱私、資料保存與稽核
-      - 消費者保護、客服與爭議處理
-      - 即時定位、外送追蹤與個資遮蔽
-      - 高峰流量、可用性與營運連續性
-    - 若某面向與 user_requirements 無關，可略過，不需硬研究。
-    - 若尚未研究任何面向，且 user_requirements 涉及支付、個資、退款、定位、稽核或高可用，請建立 action_plan，放入 1 到 3 個最重要的 research_issue，最後放 update_findings。
-    - 每個 research_issue 只聚焦一個具體問題。
-    - 工具使用邊界遵守本輪工具使用資料
-    - 若已經有 research_results，且不需要更多研究，請回傳 update_findings。
-    - 若完全不需要研究且沒有 research_results，才選 done。
-    - reasoning 請使用一句繁體中文簡述。
-
-    # 輸出 JSON
-    {{
-      "action": "done",
-      "params": {{}},
-      "reasoning": "一句說明",
-      "action_plan": {{
-        "goal": "本輪 domain research 目標",
-        "steps": [
-          {{"action": "research_issue", "params": {{"query": "具體研究問題"}}}},
-          {{"action": "update_findings", "params": {{}}}}
-        ]
-      }}
-    }}"""
+        user_prompt = render_prompt('agents_profile_expert_domain_research_user_prompt_26', **locals())
 
         messages = self.build_direct_messages(user_prompt)
         try:
@@ -307,23 +291,23 @@ class ExpertDomainResearch:
             if not isinstance(step, dict):
                 continue
             step_action = str(step.get("action") or "").strip()
-            if step_action not in {"research_issue", "update_findings"}:
+            if step_action not in {"read_reference_docs", "research_issue", "update_feedback"}:
                 continue
             params = step.get("params") if isinstance(step.get("params"), dict) else {}
-            if step_action == "research_issue" and not str(params.get("query") or "").strip():
+            if step_action in {"read_reference_docs", "research_issue"} and not str(params.get("query") or "").strip():
                 continue
             clean_steps.append({"action": step_action, "params": params})
         if any(step.get("action") == "research_issue" for step in clean_steps) and not any(
-            step.get("action") == "update_findings" for step in clean_steps
+            step.get("action") == "update_feedback" for step in clean_steps
         ):
-            clean_steps.append({"action": "update_findings", "params": {}})
+            clean_steps.append({"action": "update_feedback", "params": {}})
         if clean_steps:
             return {
                 "action": "done",
                 "params": {},
                 "reasoning": response.get("reasoning", ""),
                 "action_plan": {
-                    "goal": str(action_plan.get("goal") or "完成本輪 domain research 並寫回 feedback").strip(),
+                    "goal": str(action_plan.get("goal") or "完成本輪 domain research").strip(),
                     "steps": clean_steps,
                 },
             }
@@ -338,18 +322,63 @@ class ExpertDomainResearch:
                 "params": {},
                 "reasoning": response.get("reasoning", ""),
                 "action_plan": {
-                    "goal": "完成本輪 domain research 並寫回 feedback",
+                    "goal": "完成本輪 domain research",
                     "steps": [
                         {"action": "research_issue", "params": params},
-                        {"action": "update_findings", "params": {}},
+                        {"action": "update_feedback", "params": {}},
                     ],
                 },
             }
         if action == "done" and state.get("research_results_count", 0) > 0:
-            action = "update_findings"
+            action = "update_feedback"
         out = {
             "action": action,
             "params": response.get("params") or {},
             "reasoning": response.get("reasoning", ""),
         }
         return out
+
+    @staticmethod
+    def clean_document_evidence(raw):
+        rows = []
+        seen = set()
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if not source or not summary:
+                continue
+            row = {
+                "source": source,
+                "summary": summary,
+                "related_requirement_ids": [
+                    str(value).strip()
+                    for value in (item.get("related_requirement_ids") or [])
+                    if str(value).strip()
+                ],
+            }
+            section = str(item.get("section") or "").strip()
+            if section:
+                row["section"] = section
+            key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+        return rows
+
+    @classmethod
+    def merge_document_evidence(cls, existing, new_rows):
+        rows = cls.clean_document_evidence(existing)
+        seen = {
+            json.dumps(row, ensure_ascii=False, sort_keys=True)
+            for row in rows
+        }
+        for row in cls.clean_document_evidence(new_rows):
+            key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+            if key in seen:
+                continue
+            rows.append(row)
+            seen.add(key)
+        return rows

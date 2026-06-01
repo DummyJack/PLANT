@@ -2,8 +2,10 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from agents.profile.issue_proposal_prompt import build_issue_proposal_prompt
 from agents.profile.conflict_review import conflict_review_text_hint
 from agents.profile.analyst.requirements import requirement_discussion_pool
+from agents.profile.issue_response_prompt import READY_TO_CLOSE_QUALITY_GATE, STANCE_RESPONSE_TEXT_RULES
 
 
 class UserIssues:
@@ -30,14 +32,14 @@ class UserIssues:
         if not role_parts:
             return ""
         return (
-            "\n# 利害關係人角色約束（必須遵守）\n"
+            "\n# 利害關係人回答約束（必須遵守）\n"
             f"原始產品情境：{rough_idea or '（未提供）'}\n\n"
-            "你正在扮演本專案已選定的情境利害關係人；只能代表下列角色發言，不得新增其他角色或轉向其他產品情境。\n\n"
+            "只能代表本專案已選定的情境利害關係人發言；不得新增其他回答身份或轉向其他產品情境。\n\n"
             + "\n\n".join(role_parts)
             + "\n\n規則：\n"
             "- 每個需求、顧慮、例外情境都必須能明確回扣原始產品情境。\n"
             "- 若問題很泛，請主動拉回上述產品情境與已選利害關係人日常使用場景。\n"
-            "- 不得代表未列出的角色發言；不得把產品轉成資料權限、人資、薪資、通用內部管理等無關系統。\n"
+            "- 不得代表未列出的利害關係人發言；不得把產品轉成資料權限、人資、薪資、通用內部管理等無關系統。\n"
             f"- speaking_as 只能從這些名稱選擇：{', '.join(allowed_names)}。\n"
         )
 
@@ -46,7 +48,7 @@ class UserIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 2,
+        max_items: int = 5,
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="user_issue_proposal",
@@ -71,11 +73,9 @@ class UserIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 2),
+            "max_items": kwargs.get("max_items", 5),
             "latest_draft": artifact.get("latest_draft", ""),
-            "system_models": artifact.get("system_models", []),
-            "conflict_report": artifact.get("conflict_report", []),
-            "feedback": artifact.get("feedback", {}),
+            "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
 
     def decide_user_issue_action(
@@ -92,7 +92,7 @@ class UserIssues:
                 "reasoning": "上一輪 User issue proposal 已符合格式契約，結束提案。",
             }
         return {
-            "action": "propose_stakeholder_issues",
+            "action": "propose_issues",
             "params": {},
             "reasoning": "根據利害關係人情境、未回答問題與既有需求判斷是否提出使用者視角議題。",
         }
@@ -105,7 +105,7 @@ class UserIssues:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
-        if action != "propose_stakeholder_issues":
+        if action != "propose_issues":
             return {
                 "action": action,
                 "status": "failed",
@@ -113,41 +113,32 @@ class UserIssues:
                 "format_error": f"User issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 2)
+        max_items = int(observation.get("max_items") or 5)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
-            "system_models": observation.get("system_models", []),
-            "conflict_report": observation.get("conflict_report", []),
-            "feedback": observation.get("feedback", {}),
+            "proposal_context": observation.get("proposal_context") or {},
         }
-        prompt = f"""# 任務
-提出本輪需要進入 issue proposal 的使用者 / 利害關係人議題。目標是讓 latest draft 更 SRS-ready。
-
-# 提案邊界
-- 只根據 latest_draft、system_models、conflict_report、feedback 提案。
-- 只提出最能讓 draft 更 SRS-ready 的使用者語意、使用邊界、責任歸屬、可接受條件或待確認議題。
-- 可以提出 requirement_revision 或 srs_open_question；只有當利害關係人需求互相拉扯時才提出 tradeoff_decision；只有從使用情境能看出需求互斥或重複時才提出 conflict_resolution。
-- 議題必須聚焦利害關係人情境、目標、痛點、使用底線或回答缺口，不提出缺乏使用者影響的一般討論。
-- 最多提出 {max_items} 筆；若沒有必要議題，issues 請輸出空陣列。
-
-# 每筆 issue schema
-- title：issue proposal 的短標籤，供 triage 參考；正式會議標題由 Mediator 另行命名
-- description：說明要釐清或補充的使用者情境、需求、顧慮或底線，以及它如何影響需求收斂
-- category：只能是 srs_open_question、requirement_revision、tradeoff_decision、conflict_resolution 其中之一
-- participants：從 user、analyst、expert、modeler 挑選，必須包含 user；需要需求整理時加入 analyst，需要 domain 風險時加入 expert，需要流程/互動釐清時加入 modeler
-- discussion_mode：sequential 或 simultaneous
-- speaking_order：必須與 participants 成員一致
-- source_ids：相關 stakeholder 名稱、requirement/open question/conflict id；沒有就空陣列
-- priority_hint：high / medium / low
-- impact_level：high / medium / low
-- why_now：說明為何本輪需要處理，而不是延後
-- requires_multi_party：true/false
-- blocks_decision：true/false
-- routing_preference：direct_clarification / formal_meeting / human_decision
-
-# 輸出 JSON
-{{"issues": []}}"""
+        prompt = build_issue_proposal_prompt(
+            agent_label="使用者 / 利害關係人",
+            focus="使用者語意、使用邊界、責任歸屬、可接受條件或待確認議題",
+            common_problem_examples=[
+                "同一角色責任或使用流程下多筆需求需要利害關係人表態",
+                "一組需求的成功條件、接受底線或不可接受情況未定",
+                "多個角色對同一流程、責任或取捨方向有拉扯",
+            ],
+            value_gate=[
+                "會阻礙需求規格定稿、使用者需求確認、責任邊界、可接受條件或重要 tradeoff。",
+                "需要指定利害關係人進入正式會議表態、確認或取捨；若只是一般偏好、細節補充或可從 draft 直接整理，不要提出。",
+            ],
+            reject_rule=(
+                "不要提出：泛泛使用者意見、低影響 UI 偏好、沒有明確利害關係人的小問題、"
+                "可直接寫成草稿修正的內容。若單一缺口會影響一組需求的使用底線、"
+                "責任歸屬或驗收方式，可以提出，但 reason 必須說清楚共同利害關係人問題。"
+            ),
+            max_items=max_items,
+            proposal_context=context["proposal_context"],
+        )
         try:
             data = self.chat_json(self.build_direct_messages(prompt, context=context))
             proposals = self.user_issue_proposals_payload(
@@ -177,96 +168,54 @@ class UserIssues:
         round_num: int,
         max_items: int,
     ) -> List[Dict[str, Any]]:
-        if not isinstance(data, dict):
-            raise ValueError("User issue proposal 必須輸出 JSON object")
-        raw_issues = data.get("issues")
+        raw_issues = data
+        if isinstance(raw_issues, dict):
+            raw_issues = raw_issues.get("issues") or raw_issues.get("proposals") or []
         if not isinstance(raw_issues, list):
-            raise ValueError("User issue proposal 必須包含 issues list")
+            raise ValueError("User issue proposal 必須直接輸出 issues list")
 
-        allowed_categories = {
-            "conflict_resolution",
-            "requirement_revision",
-            "srs_open_question",
-            "tradeoff_decision",
-        }
-        allowed_participants = {"user", "analyst", "expert", "modeler"}
-        allowed_modes = {"sequential", "simultaneous"}
-        allowed_priority = {"high", "medium", "low"}
-        allowed_routing = {
-            "direct_clarification",
-            "formal_meeting",
-            "human_decision",
-        }
+        allowed_importance = {"high", "medium", "low"}
         proposals: List[Dict[str, Any]] = []
         seen = set()
         for idx, row in enumerate(raw_issues, 1):
             if not isinstance(row, dict):
                 raise ValueError(f"issues[{idx}] 必須是 object")
             title = str(row.get("title") or "").strip()
-            description = str(row.get("description") or "").strip()
-            category = str(row.get("category") or "").strip()
-            why_now = str(row.get("why_now") or "").strip()
-            if not title or not description or not why_now:
-                raise ValueError(f"issues[{idx}] 缺少 title/description/why_now")
-            if category not in allowed_categories:
-                raise ValueError(f"issues[{idx}] category 不合法: {category or '<empty>'}")
+            if not title:
+                raise ValueError(f"issues[{idx}] 缺少 title")
+            expect_outcome = str(row.get("expect_outcome") or "").strip()
+            sources = []
+            for source in row.get("sources") or []:
+                if not isinstance(source, dict):
+                    continue
+                artifact = str(source.get("artifact") or "").strip()
+                ids = [
+                    str(x).strip()
+                    for x in (source.get("ids") or [])
+                    if str(x).strip()
+                ]
+                evidence = str(source.get("evidence") or "").strip()
+                if artifact and evidence:
+                    sources.append({"artifact": artifact, "ids": list(dict.fromkeys(ids)), "evidence": evidence})
+            reason = str(row.get("reason") or "").strip()
+            if not expect_outcome or not sources or not reason:
+                raise ValueError(f"issues[{idx}] 缺少 expect_outcome/sources/reason")
 
-            participants = [
-                str(x).strip()
-                for x in (row.get("participants") or [])
-                if str(x).strip()
-            ]
-            participants = list(dict.fromkeys(participants))
-            if not participants or any(p not in allowed_participants for p in participants):
-                raise ValueError(f"issues[{idx}] participants 不合法")
-            if "user" not in participants:
-                raise ValueError(f"issues[{idx}] participants 必須包含 user")
+            importance = str(row.get("importance") or "").strip().lower()
+            if importance not in allowed_importance:
+                raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
 
-            mode = str(row.get("discussion_mode") or "").strip()
-            if mode not in allowed_modes:
-                raise ValueError(f"issues[{idx}] discussion_mode 不合法: {mode or '<empty>'}")
-            speaking_order = [
-                str(x).strip()
-                for x in (row.get("speaking_order") or [])
-                if str(x).strip()
-            ]
-            if set(speaking_order) != set(participants):
-                raise ValueError(f"issues[{idx}] speaking_order 必須與 participants 成員一致")
-
-            priority = str(row.get("priority_hint") or "").strip().lower()
-            impact = str(row.get("impact_level") or "").strip().lower()
-            if priority not in allowed_priority:
-                raise ValueError(f"issues[{idx}] priority_hint 不合法: {priority or '<empty>'}")
-            if impact not in allowed_priority:
-                raise ValueError(f"issues[{idx}] impact_level 不合法: {impact or '<empty>'}")
-            routing = str(row.get("routing_preference") or "").strip()
-            if routing not in allowed_routing:
-                raise ValueError(f"issues[{idx}] routing_preference 不合法: {routing or '<empty>'}")
-
-            source_ids = [
-                str(x).strip()
-                for x in (row.get("source_ids") or [])
-                if str(x).strip()
-            ]
-            key = (category, title, tuple(source_ids))
+            key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:
                 continue
             seen.add(key)
             proposals.append(
                 {
                     "title": title,
-                    "description": description,
-                    "category": category,
-                    "participants": participants,
-                    "discussion_mode": mode,
-                    "speaking_order": speaking_order,
-                    "source_ids": list(dict.fromkeys(source_ids)),
-                    "priority_hint": priority,
-                    "impact_level": impact,
-                    "why_now": why_now,
-                    "requires_multi_party": bool(row.get("requires_multi_party")),
-                    "blocks_decision": bool(row.get("blocks_decision")),
-                    "routing_preference": routing,
+                    "expect_outcome": expect_outcome,
+                    "sources": sources,
+                    "importance": importance,
+                    "reason": reason,
                     "proposed_by": "user",
                     "round": round_num,
                 }
@@ -310,18 +259,18 @@ class UserIssues:
             sh = speaking_as_list[0]
             name = sh.get("name", "")
             names_list = [name]
-            roles_text = f"\n# 你本輪發言身份\n請「僅」以【{name}】的身份發言。"
+            roles_text = f"\n# 本輪發言身份\n請「僅」以【{name}】的身份發言。"
         elif len(speaking_as_list) > 1:
             names = [s.get("name", "") for s in speaking_as_list]
             names_list = list(names)
             roles_text = (
-                f"\n# 你本輪發言身份（多位）\n請以【{'】與【'.join(names)}】的身份發言；若分段表述，請標明身份。"
+                f"\n# 本輪發言身份（多位）\n請以【{'】與【'.join(names)}】的身份發言；若分段表述，請標明身份。"
             )
         elif self.stakeholders:
             names_list = [sh.get("name", "") for sh in self.stakeholders]
             roles_text = (
-                "\n# 你代表的利害關係人角色\n"
-                "本輪請選擇一位或多位最適合回答此議題的身份發言。"
+                "\n# 本輪回答身份\n"
+                "本輪未指定回答身份；請只選擇與此議題最直接相關的一位或多位利害關係人發言，不要代表全部利害關係人泛泛回答。"
             )
         else:
             names_list = []
@@ -329,8 +278,8 @@ class UserIssues:
         if target_stakeholders:
             roles_text += (
                 "\n# 本輪指定回答身份\n"
-                f"本輪只能代表這些利害關係人回答：{', '.join(target_stakeholders)}。\n"
-                "不得自行切換到其他 stakeholder；如果問題不適合指定身份，請以該身份說明不適用或缺少情境。\n"
+                f"本輪身份由議題規劃指定，只能代表這些利害關係人回答：{', '.join(target_stakeholders)}。\n"
+                "不得自行切換到其他利害關係人；如果問題不適合指定身份，請以該身份說明不適用或缺少情境。\n"
             )
 
         prev_text = self.format_previous_responses(
@@ -339,12 +288,9 @@ class UserIssues:
 
         context_text = ""
         if artifact_context:
-            context_text = f"\n# 當前 artifact 分檔內容（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
-        allow_suggested_next_action = (
-            issue_category != "conflict_resolution"
-            and not str(issue.get("id") or "").startswith("ELICIT-")
-        )
+            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
         is_elicitation = str(issue.get("id") or "").startswith("ELICIT-")
+        is_answer_question = str(issue.get("id") or "") == "OQ"
 
         # 多位時輸出要含 speaking_as；一位時不必
         need_speaking_as = len(self.stakeholders) > 1
@@ -352,10 +298,7 @@ class UserIssues:
             json_hint = '"speaking_as": ["本輪發言身份名稱"], "text": "完整發言內容"'
             if not is_elicitation:
                 json_hint += ', "open_questions": [...]'
-            if issue_category == "srs_open_question":
-                flow_hint = "選擇適合回答的利害關係人，直接回答問題並補充必要情境。"
-            else:
-                flow_hint = "選擇適合的 speaking_as，說明該身份在此議題上的立場、需求與底線。"
+            flow_hint = "依議題規劃指定的 speaking_as，說明該身份在此議題上的立場、需求與底線。"
         else:
             json_hint = '"text": "針對此議題的完整發言內容"'
             if not is_elicitation:
@@ -363,60 +306,97 @@ class UserIssues:
             flow_hint = "以第一人稱撰寫一段完整發言，說明立場、需求與底線。"
         if answer_all_questions:
             flow_hint = (
-                "逐題回答前面每一位 agent 提出的問題；text 內請用「發問者 → 回答身份」分段，"
+                "逐題回答前面每一位參與者提出的問題；text 內請用「發問者 → 回答身份」分段，"
                 "每題都要明確回答，不要只回最後一題。"
             )
 
+        expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
+        user_expected = expected_actions.get("user")
+        user_expected_actions = []
+        if isinstance(user_expected, str):
+            user_expected_actions = [str(user_expected).strip()]
+        elif isinstance(user_expected, list):
+            user_expected_actions = [str(a).strip() for a in user_expected]
+
         category_hint = ""
-        if issue_category == "requirement_revision":
+        if issue_category == "clarify_requirement":
             category_hint = (
-                "\n# 本議題特別說明（requirement_revision）\n"
-                "可提出新需求，也可指出既有需求需要調整、補限制、改優先順序或移除。"
+                "\n# 本議題特別說明（clarify_requirement）\n"
+                "聚焦需求語意、使用條件、成功結果、例外情境與可接受的驗收方式。"
             )
-        elif issue_category == "srs_open_question":
+            if str(issue.get("title") or "").strip() == "需求分類":
+                category_hint = (
+                    "\n# 本議題特別說明（需求分類）\n"
+                    "先閱讀前面 Analyst 產生或更新的 REQ-* 整理結果，再以 speaking_as 身份檢查："
+                    "是否漏掉重要使用情境、業務規則或例外條件；"
+                    "驗收條件是否可接受；優先級是否符合實際需要；"
+                    "限制、風險或假設是否正確。"
+                )
+        elif issue_category == "define_boundary":
             category_hint = (
-                "\n# 本議題特別說明（srs_open_question）\n"
-                "直接回答問題；若資訊不足，說明缺少的情境、角色或使用條件。"
+                "\n# 本議題特別說明（define_boundary）\n"
+                "說明此需求在實際使用上應由本系統、外部服務、人工流程或哪個角色負責。"
             )
-        elif issue_category == "conflict_resolution":
+        elif issue_category == "tradeoff":
+            category_hint = (
+                "\n# 本議題特別說明（tradeoff）\n"
+                "比較可接受與不可接受方案，說明取捨底線與推薦方向。"
+            )
+        elif issue_category == "align_model":
+            category_hint = (
+                "\n# 本議題特別說明（align_model）\n"
+                "從使用者/利害關係人角度確認流程、狀態、actor 或責任分工是否符合實際情境。"
+            )
+        elif issue_category == "resolve_conflict":
             contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+            is_pair_review = (
+                str(contract.get("type") or "").strip() == "pair_reviews"
+            )
             known_pair_ids = [
                 str(pair_id).strip()
                 for pair_id in (contract.get("known_pair_ids") or [])
                 if str(pair_id).strip()
             ]
-            category_hint = (
-                "\n# 本議題特別說明（conflict_resolution）\n"
-                "從實際使用情境說明兩項需求是否衝突、重複、可共存或資訊不足。\n"
-                "- 外層只能輸出合法 JSON object；不要 markdown、不要 ```json fence、不要額外說明文字。\n"
-                "- 外層只能有 text 欄位。\n"
-                "- text 必須是 JSON object 字串，不是巢狀 object。\n"
-                "- text JSON 結構必須為 {\"pair_reviews\":[...]}。\n"
-                "- pair_reviews 必須逐筆涵蓋 response_contract.known_pair_ids 中每個 id，不能遺漏、不能新增未知 id。\n"
-                "- 每筆 pair_reviews 都必須有 id、proposed_label、reason。\n"
-                "- proposed_label 只能是 Conflict 或 Neutral。\n"
-                f"- 本輪必須涵蓋的 pair id：{json.dumps(known_pair_ids, ensure_ascii=False)}"
-            )
-        suggested_next_action_rule = []
-        suggested_next_action_json = ""
-        if allow_suggested_next_action:
-            suggested_next_action_rule.append(
-                "若你認為會後需要安排下一步，可額外提供 suggested_next_action；"
-                "這只是建議，不會在會議中直接執行。"
-            )
-            suggested_next_action_json = (
-                ', "suggested_next_action": {"type": "direct_clarification | new_issue", '
-                '"reason": "為何建議會後安排這一步", '
-                '"target_ids": ["可選，相關 requirement/conflict/issue id"], "urgency": "low | medium | high"}'
-            )
-        suggested_next_action_rules_text = "".join(
-            f"- {rule}\n" for rule in suggested_next_action_rule
+            if is_pair_review:
+                category_hint = (
+                    "\n# 本議題特別說明（resolve_conflict）\n"
+                    "從實際使用情境說明兩項需求是否衝突、重複、可共存或資訊不足。\n"
+                    "- 外層輸出只包含 text 欄位的 JSON object。\n"
+                    "- text 必須是 JSON object 字串，不是巢狀 object。\n"
+                    "- text JSON 結構必須為 {\"pair_reviews\":[...]}。\n"
+                    "- pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。\n"
+                    "- 每筆 pair_reviews 都必須有 id、proposed_label、reason。\n"
+                    "- proposed_label 只能是 Conflict 或 Neutral。\n"
+                    f"- 本輪必須涵蓋的 pair id：{json.dumps(known_pair_ids, ensure_ascii=False)}"
+                )
+            else:
+                category_hint = (
+                    "\n# 本議題特別說明（resolve_conflict）\n"
+                    "逐一針對 conflict report 中列出的 URL 需求與既有 resolution option 表態。\n"
+                    "- 不泛談整體平台感受。\n"
+                    "- 明確說出哪些 URL 的內容可以合併、保留、改寫或不可接受。\n"
+                    "- 說明此 speaking_as 的最低可接受條件、不能被刪掉的語意，以及需要保留的例外情境。\n"
+                    "- 不提出 open_questions；資訊不足時直接說明目前可接受的保守處理方式。"
+                )
+        open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，只把當下最重要、會相關決策的一個問題放進 open_questions。\n"
+        if is_answer_question:
+            open_questions_rule = "- open_questions 預設輸出空陣列；只有問題本身無法回答且需要一個關鍵澄清時，才提出一個 open question。\n"
+        stance_rule = "" if is_elicitation or issue_category == "resolve_conflict" or is_answer_question else (
+            "- stance.state 表示本輪 speaking_as 身份的討論狀態："
+            "ready_to_close=資訊已足夠且可結束本議題；"
+            "needs_more_discussion=還需要其他參與者補充或回應。\n"
+            "- 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議如何處理此議題。\n"
+            f"{READY_TO_CLOSE_QUALITY_GATE}\n"
         )
-        open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，只把當下最重要、會影響決策的一個問題放進 open_questions。\n"
+        stance_json = "" if is_elicitation or issue_category == "resolve_conflict" or is_answer_question else (
+            ', "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
+        )
         names_list_text = ", ".join(str(name) for name in names_list if str(name).strip())
-        if issue_category == "conflict_resolution":
+        if issue_category == "resolve_conflict" and is_pair_review:
             json_hint = conflict_review_text_hint()
-            suggested_next_action_json = ""
+        if is_answer_question:
+            flow_hint = "以議題規劃指定的 speaking_as 身份，直接回答 description 中的問題。"
+            json_hint = '"text": "直接回答問題", "open_questions": []'
 
         return f"""{stakeholder_contract}
 
@@ -432,15 +412,24 @@ class UserIssues:
 
 # 規則
 - text 要自然、口語、貼近日常使用情境。
+- text 使用第一人稱，以 speaking_as 身份在會議中直接發言；不要寫成第三人稱需求描述。
 - 回答必須扣回原始產品情境與 speaking_as 指定身份。
-- 只表達需求、顧慮、底線與可接受條件；不要寫技術解法或最終 requirement wording。
+- 只表達需求、顧慮、底線與可接受條件；不要寫技術解法或最終需求文字。
+- text 必須像該 speaking_as 身份在會議中的發言，不是需求規格文字、JSON、action 結果或專案資料內容貼上。
+- 若本輪是需求分類，請針對前面 Analyst 整理出的 REQ-* 結果回應；若有遺漏或欄位需要修正，具體說明要補哪個使用情境、業務規則、例外條件、驗收條件、限制、優先級、風險或假設。
+- 需求分類不提出 open_questions；若整理結果仍不完整，請在 text 與 stance.proposal 說明需要補充或修正的內容。
+- 若本輪是解決需求衝突，必須引用具體 URL id 或 conflict id 表態，說明採用、調整或拒絕既有 resolution 的理由；不要只描述一般痛點。
+- 不得使用其他利害關係人的第一人稱經驗回答；例如不能讓外送員、餐廳、第三方支付或平台營運主管用「我的訂單」這種消費者口吻回答。
+- 若同一題指定多個 speaking_as，text 必須用「【身份名稱】」分段，各段內容要反映該身份不同的責任、痛點、利益或限制，不得複製同一段回答。
+- 若本輪是回答 open question，只回答被問的問題，不做正式提案或收斂判斷。
 {open_questions_rule.rstrip()}
+{stance_rule.rstrip()}
 - 若資訊不足，可直接說明不確定之處。
-{suggested_next_action_rules_text}
-{('- 若前面有多位 agent 提問，text 必須逐題回答每一題。' if answer_all_questions else '')}
+{('- 若前面有多位參與者提問，text 必須逐題回答每一題。' if answer_all_questions else '')}
 {f'- speaking_as 的名稱必須從以下選一個或數個：{names_list_text}' if need_speaking_as else ''}
+{f'- 若本輪有指定回答身份，speaking_as 必須只使用議題規劃指定的 target_stakeholders：{", ".join(target_stakeholders)}' if target_stakeholders else ''}
 
 # 輸出 JSON
 {{{{
-    {json_hint}{suggested_next_action_json}
+    {json_hint}{stance_json}
 }}}}"""

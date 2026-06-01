@@ -1,12 +1,10 @@
 # Scenario helpers for prompts: expose only the selected system name.
-from typing import Any, Dict
+from typing import Any
 
 
-def scenario_name(value: Any) -> str:
-    if isinstance(value, dict):
-        return str(value.get("name") or "").strip()
+def scenario_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def scenario_prompt_value(value: Any) -> Dict[str, str]:
-    return {"name": scenario_name(value)}
+def scenario_prompt_value(value: Any) -> str:
+    return scenario_text(value)

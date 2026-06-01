@@ -7,7 +7,7 @@ DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
     "analyst": ["requirements-analyst", "conflict-analyzer"],
     "expert": ["domain-research"],
     "modeler": ["UML"],
-    "documentor": ["SRS"],
+    "documentor": [],
     "mediator": [],
     "user": [],
 }
@@ -26,7 +26,6 @@ DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {
     "requirements-analyst": ["artifact_query"],
     "conflict-analyzer": ["artifact_query"],
     "UML": ["plantuml_validate", "artifact_query"],
-    "SRS": ["artifact_query"],
 }
 
 

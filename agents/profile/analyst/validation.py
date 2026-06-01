@@ -55,11 +55,6 @@ def requirement_record(
         or source.get("requirement")
     )
 
-    priority = clean_text(source.get("priority")).lower() or "should"
-    if priority not in {"must", "should", "could"}:
-        priority = "should"
-    out["priority"] = priority
-
     stakeholder = source.get("stakeholder")
     if isinstance(stakeholder, dict):
         out["stakeholder"] = {
@@ -67,8 +62,8 @@ def requirement_record(
             "type": clean_text(stakeholder.get("type")),
         }
     out["source"] = clean_text(source.get("source"))
-    if clean_text(source.get("source_ref")):
-        out["source_ref"] = clean_text(source.get("source_ref"))
+    if clean_text(source.get("source_id")):
+        out["source_id"] = clean_text(source.get("source_id"))
     return out
 
 

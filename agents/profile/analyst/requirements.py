@@ -1,8 +1,6 @@
-# Shared requirement candidate review, merge helpers, and final meeting checks.
+# Shared requirement candidate review and merge helpers.
 import re
 from typing import Any, Dict, List
-
-from .conflict_store import all_conflict_rows, requirement_ids
 
 
 def requirement_dedupe_key(text: str) -> str:
@@ -20,7 +18,11 @@ def requirement_candidate(
 
 
 def candidate_pool(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return artifact.get("URL", []) or []
+    return [
+        row for row in (artifact.get("URL", []) or [])
+        if isinstance(row, dict)
+        and str(row.get("status") or "").strip().lower() != "superseded"
+    ]
 
 
 def requirement_candidate_id(candidates: List[Dict[str, Any]]) -> str:
@@ -61,12 +63,30 @@ def ensure_requirement_candidate_ids(
     return normalized
 
 
+def renumber_requirement_candidate_ids(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(candidates or [], 1):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        row["id"] = f"URL-{index}"
+        row["text"] = text
+        normalized.append(row)
+    return normalized
+
+
 def requirement_discussion_pool(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return formal requirements if available, otherwise candidate requirements for pre-final discussion."""
     requirements = [
         dict(row)
-        for row in artifact.get("requirements", []) or []
+        for row in artifact.get("URL", []) or []
         if isinstance(row, dict) and str(row.get("text") or "").strip()
+        and str(row.get("status") or "").strip().lower() != "superseded"
     ]
     if requirements:
         return requirements
@@ -106,7 +126,55 @@ def build_requirement_candidates_from_requirements(
     return ensure_requirement_candidate_ids(candidates)
 
 
-def attach_initial_source_refs(
+def build_initial_requirement_candidates_from_stakeholders(
+    stakeholders: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Create coarse User Requirement candidates from stakeholder statements when extraction returns none."""
+    candidates: List[Dict[str, Any]] = []
+    seen = set()
+    for stakeholder in stakeholders or []:
+        if not isinstance(stakeholder, dict):
+            continue
+        stakeholder_name = str(stakeholder.get("name") or "").strip()
+        if not stakeholder_name:
+            continue
+        stakeholder_type = str(stakeholder.get("type") or "").strip()
+        raw_texts = stakeholder.get("text") or []
+        if isinstance(raw_texts, list):
+            texts = [str(text).strip() for text in raw_texts if str(text).strip()]
+        else:
+            text = str(raw_texts or "").strip()
+            texts = [text] if text else []
+        for text in texts:
+            neutral_text = neutralize_stakeholder_requirement_text(text, stakeholder_name)
+            marker = requirement_dedupe_key(f"{stakeholder_name}:{neutral_text}")
+            if not marker or marker in seen:
+                continue
+            seen.add(marker)
+            candidates.append(
+                {
+                    "text": neutral_text,
+                    "stakeholder": {
+                        "name": stakeholder_name,
+                        "type": stakeholder_type,
+                    },
+                    "source": "initial",
+                }
+            )
+    return ensure_requirement_candidate_ids(candidates)
+
+
+def neutralize_stakeholder_requirement_text(text: str, stakeholder_name: str) -> str:
+    value = str(text or "").strip()
+    name = str(stakeholder_name or "").strip()
+    if not value or not name:
+        return value
+    value = re.sub(r"^\s*我(需要|希望|想要|擔心|要求|必須|可以|能夠|能)\s*", f"{name}\\1", value)
+    value = re.sub(r"^\s*我們(需要|希望|想要|擔心|要求|必須|可以|能夠|能)\s*", f"{name}\\1", value)
+    return value
+
+
+def attach_initial_source_ids(
     requirements: List[Dict[str, Any]],
     stakeholders: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -120,16 +188,16 @@ def attach_initial_source_refs(
     out: List[Dict[str, Any]] = []
     for req in requirements or []:
         row = dict(req)
-        if str(row.get("source") or "").strip() == "initial" and not str(row.get("source_ref") or "").strip():
+        if str(row.get("source") or "").strip() == "initial" and not str(row.get("source_id") or "").strip():
             stakeholder = row.get("stakeholder")
             stakeholder_name = (
                 str(stakeholder.get("name") or "").strip()
                 if isinstance(stakeholder, dict)
                 else str(stakeholder or "").strip()
             )
-            source_ref = stakeholder_by_name.get(stakeholder_name)
-            if source_ref:
-                row["source_ref"] = source_ref
+            source_id = stakeholder_by_name.get(stakeholder_name)
+            if source_id:
+                row["source_id"] = source_id
         out.append(row)
     return out
 
@@ -148,79 +216,3 @@ def next_requirement_id(requirements: List[Dict[str, Any]]) -> str:
         except ValueError:
             continue
     return f"REQ-{max_num + 1}"
-
-
-def assess_requirements_for_final_meeting(
-    artifact: Dict[str, Any],
-    *,
-    round_num: int,
-) -> Dict[str, Any]:
-    requirements = [
-        req for req in (artifact.get("requirements", []) or [])
-        if isinstance(req, dict)
-    ]
-    unresolved_conflict_req_ids = set()
-    for conflict in all_conflict_rows(artifact):
-        if not isinstance(conflict, dict):
-            continue
-        if str(conflict.get("label") or "").strip() != "Conflict":
-            continue
-        for rid in requirement_ids(conflict):
-            rid_s = str(rid or "").strip()
-            if rid_s:
-                unresolved_conflict_req_ids.add(rid_s)
-
-    pending_decision_req_ids = set()
-    for row in artifact.get("pending_decisions", []) or []:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("status") or "").strip() not in {"pending", "pending_confirmation"}:
-            continue
-        for rid in row.get("affected_requirement_ids", []) or []:
-            rid_s = str(rid or "").strip()
-            if rid_s:
-                pending_decision_req_ids.add(rid_s)
-
-    reasons: Dict[str, str] = {}
-    needs_followup = 0
-    for req in requirements:
-        rid = str(req.get("id") or "").strip()
-        missing = []
-        if not rid:
-            missing.append("id")
-        if not str(req.get("text") or "").strip():
-            missing.append("text")
-        stakeholder = req.get("stakeholder")
-        stakeholder_name = (
-            str(stakeholder.get("name") or "").strip()
-            if isinstance(stakeholder, dict)
-            else str(stakeholder or "").strip()
-        )
-        if not stakeholder_name:
-            missing.append("stakeholder")
-        if not str(req.get("source") or "").strip():
-            missing.append("source")
-        if rid in unresolved_conflict_req_ids:
-            missing.append("unresolved_conflict")
-        if rid in pending_decision_req_ids:
-            missing.append("pending_decision")
-
-        if missing:
-            req["final_meeting_round"] = round_num
-            req["final_meeting_note"] = "Final meeting 仍需確認：" + ", ".join(missing)
-            needs_followup += 1
-        else:
-            req["final_meeting_round"] = round_num
-            req["final_meeting_note"] = "Final meeting 已完成全員確認。"
-        if rid:
-            reasons[rid] = req.get("final_meeting_note", "")
-
-    summary = {
-        "round": round_num,
-        "confirmed_count": len(requirements) - needs_followup,
-        "needs_followup_count": needs_followup,
-        "total_requirements": len(requirements),
-        "reasons": reasons,
-    }
-    artifact["final_meeting_summary"] = summary
-    return summary

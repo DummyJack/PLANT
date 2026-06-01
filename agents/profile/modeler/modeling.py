@@ -1,11 +1,12 @@
 # Modeler modeling helpers: generate, refine, validate, and repair UML models.
+from agents.profile.prompt_catalog import render_prompt
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
 from agents.skills.base import get_skill
 from utils.language import current_output_language
-from .prompts import uml_skill_subset
+from .prompts import SYSTEM_MODEL_TYPE_RULES, uml_skill_subset
 from .validation import (
     ALLOWED_MODEL_TYPES,
     parse_diagram_model,
@@ -17,6 +18,43 @@ from .validation import (
 
 class ModelerModeling:
     AVAILABLE_MODEL_TYPES = sorted(ALLOWED_MODEL_TYPES)
+
+    @staticmethod
+    def next_model_id(models: list[Dict[str, Any]]) -> str:
+        max_num = 0
+        for model in models or []:
+            if not isinstance(model, dict):
+                continue
+            raw_id = str(model.get("id") or "").strip()
+            if not raw_id.startswith("SM-"):
+                continue
+            try:
+                max_num = max(max_num, int(raw_id.split("-", 1)[1]))
+            except (IndexError, ValueError):
+                continue
+        return f"SM-{max_num + 1}"
+
+    @staticmethod
+    def find_model_target(
+        models: list[Dict[str, Any]],
+        target: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        target_id = str(target.get("target_model_id") or target.get("id") or "").strip()
+        if target_id:
+            for model in models or []:
+                if isinstance(model, dict) and str(model.get("id") or "").strip() == target_id:
+                    return model
+        target_type = str(target.get("type") or target.get("diagram_type") or "").strip()
+        target_name = str(target.get("name") or "").strip()
+        if target_type and target_name:
+            for model in models or []:
+                if (
+                    isinstance(model, dict)
+                    and str(model.get("type") or "").strip() == target_type
+                    and str(model.get("name") or "").strip() == target_name
+                ):
+                    return model
+        return None
 
     @staticmethod
     def model_name(model_type: str) -> str:
@@ -61,13 +99,56 @@ class ModelerModeling:
         return [row for row in models if isinstance(row, dict)]
 
     @staticmethod
-    def model_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
-        source_rows = artifact.get("requirements") or artifact.get("URL") or []
+    def model_user_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
+        source_rows = artifact.get("URL") or []
         return [
             {"id": r.get("id"), "text": r.get("text", "")}
             for r in source_rows
             if isinstance(r, dict) and str(r.get("text") or "").strip()
         ]
+
+    @staticmethod
+    def model_spec_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
+        rows = []
+        for req in artifact.get("REQ") or []:
+            if not isinstance(req, dict):
+                continue
+            req_id = str(req.get("id") or "").strip()
+            title = str(req.get("title") or "").strip()
+            description = str(req.get("description") or req.get("requirement") or "").strip()
+            if not req_id or not (title or description):
+                continue
+            row: Dict[str, Any] = {
+                "id": req_id,
+                "title": title,
+                "text": description or title,
+            }
+            req_type = str(req.get("type") or "").strip()
+            if req_type:
+                row["type"] = req_type
+            source_ids = [
+                str(value).strip()
+                for value in (req.get("source_ids") or [])
+                if str(value).strip()
+            ]
+            if source_ids:
+                row["source_ids"] = source_ids
+            acceptance = [
+                str(value).strip()
+                for value in (req.get("acceptance_criteria") or [])
+                if str(value).strip()
+            ]
+            if acceptance:
+                row["acceptance_criteria"] = acceptance
+            rows.append(row)
+        return rows
+
+    def model_requirements(self, artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
+        spec_rows = self.model_spec_requirements(artifact)
+        return spec_rows or self.model_user_requirements(artifact)
+
+    def model_requirement_source(self, artifact: Dict[str, Any]) -> str:
+        return "REQ" if self.model_spec_requirements(artifact) else "URL"
 
     @staticmethod
     def model_stakeholders(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -92,10 +173,37 @@ class ModelerModeling:
             if isinstance(artifact_or_context.get("feedback"), dict)
             else {}
         )
-        return {
-            key: feedback.get(key, []) or []
-            for key in ("constraints", "risks", "open_items")
-        }
+        out: Dict[str, Any] = {}
+        for section in ("findings", "constraints", "risks", "recommendations"):
+            rows = []
+            for item in feedback.get(section) or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                row: Dict[str, Any] = {"text": text}
+                related_ids = [
+                    str(value).strip()
+                    for value in (item.get("related_requirement_ids") or [])
+                    if str(value).strip()
+                ]
+                if related_ids:
+                    row["related_requirement_ids"] = related_ids
+                source = str(item.get("source") or "").strip()
+                if source:
+                    row["source"] = source
+                rows.append(row)
+            if rows:
+                out[section] = rows
+        sources = [
+            str(source).strip()
+            for source in (feedback.get("sources") or [])
+            if str(source).strip()
+        ]
+        if sources:
+            out["sources"] = sources
+        return out
 
     def build_model_context(
         self,
@@ -105,9 +213,12 @@ class ModelerModeling:
     ) -> Dict[str, Any]:
         """保留建模需要的 artifact 欄位，避免把 pending 內容畫成正式模型。"""
         return {
-            "scenario": artifact.get("scenario", {}) or artifact.get("rough_idea", ""),
+            "scenario": artifact.get("scenario", "") or artifact.get("rough_idea", ""),
             "stakeholders": self.model_stakeholders(artifact),
             "requirements": self.model_requirements(artifact),
+            "requirement_source": self.model_requirement_source(artifact),
+            "user_requirements": self.model_user_requirements(artifact),
+            "REQ": self.model_spec_requirements(artifact),
             "scope": artifact.get("scope", {}) or {},
             "feedback": self.model_feedback(artifact),
             "open_questions": artifact.get("open_questions", []) or [],
@@ -132,7 +243,7 @@ class ModelerModeling:
             source=model_artifact.get("model_source", ""),
         )
         self.ensure_use_case_text(model_data, model_artifact)
-        return self.validate_plantuml_models(model_data)
+        return model_data
 
     def ensure_use_case_text(
         self,
@@ -171,34 +282,43 @@ class ModelerModeling:
         req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
         artifact_context = artifact_context or {}
         context_payload = {
-            "scenario": artifact_context.get("scenario", {}) or artifact_context.get("rough_idea", ""),
+            "scenario": artifact_context.get("scenario", "") or artifact_context.get("rough_idea", ""),
             "stakeholders": self.model_stakeholders(artifact_context),
             "scope": artifact_context.get("scope", {}) or {},
             "feedback": self.model_feedback(artifact_context),
             "open_questions": artifact_context.get("open_questions", []) or [],
             "model_revision_context": artifact_context.get("model_revision_context", {}) or {},
+            "model_target": artifact_context.get("model_target", {}) or {},
         }
         context_text = json.dumps(context_payload, ensure_ascii=False, indent=2)
+        system_model_type_rules = SYSTEM_MODEL_TYPE_RULES
         diagram_layout_hint = ""
         if diagram_type == "context_diagram":
             diagram_layout_hint = """
     本專案限制：不可把未確認的 provider/API 畫成已定案外部系統；若來源未定，請使用抽象資料來源。
-    context_diagram 只呈現本系統與外部 actor / external systems 的互動；不得把本系統內部功能、子系統、管理模組或實作元件畫成外部系統。只有在 requirements 明確指出某項系統是既有外部系統或第三方服務時，才可畫成 external system。"""
+    context_diagram 只呈現本系統與外部 actor / external systems 的互動；不得把本系統內部功能、子系統、管理模組或實作元件畫成外部系統。只有在 requirements 明確指出某項系統是既有外部系統或第三方服務時，才可畫成 external system。
+    context_diagram 中同一個外部角色只能畫一次；若多筆需求都指向同一角色，必須合併成同一個 actor，並把多個互動合併到同一條或同一組關係標籤。不得因來源需求不同而重複畫出同名或同義 actor。
+    actor 命名必須使用穩定的利害關係人名稱；例如「外送員」「餐廳店員」各只能出現一次，不要分成多個外送員或多個餐廳店員。"""
         elif diagram_type == "use_case_diagram":
             diagram_layout_hint = """
-    版面要求：actor 與 use case 的關聯要一目了然；若單圖連線過多，可精簡為核心用例或依角色拆分。"""
+    版面要求：actor 與 use case 的關聯要一目了然；若單圖連線過多，可精簡為核心用例或依角色拆分。
+    同一個 actor 或 use case 只能畫一次；若多筆需求指向同一使用者任務或同一角色，必須合併成同一元素，不得因來源需求不同而重複畫出同名或同義元素。"""
         elif diagram_type == "activity_diagram":
             diagram_layout_hint = """
-    本專案限制：不要放入技術實作步驟。"""
+    本專案限制：不要放入技術實作步驟。
+    相同語意的活動節點只畫一次；若多筆需求描述同一操作、判斷或狀態更新，請合併成同一流程節點，不要重複畫同義步驟。"""
         elif diagram_type == "class_diagram":
             diagram_layout_hint = """
-    本專案限制：只作為需求層級 domain model；避免加入未確認的 service、database、API 或實作類別。"""
+    本專案限制：只作為需求層級 domain model；避免加入未確認的 service、database、API 或實作類別。
+    同一個 domain concept 只能畫一次；若多筆需求指向同一資料物件、業務概念或角色概念，必須合併成同一 class，不得重複畫同名或同義 class。"""
         elif diagram_type == "sequence_diagram":
             diagram_layout_hint = """
-    本專案限制：一張圖聚焦一個主要情境流程；lifeline 使用需求層級角色/系統，不要放入低階 service/database 實作。"""
+    本專案限制：一張圖聚焦一個主要情境流程；lifeline 使用需求層級角色/系統，不要放入低階 service/database 實作。
+    同一個參與者、系統或外部服務只能有一條 lifeline；若多筆需求指向同一參與者，必須合併成同一 participant，不得重複畫同名或同義 lifeline。"""
         elif diagram_type == "state_machine":
             diagram_layout_hint = """
-    本專案限制：若狀態不明確，不要硬畫。"""
+    本專案限制：若狀態不明確，不要硬畫。
+    同一個業務狀態只能畫一次；若多筆需求描述同一狀態，必須合併成同一 state，不得因不同轉移來源重複畫同名或同義 state。"""
 
 
         description_rule = ""
@@ -227,90 +347,16 @@ class ModelerModeling:
                 ensure_ascii=False,
                 indent=2,
             ) if use_case_diagram else "{}"
-            task = f"""根據已生成的 Use Case Diagram 整理文字版使用案例。這不是 UML 圖，而是附在 use_case_diagram.text 的需求層級使用案例規格。
-
-    需求 ID 對照（只可用於 related_requirements，不可用來新增 use case）:
-    {req_text}
-
-    Use Case Diagram:
-    {use_case_diagram_text}
-
-    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
-    {context_text}
-
-    - 只能整理 Use Case Diagram 中已出現的 actor 與 use case；不要補入圖中沒有的 use case。
-    - 需求 ID 對照只用來填 related_requirements，不可作為新增 use case 的依據。
-    - 每個 use case 必須代表使用者或外部角色透過系統完成的一個可觀察任務。
-    - 不要把技術元件、資料表、API 或內部演算法寫成 use case。
-    - purpose 寫此 use case 的目的／說明。
-    - interface 寫使用者進入或操作的頁面、畫面、入口或系統介面；若需求未明確，使用需求層級名稱，不要臆測 UI 細節。
-    - related_requirements 只能放本次需求中已出現的 requirement id。
-    - 不要輸出 source；source 由系統依建模來源補上。
-    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
-    輸出 JSON:
-    {{
-      "type": "use_case_text",
-      "text": [
-        {{
-          "id": "UC-1",
-          "actor": "主要參與者",
-          "name": "使用案例名稱",
-          "purpose": "目的／說明",
-          "interface": "介面或入口",
-          "related_requirements": ["URL-1"]
-        }}
-      ]
-    }}"""
+            task = render_prompt('agents_profile_modeler_modeling_task_16', **locals())
             skill = uml_skill_subset(get_skill("UML"), "use_case_text")
             messages = self.build_skill_messages(skill, "UML", task)
             result = self.chat_json(messages)
             return parse_use_case_text(result)
 
         if existing_model and existing_model.get("plantuml"):
-            task = f"""根據更新後的需求，精煉以下 {type_name}。只修改受影響的部分，保留未變動的元素。
-
-    當前 PlantUML:
-    {existing_model['plantuml']}
-
-    需求:
-    {req_text}
-
-    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
-    {context_text}
-    {diagram_layout_hint}
-
-    - 這是帶有修訂脈絡的模型迭代：以上一版 PlantUML 為基礎，只修訂受 model_revision_context / requirements 影響的元素。
-    - 未受影響的 actor、use case、流程、資料輸入/輸出、狀態或概念必須保留；不得因重畫而改名或刪除仍有效元素。
-    - PlantUML 圖中元素（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
-    - 若資訊不足，不可臆測，也不要硬畫未確認元素。
-    - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
-    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
-    - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
-{description_rule}
-    - 不要輸出 source；source 由系統依建模來源補上。
-    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
-    輸出 JSON:
-    {{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "description": "此圖釐清的需求面向與圖中已呈現的重點。"}}"""
+            task = render_prompt('agents_profile_modeler_modeling_task_17', **locals())
         else:
-            task = f"""根據以下需求產生 {type_name}。
-
-    需求:
-    {req_text}
-
-    補充背景（不得擴張 requirements；只可用於邊界判斷；feedback.open_items 只是不確定性提示，不可畫成已確認元素）:
-    {context_text}
-    {diagram_layout_hint}
-
-    - PlantUML 圖中元素（actor/use case/class/message/lifeline/relation label）必須使用目前輸出語系；若目前輸出語系是繁體中文，圖中元素使用繁體中文；若目前輸出語系是英文，圖中元素使用英文。不要混用語言。
-    - 若資訊不足，不可臆測，也不要硬畫未確認元素。
-    - 此為需求層級模型，不是設計／架構模型；不可擴張需求。
-    - feedback 不可被轉成新的 actor、use case、class、state 或流程步驟；只能影響模型邊界、限制標註或缺口說明。
-    - name 請使用簡短、直觀的名稱，讓讀者快速理解此模型內容；不要加入專案全名、圖型名稱、冗長修飾詞或不必要形容詞。
-{description_rule}
-    - 不要輸出 source；source 由系統依建模來源補上。
-    - 若 UML skill 範例與本任務輸出格式不同，必須以本任務 JSON 結構為準。
-    輸出 JSON:
-    {{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "description": "此圖釐清的需求面向與圖中已呈現的重點。"}}"""
+            task = render_prompt('agents_profile_modeler_modeling_task_18', **locals())
 
         skill = uml_skill_subset(get_skill("UML"), "diagram", diagram_type)
         messages = self.build_skill_messages(skill, "UML", task)
@@ -374,26 +420,7 @@ class ModelerModeling:
 
     def repair_plantuml(self, model: Dict, error_msg: str) -> Optional[str]:
         """依據錯誤訊息讓 LLM 修正 PlantUML"""
-        user_prompt = f"""# 任務
-    以下 PlantUML 程式碼有語法錯誤，請修正後回傳。
-
-    # 模型名稱
-    {model.get('name', '')}
-
-    # 原始程式碼
-    {model.get('plantuml', '')}
-
-    # 驗證錯誤
-    {error_msg}
-
-    - 只修正 PlantUML 語法，不得改變圖的需求語意、範圍、角色、流程或資料關係。
-    - 修正語法時必須維持原圖元素語言，不可把繁體中文改成英文，也不可把英文改成繁體中文。
-    - 不要新增或移除需求內容；如果資訊不足，維持原本抽象元素，不要臆測補齊。
-
-    # 輸出 JSON
-    {{{{
-    "plantuml": "@startuml\\n...修正後的完整程式碼...\\n@enduml"
-    }}}}"""
+        user_prompt = render_prompt('agents_profile_modeler_modeling_user_prompt_19', **locals())
 
         try:
             skill = uml_skill_subset(get_skill("UML"), "repair", model.get("type", ""))

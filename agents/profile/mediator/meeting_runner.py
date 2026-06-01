@@ -1,8 +1,351 @@
-# Meeting runner: executes decision issue actions and coordinates round loops.
+# Meeting runner: executes formal meeting issue actions and coordinates round loops.
+import re
+import json
 from typing import Dict, List, Any, Optional
 
 from .agent import MediatorAgent
-from .validation import MEETING_ACTIONS, ISSUE_CATEGORY_LABEL
+from .validation import (
+    MEETING_ACTIONS,
+    ISSUE_CATEGORY_LABEL,
+    meeting_issue,
+    normalize_trace,
+    trace_artifact_ids,
+    trace_proposal_ids,
+)
+from utils import Collect
+
+
+def issue_trace(issue: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
+    return normalize_trace((issue or {}).get("trace"))
+
+
+def issue_artifact_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
+    return trace_artifact_ids(issue)
+
+
+def issue_proposal_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
+    return trace_proposal_ids(issue)
+
+
+def conflict_report_resolution_ids(
+    artifact: Dict[str, Any],
+    issue: Optional[Dict[str, Any]],
+    resolution: Dict[str, Any],
+) -> List[str]:
+    ids = [
+        str(value).strip()
+        for value in (resolution.get("affected_conflict_ids") or [])
+        if str(value).strip()
+    ]
+    if ids:
+        return list(dict.fromkeys(ids))
+    if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
+        return []
+    conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+    rows = conflict.get("report") if isinstance(conflict.get("report"), list) else []
+    out: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"agreed", "human_decision"}:
+            continue
+        row_id = str(row.get("id") or "").strip()
+        if row_id:
+            out.append(row_id)
+    return list(dict.fromkeys(out))
+
+
+def conflict_report_requirement_ids(row: Dict[str, Any]) -> List[str]:
+    ids: List[str] = []
+    for req in row.get("requirements") or []:
+        if not isinstance(req, dict):
+            continue
+        req_id = str(req.get("id") or "").strip()
+        if req_id:
+            ids.append(req_id)
+    for req_id in row.get("source_ids") or []:
+        req_id = str(req_id or "").strip()
+        if req_id:
+            ids.append(req_id)
+    return list(dict.fromkeys(ids))
+
+
+def adopted_resolution_option_text(
+    conflict_row: Dict[str, Any],
+    decision_text: str,
+) -> str:
+    """If a conflict resolution adopts an existing option, render that option explicitly."""
+    if not isinstance(conflict_row, dict) or not str(decision_text or "").strip():
+        return ""
+    options = conflict_row.get("resolution_options")
+    if not isinstance(options, list) or not options:
+        return ""
+
+    def compact(value: Any) -> str:
+        return re.sub(r"[\s:：,，。.\-_/]+", "", str(value or "").strip().lower())
+
+    compact_decision = compact(decision_text)
+    if not compact_decision:
+        return ""
+
+    matched: Optional[Dict[str, Any]] = None
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_id = str(option.get("option") or "").strip()
+        strategy = str(option.get("strategy") or "").strip()
+        labels = [
+            option_id,
+            f"選項{option_id}" if option_id else "",
+            f"方案{option_id}" if option_id else "",
+            strategy,
+            f"採用選項{option_id}" if option_id else "",
+            f"採用方案{option_id}" if option_id else "",
+        ]
+        if any(compact(label) and compact(label) in compact_decision for label in labels):
+            matched = option
+            break
+
+    if matched is None:
+        recommended = str(conflict_row.get("recommended_resolution") or "").strip()
+        if recommended and compact(recommended) and compact(recommended) in compact_decision:
+            matched = next(
+                (
+                    option
+                    for option in options
+                    if isinstance(option, dict) and bool(option.get("recommendation"))
+                ),
+                None,
+            )
+
+    if matched is None:
+        return ""
+
+    option_id = str(matched.get("option") or "").strip()
+    description = str(matched.get("description") or "").strip()
+    if not description:
+        return ""
+    label = f"選項 {option_id}" if option_id else "既有選項"
+    return f"採用{label}，{description}"
+
+
+def ingest_round_resolution_effects(
+    coordinator: Any,
+    artifact: Dict[str, Any],
+    meeting_records: List[Dict[str, Any]],
+    round_num: int,
+) -> None:
+    resolution_effects = artifact.get("issue_resolution_effects", []) or []
+    for item in meeting_records:
+        if not isinstance(item, dict):
+            continue
+        issue_id_value = str(item.get("issue_id") or "").strip()
+        resolution = item.get("resolution", {}) if isinstance(item.get("resolution"), dict) else {}
+        affected_conflict_ids = resolution.get("affected_conflict_ids", []) or []
+        source_ids = list(dict.fromkeys([
+            str(sid).strip()
+            for sid in list(affected_conflict_ids) + list(resolution.get("affected_requirement_ids", []) or [])
+            if str(sid).strip()
+        ]))
+        decision_id = str(resolution.get("decision_id") or "").strip()
+        if resolution.get("resolution_status") == "human_decision" and affected_conflict_ids and decision_id:
+            from flow.meeting.conflict_review import mark_conflicts_resolved_by_ids
+            mark_conflicts_resolved_by_ids(
+                artifact, affected_conflict_ids, decision_id=decision_id,
+            )
+        affected_requirement_ids = [
+            str(rid).strip()
+            for rid in (resolution.get("affected_requirement_ids", []) or [])
+            if str(rid).strip()
+        ]
+        needs_human = bool(resolution.get("needs_human"))
+        effect_row = {
+            "issue_id": issue_id_value,
+            "round": round_num,
+            "resolution_status": resolution.get("resolution_status"),
+            "needs_human": needs_human,
+        }
+        if affected_requirement_ids:
+            effect_row["affected_requirement_ids"] = affected_requirement_ids
+        resolution_effects.append(effect_row)
+        if needs_human:
+            existing_human_ids = {
+                str(row.get("issue_id") or "").strip()
+                for row in (artifact.get("human_decision_queue", []) or [])
+                if isinstance(row, dict)
+            }
+            issue_id = f"HQ-R{round_num}-{issue_id_value or len(existing_human_ids) + 1}"
+            if issue_id not in existing_human_ids:
+                queue_row = {
+                    "issue_id": issue_id,
+                    "round": round_num,
+                    "title": resolution.get("summary") or issue_id_value,
+                    "description": str(resolution.get("summary") or "").strip(),
+                    "category": "tradeoff",
+                    "trace": {"artifact_ids": source_ids, "proposal_ids": [issue_id_value] if issue_id_value else []},
+                    "status": "pending",
+                    "needs_human": True,
+                    "meeting_type": "human_decision",
+                    "options": resolution.get("options", []) or [],
+                    "recommendation": resolution.get("recommendation", {}) or {},
+                    "unresolved_points": resolution.get("unresolved_points", []) or [],
+                }
+                if affected_requirement_ids:
+                    queue_row["affected_requirement_ids"] = affected_requirement_ids
+                artifact.setdefault("human_decision_queue", []).append(queue_row)
+            continue
+    artifact["issue_resolution_effects"] = resolution_effects
+
+
+def post_issue_processing(
+    coordinator: Any,
+    artifact: Dict[str, Any],
+    issue_discussion: Dict[str, Any],
+    *,
+    round_num: int,
+) -> None:
+    ingest_round_resolution_effects(
+        coordinator, artifact, [issue_discussion], round_num=round_num,
+    )
+    coordinator.flow.store.save_artifact(artifact)
+
+
+def human_decision_issue_record(
+    coordinator: Any,
+    row: Dict[str, Any],
+    *,
+    item_prefix: str,
+    index: int,
+) -> Dict[str, Any]:
+    normalized = meeting_issue(
+        {
+            "id": f"{item_prefix}-{index}",
+            "title": (row.get("title") or "待處理事項").strip(),
+            "description": "",
+            "category": row.get("category") or "clarify_requirement",
+            "participants": row.get("participants", []),
+            "discussion_mode": row.get("discussion_mode", "sequential"),
+            "trace": normalize_trace(row.get("trace")),
+        },
+        allowed_categories=list(ISSUE_CATEGORY_LABEL.keys()),
+        registered_agents=list(coordinator.flow.registry.get_names()) if coordinator.flow.registry else ["analyst", "expert", "modeler", "user"],
+        index=index,
+    )
+    return normalized or {
+        "schema_version": "meeting_issue.v1",
+        "id": f"{item_prefix}-{index}",
+        "title": (row.get("title") or "待處理事項").strip(),
+        "description": "",
+        "category": row.get("category") or "clarify_requirement",
+        "participants": row.get("participants", []),
+        "discussion_mode": row.get("discussion_mode", "sequential"),
+        "trace": normalize_trace(row.get("trace")),
+    }
+
+
+def execute_human_decision_queue(
+    coordinator: Any,
+    artifact: Dict[str, Any],
+    runner: Any,
+    *,
+    round_num: int,
+) -> None:
+    items = artifact.get("human_decision_queue", []) or []
+    if not items:
+        return
+    for idx, row in enumerate(items, 1):
+        if not isinstance(row, dict):
+            continue
+        issue = human_decision_issue_record(
+            coordinator, row, item_prefix="HQ", index=idx,
+        )
+        options = {
+            "best_options": [],
+            "compromise": {
+                "id": 1,
+                "title": issue.get("title", ""),
+                "description": issue.get("description", ""),
+                "rationale": row.get("reason", ""),
+            },
+        }
+        if row.get("options"):
+            best_options = []
+            for idx_opt, opt in enumerate(row.get("options") or [], start=1):
+                if not isinstance(opt, dict):
+                    continue
+                best_options.append(
+                    {
+                        "id": idx_opt,
+                        "title": opt.get("summary") or opt.get("title") or "",
+                        "description": opt.get("summary") or opt.get("description") or "",
+                        "source": "judgment_options",
+                    }
+                )
+            options = {"best_options": best_options, "compromise": {}}
+        resolution_raw = Collect.human_decision_on_issue(issue, options)
+        decision_text = str(resolution_raw.get("decision", "")).strip()
+        decision_id = f"DEC-HQ-{round_num}-{idx}" if decision_text else ""
+        resolution = coordinator.flow.mediator_agent.build_issue_result(
+            resolution_status="human_decision",
+            summary=decision_text or "此議題已送人工裁決，但暫未定案。",
+            decision=decision_text,
+            mediator_compromise={},
+            agreed_points=[decision_text] if decision_text else [],
+            unresolved_points=[] if decision_text else ["人類選擇暫不裁決。"],
+            new_open_questions=[],
+            affected_conflict_ids=[
+                sid for sid in (issue_artifact_ids(issue))
+                if isinstance(sid, str) and sid.startswith(("CR-", "PAIR-", "MULTIPLE-"))
+            ],
+            needs_human=True,
+        )
+        if decision_id:
+            resolution["decision_id"] = decision_id
+        runner.meeting_records.append(
+            {"issue_id": issue.get("id"), "resolution": resolution}
+        )
+        if decision_text:
+            from flow.meeting.conflict_review import mark_conflicts_resolved_by_ids
+            mark_conflicts_resolved_by_ids(
+                artifact, resolution.get("affected_conflict_ids", []), decision_id=decision_id,
+            )
+            row["status"] = "decided"
+        else:
+            row["status"] = "deferred"
+        row["human_decision_processed_round"] = round_num
+
+
+def run_human_decision_queue(
+    coordinator: Any,
+    artifact: Dict[str, Any],
+    runner: Any,
+    *,
+    round_num: int,
+    drain_all: bool = False,
+) -> None:
+    keys = ("human_decision_queue",)
+    max_passes = 50 if drain_all else 1
+    prev_after = -1
+    for pass_idx in range(max_passes):
+        total_before = sum(len(artifact.get(k) or []) for k in keys)
+        if drain_all and total_before == 0:
+            break
+        execute_human_decision_queue(coordinator, artifact, runner, round_num=round_num)
+        artifact["human_decision_queue"] = [
+            row for row in (artifact.get("human_decision_queue", []) or [])
+            if isinstance(row, dict) and row.get("status") == "deferred"
+        ]
+        total_after = sum(len(artifact.get(k) or []) for k in keys)
+        if not drain_all:
+            break
+        if total_after == 0:
+            coordinator.flow.logger.info("最後一輪：human_decision_queue 已清空（第 %s 輪執行）", pass_idx + 1)
+            break
+        if pass_idx > 0 and total_after == prev_after:
+            coordinator.flow.logger.warning("最後一輪：human_decision_queue 無進度，停止重試（剩餘 %s 筆）", total_after)
+            break
+        prev_after = total_after
 
 
 def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
@@ -14,7 +357,11 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
         )
         decision = coordinator.plan_round_step(observation=observation)
         action = decision.get("action", "finish_round")
-        coordinator.flow.logger.info("  決策: %s — %s", action, decision.get("reasoning", ""))
+        coordinator.flow.logger.debug(
+            "Formal meeting action: %s reason=%s",
+            action,
+            decision.get("reasoning", ""),
+        )
         if action == "finish_round":
             break
         result = coordinator.act_round_step(
@@ -25,10 +372,8 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
         if result.get("error"):
             raise RuntimeError(f"會議步驟執行失敗: {result['error']}")
         elif action == "save_issue":
-            latest = runner.get_round_discussions()
+            latest = runner.get_meeting_records()
             if latest:
-                from flow.meeting.subflows import post_issue_processing
-
                 post_issue_processing(
                     coordinator,
                     runner.artifact,
@@ -39,25 +384,23 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
 
 
 def run_meeting_loop(coordinator: Any, runner: Any) -> None:
-    obs = runner.run("generate_decision_issues", None)
+    obs = runner.run("plan_issues", None)
     if obs.get("error"):
         raise RuntimeError(f"issue 生成失敗: {obs['error']}")
     drain = coordinator.is_last_meeting_round(runner.artifact, runner.round_num)
 
-    from flow.meeting.subflows import run_routed_queues
-
-    run_routed_queues(
+    run_human_decision_queue(
         coordinator,
         runner.artifact,
         runner,
         round_num=runner.round_num,
-        drain_non_formal=drain,
+        drain_all=drain,
     )
     run_round_opa_loop(coordinator, runner)
 
 
 class MeetingRunner:
-    """執行 decision issue 相關動作，維護本輪 issues、issue_status、round_discussions、all_open_questions。"""
+    """執行正式會議議題動作，維護本輪 issues、issue_states、meeting_records、open_questions。"""
 
     def __init__(
         self,
@@ -70,6 +413,7 @@ class MeetingRunner:
         store,
         collect_module,
         logger,
+        output_artifact: Optional[Dict[str, Any]] = None,
     ):
         self.mediator = mediator_agent
         self.registry = registry
@@ -79,28 +423,1161 @@ class MeetingRunner:
         self.store = store
         self.collect = collect_module
         self.logger = logger
+        self.output_artifact = output_artifact
         self.issue_pool = list(issue_pool or [])
 
-        self.issues: List[Dict] = []
-        self.issue_status: Dict[str, Dict] = {}
-        self.round_discussions: List[Dict] = []
-        self.all_open_questions: List[Dict] = []
+        self.issue_states: Dict[str, Dict] = {}
+        self.meeting_records: List[Dict] = []
+        self.open_questions: List[Dict] = []
         self.issue_idx = 0
 
-    def latest_draft_markdown(self) -> Optional[str]:
-        latest_draft = self.artifact.get("latest_draft") if isinstance(self.artifact, dict) else {}
-        if isinstance(latest_draft, str) and latest_draft.strip():
-            return latest_draft.strip()
-        latest_version = self.store.get_draft_version()
-        return self.store.load_draft(latest_version) if latest_version >= 0 else None
+    def log_agenda(
+        self,
+        *,
+        label: str,
+        issues: List[Dict[str, Any]],
+        backlog_count: Optional[int] = None,
+    ) -> None:
+        backlog_text = "" if backlog_count is None else f"，backlog {backlog_count} 筆"
+        self.logger.info("正式會議議程：%s %s 筆%s", label, len(issues), backlog_text)
+        for issue in issues:
+            participants = "、".join(issue.get("participants", []) or []) or "未指定"
+            self.logger.info(
+                "  %s｜%s｜%s｜%s，%s 輪｜%s",
+                issue.get("id", ""),
+                issue.get("title", ""),
+                issue.get("category", ""),
+                issue.get("discussion_mode", ""),
+                issue.get("discussion_rounds", 1),
+                participants,
+            )
+
+    def log_discussion_start(self, issue: Dict[str, Any]) -> None:
+        participants = "、".join(issue.get("participants", []) or []) or "未指定"
+        self.logger.info(
+            "[%s] 開始：%s（%s，%s，預計 %s 輪；參與：%s）",
+            issue.get("id", ""),
+            issue.get("title", ""),
+            issue.get("category", ""),
+            issue.get("discussion_mode", "sequential"),
+            issue.get("discussion_rounds", 1),
+            participants,
+        )
+
+    def log_discussion_done(self, issue_id: str, result: Dict[str, Any]) -> None:
+        self.logger.info(
+            "  討論完成：%s/%s 輪，%s 則發言，%s 個 open question",
+            result.get("actual_rounds", ""),
+            result.get("round_limit", ""),
+            result.get("conversation_count", ""),
+            result.get("oq_count", ""),
+        )
+
+    def log_resolution_done(self, issue_id: str, resolution: Dict[str, Any]) -> None:
+        status = str(resolution.get("resolution_status") or "").strip() or "unknown"
+        if resolution.get("needs_human"):
+            self.logger.info("  收斂結果：需要人類裁決｜%s", resolution.get("summary", ""))
+        else:
+            self.logger.info("  收斂結果：%s｜%s", status, resolution.get("summary", ""))
+
+    def log_human_judgment_done(self, issue_id: str, decision_text: str) -> None:
+        self.logger.info("  人類裁決：%s", decision_text or "已完成")
+
+    def log_issue_saved(self, issue_id: str, save_result: Dict[str, Any]) -> None:
+        self.logger.info("  已保存：%s", save_result.get("filename") or issue_id)
 
     def issue_open_questions(self, issue_id: str) -> List[Dict]:
-        return [q for q in self.all_open_questions if q.get("issue_id") == issue_id]
+        return [q for q in self.open_questions if q.get("issue_id") == issue_id]
 
-    def update_design_rationale_for_issue(
+    def current_meeting_issues(self) -> List[Dict[str, Any]]:
+        rows = []
+        for row in self.artifact.get("meeting_issues", []) or []:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("round") or -1) != int(self.round_num):
+                continue
+            rows.append(dict(row))
+        return rows
+
+    def load_meeting_issues(self) -> None:
+        rows = self.current_meeting_issues()
+        for issue in rows:
+            issue_id = issue.get("id")
+            if not issue_id or issue_id in self.issue_states:
+                continue
+            self.issue_states[issue_id] = {
+                "discussed": False,
+                "conversation": None,
+                "resolution": None,
+                "saved": False,
+            }
+
+    @staticmethod
+    def is_default_issue(issue: Dict[str, Any]) -> bool:
+        return str(issue.get("proposed_by") or "").strip() == "mediator"
+
+    def load_agenda_issue(self, issue_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        return self.get_issue(issue_id)
+
+    def prepare_discussion(self, issue: Dict[str, Any]) -> Optional[str]:
+        issue_id = issue.get("id")
+        state = self.issue_states.get(issue_id, {})
+        if state.get("discussed"):
+            return (
+                f"{issue_id} 已討論過，不可重複討論。"
+                f"請使用 save_issue 儲存後繼續下一個議題。"
+            )
+        meeting_record = self.ensure_meeting_record(issue)
+        meeting_id = str(meeting_record.get("meeting_id") or "").strip()
+        if meeting_id:
+            issue["meeting_id"] = meeting_id
+        issue["issue_context"] = self.issue_context_summary(issue)
+        return None
+
+    def run_discussion(self, issue: Dict[str, Any]) -> Dict[str, Any]:
+        issue_id = issue.get("id")
+        mode = issue.get("discussion_mode", "sequential")
+        try:
+            planned_rounds = int(issue.get("discussion_rounds") or 1)
+        except (TypeError, ValueError):
+            planned_rounds = 1
+        planned_rounds = max(1, min(3, planned_rounds))
+        max_rounds = min(5, planned_rounds + 2)
+        conversation: List[Dict[str, Any]] = []
+        question_records: List[Dict[str, Any]] = []
+        actual_rounds = 0
+        is_requirement_review = self.is_requirement_review_issue(issue)
+        if is_requirement_review:
+            max_rounds = max(planned_rounds, 2)
+
+        for round_index in range(1, max_rounds + 1):
+            actual_rounds = round_index
+            round_issue = dict(issue)
+            round_issue["discussion_round_index"] = round_index
+            round_issue["discussion_rounds"] = planned_rounds
+            round_issue["round_limit"] = max_rounds
+            if is_requirement_review and round_index > planned_rounds:
+                round_issue["participants"] = ["analyst"]
+                round_issue["expected_actions"] = {"analyst": ["refine_requirement"]}
+            if mode == "simultaneous":
+                round_conversation, round_questions = self.mediator.moderate_simultaneous(
+                    round_issue,
+                    self.registry,
+                    artifact=self.artifact,
+                    artifact_context=round_issue.get("issue_context"),
+                    previous_responses=conversation,
+                    return_open_questions=True,
+                )
+                conversation.extend(round_conversation)
+            else:
+                round_issue["seed_previous_responses"] = conversation
+                round_conversation, round_questions = self.mediator.moderate_sequential(
+                    round_issue,
+                    self.registry,
+                    artifact=self.artifact,
+                    artifact_context=round_issue.get("issue_context"),
+                )
+                conversation = round_conversation
+            for oq in round_questions:
+                oq["issue_id"] = issue_id
+                oq["discussion_round_index"] = round_index
+            question_records.extend(round_questions)
+            if is_requirement_review and round_index >= planned_rounds:
+                if round_index == planned_rounds and self.requirement_review_needs_refine_followup(round_conversation):
+                    continue
+                break
+            if round_index >= planned_rounds and not self.needs_extra_round(round_conversation):
+                break
+
+        self.open_questions.extend(question_records)
+        self.sync_open_questions_to_artifact(issue, conversation, question_records)
+        self.issue_states.setdefault(issue_id, {})
+        self.issue_states[issue_id]["discussed"] = True
+        self.issue_states[issue_id]["conversation"] = conversation
+        self.persist_formal_meeting_progress(issue, conversation=conversation)
+        self.save_formal_conflict_report(conversation)
+        self.artifact.pop("_issue_research_results", None)
+        self.artifact.pop("current_issue", None)
+        if self.output_artifact is not None:
+            for key in ("URL", "REQ", "scope", "system_models", "model_consistency_report", "feedback", "conflict", "open_questions"):
+                if key in self.artifact:
+                    self.output_artifact[key] = self.artifact[key]
+            self.store.save_artifact(self.output_artifact)
+            model_updated = self.conversation_updated_system_models(conversation)
+            if model_updated and "system_models" in self.artifact:
+                self.store.save_plantuml_files(self.artifact.get("system_models", []))
+                self.output_artifact["system_models"] = self.artifact.get("system_models", [])
+                self.store.save_artifact(self.output_artifact)
+        result = {
+            "issue_id": issue_id,
+            "planned_rounds": planned_rounds,
+            "actual_rounds": actual_rounds,
+            "round_limit": max_rounds,
+            "conversation_count": len(conversation),
+            "oq_count": len(question_records),
+        }
+        if not conversation:
+            result["warning"] = (
+                "本議題無參與者可發言，請直接執行 save_issue 儲存後繼續。"
+            )
+        return result
+
+    @staticmethod
+    def conversation_updated_system_models(conversation: List[Dict[str, Any]]) -> bool:
+        model_actions = {"model_system", "create_model", "update_model"}
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            actions = {
+                str(action or "").strip()
+                for action in (entry.get("actions") or [])
+                if str(action or "").strip()
+            }
+            if actions & model_actions:
+                return True
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            for result in response.get("issue_action_results") or []:
+                if not isinstance(result, dict):
+                    continue
+                action = str(result.get("action") or "").strip()
+                if action in model_actions:
+                    return True
+                if result.get("system_models") not in (None, "", [], {}):
+                    return True
+        return False
+
+    def sync_open_questions_to_artifact(
         self,
         issue: Dict[str, Any],
-        contributions: List[Dict],
+        conversation: List[Dict[str, Any]],
+        question_records: List[Dict[str, Any]],
+    ) -> None:
+        existing = [
+            row for row in (self.artifact.get("open_questions") or [])
+            if isinstance(row, dict)
+        ]
+        answered: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+        for row in question_records or []:
+            key = (
+                str(row.get("from_agent") or "").strip(),
+                str(row.get("to_agent") or "").strip(),
+                str(row.get("question") or "").strip(),
+            )
+            if key[2]:
+                answered[key] = row
+        next_num = len(existing) + 1
+        seen = {
+            (
+                str(row.get("from_agent") or "").strip(),
+                str(row.get("to_agent") or row.get("owner") or "").strip(),
+                str(row.get("question") or "").strip(),
+            )
+            for row in existing
+        }
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            from_agent = str(entry.get("agent") or "").strip()
+            for question in response.get("open_questions", []) or []:
+                q = question if isinstance(question, dict) else {"question": str(question)}
+                text = str(q.get("question") or "").strip()
+                if not text:
+                    continue
+                to_agent = str(q.get("to") or "user").strip()
+                key = (from_agent, to_agent, text)
+                if key in seen:
+                    continue
+                answer = answered.get(key, {})
+                status = "answered" if answer else "open"
+                existing.append({
+                    "id": f"OQ-{next_num}",
+                    "question": text,
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "owner": to_agent,
+                    "status": status,
+                    "answer": str(answer.get("answer_text") or "").strip(),
+                    "related_source": [
+                        item for item in (
+                            str(issue.get("id") or "").strip(),
+                            str(issue.get("meeting_id") or "").strip(),
+                        )
+                        if item
+                    ],
+                })
+                next_num += 1
+                seen.add(key)
+        self.artifact["open_questions"] = existing
+
+    @staticmethod
+    def response_state(response: Dict[str, Any]) -> str:
+        if not isinstance(response, dict):
+            return ""
+        state = str(response.get("state") or "").strip()
+        if state:
+            return state
+        stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+        return str(stance.get("state") or "").strip()
+
+    @staticmethod
+    def response_proposal(response: Dict[str, Any]) -> Any:
+        if not isinstance(response, dict):
+            return {}
+        proposal = response.get("proposal")
+        if proposal not in (None, "", [], {}):
+            return proposal
+        stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+        return stance.get("proposal")
+
+    @staticmethod
+    def needs_extra_round(conversation: List[Dict[str, Any]]) -> bool:
+        for record_entry in conversation or []:
+            if not isinstance(record_entry, dict):
+                continue
+            if record_entry.get("is_reply"):
+                continue
+            response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
+            if MeetingRunner.response_state(response) == "needs_more_discussion":
+                return True
+        return False
+
+    def issue_context_summary(self, issue: Dict[str, Any]) -> Dict[str, Any]:
+        source_ids = [
+            str(source_id).strip()
+            for source_id in issue_artifact_ids(issue)
+            if str(source_id).strip()
+        ]
+        source_set = set(source_ids)
+
+        def selected_rows(rows: Any, prefixes: tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            if not source_set or not isinstance(rows, list):
+                return out
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_id = str(row.get("id") or row.get("issue_id") or "").strip()
+                if not row_id:
+                    continue
+                if source_set and row_id not in source_set:
+                    continue
+                if prefixes and not row_id.startswith(prefixes):
+                    continue
+                item: Dict[str, Any] = {"id": row_id}
+                for key in ("title", "type", "category", "priority", "status"):
+                    value = row.get(key)
+                    if value not in (None, "", [], {}):
+                        item[key] = value
+                out.append(item)
+            return out
+
+        conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
+        conflict_report = conflict_state.get("report")
+        if not isinstance(conflict_report, list):
+            conflict_report = self.artifact.get("conflict_report", [])
+        selected_conflicts = selected_rows(conflict_report, ("CR-", "PAIR-", "MULTIPLE-", "C-"))
+        if str(issue.get("category") or "").strip() == "resolve_conflict":
+            source_conflicts = [
+                row for row in (conflict_report or [])
+                if isinstance(row, dict)
+                and (
+                    not source_set
+                    or str(row.get("id") or "").strip() in source_set
+                    or str(row.get("source_id") or "").strip() in source_set
+                )
+            ]
+            if source_conflicts:
+                selected_conflicts = self.conflict_report_summary(source_conflicts)
+
+        feedback = self.artifact.get("feedback") if isinstance(self.artifact.get("feedback"), dict) else {}
+        feedback_items = []
+        for section in ("findings", "constraints", "risks", "recommendations"):
+            for idx, row in enumerate(feedback.get(section) or [], 1):
+                if not isinstance(row, dict):
+                    continue
+                row_id = str(row.get("id") or f"{section}_{idx}").strip()
+                if not source_set or row_id not in source_set:
+                    continue
+                feedback_items.append({"id": row_id, "section": section, "status": row.get("status")})
+
+        return {
+            "issue": {
+                "id": issue.get("id"),
+                "title": issue.get("title"),
+                "category": issue.get("category"),
+                "discussion_mode": issue.get("discussion_mode"),
+                "discussion_rounds": issue.get("discussion_rounds"),
+            },
+            "source_summary": {
+                "source_ids": source_ids,
+                "URL": selected_rows(self.artifact.get("URL", []), ("URL-",)),
+                "REQ": selected_rows(self.artifact.get("REQ", []), ("REQ-",)),
+                "conflicts": selected_conflicts,
+                "feedback": feedback_items,
+                "system_models": selected_rows(self.artifact.get("system_models", [])),
+                "open_questions": selected_rows(self.artifact.get("open_questions", []), ("OQ-",)),
+            },
+        }
+
+    def judgment_context(self, issue: Dict[str, Any]) -> Dict[str, Any]:
+        category = str(issue.get("category") or "").strip()
+        source_ids = [
+            str(source_id).strip()
+            for source_id in (issue_artifact_ids(issue))
+            if str(source_id).strip()
+        ]
+        context: Dict[str, Any] = {}
+        if category == "resolve_conflict":
+            conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
+            report = conflict_state.get("report")
+            if not isinstance(report, list):
+                report = self.artifact.get("conflict_report")
+            if isinstance(report, list):
+                rows = report
+                if source_ids:
+                    selected = [
+                        row for row in report
+                        if isinstance(row, dict) and str(row.get("id") or "").strip() in source_ids
+                    ]
+                    if selected:
+                        rows = selected
+                summary = self.conflict_report_summary(rows)
+                if summary:
+                    context["conflict_report"] = summary
+        return context
+
+    def save_formal_conflict_report(self, conversation: List[Dict[str, Any]]) -> None:
+        report_rows: List[Dict[str, Any]] = []
+        report_md = ""
+        generated = False
+        for record_entry in conversation or []:
+            if not isinstance(record_entry, dict):
+                continue
+            if record_entry.get("is_reply"):
+                continue
+            response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
+            action_results = response.get("issue_action_results")
+            if not isinstance(action_results, list):
+                continue
+            for result in action_results:
+                if not isinstance(result, dict):
+                    continue
+                if str(result.get("action") or "").strip() != "analyze_conflicts":
+                    continue
+                rows = result.get("conflict_report")
+                if isinstance(rows, list) and rows:
+                    report_rows = [dict(row) for row in rows if isinstance(row, dict)]
+                markdown = str(result.get("conflict_report_markdown") or "").strip()
+                if markdown:
+                    report_md = markdown
+                steps = result.get("steps")
+                if isinstance(steps, list):
+                    generated = any(
+                        isinstance(step, dict)
+                        and str(step.get("action") or "").strip() == "generate_conflict_report"
+                        for step in steps
+                    )
+        if not generated or not report_rows:
+            return
+        try:
+            from storage.artifact import (
+                conflict_enrichment_matches,
+                conflict_requirement_signature,
+                existing_report_enrichment,
+                latest_conflict_report_payload,
+                reindex_conflict_report_rows,
+                save_json_path,
+            )
+
+            report_dir = self.store.artifact_dir / "report"
+            latest_version = 0
+            if report_dir.exists():
+                for path in report_dir.glob("conflict_report_v*.json"):
+                    raw_version = path.stem[len("conflict_report_v"):]
+                    if raw_version.isdigit():
+                        latest_version = max(latest_version, int(raw_version))
+            next_version = max(latest_version + 1, int(self.round_num or 1))
+            report_path = report_dir / f"conflict_report_v{next_version}.json"
+            report_rows = reindex_conflict_report_rows(report_rows)
+            history_rows = latest_conflict_report_payload(self.store.artifact_dir)
+            if history_rows:
+                enrichment = existing_report_enrichment({"conflict": {"report": list(history_rows) + list(report_rows)}})
+                merged_rows: List[Dict[str, Any]] = []
+                for row in report_rows:
+                    item = dict(row)
+                    signature = conflict_requirement_signature(item)
+                    known = enrichment.get(signature) if signature else None
+                    if known and conflict_enrichment_matches(item, known):
+                        for key, value in known.items():
+                            if key.startswith("_"):
+                                continue
+                            if item.get(key) in (None, "", [], {}):
+                                item[key] = value
+                    merged_rows.append(item)
+                report_rows = merged_rows
+            save_json_path(self.store.base_dir, report_rows, report_path)
+            if report_md and hasattr(self.store, "save_markdown"):
+                self.store.save_markdown(report_md, "conflict_report.md")
+            self.logger.info("  已更新衝突報告：artifact/report/%s", report_path.name)
+        except Exception as e:
+            raise RuntimeError("正式會議 conflict report 寫檔失敗") from e
+
+    def discussion_round_block(self, *, create: bool = True) -> Optional[Dict[str, Any]]:
+        discussions = self.artifact.setdefault("discussions", [])
+        for block in discussions:
+            if isinstance(block, dict) and int(block.get("round") or -1) == int(self.round_num):
+                block.setdefault("issues", [])
+                return block
+        if not create:
+            return None
+        block = {"round": self.round_num, "issues": []}
+        discussions.append(block)
+        return block
+
+    @staticmethod
+    def meeting_record_participants(issue: Dict[str, Any]) -> List[str]:
+        participants = list(issue.get("participants", []) or [])
+        proposer = str(issue.get("proposed_by") or "").strip()
+        if proposer and proposer not in participants:
+            participants.insert(0, proposer)
+        return list(dict.fromkeys(participants))
+
+    def ensure_meeting_record(self, issue: Dict[str, Any]) -> Dict[str, Any]:
+        issue_id = str(issue.get("id") or "").strip()
+        block = self.discussion_round_block(create=True)
+        rows = block.setdefault("issues", []) if isinstance(block, dict) else []
+        for row in rows:
+            if isinstance(row, dict) and str(row.get("issue_id") or "").strip() == issue_id:
+                return row
+        meeting_id = f"R{self.round_num}-M{len(rows) + 1}"
+        meeting_record = {
+            "meeting_id": meeting_id,
+            "issue_id": issue_id,
+            "category": issue.get("category", ""),
+            "proposed_by": issue.get("proposed_by", ""),
+            "participants": self.meeting_record_participants(issue),
+            "discussion_mode": issue.get("discussion_mode", "sequential"),
+        }
+        issue_context = issue.get("issue_context")
+        if isinstance(issue_context, dict) and issue_context:
+            meeting_record["issue_context"] = issue_context
+        rows.append(meeting_record)
+        self.meeting_records = rows
+        return meeting_record
+
+    def persist_formal_meeting_progress(
+        self,
+        issue: Dict[str, Any],
+        *,
+        conversation: Optional[List[Dict[str, Any]]] = None,
+        resolution: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        meeting_record = self.ensure_meeting_record(issue)
+        meeting_record["category"] = issue.get("category", "")
+        meeting_record["proposed_by"] = issue.get("proposed_by", "")
+        meeting_record["participants"] = self.meeting_record_participants(issue)
+        meeting_record["discussion_mode"] = issue.get("discussion_mode", "sequential")
+        issue_context = issue.get("issue_context")
+        if isinstance(issue_context, dict) and issue_context:
+            meeting_record["issue_context"] = issue_context
+        if conversation is not None:
+            clean_rows: List[Dict[str, Any]] = []
+            for row in conversation:
+                if isinstance(row, dict):
+                    clean_rows.extend(self.conversation_entry_records(row))
+            if clean_rows:
+                meeting_record["conversation"] = clean_rows
+        if resolution is not None:
+            self.apply_conflict_report_resolution(issue, resolution)
+            meeting_record["resolution"] = resolution
+            self.apply_default_issue_completion(issue, resolution, meeting_record)
+        block = self.discussion_round_block(create=True)
+        self.meeting_records = list(block.get("issues", []) if isinstance(block, dict) else [])
+        if self.output_artifact is not None:
+            for key in ("meta", "feedback", "URL", "conflict"):
+                if key in self.artifact:
+                    self.output_artifact[key] = self.artifact[key]
+            self.output_artifact["discussions"] = list(self.artifact.get("discussions", []) or [])
+            self.store.save_artifact(self.output_artifact)
+        return meeting_record
+
+    def apply_conflict_report_resolution(
+        self,
+        issue: Dict[str, Any],
+        resolution: Dict[str, Any],
+    ) -> None:
+        status = str(resolution.get("resolution_status") or "").strip()
+        if status not in {"agreed", "human_decision"}:
+            return
+        conflict = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
+        rows = conflict.get("report") if isinstance(conflict.get("report"), list) else []
+        if not rows:
+            return
+        ordered_target_ids = conflict_report_resolution_ids(self.artifact, issue, resolution)
+        target_ids = set(ordered_target_ids)
+        if not ordered_target_ids:
+            return
+        meeting_id = str(issue.get("meeting_id") or "").strip()
+        changed = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_ids = {
+                str(row.get("id") or "").strip(),
+                str(row.get("source_id") or "").strip(),
+            }
+            if not target_ids.intersection(row_ids):
+                continue
+            row["status"] = status
+            if meeting_id:
+                row["meeting_id"] = meeting_id
+            summary = str(resolution.get("summary") or "").strip()
+            decision = str(resolution.get("decision") or "").strip()
+            option_decision = adopted_resolution_option_text(row, decision)
+            if summary:
+                row["summary"] = summary
+            if option_decision:
+                row["decision"] = option_decision
+            elif decision:
+                row["decision"] = decision
+            changed = True
+        if not changed:
+            return
+        resolution["affected_conflict_ids"] = ordered_target_ids
+        self.artifact.setdefault("conflict", {})["report"] = rows
+        if self.output_artifact is not None:
+            self.output_artifact.setdefault("conflict", {})["report"] = rows
+        self.apply_conflict_resolution_to_url(
+            issue=issue,
+            resolution=resolution,
+            conflict_rows=rows,
+            target_ids=target_ids,
+        )
+        self.save_latest_conflict_report(rows)
+
+    def apply_conflict_resolution_to_url(
+        self,
+        *,
+        issue: Dict[str, Any],
+        resolution: Dict[str, Any],
+        conflict_rows: List[Dict[str, Any]],
+        target_ids: set[str],
+    ) -> None:
+        if str(issue.get("category") or "").strip() != "resolve_conflict":
+            return
+        try:
+            from agents.profile.analyst.requirements import (
+                renumber_requirement_candidate_ids,
+            )
+        except Exception as e:
+            raise RuntimeError("載入 URL id helper 失敗") from e
+
+        url_rows = [
+            dict(row)
+            for row in (self.artifact.get("URL", []) or [])
+            if isinstance(row, dict)
+        ]
+        if not url_rows:
+            return
+        by_id = {
+            str(row.get("id") or "").strip(): row
+            for row in url_rows
+            if str(row.get("id") or "").strip()
+        }
+        meeting_id = str(issue.get("meeting_id") or "").strip()
+        changed = False
+        update_plan = self.normalize_url_update_plan(resolution.get("url_updates"), by_id=by_id)
+        if update_plan:
+            remove_ids: set[str] = set()
+            for update in update_plan:
+                action = str(update.get("action") or "").strip()
+                ids = [
+                    str(req_id or "").strip()
+                    for req_id in (update.get("ids") or [])
+                    if str(req_id or "").strip() in by_id
+                ]
+                if not ids:
+                    continue
+                reason = str(update.get("reason") or "").strip()
+                if action == "remove":
+                    remove_ids.update(ids)
+                    changed = True
+                    continue
+                for req_id in ids:
+                    row = by_id.get(req_id)
+                    if not row:
+                        continue
+                    if action == "revise":
+                        text = self.clean_requirement_text(update.get("text"))
+                        if text:
+                            row["text"] = text
+                    elif action == "keep":
+                        cleaned_text = self.cleaned_single_url_text(row)
+                        if cleaned_text:
+                            row["text"] = cleaned_text
+                    row["source"] = meeting_id or str(issue.get("id") or "").strip()
+                    row.pop("source_id", None)
+                    if reason:
+                        row["resolution_reason"] = reason
+                    changed = True
+            if remove_ids:
+                url_rows = [
+                    row for row in url_rows
+                    if str(row.get("id") or "").strip() not in remove_ids
+                ]
+                url_rows = renumber_requirement_candidate_ids(url_rows)
+            if changed:
+                self.artifact["URL"] = url_rows
+                meta = self.artifact.setdefault("meta", {})
+                meta["requirements_changed"] = True
+                meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
+                meta["requirements_changed_reason"] = "resolve_conflict"
+            return
+
+        for conflict_row in conflict_rows:
+            if not isinstance(conflict_row, dict):
+                continue
+            conflict_ids = {
+                str(conflict_row.get("id") or "").strip(),
+                str(conflict_row.get("source_id") or "").strip(),
+            }
+            conflict_ids.discard("")
+            if not target_ids.intersection(conflict_ids):
+                continue
+            conflict_id = str(conflict_row.get("id") or "").strip()
+            if not conflict_id:
+                continue
+            source_ids = [
+                req_id for req_id in conflict_report_requirement_ids(conflict_row)
+                if req_id in by_id
+            ]
+            if not source_ids:
+                continue
+            source_rows = [by_id[source_id] for source_id in source_ids]
+            duplicate_groups = self.duplicate_url_groups(source_rows)
+            duplicate_ids = {
+                req_id
+                for group in duplicate_groups
+                for req_id in group[1:]
+            }
+            source_set = set(duplicate_ids)
+            for source_id in source_ids:
+                row = by_id.get(source_id)
+                if not row:
+                    continue
+                if source_id in duplicate_ids:
+                    continue
+                cleaned_text = self.cleaned_single_url_text(row)
+                if cleaned_text and cleaned_text != str(row.get("text") or "").strip():
+                    row["text"] = cleaned_text
+                    changed = True
+                row["source"] = meeting_id or str(issue.get("id") or "").strip()
+                row.pop("source_id", None)
+                changed = True
+            if not source_set:
+                continue
+            url_rows = [
+                row for row in url_rows
+                if str(row.get("id") or "").strip() not in source_set
+            ]
+            url_rows = renumber_requirement_candidate_ids(url_rows)
+            by_id = {
+                str(row.get("id") or "").strip(): row
+                for row in url_rows
+                if str(row.get("id") or "").strip()
+            }
+            changed = True
+
+        if not changed:
+            return
+        self.artifact["URL"] = url_rows
+        meta = self.artifact.setdefault("meta", {})
+        meta["requirements_changed"] = True
+        meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
+        meta["requirements_changed_reason"] = "resolve_conflict"
+
+    @staticmethod
+    def normalize_url_update_plan(
+        value: Any,
+        *,
+        by_id: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        rows = value if isinstance(value, list) else []
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            action = str(row.get("action") or "").strip()
+            if action not in {"keep", "revise", "remove"}:
+                continue
+            raw_ids = row.get("ids")
+            if isinstance(raw_ids, str):
+                raw_ids = [raw_ids]
+            ids = [
+                str(req_id or "").strip()
+                for req_id in (raw_ids or [])
+                if str(req_id or "").strip() in by_id
+            ]
+            ids = list(dict.fromkeys(ids))
+            if not ids:
+                continue
+            item: Dict[str, Any] = {
+                "action": action,
+                "ids": ids,
+                "reason": str(row.get("reason") or "").strip(),
+            }
+            if action == "revise":
+                text = str(row.get("text") or "").strip()
+                if not text:
+                    continue
+                item["text"] = text
+            out.append(item)
+        return out
+
+    def conversation_url_update_plan(
+        self,
+        conversation: List[Dict[str, Any]],
+        *,
+        by_id: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            candidates: List[Any] = []
+            if isinstance(response.get("url_updates"), list):
+                candidates.append(response.get("url_updates"))
+            stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+            proposal = stance.get("proposal") if isinstance(stance.get("proposal"), dict) else {}
+            if isinstance(proposal.get("url_updates"), list):
+                candidates.append(proposal.get("url_updates"))
+            for candidate in candidates:
+                out.extend(self.normalize_url_update_plan(candidate, by_id=by_id))
+        return out
+
+    def default_conflict_url_update_plan(
+        self,
+        conflict_rows: List[Dict[str, Any]],
+        *,
+        target_ids: set[str],
+    ) -> List[Dict[str, Any]]:
+        url_rows = [
+            row for row in (self.artifact.get("URL", []) or [])
+            if isinstance(row, dict)
+        ]
+        by_id = {
+            str(row.get("id") or "").strip(): row
+            for row in url_rows
+            if str(row.get("id") or "").strip()
+        }
+        out: List[Dict[str, Any]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for conflict_row in conflict_rows or []:
+            if not isinstance(conflict_row, dict):
+                continue
+            conflict_ids = {
+                str(conflict_row.get("id") or "").strip(),
+                str(conflict_row.get("source_id") or "").strip(),
+            }
+            conflict_ids.discard("")
+            if target_ids and not target_ids.intersection(conflict_ids):
+                continue
+            source_ids = [
+                req_id for req_id in conflict_report_requirement_ids(conflict_row)
+                if req_id in by_id
+            ]
+            source_rows = [by_id[source_id] for source_id in source_ids]
+            duplicate_groups = self.duplicate_url_groups(source_rows)
+            duplicate_ids = {
+                req_id
+                for group in duplicate_groups
+                for req_id in group[1:]
+            }
+            for source_id in source_ids:
+                row = by_id.get(source_id)
+                if not row:
+                    continue
+                if source_id in duplicate_ids:
+                    update = {
+                        "action": "remove",
+                        "ids": [source_id],
+                        "reason": "與同一衝突中的其他 URL 內容完全重複。",
+                    }
+                else:
+                    cleaned_text = self.cleaned_single_url_text(row)
+                    current_text = str(row.get("text") or "").strip()
+                    if cleaned_text and cleaned_text != current_text:
+                        update = {
+                            "action": "revise",
+                            "ids": [source_id],
+                            "text": cleaned_text,
+                            "reason": "清理重複片段，保留單筆 URL 的原始需求語意。",
+                        }
+                    else:
+                        update = {
+                            "action": "keep",
+                            "ids": [source_id],
+                            "reason": "此 URL 作為衝突解決後仍有效的使用者需求來源。",
+                        }
+                marker = (update["action"], tuple(update["ids"]))
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                out.append(update)
+        return out
+
+    @staticmethod
+    def is_decision_text(value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        markers = (
+            "採用",
+            "決議",
+            "裁決",
+            "折衷",
+            "CR-",
+            "resolution",
+            "human_decision",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def clean_requirement_text(value: Any) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        text = re.sub(r"^(使用者需求|需求|Requirement)\s*[:：]\s*", "", text, flags=re.I)
+        while True:
+            cleaned = re.sub(
+                r"^[^。；;：:]{0,40}?需要系統以一致規格整合處理\s*[:：]\s*",
+                "",
+                text,
+            ).strip()
+            if cleaned == text:
+                break
+            text = cleaned
+        return text.strip("；;，,。 ")
+
+    @classmethod
+    def requirement_text_clauses(cls, value: Any) -> List[str]:
+        text = cls.clean_requirement_text(value)
+        if not text:
+            return []
+        clauses = [
+            cls.clean_requirement_text(part)
+            for part in re.split(r"[；;]\s*", text)
+        ]
+        out: List[str] = []
+        seen = set()
+        for clause in clauses:
+            if not clause or cls.is_decision_text(clause):
+                continue
+            marker = re.sub(r"\s+", "", clause).lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            out.append(clause)
+        return out
+
+    @classmethod
+    def cleaned_single_url_text(cls, row: Dict[str, Any]) -> str:
+        clauses = cls.requirement_text_clauses(row.get("text") or row.get("description"))
+        if not clauses:
+            return ""
+        if len(clauses) == 1:
+            return clauses[0]
+        return "；".join(clauses)
+
+    @classmethod
+    def duplicate_url_groups(cls, source_rows: List[Dict[str, Any]]) -> List[List[str]]:
+        by_text: Dict[str, List[str]] = {}
+        for row in source_rows or []:
+            if not isinstance(row, dict):
+                continue
+            req_id = str(row.get("id") or "").strip()
+            text = cls.cleaned_single_url_text(row)
+            if not req_id or not text:
+                continue
+            marker = re.sub(r"\s+", "", text).lower()
+            by_text.setdefault(marker, []).append(req_id)
+        return [ids for ids in by_text.values() if len(ids) > 1]
+
+    @staticmethod
+    def common_url_stakeholder(rows: List[Dict[str, Any]]) -> Dict[str, str]:
+        stakeholders = []
+        for row in rows or []:
+            stakeholder = row.get("stakeholder")
+            if isinstance(stakeholder, dict):
+                name = str(stakeholder.get("name") or "").strip()
+                if name:
+                    stakeholders.append(
+                        {
+                            "name": name,
+                            "type": str(stakeholder.get("type") or "").strip(),
+                        }
+                    )
+        if not stakeholders:
+            return {}
+        first = stakeholders[0]
+        if all(item == first for item in stakeholders):
+            return first
+        return {}
+
+    def save_latest_conflict_report(self, rows: List[Dict[str, Any]]) -> None:
+        try:
+            from storage.artifact import reindex_conflict_report_rows, save_json_path
+
+            report_dir = self.store.artifact_dir / "report"
+            latest_path = None
+            latest_version = -1
+            if report_dir.exists():
+                for path in report_dir.glob("conflict_report_v*.json"):
+                    raw_version = path.stem[len("conflict_report_v"):]
+                    if raw_version.isdigit() and int(raw_version) > latest_version:
+                        latest_version = int(raw_version)
+                        latest_path = path
+            if latest_path is None:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                latest_path = report_dir / f"conflict_report_v{max(1, int(self.round_num or 1))}.json"
+            save_json_path(self.store.base_dir, reindex_conflict_report_rows(rows), latest_path)
+        except Exception as e:
+            raise RuntimeError("正式會議 conflict report 狀態寫檔失敗") from e
+
+    def apply_default_issue_completion(
+        self,
+        issue: Dict[str, Any],
+        resolution: Dict[str, Any],
+        meeting_record: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        status = str(resolution.get("resolution_status") or "").strip()
+        if status not in {"agreed", "human_decision"}:
+            return
+        proposal_ids = {
+            str(item).strip()
+            for item in (issue_proposal_ids(issue))
+            if str(item).strip()
+        }
+        meeting_id = str(issue.get("meeting_id") or "").strip()
+        issue_id = str(issue.get("id") or "").strip()
+        if any(source_id.endswith("-mediator-requirement-review") for source_id in proposal_ids):
+            meta = self.artifact.setdefault("meta", {})
+            meta["requirements_review_status"] = status
+            meta["requirements_review_by"] = meeting_id or issue_id
+            meta["requirements_review_round"] = self.round_num
+            meta["requirements_review_cycle"] = int(meta.get("requirements_review_cycle") or 0) + 1
+            meta.pop("requirements_review_invalidated_by", None)
+            meta.pop("requirements_review_invalidated_round", None)
+            self.run_model_system_after_requirement_review(issue, meeting_record)
+
+    def run_model_system_after_requirement_review(
+        self,
+        issue: Dict[str, Any],
+        meeting_record: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        req_rows = self.artifact.get("REQ")
+        if not isinstance(req_rows, list) or not req_rows:
+            return
+        modeler = self.registry.get("modeler") if self.registry is not None else None
+        if modeler is None or not hasattr(modeler, "run_model_loop"):
+            return
+        model_issue = {
+            "id": issue.get("id"),
+            "meeting_id": issue.get("meeting_id"),
+            "title": issue.get("title"),
+            "category": "align_model",
+            "description": "需求分類完成後，根據最新 REQ-* 建立或更新系統模型。",
+            "trace": issue.get("trace", {}),
+        }
+        try:
+            loop_result = modeler.run_model_loop(
+                self.artifact,
+                recent_discussions=self.issue_states.get(issue.get("id"), {}).get("conversation"),
+                issue=model_issue,
+            )
+            meeting_id = str(issue.get("meeting_id") or issue.get("id") or "").strip()
+            for model in self.artifact.get("system_models", []) or []:
+                if isinstance(model, dict) and meeting_id:
+                    model["source"] = meeting_id
+            self.append_requirement_review_model_record(
+                issue,
+                loop_result if isinstance(loop_result, dict) else {},
+                meeting_record,
+            )
+            meta = self.artifact.setdefault("meta", {})
+            meta["model_alignment_status"] = "agreed"
+            meta["model_alignment_by"] = meeting_id
+            meta["model_alignment_round"] = self.round_num
+            meta["model_alignment_cycle"] = int(meta.get("model_alignment_cycle") or 0) + 1
+            if self.output_artifact is not None:
+                for key in ("meta", "system_models", "model_consistency_report"):
+                    if key in self.artifact:
+                        self.output_artifact[key] = self.artifact[key]
+                self.store.save_artifact(self.output_artifact)
+                if "system_models" in self.artifact:
+                    self.store.save_plantuml_files(self.artifact.get("system_models", []))
+                    self.output_artifact["system_models"] = self.artifact.get("system_models", [])
+                    self.store.save_artifact(self.output_artifact)
+        except Exception as e:
+            meta = self.artifact.setdefault("meta", {})
+            meta["model_alignment_status"] = "failed"
+            meta["model_alignment_error"] = str(e)
+
+    def append_requirement_review_model_record(
+        self,
+        issue: Dict[str, Any],
+        loop_result: Dict[str, Any],
+        meeting_record: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        issue_id = issue.get("id")
+        action_result = {
+            "action": "model_system",
+            "steps": [
+                {
+                    "action": (row.get("decision") or {}).get("action"),
+                    "result": row.get("result", {}),
+                }
+                for row in (loop_result.get("opa_trace") or [])
+                if isinstance(row, dict)
+            ],
+            "system_models": self.artifact.get("system_models", []),
+            "model_consistency_report": self.artifact.get("model_consistency_report", {}),
+        }
+        model_rows = self.artifact.get("system_models") if isinstance(self.artifact.get("system_models"), list) else []
+        report = self.artifact.get("model_consistency_report") if isinstance(self.artifact.get("model_consistency_report"), dict) else {}
+        text = (
+            f"需求分類完成後已根據最新 REQ-* 建立或更新系統模型，共 {len(model_rows)} 筆模型。"
+        )
+        if report.get("consistency_summary"):
+            text += f" 一致性摘要：{report.get('consistency_summary')}"
+        raw_record = {
+            "agent": "modeler",
+            "round_index": "post",
+            "response": {
+                "actions": ["model_system"],
+                "text": text,
+                "issue_action_results": [action_result],
+                "stance": {"state": "ready_to_close"},
+            },
+        }
+        status = self.issue_states.setdefault(issue_id, {})
+        conversation = status.get("conversation")
+        if not isinstance(conversation, list):
+            conversation = []
+        conversation.append(raw_record)
+        status["conversation"] = conversation
+        clean_rows = self.conversation_entry_records(raw_record)
+        if clean_rows and meeting_record is not None:
+            existing = meeting_record.get("conversation")
+            if not isinstance(existing, list):
+                existing = []
+            existing.extend(clean_rows)
+            meeting_record["conversation"] = existing
+
+    def update_rationale_for_issue(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict],
         resolution: Dict[str, Any],
     ) -> None:
         """每個議題存檔後即時更新 design_rationale.md。"""
@@ -109,7 +1586,7 @@ class MeetingRunner:
             issue_oq = self.issue_open_questions(issue_id)
             issue_context = self.mediator.build_design_rationale_entry_context(
                 issue=issue,
-                contributions=contributions,
+                conversation=conversation,
                 resolution=resolution,
                 issue_open_questions=issue_oq,
                 round_num=self.round_num,
@@ -118,11 +1595,11 @@ class MeetingRunner:
             dr_path = self.store.output_dir / "design_rationale.md"
             if dr_path.exists():
                 existing_md = dr_path.read_text(encoding="utf-8")
-                dr_md = self.mediator.update_design_rationale(existing_md, issue_context)
+                dr_md = self.mediator.update_rationale(existing_md, issue_context)
             else:
-                dr_md = self.mediator.generate_design_rationale(issue_context)
+                dr_md = self.mediator.write_rationale(issue_context)
             self.store.save_markdown(dr_md, "design_rationale.md")
-            self.logger.info(f"  ✓ 已更新 design_rationale.md（{issue_id}）")
+            self.logger.info("  已更新設計緣由：design_rationale.md")
         except Exception as e:
             raise RuntimeError("更新 design_rationale.md 失敗") from e
 
@@ -130,330 +1607,562 @@ class MeetingRunner:
         params = params or {}
         action = self.action_name(action)
         state = self.get_state_summary()
+        issues = self.current_meeting_issues()
         return {
             "action": action,
             "params": params,
-            "issues_count": len(self.issues),
-            "round_discussions_count": len(self.round_discussions),
-            "open_questions_count": len(self.all_open_questions),
+            "issues_count": len(issues),
+            "records_count": len(self.meeting_records),
+            "open_questions_count": len(self.open_questions),
             "state_summary": state,
         }
-
-    def record_runner_opa_trace(
-        self,
-        *,
-        stage: str,
-        action: str,
-        params: Dict[str, Any],
-        observation: Dict[str, Any],
-        decision: Dict[str, Any],
-        result: Dict[str, Any],
-        issue_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        trace_rows = [
-            {
-                "agent": "meeting_runner",
-                "mode": "meeting_action",
-                "iteration": 1,
-                "observation": {
-                    "action": observation.get("action"),
-                    "issues_count": observation.get("issues_count"),
-                    "round_discussions_count": observation.get("round_discussions_count"),
-                    "open_questions_count": observation.get("open_questions_count"),
-                },
-                "decision": {
-                    "action": decision.get("action"),
-                    "params": decision.get("params") or {},
-                    "reasoning": decision.get("reasoning", ""),
-                },
-                "result": {
-                    "error": result.get("error"),
-                    "result": result.get("result"),
-                },
-            }
-        ]
-        self.artifact.setdefault("meeting_opa_trace", []).extend(
-            {
-                "stage": stage,
-                "issue_id": issue_id,
-                "issue_title": None,
-                "issue_category": None,
-                "agent": "meeting_runner",
-                "trace": row,
-            }
-            for row in trace_rows
-        )
-        return trace_rows
-
-    def record_action_substep_trace(
-        self,
-        *,
-        stage: str,
-        issue: Optional[Dict[str, Any]],
-        substep: str,
-        observation: Dict[str, Any],
-        decision: Dict[str, Any],
-        result: Dict[str, Any],
-    ) -> None:
-        self.artifact.setdefault("meeting_opa_trace", []).append(
-            {
-                "stage": stage,
-                "issue_id": (issue or {}).get("id"),
-                "issue_title": (issue or {}).get("title"),
-                "issue_category": (issue or {}).get("category"),
-                "agent": "meeting_runner",
-                "trace": {
-                    "agent": "meeting_runner",
-                    "mode": "action_substep",
-                    "iteration": 1,
-                    "observation": observation,
-                    "decision": decision,
-                    "result": result,
-                    "substep": substep,
-                },
-            }
-        )
 
     def resolve_issue_via_substeps(
         self,
         *,
         issue: Dict[str, Any],
-        contributions: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        stage = "meeting_runner.resolve_issue"
         issue_id = issue.get("id")
 
-        converge_obs = {
-            "issue_id": issue_id,
-            "contributions_count": len(contributions),
-        }
-        converge_decision = {
-            "action": "assess_convergence",
-            "params": {"issue_id": issue_id},
-            "reasoning": "先判斷議題是否已收斂；未收斂時改整理決策選項與建議，不進行 agent 投票。",
-        }
-        convergence = self.mediator.assess_discussion_convergence(issue, contributions)
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="resolve.assess_convergence",
-            observation=converge_obs,
-            decision=converge_decision,
-            result={
-                "converged": bool(convergence.get("converged")),
-                "reason": convergence.get("reason", ""),
-            },
-        )
+        readiness = self.collect_stance_summary(issue, conversation)
 
-        suggested_next_actions = self.mediator.collect_suggested_next_actions(contributions)
-
-        if convergence.get("converged"):
-            resolution_decision = {
-                "action": "build_converged_resolution",
-                "params": {"issue_id": issue_id},
-                "reasoning": "討論已收斂，直接生成收斂型決議。",
-            }
-            resolution = self.mediator.build_converged_resolution(
-                issue, contributions, convergence,
+        if str(issue.get("category") or "").strip() == "resolve_conflict":
+            resolution = self.close_conflict_resolution_issue(issue, conversation, readiness)
+        elif readiness.get("ready_to_close"):
+            resolution = self.mediator.close_issue(
+                issue, conversation, readiness,
             )
-            resolution["suggested_next_actions"] = suggested_next_actions
-            self.record_action_substep_trace(
-                stage=stage,
-                issue=issue,
-                substep="resolve.build_converged_resolution",
-                observation={
-                    "issue_id": issue_id,
-                    "convergence_reason": convergence.get("reason", ""),
-                },
-                decision=resolution_decision,
-                result={
-                    "resolution_status": resolution.get("resolution_status", ""),
-                    "summary": resolution.get("summary", ""),
-                },
-            )
+        elif self.is_requirement_review_issue(issue):
+            resolution = self.close_requirement_review_issue(issue, conversation, readiness)
         else:
-            options_decision = {
-                "action": "analyze_decision_options",
-                "params": {"issue_id": issue_id},
-                "reasoning": "討論未收斂，整理成可供人類裁決的選項、影響與建議。",
-            }
-            decision_analysis = self.mediator.analyze_decision_options(issue, contributions)
-            self.record_action_substep_trace(
-                stage=stage,
-                issue=issue,
-                substep="resolve.analyze_decision_options",
-                observation={
-                    "issue_id": issue_id,
-                    "convergence_reason": convergence.get("reason", ""),
-                },
-                decision=options_decision,
-                result={
-                    "options_count": len(decision_analysis.get("options") or []),
-                    "recommendation": decision_analysis.get("recommendation", {}),
-                },
+            decision_context = self.judgment_context(issue)
+            decision_analysis = self.mediator.prepare_judgment(
+                issue,
+                conversation,
+                decision_context=decision_context,
             )
-
+    
             resolution = self.mediator.build_issue_result(
                 resolution_status="pending_confirmation",
                 summary=decision_analysis.get("summary", ""),
                 decision="",
-                mediator_compromise={"title": "", "description": "", "rationale": ""},
                 agreed_points=[],
                 unresolved_points=decision_analysis.get("unresolved_points", []),
                 new_open_questions=[],
                 affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
-                needs_approval=False,
                 needs_human=True,
                 options=decision_analysis.get("options", []),
                 recommendation=decision_analysis.get("recommendation", {}),
-                needs_user_confirmation=False,
-                confirmation_status="pending",
+                mediator_compromise=decision_analysis.get("compromise", {}),
             )
-            resolution["suggested_next_actions"] = suggested_next_actions
-            self.record_action_substep_trace(
-                stage=stage,
-                issue=issue,
-                substep="resolve.build_recommendation",
-                observation={
-                    "issue_id": issue_id,
-                    "needs_human": True,
-                },
-                decision={
-                    "action": "build_recommendation",
-                    "params": {"issue_id": issue_id},
-                    "reasoning": "將選項分析保存為 recommendation，等待人類裁決後才套用為正式需求。",
-                },
-                result={
-                    "resolution_status": resolution.get("resolution_status", ""),
-                    "summary": resolution.get("summary", ""),
-                    "confirmation_status": resolution.get("confirmation_status", ""),
-                },
-            )
-
-        source_ids = list(issue.get("source_ids", []) or [])
+    
+        source_ids = list(issue_artifact_ids(issue) or [])
         derived_req_ids = [
             sid for sid in source_ids
             if isinstance(sid, str)
-            and sid.startswith(("REQ-", "R-", "FR-", "NFR-"))
+            and sid.startswith(("REQ-", "R-"))
         ]
-        finalize_contract_decision = {
-            "action": "finalize_resolution_contract",
-            "params": {"issue_id": issue_id},
-            "reasoning": "補齊決議的結構化欄位，讓後續 save/apply 流程只處理完整 contract。",
-        }
         cur_req_ids = resolution.get("affected_requirement_ids") or []
         if not cur_req_ids:
             resolution["affected_requirement_ids"] = derived_req_ids
-        if not isinstance(resolution.get("requirement_impact"), dict):
-            resolution["requirement_impact"] = {
-                "level": "none",
-                "notes": "",
-            }
-        has_changes = bool(resolution.get("change_record"))
-        has_affected = bool(resolution.get("affected_requirement_ids"))
-        if resolution.get("needs_human") or resolution.get("needs_user_confirmation"):
-            resolution["needs_approval"] = False
-        else:
-            resolution["needs_approval"] = has_affected or has_changes
-        resolution["suggested_next_actions"] = suggested_next_actions
-        for rc in (resolution.get("change_record") or []):
-            if isinstance(rc, dict):
-                rc.setdefault("source_issue_id", issue.get("id"))
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="resolve.finalize_resolution_contract",
-            observation={
-                "issue_id": issue_id,
-                "source_ids_count": len(source_ids),
-            },
-            decision=finalize_contract_decision,
-            result={
-                "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
-                "needs_approval": resolution.get("needs_approval", False),
-                "change_candidates_count": len(
-                    resolution.get("change_record") or []
-                ),
-            },
+        resolution["artifact_updates"] = self.artifact_updates_summary(
+            issue,
+            conversation,
+            resolution,
         )
         return resolution
 
-    def escalate_issue_via_substeps(
+    def conflict_rows_for_issue(self, issue: Dict[str, Any]) -> List[Dict[str, Any]]:
+        conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
+        report = conflict_state.get("report")
+        if not isinstance(report, list):
+            report = self.artifact.get("conflict_report", [])
+        if not isinstance(report, list):
+            return []
+        source_ids = [
+            str(source_id).strip()
+            for source_id in issue_artifact_ids(issue)
+            if str(source_id).strip()
+        ]
+        selected = [
+            row for row in report
+            if isinstance(row, dict)
+            and (not source_ids or str(row.get("id") or "").strip() in source_ids)
+            and str(row.get("label") or "").strip() == "Conflict"
+        ]
+        if selected:
+            return selected
+        return [
+            row for row in report
+            if isinstance(row, dict)
+            and str(row.get("label") or "").strip() == "Conflict"
+            and str(row.get("status") or "").strip().lower() not in {"agreed", "human_decision"}
+        ]
+
+    @staticmethod
+    def has_major_conflict_objection(conversation: List[Dict[str, Any]]) -> bool:
+        keywords = (
+            "反對",
+            "不同意",
+            "不可採用",
+            "不能採用",
+            "不建議採用",
+            "無法採用",
+            "重大風險",
+            "高風險",
+            "合規風險",
+            "安全風險",
+            "仍有衝突",
+            "無法收斂",
+            "must not",
+            "cannot adopt",
+            "major risk",
+            "compliance risk",
+            "security risk",
+        )
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            if MeetingRunner.response_state(response) != "needs_more_discussion":
+                continue
+            text_parts = [str(response.get("text") or "")]
+            for question in response.get("open_questions") or []:
+                if isinstance(question, dict):
+                    text_parts.append(str(question.get("question") or ""))
+                else:
+                    text_parts.append(str(question or ""))
+            text = "\n".join(text_parts).lower()
+            if any(keyword.lower() in text for keyword in keywords):
+                return True
+        return False
+
+    def close_conflict_resolution_issue(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        conflict_rows = self.conflict_rows_for_issue(issue)
+        missing_recommendation = [
+            str(row.get("id") or "").strip()
+            for row in conflict_rows
+            if not str(row.get("recommended_resolution") or "").strip()
+        ]
+        if not conflict_rows or missing_recommendation or self.has_major_conflict_objection(conversation):
+            decision_context = self.judgment_context(issue)
+            decision_analysis = self.mediator.prepare_judgment(
+                issue,
+                conversation,
+                decision_context=decision_context,
+            )
+            return self.mediator.build_issue_result(
+                resolution_status="pending_confirmation",
+                summary=decision_analysis.get("summary", ""),
+                decision="",
+                agreed_points=[],
+                unresolved_points=decision_analysis.get("unresolved_points", []),
+                new_open_questions=[],
+                affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
+                affected_conflict_ids=[
+                    str(row.get("id") or "").strip()
+                    for row in conflict_rows
+                    if str(row.get("id") or "").strip()
+                ],
+                needs_human=True,
+                options=decision_analysis.get("options", []),
+                recommendation=decision_analysis.get("recommendation", {}),
+                mediator_compromise=decision_analysis.get("compromise", {}),
+            )
+
+        affected_conflict_ids = [
+            str(row.get("id") or "").strip()
+            for row in conflict_rows
+            if str(row.get("id") or "").strip()
+        ]
+        target_ids = set(affected_conflict_ids)
+        url_rows = [
+            row for row in (self.artifact.get("URL", []) or [])
+            if isinstance(row, dict)
+        ]
+        by_id = {
+            str(row.get("id") or "").strip(): row
+            for row in url_rows
+            if str(row.get("id") or "").strip()
+        }
+        url_updates = self.conversation_url_update_plan(conversation, by_id=by_id)
+        if not url_updates:
+            url_updates = self.default_conflict_url_update_plan(
+                conflict_rows,
+                target_ids=target_ids,
+            )
+        recommended = [
+            str(row.get("recommended_resolution") or "").strip()
+            for row in conflict_rows
+            if str(row.get("recommended_resolution") or "").strip()
+        ]
+        summary = f"已採用 conflict report 中 {len(recommended)} 筆既有推薦解法處理需求衝突。"
+        if len(recommended) == 1:
+            decision = recommended[0]
+        else:
+            decision = "；".join(
+                f"{conflict_id}：{text}"
+                for conflict_id, text in zip(affected_conflict_ids, recommended)
+            )
+        return self.mediator.build_issue_result(
+            resolution_status="agreed",
+            summary=summary,
+            decision=decision,
+            agreed_points=recommended,
+            unresolved_points=[],
+            new_open_questions=[],
+            affected_conflict_ids=affected_conflict_ids,
+            url_updates=url_updates,
+            needs_human=False,
+        )
+
+    @staticmethod
+    def is_requirement_review_issue(issue: Dict[str, Any]) -> bool:
+        title = str((issue or {}).get("title") or "").strip()
+        category = str((issue or {}).get("category") or "").strip()
+        proposal_ids = {
+            str(item).strip()
+            for item in issue_proposal_ids(issue)
+            if str(item).strip()
+        }
+        return (
+            title == "需求分類"
+            or (
+                category == "clarify_requirement"
+                and any(source_id.endswith("-mediator-requirement-review") for source_id in proposal_ids)
+            )
+        )
+
+    @staticmethod
+    def requirement_review_needs_refine_followup(conversation: List[Dict[str, Any]]) -> bool:
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("agent") or "").strip() == "analyst":
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            text = str(response.get("text") or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if any(
+                keyword in lowered
+                for keyword in (
+                    "驗收",
+                    "時效",
+                    "門檻",
+                    "例外",
+                    "限制",
+                    "風險",
+                    "假設",
+                    "優先",
+                    "資安",
+                    "合規",
+                    "安全",
+                    "效能",
+                    "可靠",
+                    "同步",
+                    "通知",
+                    "退款",
+                    "公平",
+                    "validation",
+                    "metric",
+                    "constraint",
+                    "risk",
+                    "assumption",
+                    "priority",
+                )
+            ):
+                return True
+        return False
+
+    def close_requirement_review_issue(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        req_ids: List[str] = []
+        unresolved_points: List[str] = []
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            proposal = self.response_proposal(response)
+            proposal = proposal if isinstance(proposal, dict) else {}
+            summary = str(proposal.get("summary") or response.get("text") or "").strip()
+            if self.response_state(response) == "needs_more_discussion" and summary:
+                unresolved_points.append(summary)
+            for result in response.get("issue_action_results") or []:
+                if not isinstance(result, dict):
+                    continue
+                if str(result.get("action") or "").strip() != "refine_requirement":
+                    continue
+                for row in result.get("REQ") or []:
+                    if isinstance(row, dict):
+                        req_id = str(row.get("id") or "").strip()
+                        if req_id:
+                            req_ids.append(req_id)
+        req_ids = list(dict.fromkeys(req_ids))
+        unresolved_points = list(dict.fromkeys(unresolved_points))
+        summary = "需求分類已完成；未完全確認的內容已保留於 REQ 的 assumptions、risks 或 open questions。"
+        if req_ids:
+            summary = f"需求分類已完成，更新 {len(req_ids)} 筆 REQ；未完全確認的內容已保留於 assumptions、risks 或 open questions。"
+        decision = (
+            "接受目前 REQ 草稿作為下一版需求草稿輸入；"
+            "未確認欄位不交由人類裁決，先沉澱為 assumptions、risks 或 open questions，後續正式議題再處理。"
+        )
+        return self.mediator.build_issue_result(
+            resolution_status="agreed",
+            summary=summary,
+            decision=decision,
+            mediator_compromise={"title": "", "description": "", "rationale": ""},
+            agreed_points=[decision],
+            unresolved_points=unresolved_points,
+            new_open_questions=[],
+            affected_requirement_ids=req_ids,
+            needs_human=False,
+        )
+
+    def artifact_updates_summary(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        updates: Dict[str, Any] = {}
+        affected_requirements = [
+            str(value).strip()
+            for value in (resolution.get("affected_requirement_ids") or [])
+            if str(value).strip()
+        ]
+        if affected_requirements:
+            updates["requirements"] = {
+                "ids": affected_requirements,
+            }
+        if resolution.get("url_updates"):
+            updates["URL"] = {
+                "updates": len(resolution.get("url_updates") or [])
+            }
+        affected_conflicts = [
+            str(value).strip()
+            for value in (resolution.get("affected_conflict_ids") or [])
+            if str(value).strip()
+        ]
+        if affected_conflicts:
+            updates["conflict_report"] = {"ids": affected_conflicts}
+        if resolution.get("new_open_questions"):
+            updates["open_questions"] = {
+                "count": len(resolution.get("new_open_questions") or [])
+            }
+
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            for result in response.get("issue_action_results") or []:
+                if not isinstance(result, dict):
+                    continue
+                action = str(result.get("action") or "").strip()
+                if action in {"analyze_requirements", "refine_requirement", "refine_scope"}:
+                    updates.setdefault("requirements", {}).setdefault("actions", [])
+                    if action not in updates["requirements"]["actions"]:
+                        updates["requirements"]["actions"].append(action)
+                    if isinstance(result.get("REQ"), list):
+                        updates["requirements"]["REQ_count"] = len(result.get("REQ") or [])
+                elif action == "analyze_conflicts":
+                    updates.setdefault("conflict_report", {}).setdefault("actions", [])
+                    if action not in updates["conflict_report"]["actions"]:
+                        updates["conflict_report"]["actions"].append(action)
+                    if isinstance(result.get("conflict_report"), list):
+                        updates["conflict_report"]["count"] = len(result.get("conflict_report") or [])
+                elif action in {"research_domain", "update_feedback"} or result.get("feedback") not in (None, "", [], {}):
+                    feedback = result.get("feedback") if isinstance(result.get("feedback"), dict) else {}
+                    updates["feedback"] = {
+                        "action": action or "update_feedback",
+                        "sections": [
+                            key for key in ("findings", "constraints", "risks", "recommendations")
+                            if feedback.get(key)
+                        ],
+                    }
+                elif action in {"model_system", "create_model", "update_model"} or result.get("system_models") not in (None, "", [], {}):
+                    models = result.get("system_models")
+                    if isinstance(models, list):
+                        updates["system_models"] = {
+                            "action": action or "model_system",
+                            "ids": [
+                                str(model.get("id") or model.get("name") or "").strip()
+                                for model in models
+                                if isinstance(model, dict) and str(model.get("id") or model.get("name") or "").strip()
+                            ],
+                            "count": len(models),
+                        }
+        return updates
+
+    def collect_stance_summary(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        status_counts = {
+            "ready_to_close": 0,
+            "needs_more_discussion": 0,
+        }
+        participant_status: List[Dict[str, Any]] = []
+        proposer = str(issue.get("proposed_by") or self.find_issue_proposer(issue) or "").strip()
+        proposer_status = ""
+        for record_entry in conversation or []:
+            if not isinstance(record_entry, dict):
+                continue
+            if record_entry.get("is_reply"):
+                continue
+            response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
+            status = self.response_state(response)
+            if status not in status_counts:
+                status = "needs_more_discussion" if response.get("open_questions") else "ready_to_close"
+            status_counts[status] += 1
+            agent_name = str(record_entry.get("agent") or "").strip()
+            if proposer and agent_name == proposer and not proposer_status:
+                proposer_status = status
+            participant_status.append(
+                {
+                    "agent": agent_name,
+                    "status": status,
+                    "has_open_questions": bool(response.get("open_questions")),
+                    "is_proposer": bool(proposer and agent_name == proposer),
+                }
+            )
+        if not participant_status:
+            return {
+                "ready_to_close": False,
+                "reason": "無發言",
+                "summary": "本議題沒有足夠發言可形成結論。",
+                "decision": "",
+                "status_counts": status_counts,
+                "participant_status": participant_status,
+            }
+        ready_count = status_counts["ready_to_close"]
+        needs_count = status_counts["needs_more_discussion"]
+        majority_ready = ready_count > needs_count
+        proposer_ready = (not proposer or not proposer_status or proposer_status == "ready_to_close")
+        if not majority_ready or not proposer_ready:
+            reason = (
+                f"{ready_count} 位認為可收束，{needs_count} 位仍需討論；"
+                f"提案者 {proposer or '未指定'} 狀態為 {proposer_status or '未參與'}。"
+            )
+            return {
+                "ready_to_close": False,
+                "reason": reason,
+                "summary": reason,
+                "decision": "",
+                "status_counts": status_counts,
+                "participant_status": participant_status,
+            }
+        summary = (
+            f"多數參與者認為可收束，且提案者 {proposer or '未指定'} "
+            "未要求更多討論，可以結束本議題。"
+        )
+        return {
+            "ready_to_close": True,
+            "reason": summary,
+            "summary": summary,
+            "decision": summary,
+            "status_counts": status_counts,
+            "participant_status": participant_status,
+        }
+
+    def judge_issue_via_substeps(
         self,
         *,
         issue: Dict[str, Any],
-        contributions: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        stage = "meeting_runner.escalate_to_human"
         issue_id = issue.get("id")
 
-        options_decision = {
-            "action": "prepare_human_options",
-            "params": {"issue_id": issue_id},
-            "reasoning": "先整理可供人類裁決的選項，再進入裁決收集。",
+        status_resolution = (self.issue_states.get(issue_id, {}) or {}).get("resolution") or {}
+        if not status_resolution.get("options"):
+            decision_context = self.judgment_context(issue)
+            decision_analysis = self.mediator.prepare_judgment(
+                issue,
+                conversation,
+                decision_context=decision_context,
+            )
+            status_resolution = self.mediator.build_issue_result(
+                resolution_status="pending_confirmation",
+                summary=decision_analysis.get("summary", ""),
+                decision="",
+                agreed_points=[],
+                unresolved_points=decision_analysis.get("unresolved_points", []),
+                new_open_questions=[],
+                affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
+                needs_human=True,
+                options=decision_analysis.get("options", []),
+                recommendation=decision_analysis.get("recommendation", {}),
+                mediator_compromise=decision_analysis.get("compromise", {}),
+            )
+            self.issue_states.setdefault(issue_id, {})["resolution"] = status_resolution
+        best_options = []
+        for idx_opt, opt in enumerate(status_resolution.get("options") or [], start=1):
+            if not isinstance(opt, dict):
+                continue
+            best_options.append(
+                {
+                    "id": idx_opt,
+                    "title": opt.get("summary") or opt.get("title") or "",
+                    "description": opt.get("description") or opt.get("summary") or "",
+                    "source": "judgment",
+                }
+            )
+        options = {
+            "best_options": best_options,
+            "compromise": status_resolution.get("mediator_compromise", {}) or {},
         }
-        options = None
-        status_resolution = (self.issue_status.get(issue_id, {}) or {}).get("resolution") or {}
-        if status_resolution.get("options"):
-            best_options = []
-            for idx_opt, opt in enumerate(status_resolution.get("options") or [], start=1):
-                if not isinstance(opt, dict):
-                    continue
-                best_options.append(
-                    {
-                        "id": idx_opt,
-                        "title": f"{opt.get('id')}: {opt.get('summary') or opt.get('title') or ''}",
-                        "description": opt.get("summary") or opt.get("description") or "",
-                        "source": "formal_meeting_options",
-                    }
-                )
-            options = {"best_options": best_options, "compromise": {}}
-        if issue.get("category") in ("conflict_resolution",) and self.registry:
-            analyst = self.registry.get("analyst")
-            if analyst and hasattr(analyst, "get_resolution_options_for_issue"):
-                options = options or analyst.get_resolution_options_for_issue(issue, self.artifact)
-        if not options:
-            options = self.mediator.prepare_human_options(issue, contributions)
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="escalate.prepare_human_options",
-            observation={
-                "issue_id": issue_id,
-                "contributions_count": len(contributions),
-            },
-            decision=options_decision,
-            result={
-                "options_count": len(options) if isinstance(options, list) else 0,
-            },
-        )
 
-        human_decision = {
-            "action": "collect_human_decision",
-            "params": {"issue_id": issue_id},
-            "reasoning": "將整理後的選項交由人類決策。",
-        }
-        resolution = self.collect.human_decision_on_issue(issue, options)
+        display_issue = dict(issue)
+        if not str(display_issue.get("description") or "").strip():
+            display_issue["description"] = (
+                status_resolution.get("summary")
+                or status_resolution.get("decision")
+                or issue.get("expect_outcome")
+                or ""
+            )
+        resolution = self.collect.human_decision_on_issue(display_issue, options)
         decision_text = str(resolution.get("decision", ""))
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="escalate.collect_human_decision",
-            observation={
-                "issue_id": issue_id,
-                "options_count": len(options) if isinstance(options, list) else 0,
-            },
-            decision=human_decision,
-            result={
-                "decision": decision_text,
-            },
-        )
+        affected_conflict_ids = [
+            sid for sid in issue_artifact_ids(issue)
+            if isinstance(sid, str) and sid.startswith(("CR-", "PAIR-", "MULTIPLE-"))
+        ]
+        if not affected_conflict_ids:
+            affected_conflict_ids = conflict_report_resolution_ids(
+                self.artifact,
+                issue,
+                {"affected_conflict_ids": []},
+            )
+        url_updates: List[Dict[str, Any]] = []
+        if str(issue.get("category") or "").strip() == "resolve_conflict":
+            conflict_rows = self.conflict_rows_for_issue(issue)
+            url_rows = [
+                row for row in (self.artifact.get("URL", []) or [])
+                if isinstance(row, dict)
+            ]
+            by_id = {
+                str(row.get("id") or "").strip(): row
+                for row in url_rows
+                if str(row.get("id") or "").strip()
+            }
+            url_updates = self.conversation_url_update_plan(conversation, by_id=by_id)
+            if not url_updates:
+                url_updates = self.default_conflict_url_update_plan(
+                    conflict_rows,
+                    target_ids=set(affected_conflict_ids),
+                )
 
-        wrap_decision = {
-            "action": "wrap_human_resolution",
-            "params": {"issue_id": issue_id},
-            "reasoning": "將人類裁決轉成標準化 issue result contract。",
-        }
         wrapped = self.mediator.build_issue_result(
             resolution_status="human_decision",
             summary=decision_text or "本議題已升級由人類裁決。",
@@ -462,192 +2171,439 @@ class MeetingRunner:
             agreed_points=[decision_text] if decision_text else [],
             unresolved_points=[],
             new_open_questions=[],
-            affected_conflict_ids=[],
-            change_record=[],
+            affected_conflict_ids=affected_conflict_ids,
+            url_updates=url_updates,
             needs_human=True,
         )
-        wrapped["human_decision_raw"] = resolution
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="escalate.wrap_human_resolution",
-            observation={
-                "issue_id": issue_id,
-                "decision": decision_text,
-            },
-            decision=wrap_decision,
-            result={
-                "resolution_status": wrapped.get("resolution_status", ""),
-                "summary": wrapped.get("summary", ""),
-            },
+        wrapped["artifact_updates"] = self.artifact_updates_summary(
+            issue,
+            conversation,
+            wrapped,
         )
         return wrapped
 
-    def save_issue_via_substeps(
+    def load_saved_formal_meeting_issue(
+        self,
+        issue: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        from storage.artifact import load_formal_meeting_discussions
+
+        issue_id = str(issue.get("id") or "").strip()
+        formal_meeting = load_formal_meeting_discussions(self.store.artifact_dir)
+        round_key = f"r{int(self.round_num or 1)}"
+        rows = formal_meeting.get(round_key) if isinstance(formal_meeting, dict) else []
+        search_rows = rows if isinstance(rows, list) else []
+        if not search_rows and isinstance(formal_meeting, dict):
+            for value in formal_meeting.values():
+                if isinstance(value, list):
+                    search_rows.extend(value)
+        for row in search_rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("issue_id") or "").strip() == issue_id:
+                conversation = row.get("conversation")
+                resolution = row.get("resolution")
+                if not isinstance(conversation, list):
+                    raise RuntimeError(f"formal meeting record 中 {issue_id} 缺少 conversation")
+                if not isinstance(resolution, dict):
+                    raise RuntimeError(f"formal meeting record 中 {issue_id} 缺少 resolution")
+                return row
+        raise RuntimeError(f"formal meeting record 找不到 issue_id: {issue_id}")
+
+    def save_issue_artifacts(
         self,
         *,
         issue: Dict[str, Any],
-        contributions: List[Dict[str, Any]],
-        resolution: Dict[str, Any],
     ) -> Dict[str, Any]:
-        stage = "meeting_runner.save_issue"
         issue_id = issue.get("id")
 
-        proposer_decision = {
-            "action": "name_issue",
-            "params": {"issue_id": issue_id},
-            "reasoning": "依討論結果重新命名議題，確保存檔名稱貼近正式決議。",
-        }
-        proposer = self.find_issue_proposer(issue)
+        proposer = (
+            str(issue.get("proposed_by") or "").strip()
+            or self.find_issue_proposer(issue)
+            or "mediator"
+        )
         issue["proposed_by"] = proposer
-        final_title = self.mediator.name_issue_after_discussion(
-            issue,
-            contributions,
-            resolution,
-            proposer_agent=proposer,
-        )
-        if final_title:
-            issue["title"] = final_title
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="save.name_issue",
-            observation={
-                "issue_id": issue_id,
-                "proposed_by": proposer,
-            },
-            decision=proposer_decision,
-            result={
-                "final_title": issue.get("title", ""),
-            },
-        )
 
-        markdown_decision = {
-            "action": "generate_meeting_markdown",
-            "params": {"issue_id": issue_id},
-            "reasoning": "將議題討論與決議生成正式會議紀錄文件。",
-        }
-        self.issue_idx += 1
-        meeting_md = self.mediator.generate_meeting_markdown(
+        meeting_record = self.load_saved_formal_meeting_issue(issue)
+        meeting_id = str(meeting_record.get("meeting_id") or "").strip()
+        if not meeting_id:
+            raise RuntimeError(f"formal meeting record 中 {issue_id} 缺少 meeting_id")
+        conversation = meeting_record.get("conversation") or []
+        resolution = meeting_record.get("resolution") or {}
+        meeting_md = self.mediator.write_meeting_note(
             issue,
-            contributions,
+            conversation,
             resolution,
             round_num=self.round_num,
             proposed_by=proposer,
         )
-        meeting_id = f"R{self.round_num}-M{self.issue_idx}"
         meeting_filename = f"{meeting_id}.md"
         self.store.save_markdown(meeting_md, meeting_filename)
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="save.generate_meeting_markdown",
-            observation={
-                "issue_id": issue_id,
-                "contributions_count": len(contributions),
-            },
-            decision=markdown_decision,
-            result={
-                "meeting_id": meeting_id,
-                "filename": meeting_filename,
-                "markdown_length": len(meeting_md),
-            },
-        )
 
-        persist_decision = {
-            "action": "persist_discussion_record",
-            "params": {"issue_id": issue_id, "filename": meeting_filename},
-            "reasoning": "把本次議題結果寫入 round discussions 與 OPA trace。",
-        }
-        issue_record = {
-            "schema_version": issue.get("schema_version", "decision_issue.v1"),
-            "id": issue.get("id"),
-            "meeting_id": meeting_id,
-            "title": issue.get("title"),
-            "description": issue.get("description", ""),
-            "category": issue.get("category", ""),
-            "participants": issue.get("participants", []),
-            "discussion_mode": issue.get("discussion_mode", "sequential"),
-            "speaking_order": issue.get("speaking_order", []),
-            "source_ids": issue.get("source_ids", []),
-            "source_issue_ids": issue.get("source_issue_ids", []),
-            "proposed_by": issue.get("proposed_by"),
-            "status": "saved",
-            "triage_action": issue.get("triage_action", "formal_meeting"),
-        }
-        self.round_discussions.append(
-            {
-                "meeting_id": meeting_id,
-                "issue": issue_record,
-                "source_ids": issue.get("source_ids", []),
-                "contributions": [
-                    {"agent": c.get("agent"), "response": c.get("response", {})}
-                    for c in contributions
-                ],
-                "resolution": resolution,
-            }
-        )
-        trace_rows = self.artifact.setdefault("meeting_opa_trace", [])
-        contribution_trace_count = 0
-        for c in contributions or []:
-            if not isinstance(c, dict):
-                continue
-            response = c.get("response") or {}
-            if not isinstance(response, dict):
-                continue
-            for row in (response.get("opa_trace") or []):
-                if not isinstance(row, dict):
-                    continue
-                contribution_trace_count += 1
-                trace_rows.append(
-                    {
-                        "stage": "decision_issue",
-                        "issue_id": issue_record.get("id"),
-                        "issue_title": issue_record.get("title"),
-                        "issue_category": issue_record.get("category"),
-                        "agent": c.get("agent"),
-                        "trace": row,
-                    }
-                )
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="save.persist_discussion_record",
-            observation={
-                "issue_id": issue_id,
-                "round_discussions_before": len(self.round_discussions) - 1,
-            },
-            decision=persist_decision,
-            result={
-                "round_discussions_after": len(self.round_discussions),
-                "contribution_trace_count": contribution_trace_count,
-            },
-        )
-
-        rationale_decision = {
-            "action": "update_design_rationale",
-            "params": {"issue_id": issue_id},
-            "reasoning": "同步將本議題決議沉澱到 design rationale。",
-        }
-        self.update_design_rationale_for_issue(issue, contributions, resolution)
-        self.record_action_substep_trace(
-            stage=stage,
-            issue=issue,
-            substep="save.update_design_rationale",
-            observation={
-                "issue_id": issue_id,
-                "filename": meeting_filename,
-            },
-            decision=rationale_decision,
-            result={
-                "updated": True,
-            },
-        )
-        self.issue_status[issue_id]["saved"] = True
+        self.update_rationale_for_issue(issue, conversation, resolution)
+        self.issue_states[issue_id]["saved"] = True
         return {
             "issue_id": issue_id,
             "filename": meeting_filename,
         }
+
+    def conversation_entry_records(self, record_entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+        response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
+        actions = [str(item).strip() for item in response.get("actions", []) if str(item).strip()]
+        response_text = str(response.get("text") or "").strip()
+        is_conflict_round = "discuss_conflict" in actions
+
+        if not is_conflict_round and response_text and response_text.startswith("{") and response_text.endswith("}"):
+            try:
+                parsed = json.loads(response_text)
+            except Exception:
+                parsed = None
+            else:
+                if isinstance(parsed, dict) and "pair_reviews" in parsed:
+                    response["text"] = "（本發言無可讀內容）"
+
+        if not is_conflict_round:
+            response.pop("pair_reviews", None)
+
+        response_keys = (
+            "actions",
+            "text",
+            "open_questions",
+            "state",
+            "proposal",
+            "pair_reviews",
+            "speaking_as",
+            "reply_to_question",
+            "reply_to_agent",
+        )
+        clean_response = {
+            key: response.get(key)
+            for key in response_keys
+            if response.get(key) not in (None, "", [], {})
+        }
+        agent_name = record_entry.get("agent")
+        agents = [agent_name]
+        text_by_agent: Dict[str, str] = {}
+        if agent_name == "user":
+            speaking_as = clean_response.get("speaking_as")
+            if isinstance(speaking_as, list) and speaking_as:
+                agents = [
+                    str(name).strip()
+                    for name in speaking_as
+                    if str(name).strip()
+                ] or [agent_name]
+                text_by_agent = MeetingRunner.split_speaking_as_text(
+                    str(clean_response.get("text") or ""),
+                    agents,
+                )
+                clean_response.pop("speaking_as", None)
+        records = []
+        for name in agents:
+            if record_entry.get("round_index") not in (None, ""):
+                record = {"round_index": record_entry.get("round_index")}
+            else:
+                record = {}
+            record["agent"] = name
+            actions = self.record_actions(clean_response.get("actions"))
+            if actions:
+                record["actions"] = actions
+            response_text = text_by_agent.get(name) or str(clean_response.get("text") or "").strip()
+            response_record = {"text": response_text}
+            state = self.response_state(response)
+            if state:
+                response_record["state"] = state
+            proposal = self.response_proposal(response)
+            if proposal not in (None, "", [], {}):
+                response_record["proposal"] = proposal
+            for key in (
+                "open_questions",
+                "pair_reviews",
+                "reply_to_question",
+                "reply_to_agent",
+            ):
+                value = clean_response.get(key)
+                if value not in (None, "", [], {}):
+                    response_record[key] = value
+            record["response"] = response_record
+            issue_action_results = (
+                response.get("issue_action_results")
+                if isinstance(response.get("issue_action_results"), list)
+                else []
+            )
+            artifacts: Dict[str, Any] = {}
+            if name == "analyst":
+                analysis_artifacts = self.analyst_issue_artifacts(
+                    issue_action_results,
+                )
+                if analysis_artifacts:
+                    artifacts.update(analysis_artifacts)
+            if name == "expert":
+                feedback = self.issue_action_result_value(
+                    issue_action_results,
+                    "feedback",
+                )
+                if isinstance(feedback, dict) and feedback:
+                    artifacts["feedback"] = self.feedback_summary(feedback)
+            if name == "modeler":
+                system_models = self.issue_action_result_value(
+                    issue_action_results,
+                    "system_models",
+                )
+                if isinstance(system_models, list) and system_models:
+                    artifacts["system_models"] = system_models
+                consistency_report = self.issue_action_result_value(
+                    issue_action_results,
+                    "model_consistency_report",
+                )
+                if isinstance(consistency_report, dict) and consistency_report:
+                    artifacts["model_consistency_report"] = consistency_report
+            if artifacts:
+                record["artifacts"] = artifacts
+            if record_entry.get("is_reply"):
+                record["is_reply"] = True
+            if record_entry.get("is_follow_up"):
+                record["is_follow_up"] = True
+            records.append(record)
+        return records
+
+    @staticmethod
+    def split_speaking_as_text(text: str, names: List[str]) -> Dict[str, str]:
+        source = str(text or "").strip()
+        clean_names = [str(name or "").strip() for name in names or [] if str(name or "").strip()]
+        if not source or not clean_names:
+            return {}
+        escaped = "|".join(re.escape(name) for name in clean_names)
+        pattern = re.compile(rf"(?:^|\n)\s*【({escaped})】\s*")
+        matches = list(pattern.finditer(source))
+        if not matches:
+            return {}
+        parts: Dict[str, str] = {}
+        for index, match in enumerate(matches):
+            name = str(match.group(1) or "").strip()
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+            body = source[start:end].strip()
+            body = re.sub(r"^\s*[-—]+\s*", "", body).strip()
+            if name and body:
+                parts[name] = body
+        return parts
+
+    @staticmethod
+    def record_actions(actions: Any) -> List[str]:
+        if isinstance(actions, str):
+            actions = [actions]
+        if not isinstance(actions, list):
+            return []
+        hidden = set()
+        return [
+            str(action).strip()
+            for action in actions
+            if str(action).strip() and str(action).strip() not in hidden
+        ]
+
+    @staticmethod
+    def issue_action_result_value(action_results: Any, key: str) -> Any:
+        if not isinstance(action_results, list):
+            return None
+        for row in reversed(action_results):
+            if isinstance(row, dict) and row.get(key) not in (None, "", [], {}):
+                return row.get(key)
+        return None
+
+    @staticmethod
+    def analyst_issue_artifacts(action_results: Any) -> Dict[str, Any]:
+        if not isinstance(action_results, list):
+            return {}
+        artifacts: Dict[str, Any] = {}
+        for row in action_results:
+            if not isinstance(row, dict):
+                continue
+            action = str(row.get("action") or "").strip()
+            output = row.get("output")
+            if action == "analyze_requirements":
+                if output in (None, "", [], {}):
+                    continue
+                candidates = MeetingRunner.requirement_candidate_summary(output)
+                if candidates:
+                    artifacts["URL"] = candidates
+            elif action == "refine_requirement":
+                req_rows = row.get("REQ")
+                if isinstance(req_rows, list) and req_rows:
+                    artifacts["REQ"] = MeetingRunner.system_requirement_summary(req_rows)
+                reason = str(row.get("reason") or "").strip()
+                if reason:
+                    artifacts["requirement_reason"] = reason
+            elif action == "analyze_conflicts":
+                conflict_report = row.get("conflict_report")
+                if conflict_report not in (None, "", [], {}):
+                    artifacts["conflict_report"] = MeetingRunner.conflict_report_summary(conflict_report)
+                elif isinstance(output, dict):
+                    payload = output.get("conflict") if isinstance(output.get("conflict"), dict) else {}
+                    report = payload.get("report")
+                    if report not in (None, "", [], {}):
+                        artifacts["conflict_report"] = MeetingRunner.conflict_report_summary(report)
+            elif action == "refine_scope":
+                scope_updates = row.get("scope_updates")
+                if isinstance(scope_updates, dict) and any(scope_updates.get(key) for key in scope_updates):
+                    artifacts["scope"] = scope_updates
+                reason = str(row.get("reason") or "").strip()
+                if reason:
+                    artifacts["scope_reason"] = reason
+        return artifacts
+
+    @staticmethod
+    def system_requirement_summary(rows: Any) -> List[Dict[str, Any]]:
+        if not isinstance(rows, list):
+            return []
+        summaries: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in ("id", "type", "title", "description", "requirement", "priority"):
+                value = row.get(key)
+                if value not in (None, "", [], {}):
+                    item[key] = value
+            if "requirement" not in item and item.get("description"):
+                item["requirement"] = item.get("description")
+                item.pop("description", None)
+            source_ids = [
+                str(value).strip()
+                for value in (row.get("source_ids") or [])
+                if str(value).strip()
+            ]
+            if source_ids:
+                item["source_ids"] = source_ids
+            for key in ("acceptance_criteria", "risks", "assumptions"):
+                values = [
+                    str(value).strip()
+                    for value in (row.get(key) or [])
+                    if str(value).strip()
+                ]
+                if values:
+                    item[key] = values
+            if item:
+                summaries.append(item)
+        return summaries
+
+    @staticmethod
+    def requirement_candidate_summary(output: Any) -> List[Dict[str, Any]]:
+        if not isinstance(output, dict):
+            return []
+        rows = output.get("URL")
+        if not isinstance(rows, list):
+            return []
+        summaries: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in ("id", "text", "source"):
+                value = row.get(key)
+                if value not in (None, "", [], {}):
+                    item[key] = value
+            stakeholder = row.get("stakeholder")
+            if isinstance(stakeholder, dict):
+                name = str(stakeholder.get("name") or "").strip()
+                if name:
+                    item["stakeholder"] = name
+            elif str(stakeholder or "").strip():
+                item["stakeholder"] = str(stakeholder).strip()
+            if "source" not in item:
+                item["source"] = "meeting"
+            if item.get("text"):
+                summaries.append(item)
+        return summaries
+
+    @staticmethod
+    def conflict_report_summary(report: Any) -> List[Dict[str, Any]]:
+        if not isinstance(report, list):
+            return []
+        summaries: List[Dict[str, Any]] = []
+        for row in report:
+            if not isinstance(row, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in ("id", "source", "label", "type", "description", "recommended_resolution"):
+                value = row.get(key)
+                if value not in (None, "", [], {}):
+                    item[key] = value
+            requirements = []
+            for req in row.get("requirements") or []:
+                if not isinstance(req, dict):
+                    continue
+                req_item = {}
+                for key in ("id", "text"):
+                    value = req.get(key)
+                    if value not in (None, "", [], {}):
+                        req_item[key] = value
+                if req_item:
+                    requirements.append(req_item)
+            if requirements:
+                item["requirements"] = requirements
+            options = []
+            for option in row.get("resolution_options") or []:
+                if not isinstance(option, dict):
+                    continue
+                option_item = {}
+                for key in ("option", "description", "recommendation"):
+                    value = option.get(key)
+                    if value not in (None, "", [], {}):
+                        option_item[key] = value
+                if option_item:
+                    options.append(option_item)
+            if options:
+                item["resolution_options"] = options
+            if item:
+                summaries.append(item)
+        return summaries
+
+    @staticmethod
+    def feedback_summary(feedback: Any) -> Dict[str, Any]:
+        if not isinstance(feedback, dict):
+            return {}
+        summary: Dict[str, Any] = {}
+        for section in ("findings", "constraints", "risks", "recommendations"):
+            rows = []
+            for row in feedback.get(section) or []:
+                if not isinstance(row, dict):
+                    continue
+                item = {}
+                for key in ("text", "related_requirement_ids", "source"):
+                    value = row.get(key)
+                    if value not in (None, "", [], {}):
+                        item[key] = value
+                if item:
+                    rows.append(item)
+            if rows:
+                summary[section] = rows
+        sources = [
+            str(source).strip()
+            for source in (feedback.get("sources") or [])
+            if str(source).strip()
+        ]
+        if sources:
+            summary["sources"] = sources
+        return summary
+
+    @staticmethod
+    def system_model_summary(system_models: Any) -> List[Dict[str, Any]]:
+        if not isinstance(system_models, list):
+            return []
+        summaries: List[Dict[str, Any]] = []
+        for model in system_models:
+            if not isinstance(model, dict):
+                continue
+            item: Dict[str, Any] = {}
+            for key in ("id", "name", "type", "description", "source"):
+                value = model.get(key)
+                if value not in (None, "", [], {}):
+                    item[key] = value
+            if str(model.get("plantuml") or "").strip():
+                item["diagram_available"] = True
+            if item:
+                summaries.append(item)
+        return summaries
 
     def plan_action(
         self,
@@ -664,7 +2620,6 @@ class MeetingRunner:
                 "action": planned.get("action", "finish_round"),
                 "params": planned.get("params") or {},
                 "reasoning": planned.get("reasoning", ""),
-                "planner_trace": planned.get("opa_trace", []),
                 "observation": observation,
             }
         return {
@@ -684,15 +2639,6 @@ class MeetingRunner:
         observation = self.observe_action(action, params)
         decision = self.plan_action(action, params, observation)
         result = self.execute_action(decision)
-        result["opa_trace"] = self.record_runner_opa_trace(
-            stage=f"meeting_runner.{decision.get('action', action)}",
-            action=decision.get("action", action),
-            params=decision.get("params") or {},
-            observation=observation,
-            decision=decision,
-            result=result,
-            issue_id=(decision.get("params") or {}).get("issue_id"),
-        )
         return result
 
     @staticmethod
@@ -704,31 +2650,70 @@ class MeetingRunner:
         params = params or {}
         obs = {"action": action, "result": None, "error": None}
 
-        if action == "generate_decision_issues":
+        def sync_meeting_issues(issues: List[Dict[str, Any]]) -> None:
+            existing = [
+                row for row in (self.artifact.get("meeting_issues", []) or [])
+                if isinstance(row, dict)
+                and int(row.get("round") or -1) != int(self.round_num)
+            ]
+            self.artifact["meeting_issues"] = existing + [
+                {**issue, "round": self.round_num}
+                for issue in issues
+                if isinstance(issue, dict)
+            ]
+            if self.output_artifact is not None:
+                self.output_artifact["meeting_issues"] = list(self.artifact["meeting_issues"])
+                self.store.save_artifact(self.output_artifact)
+            self.load_meeting_issues()
+
+        if action == "plan_issues":
+            existing_issues = self.current_meeting_issues()
+            if existing_issues:
+                self.load_meeting_issues()
+                self.log_agenda(label="沿用既有議程", issues=existing_issues)
+                obs["result"] = {
+                    "issues": [
+                        {
+                            "id": t["id"],
+                            "title": t["title"],
+                            "category": t.get("category", ""),
+                        }
+                        for t in existing_issues
+                    ],
+                    "count": len(existing_issues),
+                    "agenda_reused": True,
+                }
+                return obs
+
             skip = set()
             for disc in self.artifact.get("discussions", []):
                 for td in disc.get("issues", []):
-                    for sid in td.get("source_ids", []):
+                    for sid in trace_artifact_ids(td):
                         skip.add(sid)
-            max_items = self.config.get("issue_items", 5)
-            draft_md = self.latest_draft_markdown()
-            self.issues = self.mediator.generate_decision_issues(
+            max_items = self.config.get("max_issues", 5)
+            planned_issues = self.mediator.plan_issues(
                 self.artifact,
                 registry=self.registry,
                 max_items=max_items,
                 skip_source_ids=skip if skip else None,
-                draft_markdown=draft_md,
                 issue_pool=self.issue_pool,
             )
+            sync_meeting_issues(planned_issues)
+            issues = self.current_meeting_issues()
+            self.log_agenda(
+                label="產生",
+                issues=issues,
+                backlog_count=len(self.artifact.get("issue_backlog", []) or []),
+            )
             self.issue_pool = list(self.artifact.get("issue_backlog", []) or [])
-            self.issue_status = {
+            self.issue_states = {
                 t["id"]: {
                     "discussed": False,
-                    "contributions": None,
+                    "conversation": None,
                     "resolution": None,
                     "saved": False,
                 }
-                for t in self.issues
+                for t in issues
             }
             obs["result"] = {
                 "issues": [
@@ -737,47 +2722,54 @@ class MeetingRunner:
                         "title": t["title"],
                         "category": t.get("category", ""),
                     }
-                    for t in self.issues
+                    for t in issues
                 ],
-                "count": len(self.issues),
+                "count": len(issues),
             }
             return obs
 
-        if action == "expand_decision_issues":
-            issue_limit = self.config.get("issue_items", 5)
-            if len(self.issues) >= issue_limit:
-                obs["error"] = "已達decision issue 上限，無法擴充"
+        if action == "add_issues":
+            issues = self.current_meeting_issues()
+            issue_limit = self.config.get("max_issues", 5)
+            extra_issue_count = len([issue for issue in issues if not self.is_default_issue(issue)])
+            if extra_issue_count >= issue_limit:
+                obs["error"] = "已達 issue 上限，無法擴充"
                 return obs
             all_saved = all(
-                self.issue_status.get(t["id"], {}).get("saved", False)
-                for t in self.issues
+                self.issue_states.get(t["id"], {}).get("saved", False)
+                for t in issues
             )
             if not all_saved:
-                obs["error"] = "須先將本輪目前所有議題 save_issue 後才能擴充 decision issue"
+                obs["error"] = "須先將本輪目前所有議題 save_issue 後才能擴充 issue"
                 return obs
             skip = set()
             for disc in self.artifact.get("discussions", []):
                 for td in disc.get("issues", []):
-                    for sid in td.get("source_ids", []):
+                    for sid in trace_artifact_ids(td):
                         skip.add(sid)
-            for rd in self.round_discussions:
-                for sid in rd.get("source_ids", []):
+            meeting_issues_by_id = {
+                str(row.get("id") or "").strip(): row
+                for row in (self.artifact.get("meeting_issues", []) or [])
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            for rd in self.meeting_records:
+                issue_ref = meeting_issues_by_id.get(str(rd.get("issue_id") or "").strip()) or {}
+                for sid in trace_artifact_ids(issue_ref):
                     skip.add(sid)
-            max_items = issue_limit - len(self.issues)
-            draft_md = self.latest_draft_markdown()
-            new_items = self.mediator.generate_decision_issues(
+            max_items = issue_limit - extra_issue_count
+            new_items = self.mediator.plan_issues(
                 self.artifact,
                 registry=self.registry,
                 max_items=max_items,
                 skip_source_ids=skip if skip else None,
-                draft_markdown=draft_md,
                 issue_pool=self.issue_pool,
             )
             self.issue_pool = list(self.artifact.get("issue_backlog", []) or [])
             if not new_items:
-                obs["result"] = {"expanded": 0, "message": "無新增議題"}
+                obs["result"] = {"added": 0, "message": "無新增議題"}
                 return obs
-            start_idx = len(self.issues) + 1
+            start_idx = len(issues) + 1
+            added_issues = []
             for i, item in enumerate(new_items):
                 tid = f"T-{start_idx + i}"
                 new_issue = {
@@ -787,132 +2779,106 @@ class MeetingRunner:
                     "category": item.get("category", ""),
                     "participants": item.get("participants", []),
                     "discussion_mode": item.get("discussion_mode", "sequential"),
-                    "speaking_order": item.get("speaking_order", []),
-                    "source_ids": item.get("source_ids", []),
+                    "discussion_rounds": item.get("discussion_rounds", 1),
+                    "target_stakeholders": item.get("target_stakeholders", []),
+                    "trace": normalize_trace(item.get("trace")),
+                    "proposed_by": item.get("proposed_by", ""),
+                    "expected_actions": item.get("expected_actions", {}),
                 }
-                self.issues.append(new_issue)
-                self.issue_status[tid] = {
+                added_issues.append(new_issue)
+                self.issue_states[tid] = {
                     "discussed": False,
-                    "contributions": None,
+                    "conversation": None,
                     "resolution": None,
                     "saved": False,
                 }
+            sync_meeting_issues(issues + added_issues)
+            self.log_agenda(label="追加", issues=added_issues)
             obs["result"] = {
-                "expanded": len(new_items),
+                "added": len(new_items),
                 "new_issues": [
                     {"id": t["id"], "title": t["title"], "category": t.get("category", "")}
-                    for t in self.issues[-len(new_items):]
+                    for t in added_issues
                 ],
             }
             return obs
 
-        if action == "start_discussion":
+        if action == "start_issue":
             issue_id = params.get("issue_id")
-            issue = self.get_issue(issue_id)
+            issue = self.load_agenda_issue(issue_id)
             if not issue:
                 obs["error"] = f"issue_id 不存在: {issue_id}"
                 return obs
-            st_disc = self.issue_status.get(issue_id, {})
-            if st_disc.get("discussed"):
-                obs["error"] = (
-                    f"{issue_id} 已討論過，不可重複討論。"
-                    f"請使用 save_issue 儲存後繼續下一個議題。"
-                )
+            error = self.prepare_discussion(issue)
+            if error:
+                obs["error"] = error
                 return obs
-            mode = issue.get("discussion_mode", "sequential")
-            if mode == "simultaneous":
-                contributions = self.mediator.moderate_simultaneous(
-                    issue, self.registry, artifact=self.artifact
-                )
-                stakeholders = self.artifact.get("stakeholders", [])
-                oq_records = self.mediator.handle_open_questions(
-                    contributions, self.registry, stakeholders, artifact=self.artifact
-                )
-            else:
-                contributions, oq_records = self.mediator.moderate_sequential(
-                    issue, self.registry, artifact=self.artifact
-                )
-            for oq in oq_records:
-                oq["issue_id"] = issue_id
-            self.all_open_questions.extend(oq_records)
-            self.issue_status[issue_id]["discussed"] = True
-            self.issue_status[issue_id]["contributions"] = contributions
-            result_info = {
-                "issue_id": issue_id,
-                "contributions_count": len(contributions),
-                "oq_count": len(oq_records),
-            }
-            if not contributions:
-                result_info["warning"] = (
-                    "本議題無參與者可發言，請直接執行 save_issue 儲存後繼續。"
-                )
-            obs["result"] = result_info
+            self.log_discussion_start(issue)
+            obs["result"] = self.run_discussion(issue)
+            result = obs["result"] if isinstance(obs.get("result"), dict) else {}
+            self.log_discussion_done(issue_id, result)
             return obs
 
         if action == "resolve_issue":
             issue_id = params.get("issue_id")
             issue = self.get_issue(issue_id)
-            st = self.issue_status.get(issue_id, {})
-            if not issue or not st.get("discussed"):
-                obs["error"] = f"請先對 {issue_id} 執行 start_discussion"
+            issue_state = self.issue_states.get(issue_id, {})
+            if not issue or not issue_state.get("discussed"):
+                obs["error"] = f"請先對 {issue_id} 執行 start_issue"
                 return obs
-            contributions = st.get("contributions") or []
+            conversation = issue_state.get("conversation") or []
             resolution = self.resolve_issue_via_substeps(
                 issue=issue,
-                contributions=contributions,
+                conversation=conversation,
             )
-            convergence_reason = resolution.get("summary", "")
-            self.issue_status[issue_id]["resolution"] = resolution
-            status = resolution.get("resolution_status")
-            if status == "agreed":
-                status_label = "收斂"
-            elif status == "pending_confirmation":
-                status_label = "待人類裁決"
-            else:
-                status_label = "未收斂"
-            self.logger.info(
-                "  決議: [%s] %s｜%s｜結果: %s",
-                issue_id,
-                issue.get("title", ""),
-                f"{status_label}（{convergence_reason}）",
-                resolution.get("resolution", ""),
-            )
+            self.issue_states[issue_id]["resolution"] = resolution
+            self.log_resolution_done(issue_id, resolution)
             needs_human = bool(resolution.get("needs_human"))
             obs["result"] = {
                 "issue_id": issue_id,
-                "resolution": resolution.get("resolution"),
-                "resolution_status": resolution.get("resolution_status", resolution.get("resolution")),
+                "resolution_status": resolution.get("resolution_status", ""),
                 "summary": resolution.get("summary", ""),
-                "decision_summary": resolution.get("decision_summary", resolution.get("summary", "")),
                 "agreed_points_count": len(resolution.get("agreed_points", []) or []),
                 "unresolved_points_count": len(resolution.get("unresolved_points", []) or []),
                 "needs_human": needs_human,
             }
             obs["status"] = "needs_human" if needs_human else "resolved"
             obs["issue_id"] = issue_id
-            obs["summary"] = resolution.get("summary", "") or resolution.get("resolution", "")
+            obs["summary"] = resolution.get("summary", "") or resolution.get("resolution_status", "")
             if needs_human:
-                self.issue_status[issue_id]["resolution"] = None
+                self.issue_states[issue_id]["resolution"] = None
+            else:
+                self.persist_formal_meeting_progress(
+                    issue,
+                    conversation=conversation,
+                    resolution=resolution,
+                )
             return obs
 
-        if action == "escalate_to_human":
-            if not self.mediator.enable_human_escalation:
-                self.logger.info("  人類裁決已關閉，自動改為 resolve_issue")
+        if action == "judge_issue":
+            if not self.mediator.enable_human_judgment:
+                self.logger.debug("Formal meeting judge_issue disabled; running resolve_issue")
                 return self.run("resolve_issue", params)
             issue_id = params.get("issue_id")
             issue = self.get_issue(issue_id)
-            st_esc = self.issue_status.get(issue_id, {})
-            if not issue or not st_esc.get("discussed"):
-                obs["error"] = f"請先對 {issue_id} 執行 start_discussion"
+            issue_state = self.issue_states.get(issue_id, {})
+            if not issue or not issue_state.get("discussed"):
+                obs["error"] = f"請先對 {issue_id} 執行 start_issue"
                 return obs
-            contributions = st_esc.get("contributions") or []
-            self.logger.info(f"  人類裁決: [{issue_id}] {issue.get('title', '')}")
-            wrapped = self.escalate_issue_via_substeps(
+            conversation = issue_state.get("conversation") or []
+            self.logger.info("  進入人類裁決：%s", issue.get("title", ""))
+            wrapped = self.judge_issue_via_substeps(
                 issue=issue,
-                contributions=contributions,
+                conversation=conversation,
             )
-            decision_text = str((wrapped.get("human_decision_raw") or {}).get("decision", ""))
-            self.issue_status[issue_id]["resolution"] = wrapped
+            decision_text = str(wrapped.get("decision") or "")
+            self.log_human_judgment_done(issue_id, decision_text)
+            self.issue_states[issue_id]["resolution"] = wrapped
+            self.persist_formal_meeting_progress(
+                issue,
+                conversation=conversation,
+                resolution=wrapped,
+            )
             obs["result"] = {
                 "issue_id": issue_id,
                 "resolution": "human_decision",
@@ -926,21 +2892,17 @@ class MeetingRunner:
         if action == "save_issue":
             issue_id = params.get("issue_id")
             issue = self.get_issue(issue_id)
-            st = self.issue_status.get(issue_id, {})
-            if not issue or not st.get("discussed"):
-                obs["error"] = f"請先對 {issue_id} 執行 start_discussion"
+            issue_state = self.issue_states.get(issue_id, {})
+            if not issue or not issue_state.get("discussed"):
+                obs["error"] = f"請先對 {issue_id} 執行 start_issue"
                 return obs
-            contributions = st.get("contributions") or []
-            resolution = st.get("resolution")
-            self.logger.info(f"  存檔: [{issue_id}] {issue.get('title', '')}")
+            conversation = issue_state.get("conversation") or []
+            resolution = issue_state.get("resolution")
             if not resolution:
-                obs["error"] = f"請先對 {issue_id} 執行 resolve_issue 或 escalate_to_human，之後才能 save_issue"
+                obs["error"] = f"請先對 {issue_id} 執行 resolve_issue 或 judge_issue，之後才能 save_issue"
                 return obs
-            save_result = self.save_issue_via_substeps(
-                issue=issue,
-                contributions=contributions,
-                resolution=resolution,
-            )
+            save_result = self.save_issue_artifacts(issue=issue)
+            self.log_issue_saved(issue_id, save_result)
             obs["result"] = save_result
             obs["status"] = "saved"
             obs["issue_id"] = issue_id
@@ -948,11 +2910,12 @@ class MeetingRunner:
             return obs
 
         if action == "finish_round":
-            if self.issues:
+            issues = self.current_meeting_issues()
+            if issues:
                 unsaved_ids = [
                     t.get("id", "")
-                    for t in self.issues
-                    if not self.issue_status.get(t.get("id", ""), {}).get("saved", False)
+                    for t in issues
+                    if not self.issue_states.get(t.get("id", ""), {}).get("saved", False)
                 ]
                 if unsaved_ids:
                     obs["error"] = (
@@ -969,14 +2932,15 @@ class MeetingRunner:
     def get_issue(self, issue_id: Optional[str]) -> Optional[Dict]:
         if not issue_id:
             return None
-        for t in self.issues:
-            if t.get("id") == issue_id:
-                return t
+        self.load_meeting_issues()
+        for issue in self.current_meeting_issues():
+            if issue.get("id") == issue_id:
+                return issue
         return None
 
     def find_issue_proposer(self, issue: Dict) -> Optional[str]:
-        """從 issue 的 source_issue_ids 反查提案者。"""
-        issue_ids = set(issue.get("source_issue_ids") or [])
+        """從 issue 的 trace.proposal_ids 反查提案者。"""
+        issue_ids = set(issue_proposal_ids(issue))
         if not issue_ids:
             return None
         for p in self.artifact.get("issue_proposals", []) or []:
@@ -989,75 +2953,67 @@ class MeetingRunner:
         return None
 
     def get_state_summary(self) -> Dict[str, Any]:
-        status_list = []
-        for tid, st in self.issue_status.items():
-            status_list.append(
+        issue_state_rows = []
+        for issue_id, issue_state in self.issue_states.items():
+            issue_state_rows.append(
                 {
-                    "issue_id": tid,
-                    "discussed": st.get("discussed", False),
-                    "resolved": st.get("resolution") is not None,
-                    "resolution": (st.get("resolution") or {}).get("resolution"),
-                    "saved": st.get("saved", False),
+                    "issue_id": issue_id,
+                    "discussed": issue_state.get("discussed", False),
+                    "resolved": issue_state.get("resolution") is not None,
+                    "resolution": (issue_state.get("resolution") or {}).get("resolution_status"),
+                    "saved": issue_state.get("saved", False),
                 }
             )
-        issue_limit = self.config.get("issue_items", 5)
-        issues_count = len(self.issues)
-        issue_pool_count = len(self.issue_pool)
+        issue_limit = self.config.get("max_issues", 5)
+        issues = self.current_meeting_issues()
+        issues_count = len(issues)
+        general_issues_count = len([issue for issue in issues if not self.is_default_issue(issue)])
+        backlog_count = len(self.issue_pool)
         all_saved = (
             issues_count > 0
-            and all(self.issue_status.get(t["id"], {}).get("saved", False) for t in self.issues)
+            and all(self.issue_states.get(t["id"], {}).get("saved", False) for t in issues)
         )
-        can_expand_decision_issues = issues_count < issue_limit and all_saved and issue_pool_count > 0
-        clarification_queue = [
-            row for row in (self.artifact.get("clarification_queue", []) or [])
-            if isinstance(row, dict)
-        ]
+        can_add_issues = general_issues_count < issue_limit and all_saved and backlog_count > 0
         human_decision_queue = [
             row for row in (self.artifact.get("human_decision_queue", []) or [])
-            if isinstance(row, dict)
-        ]
-        direct_apply_queue = [
-            row for row in (self.artifact.get("direct_apply_queue", []) or [])
             if isinstance(row, dict)
         ]
         return {
             "round_num": self.round_num,
             "issue_limit": issue_limit,
             "issues_count": issues_count,
-            "issue_pool_count": issue_pool_count,
+            "default_issues_count": issues_count - general_issues_count,
+            "general_issues_count": general_issues_count,
+            "backlog_count": backlog_count,
             "all_current_issues_saved": all_saved,
-            "can_expand_decision_issues": can_expand_decision_issues,
-            "queue_status": {
-                "clarification_queue_count": len(clarification_queue),
+            "can_add_issues": can_add_issues,
+            "human_decision_status": {
                 "human_decision_queue_count": len(human_decision_queue),
-                "direct_apply_queue_count": len(direct_apply_queue),
-                "has_pending_queue_items": bool(
-                    clarification_queue or human_decision_queue or direct_apply_queue
-                ),
+                "has_pending_human_decisions": bool(human_decision_queue),
             },
             "issues": [
                 {
-                    "schema_version": t.get("schema_version", "decision_issue.v1"),
+                    "schema_version": t.get("schema_version", "meeting_issue.v1"),
                     "id": t["id"],
                     "title": t["title"],
                     "category": t.get("category", ""),
                     "category_label": ISSUE_CATEGORY_LABEL.get(
                         t.get("category", ""), t.get("category", "")
                     ),
-                    "source_issue_ids": t.get("source_issue_ids", []),
-                    "triage_action": t.get("triage_action", "formal_meeting"),
+                    "trace": normalize_trace(t.get("trace")),
                 }
-                for t in self.issues
+                for t in issues
             ],
-            "issue_status": status_list,
-            "round_discussions_length": len(self.round_discussions),
+            "issue_states": issue_state_rows,
+            "records_count": len(self.meeting_records),
         }
 
-    def get_round_discussions(self) -> List[Dict]:
-        return self.round_discussions
+    def get_meeting_records(self) -> List[Dict]:
+        return self.meeting_records
 
-    def get_all_open_questions(self) -> List[Dict]:
-        return self.all_open_questions
+    def get_open_questions(self) -> List[Dict]:
+        return self.open_questions
 
     def get_issue_snapshot(self) -> List[Dict]:
-        return list(self.issues)
+        self.load_meeting_issues()
+        return self.current_meeting_issues()

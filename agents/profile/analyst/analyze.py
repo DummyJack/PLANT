@@ -1,4 +1,6 @@
-# Analyst requirements logic: scope, drafts, requirement records, and change candidates.
+# Analyst requirements logic: scope, drafts, requirements, and change candidates.
+from agents.profile.prompt_catalog import render_prompt
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,7 +9,7 @@ from agents.base import parse_json_array, parse_json_object
 from storage.markdown import clean_llm_output
 from storage.plantuml import plantuml_safe_name
 from agents.skills.base import get_skill
-from agents.profile.scenario import scenario_prompt_value
+from agents.profile.scenario import scenario_prompt_value, scenario_text
 
 from .conflict_store import all_conflict_rows, conflict_entries_count
 from .validation import (
@@ -20,7 +22,7 @@ from .requirements import requirement_discussion_pool
 from .prompts import (
     build_draft_prompt,
     requirements_skill_guidance,
-    user_requirement_extraction_contract,
+    url_extraction_rules,
 )
 
 
@@ -53,18 +55,150 @@ def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
     for question in artifact.get("open_questions", []) or []:
         if not isinstance(question, dict):
             continue
         text = str(question.get("question") or "").strip()
         if not text:
             continue
+        qid = str(question.get("id") or "").strip()
+        if qid:
+            seen_ids.add(qid)
         row = {"question": text}
         for key in ("id", "to", "status", "source", "type"):
             value = question.get(key)
             if value:
                 row[key] = value
         rows.append(row)
+    return rows
+
+
+def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    req_rows = [row for row in (artifact.get("REQ") or []) if isinstance(row, dict)]
+    formalized_sources = set()
+    formalized_text = ""
+    for req in req_rows:
+        for key in ("source_ids", "source_meeting"):
+            for value in req.get(key) or []:
+                value_text = str(value).strip()
+                if value_text:
+                    formalized_sources.add(value_text)
+        text_parts = []
+        for key in ("title", "description", "rationale", "constraint_type", "impact"):
+            value = str(req.get(key) or "").strip()
+            if value:
+                text_parts.append(value)
+        for key in ("risks", "assumptions", "acceptance_criteria"):
+            for value in req.get(key) or []:
+                value_text = str(value).strip()
+                if value_text:
+                    text_parts.append(value_text)
+        formalized_text += "\n" + "\n".join(text_parts)
+
+    def is_formalized_feedback(item: Dict[str, Any], text: str) -> bool:
+        item_id = str(item.get("id") or "").strip()
+        source = str(item.get("source") or "").strip()
+        related = {
+            str(value).strip()
+            for value in (item.get("related_requirement_ids") or [])
+            if str(value).strip()
+        }
+        if item_id and item_id in formalized_sources:
+            return True
+        if source and source in formalized_sources:
+            return True
+        if related and related.issubset(formalized_sources):
+            return True
+        compact_text = re.sub(r"\s+", "", text)
+        compact_formalized = re.sub(r"\s+", "", formalized_text)
+        return bool(compact_text and compact_text in compact_formalized)
+
+    out: Dict[str, Any] = {}
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        rows: List[Dict[str, Any]] = []
+        for item in feedback.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            if is_formalized_feedback(item, text):
+                continue
+            row: Dict[str, Any] = {"text": text}
+            related = item.get("related_requirement_ids")
+            if isinstance(related, list):
+                related_rows = [str(value).strip() for value in related if str(value).strip()]
+                if related_rows:
+                    row["related_requirement_ids"] = related_rows
+            source = str(item.get("source") or "").strip()
+            if source:
+                row["source"] = source
+            rows.append(row)
+        if rows:
+            out[section] = rows
+    sources = [
+        str(source).strip()
+        for source in (feedback.get("sources") or [])
+        if str(source).strip()
+    ]
+    if sources:
+        out["sources"] = sources
+    return out
+
+
+def draft_meeting_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for discussion in artifact.get("discussions", []) or []:
+        if not isinstance(discussion, dict):
+            continue
+        round_num = discussion.get("round")
+        for issue in discussion.get("issues", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            row: Dict[str, Any] = {
+                "round": round_num,
+                "meeting_id": issue.get("meeting_id"),
+                "issue_id": issue.get("issue_id"),
+            }
+            conversation = []
+            for entry in issue.get("conversation", []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+                text = str(response.get("text") or "").strip()
+                if not text:
+                    continue
+                item = {
+                    "agent": entry.get("agent"),
+                    "actions": entry.get("actions", []) or [],
+                    "text": text,
+                }
+                if entry.get("is_reply"):
+                    item["is_reply"] = True
+                    item["reply_to_question"] = response.get("reply_to_question")
+                    item["reply_to_agent"] = response.get("reply_to_agent")
+                action_results = response.get("action_results")
+                if isinstance(action_results, list) and action_results:
+                    item["action_results"] = action_results
+                conversation.append(item)
+            if conversation:
+                row["conversation"] = conversation
+            resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
+            if resolution:
+                row["resolution"] = {
+                    "resolution_status": resolution.get("resolution_status"),
+                    "summary": resolution.get("summary"),
+                    "decision": resolution.get("decision"),
+                    "affected_requirement_ids": resolution.get("affected_requirement_ids", []) or [],
+                    "affected_conflict_ids": resolution.get("affected_conflict_ids", []) or [],
+                    "new_open_questions": resolution.get("new_open_questions", []) or [],
+                    "artifact_updates": resolution.get("artifact_updates", {}) or {},
+                }
+            if row.get("conversation") or row.get("resolution"):
+                rows.append(row)
     return rows
 
 
@@ -135,26 +269,24 @@ class AnalystRequirements:
         draft_version: Optional[int] = None,
         previous_draft: Optional[str] = None,
         conflict_report_md: str = "",
-        meeting_record_md: str = "",
         round_num: Optional[int] = None,
         artifact_dir: Optional[Any] = None,
     ):
         """requirements-analyst skill 統一入口。
 
         action:
-            "analyze_scenario"        -> 回傳 Dict (scenario)
-            "generate_scope"          -> 回傳 Dict (scope)
+            "analyze_scenario"        -> 回傳 str (scenario)
+            "define_scope"          -> 回傳 Dict (scope)
             "analyze_requirements"    -> 回傳 Dict (requirements list)
-            "create_draft"            -> 回傳 str  (Markdown)
-            "update_draft"            -> 回傳 Dict (requirements + change_candidates)
+            "create_draft"          -> 回傳 str  (Markdown)
+            "update_draft"          -> 回傳 str  (Markdown)
         """
         allowed_actions = {
             "analyze_scenario",
-            "generate_scope",
+            "define_scope",
             "analyze_requirements",
             "create_draft",
             "update_draft",
-            "finalize_requirements",
         }
         if action not in allowed_actions:
             raise ValueError(f"未知 requirements action: {action}")
@@ -168,7 +300,6 @@ class AnalystRequirements:
                 "version": draft_version,
                 "previous_draft": previous_draft,
                 "conflict_report_md": conflict_report_md,
-                "meeting_record_md": meeting_record_md,
                 "round_num": round_num,
                 "artifact_dir": artifact_dir,
             },
@@ -191,7 +322,6 @@ class AnalystRequirements:
             "max_iterations": kwargs["max_iterations"],
             "stakeholder_count": len(stakeholders),
             "requirements_count": len(requirement_discussion_pool(artifact)),
-            "decisions_count": len(artifact.get("decisions", []) or []),
             "conflicts_count": conflict_entries_count(artifact),
             "has_scope": bool(artifact.get("scope")),
         }
@@ -226,28 +356,24 @@ class AnalystRequirements:
         try:
             if action == "analyze_scenario":
                 output = self.analyze_scenario(kwargs.get("rough_idea", ""))
-            elif action == "generate_scope":
-                output = self.generate_scope(
+            elif action == "define_scope":
+                output = self.define_scope(
                     kwargs.get("rough_idea", ""),
                     kwargs.get("stakeholders") or [],
                     artifact=kwargs.get("artifact") or {},
                 )
             elif action == "analyze_requirements":
                 output = self.analyze_requirements(kwargs.get("stakeholders") or [])
-            elif action == "create_draft":
+            elif action in {"create_draft", "update_draft"}:
                 output = self.create_draft(
                     kwargs.get("artifact") or {},
                     draft_version=kwargs.get("version"),
                     previous_draft=kwargs.get("previous_draft"),
                     conflict_report_md=kwargs.get("conflict_report_md") or "",
-                    meeting_record_md=kwargs.get("meeting_record_md") or "",
                     round_num=kwargs.get("round_num"),
                     artifact_dir=kwargs.get("artifact_dir"),
+                    mode="update" if action == "update_draft" else "create",
                 )
-            elif action == "update_draft":
-                output = self.update_draft(kwargs.get("artifact") or {})
-            elif action == "finalize_requirements":
-                output = self.finalize_requirements(kwargs.get("artifact") or {})
             else:
                 raise ValueError(f"未知 requirements action: {action}")
         except Exception as e:
@@ -274,20 +400,9 @@ class AnalystRequirements:
     ) -> Dict[str, Any]:
         return analyst_requirement_record(req)
 
-    def analyze_scenario(self, rough_idea: str) -> Dict[str, Any]:
+    def analyze_scenario(self, rough_idea: str) -> str:
         context = {"rough_idea": rough_idea}
-        task = """# 任務
-根據 rough_idea，產生一個可實際開發的系統情境名稱。
-
-# 判斷重點
-- 將 rough_idea 轉成清楚的系統名稱。
-
-# 輸出 JSON
-{
-  "scenario": {
-    "name": "可以做的系統名稱"
-  }
-}"""
+        task = render_prompt('agents_profile_analyst_analyze_task_11', **locals())
         try:
             data = self.invoke_direct_requirements_object_json(
                 task,
@@ -296,13 +411,13 @@ class AnalystRequirements:
             )
         except Exception as e:
             raise RuntimeError(f"scenario 分析失敗: {e}") from e
-        scenario = data.get("scenario") if isinstance(data.get("scenario"), dict) else data
-        name = str((scenario or {}).get("name") or "").strip()
+        scenario = data.get("scenario") if isinstance(data, dict) and "scenario" in data else data
+        name = scenario_text(scenario)
         if not name:
             raise ValueError("scenario 分析未產生有效 name")
-        return {"name": name}
+        return name
 
-    def generate_scope(
+    def define_scope(
         self, rough_idea: str, stakeholders: List[Dict],
         *, artifact: Optional[Dict[str, Any]] = None,
     ) -> Dict:
@@ -316,33 +431,8 @@ class AnalystRequirements:
                 context["current_scope"] = artifact["scope"]
             req_pool = requirement_discussion_pool(artifact)
             if req_pool:
-                context["URL"] = req_pool
-        task = """# 任務
-根據產品情境與 User Requirements，界定本專案需求範圍。
-
-# 可用資料
-- scenario：產品情境。
-- URL：目前已抽取的候選 User Requirements。
-
-# 判斷規則
-- in_scope 只能放輸入資料明確支持，且需要本系統直接提供或管理的產品能力、使用流程、資料處理、角色操作、外部介接或限制條件。
-- in_scope 不要放純粹的情緒、期待、抱怨、商業目標或抽象品質描述；必須能對應到至少一個 User Requirement 或 scenario 中的系統責任。
-- 若某內容只是風險、待確認問題或領域研究建議，不要放入 in_scope；除非 User Requirements 已明確支持它是本系統要處理的能力或限制。
-- out_of_scope 放明確不屬於本專案、不符合產品情境，或已被排除的內容。
-- out_of_scope 只能放兩類內容：輸入資料明確排除的內容；或明顯由第三方、線下實體流程、外部組織自行負責，且本系統最多只能提供紀錄、通知、查詢或介接的內容。
-- 不要只因為某內容看起來超出目前版本，就自行放入 out_of_scope；除非輸入資料有明確支持。
-- 不得加入與 scenario 無關的排除項。
-- 不確定是否排除時，不要放入 out_of_scope。
-- out_of_scope 不需要湊數；若沒有明確或高度可判定的排除內容，輸出空陣列。
-- 不要加入 assumptions、unknowns、description、status 或 source。
-
-# 輸出 JSON
-{
-  "scope": {
-    "in_scope": [],
-    "out_of_scope": []
-  }
-}"""
+                context["user_requirements"] = req_pool
+        task = render_prompt('agents_profile_analyst_analyze_task_12', **locals())
         try:
             data = self.invoke_direct_requirements_object_json(
                 task,
@@ -367,31 +457,41 @@ class AnalystRequirements:
                 source_text = str(sh_texts or "").strip()
                 source_texts = [source_text] if source_text else []
             for source_idx, source_text in enumerate(source_texts, 1):
+                existing_requirements_json = json.dumps(
+                    [
+                        {
+                            "id": str(row.get("id") or "").strip(),
+                            "text": str(row.get("text") or "").strip(),
+                            "stakeholder": (
+                                str((row.get("stakeholder") or {}).get("name") or "").strip()
+                                if isinstance(row.get("stakeholder"), dict)
+                                else str(row.get("stakeholder") or "").strip()
+                            ),
+                            "source": str(row.get("source") or "").strip(),
+                        }
+                        for row in all_requirements
+                        if isinstance(row, dict) and str(row.get("text") or "").strip()
+                    ],
+                    ensure_ascii=False,
+                    indent=2,
+                )
                 context = {
                     "stakeholder": {
                         "name": sh_label,
                         "type": one_sh.get("type"),
                         "source_text": source_text,
                         "all_text": source_texts,
-                    }
+                    },
+                    "existing_requirements": existing_requirements_json,
                 }
-                task = f"""請依照 requirements-analyst skill，只根據目前這一條 source_text 抽取 User Requirements。
-
-完整 all_text 只作為理解語境的背景，不可從其他 all_text 條目產生需求。
-
-{user_requirement_extraction_contract()}
-"""
+                extraction_rules = url_extraction_rules()
+                task = render_prompt('agents_profile_analyst_analyze_task_13', **locals())
                 try:
                     data = self.invoke_requirements_analyst_array_json(task, context, mode="analysis")
                 except Exception as e:
                     try:
                         raw = self.invoke_requirements_analyst_text(task, context, mode="analysis")
-                        repair_task = f"""上一個回覆不是合法 JSON array。請只修正格式，不要重新分析、不要新增需求。
-
-輸出必須是 JSON array，每筆只包含 text、priority。
-
-原始回覆：
-{raw}"""
+                        repair_task = render_prompt('agents_profile_analyst_analyze_repair_task_27', **locals())
                         data = self.invoke_direct_requirements_array_json(
                             repair_task,
                             context={},
@@ -415,9 +515,19 @@ class AnalystRequirements:
                     ])
                     if row.get("stakeholder") and row.get("source")
                 ]
-                all_requirements.extend(normalized_rows)
+                existing_texts = {
+                    str(row.get("text") or "").strip().lower()
+                    for row in all_requirements
+                    if isinstance(row, dict) and str(row.get("text") or "").strip()
+                }
+                for row in normalized_rows:
+                    text = str(row.get("text") or "").strip()
+                    if not text or text.lower() in existing_texts:
+                        continue
+                    all_requirements.append(row)
+                    existing_texts.add(text.lower())
 
-        return {"requirements": all_requirements}
+        return {"URL": all_requirements}
 
     def create_draft(
         self,
@@ -425,10 +535,11 @@ class AnalystRequirements:
         draft_version: Optional[int] = None,
         previous_draft: Optional[str] = None,
         conflict_report_md: str = "",
-        meeting_record_md: str = "",
         round_num: Optional[int] = None,
         artifact_dir: Optional[Any] = None,
+        mode: str = "create",
     ) -> str:
+        mode = "update" if str(mode or "").strip() == "update" else "create"
         user_requirements = requirement_discussion_pool(artifact)
         for req in user_requirements:
             req_norm = self.requirement_record(req)
@@ -436,20 +547,22 @@ class AnalystRequirements:
 
         scope = artifact.get("scope", {}) or {}
         context = {
-            "rough_idea": str(artifact.get("rough_idea") or "").strip(),
-            "scenario": scenario_prompt_value(artifact.get("scenario", {}) or {}),
             "scope": scope,
             "stakeholders": draft_stakeholders(artifact),
             "user_requirements": user_requirements,
             "conflict_report": (conflict_report_md or "").strip(),
-            "meeting_record": (meeting_record_md or "").strip(),
             "open_questions": draft_open_questions(artifact),
+            "feedback": draft_feedback(artifact),
+            "meeting_context": draft_meeting_context(artifact),
+            "REQ": artifact.get("REQ", []) or [],
             "system_models": draft_system_models(artifact, artifact_dir=artifact_dir),
             "version": draft_version if draft_version is not None else 0,
         }
+        if mode == "create":
+            context["rough_idea"] = str(artifact.get("rough_idea") or "").strip()
+            context["scenario"] = scenario_prompt_value(artifact.get("scenario", ""))
         previous_draft_text = (previous_draft or "").strip()
-        is_revision = bool(previous_draft_text and draft_version and draft_version > 0)
-        if is_revision:
+        if mode == "update":
             context["previous_draft"] = previous_draft_text
         version_note = ""
         if draft_version is not None:
@@ -457,12 +570,16 @@ class AnalystRequirements:
         if round_num is not None:
             version_note += f" 對應輪次: Round {round_num}。"
         task = build_draft_prompt(
-            is_revision=is_revision,
+            mode=mode,
             version_note=version_note,
             version=draft_version if draft_version is not None else 0,
         )
         try:
-            raw = self.invoke_requirements_analyst_text(task, context, mode="draft")
+            raw = self.invoke_direct_requirements_text(
+                task,
+                context,
+                action="requirements.draft",
+            )
         except Exception as e:
             raise RuntimeError(f"draft 生成失敗: {e}") from e
         md = clean_llm_output(raw)
@@ -477,24 +594,12 @@ class AnalystRequirements:
         if missing_ids:
             self.logger.warning("draft 未保留部分 User Requirements ID: %s", missing_ids)
         if unknown_ids or missing_ids:
-            repair_task = f"""上一版需求草稿 Markdown 的 URL-* 覆蓋不符合契約。請只修正 Markdown，不要重新分析，不要新增需求，不要改變原有需求語意。
-
-修正目標：
-- 移除或更正輸入 user_requirements 中不存在的 URL-*：{unknown_ids}
-- 補回缺少的 URL-*：{missing_ids}
-- 每個 URL-* 必須出現在「使用者需求」表。
-- 不得新增輸入資料以外的 URL-*。
-- 不得把 open_questions、system_models、conflict_report 或 meeting_record 直接轉成 User Requirements。
-
-原始草稿：
-{md}
-
-請只輸出修正後的完整 Markdown 草稿。"""
+            repair_task = render_prompt('agents_profile_analyst_analyze_repair_task_28', **locals())
             try:
-                repaired = self.invoke_requirements_analyst_text(
+                repaired = self.invoke_direct_requirements_text(
                     repair_task,
                     context,
-                    mode="draft",
+                    action="requirements.draft.repair",
                 )
                 md = clean_llm_output(repaired)
                 unknown_ids, missing_ids = draft_requirement_id_issues(md, expected_ids)
@@ -506,209 +611,6 @@ class AnalystRequirements:
                 )
 
         return md
-
-    def update_draft(self, artifact: Dict) -> Dict:
-        context = {
-            "requirements": artifact.get("requirements", []),
-            "decisions": artifact.get("decisions", []),
-            "discussions": artifact.get("discussions", []),
-            "conflicts": all_conflict_rows(artifact),
-            "scope": artifact.get("scope", {}),
-        }
-        task = """請基於 User Requirements 更新需求，重點是消化已明確形成的 decisions / discussions 對需求文字的影響。
-
-更新邊界：
-1. requirements 陣列必須保留所有既有需求 id；不得重新編號。
-2. 只調整受本輪 decisions 或 discussions 直接影響的條目；與本輪無關的需求不要改動。
-3. 既有 id 除非 decisions 明確要求，不得任意改動。
-4. 可追加 scope 內、且由 discussions/decisions 明確支持的新需求；不得新增超出 scope.out_of_scope 的內容。
-5. 若只是推論，放到 open_questions/to_confirm，不要寫入 requirements。
-6. 已解決的 conflict 對應需求應與決策方向一致。
-7. 可整理 wording，但不得改變需求實質內容，也不得把未定案內容寫成已確認。
-8. 每筆需求只保留 id、text、priority、stakeholder、source；若原本有 source_ref 必須保留。
-9. stakeholder 必須保留為 {"name":"...","type":"..."}，不得改成字串，不得輸出 stakeholder.text。
-10. source 只表示來源階段代碼；不得改成原話。
-
-只輸出一個 JSON 物件：{"requirements":[...]}。"""
-        try:
-            data = self.invoke_direct_requirements_object_json(
-                task,
-                context,
-                action="requirements.update_draft",
-            )
-        except Exception as e:
-            raise RuntimeError(f"draft 更新失敗: {e}") from e
-        requirements = data.get("requirements", artifact.get("requirements", []))
-        if not isinstance(requirements, list):
-            requirements = artifact.get("requirements", [])
-        prev_by_id = {
-            r.get("id"): r for r in artifact.get("requirements", []) if r.get("id")
-        }
-        returned_ids = {r.get("id") for r in requirements if r.get("id")}
-        for pid, prev_req in prev_by_id.items():
-            if pid not in returned_ids:
-                requirements.append(dict(prev_req))
-                self.logger.debug("update_draft: 補回既有需求 %s", pid)
-        for req in requirements:
-            normalized = self.requirement_record(req)
-            req.update(normalized)
-        change_candidates = self.build_change_record(
-            artifact.get("requirements", []),
-            requirements,
-            artifact=artifact,
-        )
-        return {
-            "requirements": requirements,
-            "conflicts": all_conflict_rows(artifact),
-            "change_record": change_candidates,
-        }
-
-    def finalize_requirements(self, artifact: Dict) -> Dict:
-        candidate_pool = requirement_discussion_pool(artifact)
-        context = {
-            "URL": candidate_pool,
-            "decisions": artifact.get("decisions", []),
-            "discussions": artifact.get("discussions", []),
-            "conflicts": all_conflict_rows(artifact),
-            "scope": artifact.get("scope", {}),
-            "stakeholders": artifact.get("stakeholders", []),
-            "elicitation": artifact.get("elicitation", {}),
-        }
-        task = """請根據輸入資料將候選需求池定版為正式 requirements。
-
-輸入來源：
-- User Requirements 是需求池，包含初始分析與 requirement elicitation meeting 產生的候選需求。
-- 會議決策、討論紀錄與衝突結果是會議協調後的正式依據。
-
-定版規則：
-1. 正式 requirements 只能來自 URL，或由 decisions/discussions 明確支持的候選修訂；不得憑空新增需求。
-2. 必須消化已明確形成的 decisions 與已解決 conflicts。
-3. 若候選需求重複或只是同一需求的細化，請合併成一筆正式需求。
-4. 若候選需求仍缺少支持、超出 scope.out_of_scope，或只是 open question，不要寫入正式 requirements。
-5. 每筆正式需求都要有 id，格式為 REQ-1、REQ-2、REQ-3；不要使用 URL-*。
-6. 每筆需求只輸出 text、priority、stakeholder、source；若候選需求有 source_ref 且仍可追溯，請保留 source_ref。
-7. stakeholder 必須保留為 {"name":"...","type":"..."}，name 是利害關係人名稱，type 是 stakeholder 類型；不得輸出 stakeholder.text。
-8. source 只表示來源階段代碼；不得改成原話。
-9. priority 只能是 must、should 或 could；不收錄的項目不要輸出。
-
-只輸出一個 JSON 物件：{"requirements":[...]}。勿輸出 Markdown。"""
-        try:
-            data = self.invoke_direct_requirements_object_json(
-                task,
-                context,
-                action="requirements.finalize",
-            )
-        except Exception as e:
-            raise RuntimeError(f"正式 requirements 定版失敗: {e}") from e
-        requirements = data.get("requirements", [])
-        if not isinstance(requirements, list):
-            requirements = []
-        normalized: List[Dict[str, Any]] = []
-        seen_ids = set()
-        for idx, req in enumerate(requirements, 1):
-            if not isinstance(req, dict):
-                continue
-            row = self.requirement_record(req)
-            if not row.get("text"):
-                continue
-            rid = str(row.get("id") or "").strip()
-            if not re.fullmatch(r"REQ-\d+", rid) or rid in seen_ids:
-                rid = f"REQ-{len(normalized) + 1}"
-            row["id"] = rid
-            seen_ids.add(rid)
-            normalized.append(row)
-        return {
-            "requirements": normalized,
-            "conflicts": all_conflict_rows(artifact),
-            "change_record": [],
-        }
-
-    def build_change_record(
-        self,
-        previous_requirements: List[Dict[str, Any]],
-        updated_requirements: List[Dict[str, Any]],
-        *,
-        artifact: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """從舊新版需求清單推導可追蹤的變更候選，不自動產生刪除。"""
-        previous_by_id = {
-            req.get("id"): dict(req)
-            for req in previous_requirements
-            if isinstance(req, dict) and req.get("id")
-        }
-        decisions = (artifact or {}).get("decisions", []) or []
-        discussions = (artifact or {}).get("discussions", []) or []
-        source_ids = [
-            item.get("id")
-            for item in list(decisions) + list(discussions)
-            if isinstance(item, dict) and item.get("id")
-        ]
-        candidates: List[Dict[str, Any]] = []
-        seen_keys = set()
-        next_index = 1
-
-        for req in updated_requirements:
-            if not isinstance(req, dict):
-                continue
-            req_id = req.get("id")
-            if not req_id:
-                continue
-            before = previous_by_id.get(req_id)
-            if before is None:
-                key = ("add", req_id)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                candidates.append(
-                    {
-                        "id": f"RC-{next_index}",
-                        "requirement_id": req_id,
-                        "change_type": "add",
-                        "field": "requirement",
-                        "before": None,
-                        "after": dict(req),
-                        "reason": "Added by analyst draft update.",
-                        "source_ids": list(source_ids),
-                        "status": "proposed",
-                    }
-                )
-                next_index += 1
-                continue
-
-            changed_fields = [
-                field
-                for field in (
-                    "text",
-                    "priority",
-                    "stakeholder",
-                    "source",
-                )
-                if before.get(field) != req.get(field)
-            ]
-            if not changed_fields:
-                continue
-            for field in changed_fields:
-                key = ("update", req_id, field)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                candidates.append(
-                    {
-                        "id": f"RC-{next_index}",
-                        "requirement_id": req_id,
-                        "change_type": "update",
-                        "field": field,
-                        "before": before.get(field),
-                        "after": req.get(field),
-                        "reason": "Updated by analyst draft refresh after decisions/discussions.",
-                        "source_ids": list(source_ids),
-                        "status": "proposed",
-                    }
-                )
-                next_index += 1
-
-        return candidates
-
 
     def invoke_requirements_analyst_text(
         self, task: str, context: Dict[str, Any], *, mode: str = "analysis"

@@ -1,4 +1,5 @@
 # Analyst conflict logic: detect, recheck, sign off, and report requirement conflicts.
+from agents.profile.prompt_catalog import render_prompt
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -165,14 +166,14 @@ class AnalystConflicts:
                 output = self.execute_pairwise_conflict_detection(kwargs.get("artifact") or {})
             elif action == "run_group_conflict_detection":
                 output = self.execute_group_conflict_detection(kwargs.get("artifact") or {})
-            elif action == "signoff_conflict_recheck":
-                output = self.execute_signoff_conflict_recheck(
+            elif action == "review_conflicts":
+                output = self.execute_review_conflicts(
                     kwargs.get("proposal_list") or [],
                     kwargs.get("discussion_rows") or [],
                     kwargs.get("extracted_pair_reviews"),
                 )
-            elif action == "finalize_conflict_review_reasons":
-                output = self.execute_finalize_conflict_review_reasons(
+            elif action == "finalize_review":
+                output = self.execute_finalize_review(
                     kwargs.get("decision_list") or [],
                     kwargs.get("discussion_rows") or [],
                     kwargs.get("extracted_pair_reviews"),
@@ -185,12 +186,7 @@ class AnalystConflicts:
                     previous_report=kwargs.get("previous_report"),
                 )
             elif action == "generate_conflict_resolutions":
-                output = self.build_conflict_resolutions(kwargs.get("artifact") or {})
-            elif action == "get_resolution_options_for_issue":
-                output = self.fetch_resolution_options_for_issue(
-                    kwargs.get("issue") or {},
-                    kwargs.get("artifact") or {},
-                )
+                output = self.generate_conflict_resolutions(kwargs.get("artifact") or {})
             else:
                 raise ValueError(f"未知 conflict action: {action}")
         except Exception as e:
@@ -209,16 +205,31 @@ class AnalystConflicts:
         }
 
     def run_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
-        return self.execute_pairwise_conflict_detection(artifact)
+        return self.run_conflict_analysis_loop(
+            "run_pairwise_conflict_detection",
+            artifact=artifact,
+        )
 
-    def signoff_conflict_recheck(
+    def run_group_conflict_detection(self, artifact: Dict) -> Dict:
+        return self.run_conflict_analysis_loop(
+            "run_group_conflict_detection",
+            artifact=artifact,
+        )
+
+    def generate_conflict_resolutions(self, artifact: Dict) -> Dict:
+        return self.run_conflict_analysis_loop(
+            "generate_conflict_resolutions",
+            artifact=artifact,
+        )
+
+    def review_conflicts(
         self,
         proposal_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, Any]], str]:
         return self.run_conflict_analysis_loop(
-            "signoff_conflict_recheck",
+            "review_conflicts",
             proposal_list=proposal_list,
             discussion_rows=discussion_rows,
             extracted_pair_reviews=extracted_pair_reviews,
@@ -237,12 +248,6 @@ class AnalystConflicts:
             round_num=round_num,
             recent_decisions_limit=recent_decisions_limit,
             previous_report=previous_report,
-        )
-
-    def generate_conflict_resolutions(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
-        return self.run_conflict_analysis_loop(
-            "generate_conflict_resolutions",
-            artifact=artifact,
         )
 
     def run_pair_conflict_detection(
@@ -266,29 +271,13 @@ class AnalystConflicts:
 {rows_label}：
 {json.dumps(pair_rows, ensure_ascii=False, indent=2)}
 
-只輸出一個 JSON 物件：{{"conflicts":[...]}}。勿輸出 Markdown 或其他文字。"""
+輸出只包含 JSON 物件：{{"conflicts":[...]}}。"""
         raw = ""
         try:
             raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
             data = self.parse_issue_response_json(raw)
         except Exception as first_error:
-            repair_prompt = f"""上一輪 {error_label} 輸出不是合法 JSON object。請只根據原始輸出與指定 pairs 修正格式，不要重新分析、不要新增 pair。
-
-# 必須輸出
-{{"conflicts":[...]}}
-
-# 欄位規則
-- conflicts 必須是 array。
-- 每筆必須包含 pair_index、label、reason。
-- label 只能是 "Conflict" 或 "Neutral"。
-- label 是 "Conflict" 時才可包含 type。
-- pair_index 只能來自指定 pairs。
-
-# 指定 pairs
-{json.dumps(pair_rows, ensure_ascii=False, indent=2)}
-
-# 原始輸出
-{str(raw or "")[:12000]}"""
+            repair_prompt = render_prompt('agents_profile_analyst_conflicts_repair_prompt_3', **locals())
             try:
                 data = self.chat_json(
                     self.build_direct_messages(repair_prompt, context=context),
@@ -366,9 +355,9 @@ class AnalystConflicts:
 
 【批次補找 Pair】
 - 這一步在固定相鄰 pair 判斷之後執行，用來找出同一批需求中「不相鄰但有衝突價值」的需求對。
-- 只輸出額外發現的 Conflict pair；不要輸出 Neutral。
+- conflicts 只放額外發現的 Conflict pair。
 - 每筆 Conflict 的 requirement_ids 必須剛好 2 個需求 id。
-- 不要輸出已判斷過的 pair。
+- 已判斷過的 pair 不再列入 conflicts。
 - 若兩個需求不能直接同時定版，或需要補充規則、優先順序、條件邊界、責任歸屬、例外處理或人工裁定，標為 Conflict。
 - 若沒有額外 Conflict pair，輸出 {{"conflicts":[]}}。
 
@@ -378,28 +367,13 @@ class AnalystConflicts:
 已判斷過的 pair：
 {json.dumps(existing_in_batch, ensure_ascii=False, indent=2)}
 
-只輸出一個 JSON 物件：{{"conflicts":[...]}}。勿輸出 Markdown 或其他文字。"""
+輸出只包含 JSON 物件：{{"conflicts":[...]}}。"""
             raw = ""
             try:
                 raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
                 data = self.parse_issue_response_json(raw)
             except Exception as first_error:
-                repair_prompt = f"""上一輪批次補找 Pair 輸出不是合法 JSON object。請只修正格式，不要重新分析。
-
-# 必須輸出
-{{"conflicts":[...]}}
-
-# 欄位規則
-- conflicts 必須是 array。
-- 每筆必須包含 label="Conflict"、requirement_ids、reason。
-- requirement_ids 必須剛好 2 個需求 id，且只能來自本批需求。
-- 不要輸出 Neutral。
-
-# 本批需求
-{json.dumps(batch_rows, ensure_ascii=False, indent=2)}
-
-# 原始輸出
-{str(raw or "")[:12000]}"""
+                repair_prompt = render_prompt('agents_profile_analyst_conflicts_repair_prompt_4', **locals())
                 try:
                     data = self.chat_json(
                         self.build_direct_messages(repair_prompt, context=context),
@@ -439,7 +413,7 @@ class AnalystConflicts:
 
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
         return [
-            req for req in (artifact.get("requirements") or artifact.get("URL") or [])
+            req for req in (artifact.get("URL") or [])
             if isinstance(req, dict)
             and str(req.get("id") or "").strip()
             and str(req.get("text") or "").strip()
@@ -480,7 +454,7 @@ class AnalystConflicts:
 
 本專案覆蓋規則：
 - 本步只做 requirement candidate conflict classification，不做報告或解決方案建議。
-- 不改寫需求、不要新增需求、不要提出解決方案、不要做 meeting decision。
+- 保持原需求文字不變；輸出不包含新增需求、解決方案或 meeting decision。
 - 只輸出呼叫端指定的 JSON。
 - 產品情境與需求範圍只作為產品邊界背景；Conflict / Neutral 仍以 User Requirements 原文為主要依據。
 
@@ -488,7 +462,7 @@ class AnalystConflicts:
 - label 只用英文 "Conflict" 或 "Neutral"。
 - 若 label 是 "Conflict"，必須輸出 type；type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
 - 若無法歸入前八類但仍是 Conflict，type 使用 other。
-- 若 label 是 "Neutral"，不要輸出 type。
+- Neutral 項目只輸出 label 與 reason。
 - 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
 - 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
 - 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
@@ -500,7 +474,7 @@ class AnalystConflicts:
 """
 
     def execute_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
-        """用正式 requirements；若尚無正式 requirements，fallback 到 URL 做相鄰兩兩需求衝突判斷。"""
+        """使用 requirements 做相鄰兩兩需求衝突判斷。"""
         requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 2:
             return set_pair_conflicts({**artifact}, [])
@@ -539,7 +513,7 @@ class AnalystConflicts:
                 "每一個 pair 都必須輸出恰好一筆結果。",
                 "pair_index 必須與下列清單一致。",
                 "不需要輸出 requirement_ids，系統會根據 pair_index 自動對回 requirements。",
-                "不要輸出 3 條以上需求共同造成的群組衝突。",
+                "本步只處理指定 pair；群組衝突留給整體判斷。",
             ],
             rows_label="指定 pairs",
             error_label="兩兩 Conflict 分析",
@@ -573,8 +547,8 @@ class AnalystConflicts:
                     "每一個 missing pair 都必須輸出恰好一筆結果。",
                     "pair_index 必須與下列清單一致，不可重新編號。",
                     "不需要輸出 requirement_ids，系統會根據 pair_index 自動對回 requirements。",
-                    "不要輸出清單以外的 pair。",
-                    "不要輸出 3 條以上需求共同造成的群組衝突。",
+                    "輸出只涵蓋下列 missing pair。",
+                    "本步只處理指定 pair；群組衝突留給整體判斷。",
                 ],
                 rows_label="Missing pairs",
                 error_label="兩兩 Missing 補判",
@@ -625,9 +599,9 @@ class AnalystConflicts:
         return set_pair_conflicts({**artifact}, pair_conflicts)
 
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
-        """用正式 requirements；若尚無正式 requirements，fallback 到 URL 做 3+ 需求群組衝突判斷。"""
+        """使用 requirements 做集合型需求衝突判斷。"""
         requirements = self.conflict_detection_requirements(artifact)
-        if len(requirements) < 3:
+        if len(requirements) < 2:
             self.logger.info("整體衝突判斷 0 組（Conflict: 0）")
             return artifact
         context = self.conflict_detection_context(artifact, requirements)
@@ -646,35 +620,33 @@ class AnalystConflicts:
         holistic_task = base_task + """
 
 【整體判斷】
-- 根據 pairwise_conflicts 與 User Requirements，將圍繞同一個決策問題、規則邊界、流程狀態、資料一致性、優先順序或資源限制的衝突聚合成衝突主題。
-- 本步不是重新做兩兩判斷，而是把相關 pairwise conflicts 整理成可供會議討論的 group conflict。
-- 同一個 group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。
-- 每筆 Conflict 必須包含 related_pairs，記錄此 group 來源的 pair id 清單。
-- 若多個 pairwise conflicts 其實是同一個決策主題，請聚合成一筆 Conflict，不要逐 pair 重複輸出。
-- 若沒有可聚合的 pairwise conflict，輸出 {"conflicts": []}。
-- 本步只輸出 label="Conflict" 的項目，不需要輸出 Neutral。
+- 第一步先找「決策主題」，不要先做固定配對。可用主題包含：
+  - 資料揭露、保存、查詢權限、稽核責任。
+  - 流程責任邊界、人工介入與自動化分工。
+  - 即時性、效率、簡化流程 vs 安全、驗證、合規。
+  - 使用者自主權、平台控管、營運效率、公平性或風險控管。
+  - 狀態一致性、資料同步、付款/退款/取消/配送狀態。
+  - scope、角色責任、第三方服務或人工流程邊界。
+- 第二步才判斷：同一決策主題下，是否有兩筆以上 User Requirements 不能直接同時定稿。
+- group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。2 條也可以，但必須代表共同決策主題，不要只是重複 pairwise 的相鄰配對。
+- 不要用 URL 編號順序做固定配對（例如 URL-1/URL-2、URL-3/URL-4、URL-5/URL-6）；pairwise detection 已負責固定 pair。整體判斷應以共同決策主題、規則邊界或一致性問題選取需求。
+- pairwise_conflicts 只作為參考；若多個 pairwise conflicts 其實是同一個決策主題，請聚合成一筆 Conflict。
+- 即使沒有 pairwise_conflicts，只要 User Requirements 顯示多筆需求在同一決策主題下無法一起寫入 SRS，也要輸出 Conflict。
+- 若只是資訊不足、需要補問、語意模糊但尚未形成不能同時定稿的需求關係，不要標為 Conflict；可以在 reason 中說明不是衝突，但不要輸出到 conflicts。
+- 只輸出會影響需求取捨、改寫、合併、刪除、責任分工或人類裁決的 Conflict。
+- 每筆 Conflict 的 reason 必須說明「共同決策主題」以及「為什麼這些需求不能直接同時定稿」。
+- 若 group 來自既有 pairwise_conflicts，才輸出 related_pairs；若是直接從 User Requirements 發現，related_pairs 可省略或輸出空陣列。
+- 若沒有可定義的 group conflict，輸出 {"conflicts": []}。
+- conflicts 只包含 label="Conflict" 的項目。
 
-只輸出一個 JSON 物件：{"conflicts":[...]}。勿輸出 Markdown 或其他文字。"""
+輸出只包含 JSON 物件：{"conflicts":[...]}。"""
         try:
             holistic_raw = self.invoke_conflict_skill(
                 holistic_task, context=context, mode="analysis"
             )
             holistic_data = self.parse_issue_response_json(holistic_raw)
         except Exception as first_error:
-            repair_prompt = f"""上一輪整體 Conflict 分析輸出不是合法 JSON object。請只修正格式，不要重新分析。
-
-# 必須輸出
-{{"conflicts":[...]}}
-
-# 規則
-- 若原始輸出沒有明確可聚合的 group conflict，輸出 {{"conflicts":[]}}。
-- 每筆 Conflict 必須包含 label="Conflict"、requirement_ids 與 related_pairs。
-- requirement_ids 必須包含至少 2 個需求 id。
-- related_pairs 必須包含至少 1 個 pair id。
-- 不要輸出 Markdown 或額外文字。
-
-# 原始輸出
-{str(holistic_raw or "")[:12000]}"""
+            repair_prompt = render_prompt('agents_profile_analyst_conflicts_repair_prompt_5', **locals())
             try:
                 holistic_data = self.chat_json(
                     self.build_direct_messages(repair_prompt, context=context),
@@ -690,7 +662,6 @@ class AnalystConflicts:
             row for row in conflict_records(holistic_data.get("conflicts", []))
             if row.get("label") == "Conflict"
             and len(row.get("requirement_ids") or []) >= 2
-            and row.get("related_pairs")
         ]
         self.logger.info(
             "整體衝突判斷 %s 組（Conflict: %s）",
@@ -705,7 +676,7 @@ class AnalystConflicts:
             multiple_rows.append(item)
         return set_multiple_conflicts({**artifact}, multiple_rows)
 
-    def execute_signoff_conflict_recheck(
+    def execute_review_conflicts(
         self,
         proposal_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
@@ -715,20 +686,20 @@ class AnalystConflicts:
         if not proposal_list:
             return [], ""
         prompt = (
-            "請根據 requirements 原文與各 agent 的逐筆 pair_reviews，"
+            "請根據 User Requirements（URL-*）原文與各 agent 的逐筆 pair_reviews，"
             "對每筆 Conflict/Neutral 項目做最終裁定。\n\n"
             f"# 待裁定項目\n{json.dumps(proposal_list, ensure_ascii=False, indent=2)}\n\n"
             f"# 各 agent 的 pair_reviews\n{json.dumps(extracted_pair_reviews or [], ensure_ascii=False, indent=2)}\n\n"
             f"# 補充會議內容（僅在 pair_reviews 不足時參考）\n{json.dumps(discussion_rows, ensure_ascii=False, indent=2)}\n\n"
             "# 裁定規則\n"
-            "- 先看 requirements 原文，再看各 agent 的 pair_reviews。\n"
+            "- 先看 User Requirements（URL-*）原文，再看各 agent 的 pair_reviews。\n"
             "- discussion_rows 只在 pair_reviews 證據不足時作補充參考。\n"
             "- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。\n"
-            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 requirements 原文本身已足以明確推翻現標籤。\n"
+            "- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 User Requirements（URL-*）原文本身已足以明確推翻現標籤。\n"
             "- 若證據不足、理由不一致或沒有明確共識，維持 current_label。\n"
             f"{CONFLICT_REVIEW_LABEL_RULES}\n"
-            "- 你必須對 proposal_list 中的每一個項目都輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
-            "- 只輸出 JSON array，不要輸出 Markdown、程式碼區塊、前言或額外說明。\n"
+            "- proposal_list 中每一個項目都必須輸出一筆 decision；即使決定維持 current_label，也不可省略。\n"
+            "- 輸出只包含 JSON array。\n"
             "- 請直接做最終裁定，不要重述整場會議。\n\n"
             "# 輸出 JSON array\n"
             '[{"id": "衝突ID", "new_label": "Conflict 或 Neutral", '
@@ -739,22 +710,7 @@ class AnalystConflicts:
         try:
             data = parse_json_array_text(raw)
         except ValueError as first_error:
-            repair_prompt = f"""上一輪 conflict signoff 輸出不是合法 JSON array。請只修正格式，不要重新裁定。
-
-# 必須輸出
-[{{"id":"衝突ID","new_label":"Conflict 或 Neutral","reason":"一句繁中裁定理由"}}]
-
-# 規則
-- 只能輸出 JSON array。
-- 必須對 proposal_list 中每個 id 輸出一筆 decision。
-- new_label 只能是 Conflict 或 Neutral。
-- 不要輸出 Markdown 或額外文字。
-
-# proposal_list
-{json.dumps(proposal_list, ensure_ascii=False, indent=2)}
-
-# 原始輸出
-{raw[:12000]}"""
+            repair_prompt = render_prompt('agents_profile_analyst_conflicts_repair_prompt_6', **locals())
             repaired = self.model.chat(
                 self.build_direct_messages(repair_prompt),
                 action="conflict_recheck_signoff_repair",
@@ -769,20 +725,20 @@ class AnalystConflicts:
                 ) from repair_error
         return signoff_decisions(data), raw
 
-    def finalize_conflict_review_reasons(
+    def finalize_review(
         self,
         decision_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
         extracted_pair_reviews: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, str]], str]:
         return self.run_conflict_analysis_loop(
-            "finalize_conflict_review_reasons",
+            "finalize_review",
             decision_list=decision_list,
             discussion_rows=discussion_rows,
             extracted_pair_reviews=extracted_pair_reviews,
         )
 
-    def execute_finalize_conflict_review_reasons(
+    def execute_finalize_review(
         self,
         decision_list: List[Dict[str, Any]],
         discussion_rows: List[Dict[str, Any]],
@@ -805,10 +761,9 @@ class AnalystConflicts:
             "- 若 final_label 是 Conflict：必須輸出 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。\n"
             "- final_type 根據討論後的主要衝突原因決定，不必沿用 initial_type；若無法歸入前八類但仍是 Conflict，使用 other。\n"
             "- 若 final_label 是 Neutral：說明為什麼需求之間不構成衝突。\n"
-            "- 若 final_label 是 Neutral：不要輸出 final_type。\n"
-            "- 使用各 agent 已提出的理由，不要加入新的需求解釋或新的判準。\n"
-            "- 不要逐一列出 agent 名稱或投票過程。\n"
-            "- 不要重述完整需求原文。\n\n"
+            "- 若 final_label 是 Neutral：只輸出 id 與 description。\n"
+            "- 使用各 agent 已提出的理由，不加入新的需求解釋或新的判準。\n"
+            "- description 只整理裁定理由，不列 agent 名稱、投票過程或完整需求原文。\n\n"
             "# 輸出 JSON array\n"
             '[{"id": "PAIR-1", "description": "Conflict 的最終裁定描述", "final_type": "scope"}, '
             '{"id": "PAIR-2", "description": "Neutral 的最終裁定描述"}]'
@@ -825,24 +780,7 @@ class AnalystConflicts:
         try:
             data = parse_json_array_text(text)
         except ValueError as first_error:
-            repair_prompt = f"""上一輪 conflict final reason 輸出不是合法 JSON array。請只修正格式，不要重新分析、不要新增項目。
-
-# 必須輸出
-[{{"id":"PAIR-1","description":"最終裁定描述","final_type":"scope"}}]
-
-# 規則
-- 只能輸出 JSON array。
-- 必須只包含 decision_list 中存在的 id。
-- 每筆必須包含 id 與 description。
-- final_label 是 Conflict 時可包含 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
-- final_label 是 Neutral 時不要輸出 final_type。
-- 不要輸出 Markdown、程式碼區塊、前言或額外文字。
-
-# decision_list
-{json.dumps(decision_list, ensure_ascii=False, indent=2)}
-
-# 原始輸出
-{raw[:12000]}"""
+            repair_prompt = render_prompt('agents_profile_analyst_conflicts_repair_prompt_7', **locals())
             repaired = self.model.chat(
                 self.build_direct_messages(repair_prompt),
                 action="conflict_recheck_final_reason_repair",
@@ -898,44 +836,17 @@ class AnalystConflicts:
         if not conflict_rows:
             return ""
         context: Any = {
-            "scenario": str(artifact.get("scenario") or "").strip(),
             "conflict_report": conflict_rows,
         }
         previous_report_text = (previous_report or "").strip()
         if previous_report_text:
             context = {
-                "scenario": str(artifact.get("scenario") or "").strip(),
                 "previous_conflict_report": previous_report_text,
                 "conflict_report": conflict_rows,
             }
-            task = """根據 previous_conflict_report 與 conflict_report 修訂需求衝突 Markdown 報告。
-
-本專案約束：
-- 每筆 conflict_report 都要列入報告。
-- 保留上一版仍有效內容，移除與最新 conflict_report 不一致的內容。
-- 只渲染輸入資料，不重新分類、不新增或移除項目。
-- description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
-- 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
-- 衝突清單章節標題使用「衝突需求（Conflicting Requirements）」。
-- 每筆衝突使用 id 作為顯示編號；source 只作為來源追蹤。
-- 不要產生 Executive Summary。
-- 不要產生整體 recommendations 區塊。
-
-只輸出 Markdown。"""
+            task = render_prompt('agents_profile_analyst_conflicts_task_8', **locals())
         else:
-            task = """根據 conflict_report 產生需求衝突 Markdown 報告。
-
-本專案約束：
-- 每筆輸入都要列入報告。
-- 只渲染輸入資料，不重新分類、不新增或移除項目。
-- description、resolution_options、recommended_resolution 視為已定案內容，不可改寫。
-- 報告 H1 標題使用 scenario；若 scenario 為空，使用「需求衝突報告」。
-- 衝突清單章節標題使用「衝突需求（Conflicting Requirements）」。
-- 每筆衝突使用 id 作為顯示編號；source 只作為來源追蹤。
-- 不要產生 Executive Summary。
-- 不要產生整體 recommendations 區塊。
-
-只輸出 Markdown。"""
+            task = render_prompt('agents_profile_analyst_conflicts_task_9', **locals())
         try:
             raw = self.invoke_conflict_skill(task, context=context, mode="report")
         except Exception as e:
@@ -945,7 +856,7 @@ class AnalystConflicts:
             raise RuntimeError("conflict report 無內容")
         return out
 
-    def build_conflict_resolutions(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_conflict_resolutions(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         """Use conflict skill resolution guidance to enrich conflict.report rows."""
         conflict_payload = artifact.get("conflict", {}) or {}
         report_rows = (
@@ -959,35 +870,7 @@ class AnalystConflicts:
         ]
         if not conflict_rows:
             return artifact
-        task = """根據單一已定案 Conflict 項目產生 resolution options。
-
-本專案約束：
-- 輸入資料已完成衝突辨識與衝突再審查。
-- 不重新分類、不新增衝突、不移除衝突。
-- label、type、description 視為定案內容。
-- type 只作為策略候選方向；實際 resolution 必須根據 requirements 與 description 決定。
-- 若 type 是 other，不要硬套特定衝突類型；請根據 requirements 與 description 產生可行 resolution。
-- 若本任務沒有提供 resolution strategy guidance，代表此 Conflict 無對應類型策略；請只根據 requirements 與 description 產生 resolution。
-- id 必須使用輸入 Conflict 項目的 id，不可自行產生 CONF-* 或 CR-*。
-- requirements id 與 text 只作為判斷依據，不可改寫。
-- 不要輸出 effort、impact 或輸出契約以外欄位。
-- 只輸出本任務指定的合法 JSON 格式。
-
-# 輸出 JSON
-{
-  "id": "Conflict 項目 id",
-  "resolution_options": [
-    {
-      "option": "A",
-      "strategy": "Resolution strategy name",
-      "description": "處理方式",
-      "pros": ["優點"],
-      "cons": ["限制或代價"],
-      "recommendation": true
-    }
-  ],
-  "recommended_resolution": "建議採用的 resolution 與理由"
-}"""
+        task = render_prompt('agents_profile_analyst_conflicts_task_10', **locals())
         by_id: Dict[str, Dict[str, Any]] = {}
         for conflict_row in conflict_rows:
             conflict_id = str(conflict_row.get("id") or "").strip()
