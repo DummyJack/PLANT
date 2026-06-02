@@ -1,4 +1,5 @@
 # Meeting round lifecycle: pre-round checks, issue planning, and meeting execution.
+import re
 from typing import Any, Dict, List, Optional
 
 from utils import Collect, stage_enabled
@@ -21,7 +22,7 @@ def save_meeting_preparation_outputs(
     requirements = artifact.get("URL")
     if not isinstance(requirements, list) or not requirements:
         raise RuntimeError(
-            "正式會議缺少輸入；需要 artifact/requirements.json 中的 requirements"
+            "正式會議缺少輸入；需要 artifact/requirements.json 中的 URL"
         )
 
 
@@ -41,6 +42,8 @@ def build_formal_meeting_artifact(coordinator: Any, artifact: Dict[str, Any]) ->
         "feedback": artifact.get("feedback", {}) if isinstance(artifact.get("feedback"), dict) else {},
         "open_questions": artifact.get("open_questions", []) if isinstance(artifact.get("open_questions"), list) else [],
         "discussions": artifact.get("discussions", []) if isinstance(artifact.get("discussions"), list) else [],
+        "issue_proposals": artifact.get("issue_proposals", []) if isinstance(artifact.get("issue_proposals"), list) else [],
+        "meeting_issues": artifact.get("meeting_issues", []) if isinstance(artifact.get("meeting_issues"), list) else [],
         "issue_backlog": artifact.get("issue_backlog", []) if isinstance(artifact.get("issue_backlog"), list) else [],
         "issue_discarded": artifact.get("issue_discarded", []) if isinstance(artifact.get("issue_discarded"), list) else [],
     }
@@ -139,7 +142,7 @@ def mediator_issue_proposals(
         rows.append(
             {
                 "issue_id": f"I-R{round_num}-mediator-requirement-review",
-                "title": "需求分類",
+                "title": "需求正式化",
                 "category": "clarify_requirement",
                 "evidence": [
                     "User Requirements 需先整體整理，再正式化為初步 REQ-* 需求條目；此會議只做需求整理，不做業務裁決。"
@@ -176,6 +179,152 @@ def is_conflict_report_only_proposal(row: Dict[str, Any]) -> bool:
         if isinstance(item, dict)
     }
     return artifacts == {"conflict_report"}
+
+
+WEAK_FIELD_TERMS = (
+    "待確認",
+    "待協議",
+    "合理",
+    "快速",
+    "穩定",
+    "清楚",
+    "明確",
+    "適時",
+    "即時",
+)
+STAKEHOLDER_TITLE_TERMS = (
+    "消費者",
+    "餐廳店員",
+    "外送員",
+    "平台營運",
+    "平台營運主管",
+    "店家管理者",
+    "財務",
+    "客服",
+)
+
+
+def draft_requirement_completeness_proposals(
+    draft_md: str,
+    *,
+    round_num: int,
+) -> List[Dict[str, Any]]:
+    """Create concrete proposals from visible weak REQ fields in the latest draft."""
+    if not str(draft_md or "").strip():
+        return []
+
+    req_blocks: List[Dict[str, Any]] = []
+    matches = list(re.finditer(r"^###\s+(REQ-\d+):\s*(.+?)\s*$", draft_md, re.MULTILINE))
+    for idx, match in enumerate(matches):
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(draft_md)
+        block = draft_md[start:end]
+        req_blocks.append(
+            {
+                "id": match.group(1).strip(),
+                "title": match.group(2).strip(),
+                "block": block,
+            }
+        )
+
+    if not req_blocks:
+        return []
+
+    weak_rows: List[Dict[str, str]] = []
+    for row in req_blocks:
+        req_id = row["id"]
+        block = row["block"]
+        reasons: List[str] = []
+        is_nfr = bool(re.search(r"^\s*-\s*Type:\s*non-functional\s*$", block, re.MULTILINE))
+        title = row["title"]
+        if any(term in title for term in STAKEHOLDER_TITLE_TERMS):
+            reasons.append("Title 可能混入 stakeholder，需確認是否可改成需求核心短語")
+
+        if is_nfr and not re.search(r"^\s*-\s*Category:\s*(.+?)\s*$", block, re.MULTILINE):
+            reasons.append("NFR 缺 Category")
+
+        description_match = re.search(r"^\s*-\s*Description:\s*(.+?)\s*$", block, re.MULTILINE)
+        if description_match:
+            description = description_match.group(1).strip()
+            if description.count("；") >= 2 or description.count("，") >= 5:
+                reasons.append("Description 可能混入多個能力或條件")
+
+        validation_match = re.search(r"^\s*-\s*Validation:\s*(.+?)\s*$", block, re.MULTILINE)
+        if validation_match:
+            validation = validation_match.group(1).strip()
+            if validation.lower() in {"test", "inspection", "walkthrough"}:
+                reasons.append(f"Validation 只寫泛稱 `{validation}`")
+        elif is_nfr:
+            reasons.append("NFR 缺 Validation")
+
+        metric_match = re.search(r"^\s*-\s*Metric:\s*(.+?)\s*$", block, re.MULTILINE)
+        if metric_match:
+            metric = metric_match.group(1).strip()
+            if any(term in metric for term in WEAK_FIELD_TERMS):
+                reasons.append(f"Metric 仍含待確認或抽象條件：{metric}")
+        elif is_nfr:
+            reasons.append("NFR 缺 Metric")
+
+        acceptance_match = re.search(
+            r"^\s*-\s*Acceptance Criteria:\s*(.*?)(?=^\s*-\s*[A-Z][A-Za-z _-]+:|^###\s+REQ-|\Z)",
+            block,
+            re.MULTILINE | re.DOTALL,
+        )
+        if acceptance_match:
+            acceptance = acceptance_match.group(1).strip()
+            if not acceptance:
+                reasons.append("Acceptance Criteria 為空")
+            elif any(term in acceptance for term in ("待確認", "待協議", "細節待確認")):
+                reasons.append("Acceptance Criteria 仍含待確認內容")
+        else:
+            reasons.append("缺 Acceptance Criteria")
+
+        source_match = re.search(r"^\s*-\s*Source:\s*(.+?)\s*$", block, re.MULTILINE)
+        if source_match:
+            source_text = source_match.group(1).strip()
+            if source_text and not re.search(r"\b(?:URL-\d+|R\d+-M\d+|SM-\d+|Feedback)\b", source_text):
+                reasons.append("Source 不是可追蹤 ID")
+
+        if reasons:
+            weak_rows.append(
+                {
+                    "id": req_id,
+                    "title": row["title"],
+                    "reason": "；".join(reasons),
+                }
+            )
+
+    if not weak_rows:
+        return []
+
+    ids = [row["id"] for row in weak_rows[:12]]
+    evidence = "；".join(f"{row['id']}：{row['reason']}" for row in weak_rows[:8])
+    if len(weak_rows) > 8:
+        evidence += f"；另有 {len(weak_rows) - 8} 筆同類弱欄位"
+
+    row = {
+        "title": "補強既有需求的驗收與品質欄位",
+        "category": "clarify_requirement",
+        "issue_focus": "requirement_completeness",
+        "expect_outcome": "針對 latest draft 中多筆 REQ-* 的弱化欄位，討論並補強 acceptance criteria、NFR category、metric、validation、風險或假設，使需求更可測試、可追溯並可寫入 SRS。",
+        "sources": [
+            {
+                "artifact": "REQ",
+                "ids": ids,
+                "evidence": evidence,
+            }
+        ],
+        "expected_actions": {"analyst": ["refine_requirement"]},
+        "importance": "high",
+        "reason": "latest draft 中多筆既有 REQ-* 欄位雖存在但內容仍抽象、待確認或不可驗收；這是需求完整性問題，應優先於新增需求處理。",
+    }
+    normalized = issue_proposal(
+        row,
+        proposed_by="analyst",
+        round_num=round_num,
+        index=900,
+    )
+    return [normalized] if normalized else []
 
 
 def collect_issue_proposals(
@@ -237,7 +386,7 @@ def collect_issue_proposals(
                 "proposal_context": proposal_context,
             }
             registry = getattr(coordinator.flow, "registry", None)
-            max_items = 5
+            proposal_safety_limit = 20
             for agent_name in ("analyst", "expert", "modeler"):
                 agent = registry.get(agent_name) if registry else None
                 if not agent or not hasattr(agent, "propose_issues"):
@@ -246,7 +395,7 @@ def collect_issue_proposals(
                     rows = agent.propose_issues(
                         proposal_artifact,
                         round_num=round_num,
-                        max_items=max_items,
+                        max_items=proposal_safety_limit,
                     )
                 except Exception as e:
                     invalid_count += 1
@@ -265,6 +414,11 @@ def collect_issue_proposals(
                     )
                     if not append_proposal(normalized):
                         invalid_count += 1
+            for row in draft_requirement_completeness_proposals(
+                draft_md,
+                round_num=round_num,
+            ):
+                append_proposal(row)
             if proposals or invalid_count:
                 meta = artifact.setdefault("meta", {})
                 meta[f"draft_issue_proposals_round_{round_num}"] = True

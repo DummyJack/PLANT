@@ -606,9 +606,9 @@ def extract_candidates(
                 require_labels=len(names) > 1,
             )
             if len(names) > 1 and len(text_parts) < len(names):
-                fallback_name = names[0] if names else ""
-                text_parts = {fallback_name: text} if fallback_name else {}
-                names = [fallback_name] if fallback_name else []
+                primary_name = names[0] if names else ""
+                text_parts = {primary_name: text} if primary_name else {}
+                names = [primary_name] if primary_name else []
             for offset, name in enumerate(names):
                 source_id = f"elicit-{max(1, int(turn))}-{start_row_index + offset}"
                 stakeholder_rows.append({

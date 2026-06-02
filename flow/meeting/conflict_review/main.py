@@ -240,7 +240,7 @@ def conflict_review(
         "discussion_mode": discussion_mode,
         "trace": {"artifact_ids": list(conflicts_by_id.keys()), "proposal_ids": []},
         "pair_cards": pair_cards,
-        "response_contract": {
+        "conflict_review_contract": {
             "type": "pair_reviews",
             "known_pair_ids": list(conflicts_by_id.keys()),
             "current_labels_by_id": {
@@ -314,7 +314,7 @@ def conflict_review(
             "trace": {"artifact_ids": list(second_conflicts_by_id.keys()), "proposal_ids": []},
             "pair_cards": second_pair_cards,
             "review_round": 2,
-            "response_contract": {
+            "conflict_review_contract": {
                 "type": "pair_reviews",
                 "known_pair_ids": list(second_conflicts_by_id.keys()),
                 "current_labels_by_id": {

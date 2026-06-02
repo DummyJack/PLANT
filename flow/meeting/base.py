@@ -19,6 +19,7 @@ from agents.profile.mediator.meeting_runner import (
 from .main import (
     apply_mediator_updates,
     collect_issue_proposals,
+    draft_requirement_completeness_proposals,
     issue_proposal,
     recent_issue_discussions,
     run_meeting_round_block,
@@ -137,8 +138,15 @@ class MeetingCoordinator:
         human_decision_status = state_summary.get("human_decision_status") or {}
         runner = observation.get("runner")
         if runner is not None:
-            draft_updated = self.update_draft_after_default_issues(runner)
-            if runner.issue_pool:
+            draft_updated = (
+                self.default_update_draft(runner)
+                if stage_enabled(self.flow.config, "default_update_draft", True)
+                else None
+            )
+            current_issues_saved = bool(state_summary.get("all_current_issues_saved"))
+            current_issues_count = int(state_summary.get("issues_count") or 0)
+            can_expand_issues = current_issues_count == 0 or current_issues_saved
+            if runner.issue_pool and can_expand_issues:
                 return {
                     "action": "add_issues",
                     "params": {},
@@ -146,13 +154,13 @@ class MeetingCoordinator:
                 }
             if stage_enabled(self.flow.config, "general_formal_meeting", True):
                 prepared = self.prepare_draft_issue_proposals_after_defaults(runner)
-                if runner.issue_pool:
+                if runner.issue_pool and can_expand_issues:
                     return {
                         "action": "add_issues",
                         "params": {},
                         "reasoning": "預設會議後產生待處理議題，先追加並完成討論，再繼續本輪。",
                     }
-                if prepared:
+                if prepared and can_expand_issues:
                     return {
                         "action": "add_issues",
                         "params": {},
@@ -161,7 +169,8 @@ class MeetingCoordinator:
             elif draft_updated:
                 self.flow.logger.info("Default Formal Meeting：已更新 draft，general_formal_meeting disabled，略過一般議題提出")
         if runner is not None:
-            self.update_draft_after_general_issues(runner, state_summary, human_decision_status)
+            if stage_enabled(self.flow.config, "general_update_draft", True):
+                self.general_update_draft(runner, state_summary, human_decision_status)
         if (
             int(state_summary.get("issues_count") or 0) == 0
             and int(state_summary.get("backlog_count") or 0) == 0
@@ -182,6 +191,34 @@ class MeetingCoordinator:
                 "params": {},
                 "reasoning": "所有議題已保存，且沒有剩餘 proposal 或待處理 human_decision_queue，直接結束本輪。",
             }
+        for issue_state in state_summary.get("issue_states") or []:
+            issue_id = issue_state.get("issue_id")
+            if not issue_id:
+                continue
+            if not issue_state.get("discussed"):
+                return {
+                    "action": "start_issue",
+                    "params": {"issue_id": issue_id},
+                    "reasoning": "依議程順序開始下一個未討論議題。",
+                }
+            if issue_state.get("needs_human"):
+                return {
+                    "action": "judge_issue",
+                    "params": {"issue_id": issue_id},
+                    "reasoning": "議題已判定需要人類裁決，進入裁決流程。",
+                }
+            if not issue_state.get("resolved"):
+                return {
+                    "action": "resolve_issue",
+                    "params": {"issue_id": issue_id},
+                    "reasoning": "議題已完成討論，先整理收斂結果。",
+                }
+            if not issue_state.get("saved"):
+                return {
+                    "action": "save_issue",
+                    "params": {"issue_id": issue_id},
+                    "reasoning": "議題已收斂，先保存會議紀錄與設計緣由。",
+                }
         last_observation = observation.get("last_action_result") or {}
         decision = self.plan_meeting_action(
             state_summary=state_summary,
@@ -201,14 +238,20 @@ class MeetingCoordinator:
         flag = f"draft_issue_proposals_round_{runner.round_num}"
         if meta.get(flag):
             return False
-        latest_version = self.update_draft_after_default_issues(runner)
+        if not stage_enabled(self.flow.config, "default_update_draft", True):
+            return False
+        latest_version = self.default_update_draft(runner)
         if latest_version is None:
             return False
         latest_version = int(latest_version)
         draft_md = self.flow.store.load_draft(latest_version) or ""
         if not draft_md.strip():
             return False
-        if self.refresh_conflicts_before_draft_update(runner, artifact):
+        if self.refresh_conflicts_before_draft_update(
+            runner,
+            artifact,
+            block_on_unresolved=False,
+        ):
             return None
 
         post_default_proposals = self.post_default_conflict_proposals(
@@ -227,7 +270,7 @@ class MeetingCoordinator:
                 draft_version=latest_version,
             ),
         }
-        max_items = 5
+        proposal_safety_limit = 20
         proposals = list(post_default_proposals)
         invalid_count = 0
         registry = getattr(self.flow, "registry", None)
@@ -239,7 +282,7 @@ class MeetingCoordinator:
                 rows = agent.propose_issues(
                     proposal_artifact,
                     round_num=runner.round_num,
-                    max_items=max_items,
+                    max_items=proposal_safety_limit,
                 )
             except Exception as e:
                 invalid_count += 1
@@ -260,6 +303,12 @@ class MeetingCoordinator:
                     proposals.append(normalized)
                 else:
                     invalid_count += 1
+        proposals.extend(
+            draft_requirement_completeness_proposals(
+                draft_md,
+                round_num=runner.round_num,
+            )
+        )
 
         meta[flag] = True
         if runner.artifact is not artifact:
@@ -309,12 +358,14 @@ class MeetingCoordinator:
         )
         return bool(backlog or added)
 
-    def update_draft_after_default_issues(self, runner: Any) -> Optional[int]:
+    def default_update_draft(self, runner: Any) -> Optional[int]:
+        if not stage_enabled(self.flow.config, "default_update_draft", True):
+            return None
         artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
         meta = artifact.setdefault("meta", {})
-        flag = f"draft_updated_after_default_issues_round_{runner.round_num}"
+        flag = f"default_update_draft_round_{runner.round_num}"
         if meta.get(flag):
-            value = meta.get("latest_default_issue_draft_version")
+            value = meta.get("latest_default_draft_version")
             try:
                 return int(value)
             except (TypeError, ValueError):
@@ -336,35 +387,37 @@ class MeetingCoordinator:
         if runner.issue_pool:
             return None
 
-        if self.refresh_conflicts_before_draft_update(runner, artifact):
+        if self.refresh_conflicts_before_draft_update(
+            runner,
+            artifact,
+            block_on_unresolved=False,
+        ):
             return None
 
         latest_version = self.flow.store.get_draft_version()
         previous_draft = self.flow.store.load_draft(latest_version) if latest_version >= 0 else ""
         next_version = max(0, latest_version + 1)
-        conflict_report_md = self.flow.store.load_markdown("conflict_report.md")
         draft_md = self.flow.analyst_agent.run_requirements_analyst(
-            "update_draft",
+            "default_update_draft",
             artifact=artifact,
             draft_version=next_version,
             previous_draft=previous_draft,
-            conflict_report_md=conflict_report_md,
             round_num=runner.round_num,
             artifact_dir=getattr(self.flow.store, "artifact_dir", None),
         )
         self.flow.store.save_draft(draft_md, version=next_version)
         meta[flag] = True
-        meta["latest_default_issue_draft_version"] = next_version
+        meta["latest_default_draft_version"] = next_version
         if runner.artifact is not artifact:
             runner.artifact.setdefault("meta", {}).update(
                 {
                     flag: True,
-                    "latest_default_issue_draft_version": next_version,
+                    "latest_default_draft_version": next_version,
                 }
             )
         self.flow.store.save_artifact(artifact)
         self.flow.logger.info(
-            "Draft Update：預設會議完成後已更新 draft_v%s",
+            "Default Update Draft：已生成 draft_v%s",
             next_version,
         )
         return next_version
@@ -403,11 +456,11 @@ class MeetingCoordinator:
         req_counts = {"URL": len(requirements), "REQ": len(req_rows), "functional": 0, "non_functional": 0, "constraint": 0}
         for row in req_rows:
             rtype = clean_id(row.get("type")).lower()
-            if rtype in {"functional", "functional_requirement", "fr"}:
+            if rtype == "functional":
                 req_counts["functional"] += 1
-            elif rtype in {"non_functional", "non-functional", "nfr"}:
+            elif rtype == "non-functional":
                 req_counts["non_functional"] += 1
-            elif rtype in {"constraint", "constraints", "con"}:
+            elif rtype == "constraint":
                 req_counts["constraint"] += 1
 
         conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
@@ -463,7 +516,7 @@ class MeetingCoordinator:
         return {
             "draft": {"version": draft_version},
             "stakeholders": list(dict.fromkeys(stakeholders)),
-            "requirements": req_counts,
+            "requirement_counts": req_counts,
             "open_questions": {
                 "count": len(open_questions),
                 "ids": first_ids(open_questions),
@@ -490,6 +543,11 @@ class MeetingCoordinator:
     ) -> List[Dict[str, Any]]:
         if not isinstance(artifact, dict):
             return []
+        meta = artifact.setdefault("meta", {})
+        added_flag = f"post_refine_conflict_issue_added_round_{round_num}"
+        signature_key = f"post_refine_conflict_signature_round_{round_num}"
+        if meta.get(added_flag):
+            return []
         conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
         report = conflict.get("report") if isinstance(conflict.get("report"), list) else []
         unresolved = []
@@ -507,6 +565,7 @@ class MeetingCoordinator:
             for row in unresolved
             if str(row.get("id") or "").strip()
         ]
+        signature = ",".join(sorted(dict.fromkeys(unresolved_ids)))
         existing_ids = []
         for key in ("issue_proposals", "issue_backlog", "meeting_issues"):
             for row in artifact.get(key) or []:
@@ -520,7 +579,13 @@ class MeetingCoordinator:
                     value = str(proposal_id or "").strip()
                     if "mediator-conflict-review" in value:
                         existing_ids.append(value)
-        issue_id = f"I-R{round_num}-mediator-conflict-review-{len(set(existing_ids)) + 1}"
+        if existing_ids:
+            meta[added_flag] = True
+            meta[signature_key] = signature
+            return []
+        meta[added_flag] = True
+        meta[signature_key] = signature
+        issue_id = f"I-R{round_num}-mediator-conflict-review"
         return [
             {
                 "issue_id": issue_id,
@@ -541,20 +606,23 @@ class MeetingCoordinator:
                 "participants": ["user", "analyst"],
                 "discussion_mode": "sequential",
                 "round": round_num,
+                "conflict_signature": signature,
             }
         ]
 
-    def update_draft_after_general_issues(
+    def general_update_draft(
         self,
         runner: Any,
         state_summary: Dict[str, Any],
         human_decision_status: Dict[str, Any],
     ) -> bool:
+        if not stage_enabled(self.flow.config, "general_update_draft", True):
+            return False
         artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
         meta = artifact.setdefault("meta", {})
         round_num = runner.round_num
         proposal_flag = f"draft_issue_proposals_round_{round_num}"
-        final_flag = f"draft_updated_after_general_issues_round_{round_num}"
+        final_flag = f"general_update_draft_round_{round_num}"
         if meta.get(final_flag):
             return False
         if not meta.get(proposal_flag):
@@ -576,31 +644,29 @@ class MeetingCoordinator:
         if self.refresh_conflicts_before_draft_update(
             runner,
             artifact,
-            log_prefix="Draft Update",
+            log_prefix="General Update Draft",
         ):
             return False
 
         latest_version = self.flow.store.get_draft_version()
         previous_draft = self.flow.store.load_draft(latest_version) if latest_version >= 0 else ""
         next_version = max(0, latest_version + 1)
-        conflict_report_md = self.flow.store.load_markdown("conflict_report.md")
         draft_md = self.flow.analyst_agent.run_requirements_analyst(
-            "update_draft",
+            "general_update_draft",
             artifact=artifact,
             draft_version=next_version,
             previous_draft=previous_draft,
-            conflict_report_md=conflict_report_md,
             round_num=round_num,
             artifact_dir=getattr(self.flow.store, "artifact_dir", None),
         )
         self.flow.store.save_draft(draft_md, version=next_version)
         meta[final_flag] = True
-        meta["latest_general_issue_draft_version"] = next_version
+        meta["latest_general_draft_version"] = next_version
         if runner.artifact is not artifact:
             runner.artifact.setdefault("meta", {}).update(meta)
         self.flow.store.save_artifact(artifact)
         self.flow.logger.info(
-            "Draft Update：一般正式議題完成後已更新 draft_v%s",
+            "General Update Draft：已生成 draft_v%s",
             next_version,
         )
         return True
@@ -611,6 +677,7 @@ class MeetingCoordinator:
         artifact: Dict[str, Any],
         *,
         log_prefix: str = "Issue Proposal",
+        block_on_unresolved: bool = True,
     ) -> bool:
         meta = artifact.setdefault("meta", {})
         if not bool(meta.get("requirements_changed")):
@@ -640,6 +707,17 @@ class MeetingCoordinator:
             runner.artifact.setdefault("meta", {}).update(meta)
             if "conflict" in artifact:
                 runner.artifact["conflict"] = artifact["conflict"]
+
+        conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+        report_rows = conflict_state.get("report") if isinstance(conflict_state.get("report"), list) else []
+        unresolved_count = 0
+        for report_row in report_rows:
+            if not isinstance(report_row, dict):
+                continue
+            status = str(report_row.get("status") or "").strip().lower()
+            if status not in {"agreed", "human_decision"}:
+                unresolved_count += 1
+
         pending_conflict_proposals = self.post_default_conflict_proposals(
             artifact,
             round_num=runner.round_num,
@@ -675,15 +753,6 @@ class MeetingCoordinator:
                     runner.artifact["conflict"] = artifact["conflict"]
             self.flow.store.save_artifact(artifact)
             if added:
-                conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
-                report_rows = conflict_state.get("report") if isinstance(conflict_state.get("report"), list) else []
-                unresolved_count = 0
-                for report_row in report_rows:
-                    if not isinstance(report_row, dict):
-                        continue
-                    status = str(report_row.get("status") or "").strip().lower()
-                    if status not in {"agreed", "human_decision"}:
-                        unresolved_count += 1
                 self.flow.logger.info(
                     "%s：需求更新後有 %s 筆未解決衝突，已追加 %s 個預設衝突解決議題",
                     log_prefix,
@@ -691,9 +760,32 @@ class MeetingCoordinator:
                     len(added),
                 )
                 return True
+            if block_on_unresolved:
+                self.flow.logger.info(
+                    "%s：需求更新後仍有 %s 筆未解決衝突；暫停更新 draft，需先完成需求衝突解決",
+                    log_prefix,
+                    unresolved_count,
+                )
+                return True
             self.flow.logger.info(
-                "%s：需求更新後仍有未解決衝突，但沒有新增可追加的預設衝突議題",
+                "%s：需求更新後仍有 %s 筆未解決衝突，但 default_update_draft 必須更新草稿，接著更新 draft",
                 log_prefix,
+                unresolved_count,
+            )
+            return False
+        if unresolved_count:
+            self.flow.store.save_artifact(artifact)
+            if block_on_unresolved:
+                self.flow.logger.info(
+                    "%s：需求更新後仍有 %s 筆未解決衝突；暫停更新 draft，需先完成需求衝突解決",
+                    log_prefix,
+                    unresolved_count,
+                )
+                return True
+            self.flow.logger.info(
+                "%s：需求更新後仍有 %s 筆未解決衝突，但 default_update_draft 必須更新草稿，接著更新 draft",
+                log_prefix,
+                unresolved_count,
             )
             return False
         self.flow.store.save_artifact(artifact)

@@ -76,8 +76,8 @@ def build_pair_review_conversation(
         final_type = str(decision.get("final_type") or conflict.get("final_type") or "").strip()
         if final_label == "Conflict" and final_type:
             conversation["final_type"] = final_type
-        for idx, req_id in enumerate(req_ids, 1):
-            conversation[f"req_{idx}"] = req_id
+        if req_ids:
+            conversation["requirements"] = [{"id": req_id} for req_id in req_ids]
         conversations.append(conversation)
     return conversations
 

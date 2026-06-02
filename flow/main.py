@@ -11,9 +11,11 @@ MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
 
 def sync_project_output_language(artifact: Dict[str, Any]) -> None:
     meta = artifact.setdefault("meta", {})
-    lang = str(meta.get("output_language") or os.environ.get("PLANT_OUTPUT_LANGUAGE") or "zh-Hant").strip() or "zh-Hant"
+    explicit_lang = meta.get("output_language")
+    lang = str(explicit_lang or os.environ.get("PLANT_OUTPUT_LANGUAGE") or "zh-Hant").strip() or "zh-Hant"
     if lang not in {"en", "zh-Hant"}:
-        lang = "zh-Hant"
+        source = "artifact.meta.output_language" if explicit_lang else "PLANT_OUTPUT_LANGUAGE"
+        raise ValueError(f"{source} 不合法: {lang}")
     os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
     meta["output_language"] = lang
 
@@ -109,6 +111,40 @@ def _has_existing_srs(flow) -> bool:
     return _artifact_file_non_empty(flow, "srs.md")
 
 
+def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    if not stage_enabled(flow.config, "default_update_draft", True):
+        default_enabled = False
+    else:
+        default_enabled = True
+    update_actions = []
+    if default_enabled:
+        update_actions.append(("default_update_draft", "latest_default_draft_version", "Default Update Draft"))
+    if stage_enabled(flow.config, "general_update_draft", True):
+        update_actions.append(("general_update_draft", "latest_general_draft_version", "General Update Draft"))
+    if not update_actions:
+        return artifact
+
+    meta = artifact.setdefault("meta", {})
+    for action, meta_key, label in update_actions:
+        latest_version = flow.store.get_draft_version()
+        previous_draft = flow.store.load_draft(latest_version) if latest_version >= 0 else ""
+        next_version = max(0, latest_version + 1)
+        draft_md = flow.analyst_agent.run_requirements_analyst(
+            action,
+            artifact=artifact,
+            draft_version=next_version,
+            previous_draft=previous_draft,
+            round_num=0,
+            artifact_dir=getattr(flow.store, "artifact_dir", None),
+        )
+        flow.store.save_draft(draft_md, version=next_version)
+        meta[meta_key] = next_version
+        meta[f"{action}_without_meeting"] = True
+        flow.store.save_artifact(artifact)
+        flow.logger.info("%s：正式會議關閉，已生成 draft_v%s", label, next_version)
+    return artifact
+
+
 def save_cost_summary(flow) -> None:
     cost_summary = flow.build_cost_summary()
     if cost_summary:
@@ -146,6 +182,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     if not run_formal:
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議")
+        artifact = run_update_drafts_without_meeting(flow, artifact)
     elif _has_completed_formal_meeting(flow, artifact, rounds):
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
@@ -197,6 +234,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     if not run_formal:
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議")
+        artifact = run_update_drafts_without_meeting(flow, artifact)
     elif _has_completed_formal_meeting(flow, artifact, end_round):
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
