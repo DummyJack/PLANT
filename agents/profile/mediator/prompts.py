@@ -32,29 +32,28 @@ def issue_selection_prompt(
 # 分流規則
 - 本輪 round={round_num}，is_last_round={str(is_last_round).lower()}，max_issues={max_items}，already_discussed_source_ids={json.dumps(skip_source_ids, ensure_ascii=False)}。
 - 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。
-- agent proposal 只是候選訊號，不是正式會議題目；Mediator 必須負責合併、淘汰與定題。
-- 預設會議已處理整份衝突報告、全部 User Requirements 初步正式化；非 mediator 提案不得重複提出這兩類泛稱議題。
-- 只有當預設會議後的 latest draft 仍留下具體 source id、open question、決策缺口、scope/責任分歧、限制確認、模型不一致或人類裁決需求時，才可選入正式議題；一般議題不得再提出需求衝突解決，需求衝突只由預設會議處理。
-- 一般議題選入優先序：
-  1. Requirement Completeness：既有 REQ-* 缺 acceptance criteria、verification、可量化 NFR 門檻、外部限制影響、source coverage，或仍抽象不可測。
-  2. Boundary / Responsibility：系統、人工、第三方或角色責任不清。
-  3. Tradeoff：多方需求有方案取捨但尚未形成衝突。
-  4. Model Alignment：模型揭露流程、狀態、actor、資料或責任不一致。
-  5. New Requirement / Expansion：新增或延伸需求；只有前面高優先缺口不阻礙定稿時才選入。
-- 若 Requirement Completeness 類提案存在且有具體 source 支持，應優先選入 issues；不要先選新增功能或低優先建議。
-- 選入 issues 的數量最多 max_issues；在不降低品質的前提下，盡量填滿 max_issues。
-- 高價值且本輪容量內的提案放 issues。
-- 可能有價值但本輪排不下、證據尚不夠成熟、或需要等後續 draft/meeting 補足的提案放 backlog。
-- 只有明確低價值、重複、已被討論涵蓋、沒有 source 支持、可由單一 agent 直接修稿/更新 feedback/更新模型、或不需要正式會議的提案才放 discarded。
-- 只有「需要正式會議處理」的提案才能進 issues/backlog：必須能讓需求更明確、可驗收、可追溯、可建模或一致，且需要多方確認、取捨、scope/責任裁定、限制確認、模型與需求一致性確認或人類裁決。
+- proposal 是候選訊號；Mediator 負責合併、淘汰、排序與定題。
+- proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
+- 一般議題不得重複提出預設會議已處理的泛稱衝突解決或需求正式化；需求衝突只由預設會議處理。
+- 只有需要正式會議才能處理的共同問題可進 issues/backlog；可由單一 agent 直接修稿、補格式、更新 feedback 或更新模型的項目放 discarded。
 - 正式議題必須代表一組相關需求背後的共同問題，例如同一使用流程、狀態規則、責任邊界、外部限制、方案取捨或模型一致性缺口。
-- 不得讓單一 requirement、單一 open question、單一 acceptance criteria、單一來源追蹤或單一模型項目直接成為正式議題；除非 evidence 明確顯示它代表更大的共同問題。
-- 可由單一 agent 直接修稿、更新 feedback、更新模型、補格式、補命名、補一般說明的項目放 discarded。
-- 避免重複討論 already_discussed_source_ids 已涵蓋的提案；可合併重複或高度相近提案，合併時保留 trace.proposal_ids。
-- 依 sources、expect_outcome、importance、reason 判斷；issues 優先選會影響 REQ-* 需求條目完整性的議題，尤其是 acceptance criteria、verification、NFR metric、外部限制影響、source coverage；再選邊界裁定、方案取捨、限制確認、模型與需求一致性問題與定稿阻礙。
-- 若多筆提案指向同一使用流程、狀態規則、責任邊界、外部限制、方案取捨、模型缺口、同一批來源 id 或同一個決策結果，合併成一個較大的議題，不要拆成多個小議題，並保留來源追蹤。
-- importance 為 low 的提案，除非是最後一輪且會阻礙需求規格定稿，否則放 discarded；不要放 backlog。
+- 不要讓單一 REQ、單一 open question、單一 acceptance criteria、單一 source 或單一模型項目直接成為正式議題，除非 evidence 顯示它代表更大的共同問題。
+- 若多筆提案指向同一共同問題，合併成一個議題，保留 trace.proposal_ids 與來源追蹤。
+- 避免重複討論 already_discussed_source_ids 已涵蓋的提案。
 - 不要新增輸入資料沒有支持的新需求。
+
+# 選入優先順序
+1. requirement_completeness：既有 REQ-* 缺或弱化 acceptance criteria、NFR category、metric、validation、外部限制影響、source coverage，或 title、description、rationale、risks、assumptions 不清楚、混雜、不可測、不可追溯、只是重述需求。
+2. boundary_responsibility：系統、人工、第三方或角色責任不清。
+3. tradeoff：多方需求有方案取捨但尚未形成衝突。
+4. model_alignment：模型揭露流程、狀態、actor、資料或責任不一致。
+5. new_requirement：新增或延伸需求；只有前面高優先缺口不阻礙定稿時才選入。
+
+# 分流
+- issues：高價值、source 具體、本輪容量內，且能改善 Specific / Testable / Traceable / Consistent 的候選。
+- backlog：可能有價值但本輪排不下、證據尚不成熟，或需等後續 draft/meeting 補足的候選。
+- discarded：低價值、重複、已涵蓋、沒有 source、只補格式/措辭/單筆欄位，或不需要正式會議的候選。
+- importance=low 除非最後一輪且會阻礙定稿，否則放 discarded；不要放 backlog。
 - discarded 每筆至少保留 title、reason、source proposal id 或 trace，並用一句話說明丟棄原因；discarded 不會進入會議，但會保留供稽核。
 
 # 輸出 JSON
@@ -92,7 +91,7 @@ def issue_meeting_plan_prompt(
 # 可用利害關係人
 {json.dumps(stakeholder_names, ensure_ascii=False, indent=2)}
 
-# planning 規則
+# 基本規則
 - category 只能使用上方可用類型；participants 只能使用 agents={json.dumps(registered, ensure_ascii=False)}。
 - 若 participants 包含 user，必須填 target_stakeholders，且只能從上方可用利害關係人選擇一位或多位；若 participants 不包含 user，target_stakeholders 請省略或使用空陣列。
 - target_stakeholders 必須是此議題實際需要表態或回答的利害關係人；不要因為有 user 參與就放入全部利害關係人。
@@ -103,11 +102,16 @@ def issue_meeting_plan_prompt(
 - 若 proposed_by 是可用 agents 中的實際 agent 且不是 mediator，participants 必須包含該提案人；mediator 只負責主持與整理，不作為討論發言者。
 - title 是正式會議使用的標題，請根據議題提案與相關專案資料命名；必須描述群組化共同問題，不要只用單一來源 id、單一欄位缺口或單一 open question 命名；description 先保留空字串；proposed_by 必須保留原值。
 - 若議題提案包含 expected_actions，請原樣保留；只能保留 participants 中對應 agent 的 action hint，不要新增 action。
+- 若議題目標是補完整既有 REQ-* 的 acceptance criteria、NFR category、metric、validation、風險、假設或來源覆蓋，expected_actions 必須包含 analyst=["refine_requirement"]，讓討論結果寫回 REQ-*。
 - 若議題提案已指定 participants、discussion_mode 或 discussion_rounds，除非指定值不在可用 agents 內，請原樣保留。
-- 若 title 是「解決需求衝突」，固定以 participants=["user","analyst"]、discussion_mode="sequential" 為基準，讓利害關係人先針對具體 conflict id / URL id 表態，analyst 最後整理與執行 action；只有衝突報告內容明確涉及法規/標準/安全/隱私/外部限制時才加入 expert，只有明確影響流程/狀態/資料/責任邊界或系統模型時才加入 modeler。這場只討論既有解決選項與建議解法的採用或調整，不重新辨識衝突，不提出 open questions；收斂時必須產生可執行 url_updates，說明每個相關 URL 要 keep、revise 或 remove；若已有明確 recommended_resolution 且沒有重大反對，後續可直接採用既有推薦收斂，只有缺少推薦、重大分歧或高風險未決時才交由人類裁決。
-- 若 title 是「需求分類」，固定使用 participants=["analyst","user"]、discussion_mode="sequential"，讓 analyst 先執行 refine_requirement 產生或更新初步 REQ-*，再讓 user 依指定利害關係人角度檢查是否漏掉重要使用情境、業務規則、例外條件、驗收條件、品質限制、優先級、風險或假設；這場不做業務裁決，不提出 open questions，也不交由人類裁決。未完全確認的內容應保留於 assumptions、risks 或 open questions，後續正式議題再處理。
+- 一般類型的最低參與規則：clarify_requirement 至少 analyst+user；define_boundary 至少 analyst+user+modeler；tradeoff 至少 analyst+user；align_model 至少 modeler+analyst。若 proposed_by 是實際 agent，也必須參與。
+
+# 固定預設議題
+- 需求正式化：固定 participants=["analyst","user"]、discussion_mode="sequential"。analyst 先執行 refine_requirement，user 依指定利害關係人角度檢查遺漏情境、規則、例外、驗收、品質限制、優先級、風險或假設。這場不做業務裁決，不交由人類裁決；會議發言不提出 open questions，未確認內容由 Analyst 寫入 REQ 的 assumptions/risks 或 artifact open_questions。需求正式化完成後，系統會在同一筆會議紀錄附加 modeler 的 model_system 結果，用最新 REQ-* 建立或更新系統模型，不把建模當成額外討論輪次。
+
+# 補充規則
 - 若一般議題涉及流程、狀態、actor/use case、資料生命週期、互動順序、系統邊界或責任分工，且用圖說明會比純文字更清楚，participants 應加入 modeler；modeler 可透過 model_system 建立或更新模型參與討論。
-- 來源追蹤優先使用 sources[*].ids；若 sources.evidence 有 URL-12、REQ-3、CF-2 等具體 id，也要納入。
+- 來源追蹤優先使用 sources[*].ids；若 sources.evidence 有 URL-12、REQ-3、CR-2 等具體 id，也要納入。
 - 不要編造來源 id；把 proposal.issue_id 放入 trace.proposal_ids 保留提案追蹤。
 - 正式會議議題要保持自然需求問題導向；不要用「補 dependencies 欄位」「填 risks 欄位」這類欄位填寫題目命名。若欄位缺口重要，請改寫成背後的需求問題、邊界問題、限制問題、方案取捨或模型不一致。
 - 預期此議題收斂後，Analyst 可把結果沉澱到 REQ-* 需求條目的描述、驗收條件、相依性、風險、假設、限制、相關模型或開放問題。
@@ -217,7 +221,7 @@ def elicitation_plan_prompt(
 # stakeholders
 {json.dumps(stakeholder_names, ensure_ascii=False, indent=2)}
 
-# current_user_requirements
+# current_URL
 {json.dumps(current_requirements, ensure_ascii=False, indent=2)}
 
 # previous_turn_summary
@@ -317,60 +321,63 @@ def judge_options_prompt(
     context_block = ""
     if decision_context:
         context_block = (
-            "\n    # 既有決策資料\n"
-            f"    {json.dumps(decision_context, ensure_ascii=False, indent=2)}\n"
+            "\n# 既有決策資料\n"
+            f"{json.dumps(decision_context, ensure_ascii=False, indent=2)}\n"
         )
     return f"""# 任務
-    請把以下尚未自然收斂的正式會議議題整理成「需要人類裁決的決策分析」。
-    不要替人類做最終決策，也不要模擬投票。只能提出選項、影響與建議。
+把尚未自然收斂的正式會議議題整理成人類裁決選項。
+不要替人類做最終決策，也不要模擬投票。
+選項必須是可寫回需求的規則，不是「先納入 / 暫緩 / 分階段」這類流程策略。
 
-    # 議題
-    標題: {issue.get("title", "")}
-    類型: {issue.get("category", "")}
-    描述: {issue.get("description", "")}
-    預期結果: {issue.get("expect_outcome", "")}
+# 議題
+標題: {issue.get("title", "")}
+類型: {issue.get("category", "")}
+描述: {issue.get("description", "")}
+預期結果: {issue.get("expect_outcome", "")}
 
-    # 討論紀錄
-    {discussion_text or "（無發言紀錄）"}
+# 討論紀錄
+{discussion_text or "（無發言紀錄）"}
 {context_block}
 
-    # 要求
-    - options 請列 2-4 個可執行方案；若只有一個合理方案，也至少提供「採用」與「暫緩」兩種選項。
-    - 若既有決策資料包含衝突報告的解決選項或建議解法，options 必須優先沿用這些既有方案；只能依討論內容調整文字或補充影響，不要重新發明與報告無關的新方案。
-    - 優先使用各 agent 在 proposal 中提出的方案；也可從 text 中萃取可行方案。
-    - 每個 option 必須包含優點、限制、影響與風險等級。
-    - compromise 請整理 1 個可行折衷方案；若沒有合理折衷，回空物件。
-    - recommendation 只能是建議，不代表已決議；最後由人類裁決，不交給 user agent。
-    - affected_requirement_ids 優先使用議題來源追蹤中的需求 id；若沒有，回空陣列。
-    - 請以繁體中文撰寫。
+# 規則
+- options 列 2-5 個可執行的需求規則；同一議題可讓人類同時採用多個 option。
+- 每個 option 要裁決一個具體需求內容，例如責任歸屬、狀態流程、必填欄位、回覆時限、保存期限、權限限制、驗收標準或例外規則。
+- 不要產生「現有需求先納入」「暫緩納入」「後續再細化」這類只決定流程、不決定需求內容的 option。
+- 若既有決策資料包含衝突解決選項或 recommended_resolution，優先沿用；只能依討論內容補充影響或調整文字。
+- 優先使用 agent 在 proposal 中提出的方案，也可從發言萃取可行方案。
+- 每個 option 必須包含 pros、cons、impact、risk。
+- compromise 只在有合理折衷時輸出；沒有就回空物件。
+- recommendation 是建議，不是決議；最後由人類裁決。
+- affected_requirement_ids 優先使用議題來源追蹤中的需求 id；沒有就回空陣列。
+- 使用繁體中文。
 
-    # 輸出 JSON
+# 輸出 JSON
+{{
+  "summary": "此議題需要決策的原因",
+  "options": [
     {{
-      "summary": "此議題需要決策的原因",
-      "options": [
-        {{
-          "id": "A",
-          "summary": "方案摘要",
-          "pros": ["優點"],
-          "cons": ["缺點"],
-          "impact": ["對需求、範圍、驗收或設計的影響"],
-          "risk": "low | medium | high"
-        }}
-      ],
-      "recommendation": {{
-        "option_id": "A",
-        "rationale": "為何建議此方案",
-        "needs_human": true
-      }},
-      "compromise": {{
-        "title": "折衷方案標題",
-        "description": "折衷方案內容",
-        "rationale": "為何此方案能平衡各方需求"
-      }},
-      "affected_requirement_ids": ["REQ-01"],
-      "unresolved_points": ["需要人類裁決的事項"]
+      "id": "A",
+      "summary": "可直接寫回需求的決策規則",
+      "pros": ["優點"],
+      "cons": ["限制或代價"],
+      "impact": ["對需求、範圍、驗收或設計的影響"],
+      "risk": "low | medium | high"
     }}
-    只輸出 JSON。"""
+  ],
+  "recommendation": {{
+    "option_id": "A",
+    "rationale": "為何建議此方案",
+    "needs_human": true
+  }},
+  "compromise": {{
+    "title": "折衷方案標題",
+    "description": "折衷方案內容",
+    "rationale": "為何此方案能平衡各方需求"
+  }},
+  "affected_requirement_ids": ["REQ-1"],
+  "unresolved_points": ["需要人類裁決的事項"]
+}}
+只輸出 JSON。"""
 
 
 def close_issue_prompt(
@@ -380,38 +387,42 @@ def close_issue_prompt(
     readiness: Dict[str, Any],
 ) -> str:
     return f"""# 任務
-    根據已收斂的正式會議議題，整理具體決議。
+根據已收斂的正式會議議題，整理可寫入 formal_meeting 的具體決議。
 
-    # 議題
-    標題: {issue.get("title", "")}
-    類型: {issue.get("category", "")}
-    描述: {issue.get("description", "")}
-    預期結果: {issue.get("expect_outcome", "")}
+# 議題
+標題: {issue.get("title", "")}
+類型: {issue.get("category", "")}
+描述: {issue.get("description", "")}
+預期結果: {issue.get("expect_outcome", "")}
 
-    # 收斂狀態
-    {json.dumps(readiness, ensure_ascii=False, indent=2)}
+# 收斂狀態
+{json.dumps(readiness, ensure_ascii=False, indent=2)}
 
-    # 討論紀錄
-    {discussion_text or "（無發言紀錄）"}
+# 討論紀錄
+{discussion_text or "（無發言紀錄）"}
 
-    # 規則
-    - 只整理討論中已明確收斂的內容，不新增需求、不擴張範圍。
-    - decision 必須是可執行的具體決議，不要只寫「可以結束」。
-    - agreed_points 列出已同意的重點。
-    - affected_requirement_ids 優先使用議題來源追蹤中的需求 id；若沒有，回空陣列。
-    - 若本議題是解決需求衝突，affected_conflict_ids 必須包含議題來源追蹤中的每一個 conflict_report id（CR-*）；不要只輸出討論中第一個或最明顯的一筆。
-    - 其他議題的 affected_conflict_ids 優先使用議題來源追蹤中的 conflict_report id（CR-*）；若沒有，才使用 pair/group id；都沒有則回空陣列。
-    - 請以繁體中文撰寫。
+# 規則
+- 只整理已明確收斂的內容，不新增需求、不擴張範圍。
+- decision 必須是可執行決議，不要只寫「可以結束」。
+- requirement_changes / model_changes 只列本議題造成或確認的變更；沒有就回空陣列。
+- open_questions 只列仍會影響 SRS 的未解問題；沒有就回空陣列。
+- affected_requirement_ids 使用議題來源追蹤中的 REQ-*；沒有就回空陣列。
+- affected_conflict_ids 優先使用議題來源追蹤中的 CR-*；若本議題是解決需求衝突，必須包含每一個來源 CR-*。
+- 使用繁體中文。
 
-    # 輸出 JSON
-    {{
-      "summary": "決議摘要",
-      "decision": "具體決議",
-      "agreed_points": ["已同意重點"],
-      "affected_requirement_ids": ["REQ-01"],
-      "affected_conflict_ids": ["CR-1"]
-    }}
-    只輸出 JSON。"""
+# 輸出 JSON
+{{
+  "summary": "決議摘要",
+  "decision": "具體決議",
+  "agreed_points": ["已同意重點"],
+  "affected_requirement_ids": ["REQ-1"],
+  "affected_conflict_ids": ["CR-1"],
+  "requirement_changes": [{{"id": "REQ-1", "change": "confirmed_or_updated"}}],
+  "model_changes": [{{"id": "SM-1", "change": "updated"}}],
+  "open_questions": [{{"question": "仍待確認問題", "related_source": "REQ-1"}}],
+  "follow_up_actions": ["general_update_draft"]
+}}
+只輸出 JSON。"""
 
 
 def closure_vote_prompt(

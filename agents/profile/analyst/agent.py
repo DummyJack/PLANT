@@ -1,4 +1,5 @@
 import copy
+import json
 
 # Analyst agent: requirement extraction, conflict analysis, elicitation, and issue response.
 from typing import Any, Dict, List, Optional
@@ -127,7 +128,7 @@ conflict-analyzer：
                     )
                     analyst_action_result = {
                         "action": action,
-                        "output": output,
+                        "URL": output.get("URL", []) if isinstance(output, dict) else [],
                     }
                 elif action == "refine_scope":
                     analyst_action_result = self.execute_refine_scope(
@@ -149,19 +150,16 @@ conflict-analyzer：
                 elif action == "discuss_conflict":
                     analyst_action_result = {
                         "action": action,
-                        "output": None,
                         "summary": "讀取既有衝突報告，針對解決選項與建議解法討論取捨，不重新執行衝突辨識。",
                     }
                 elif action == "respond_issue":
                     analyst_action_result = {
                         "action": action,
-                        "output": None,
                         "summary": "只產生會議回答，不更新專案資料。",
                     }
                 elif action == "answer_question":
                     analyst_action_result = {
                         "action": action,
-                        "output": None,
                         "summary": "回答 open question，不更新專案資料。",
                     }
             except Exception as e:
@@ -183,12 +181,7 @@ conflict-analyzer：
                 "format_error": f"{action} requires artifact context",
                 "summary": f"analyst {action} 缺少 artifact，無法執行分析",
             }
-        return {
-            "action": decision.get("action", ""),
-            "status": "success",
-            "action_result": analyst_action_result or {"action": action, "output": None},
-            "summary": f"完成 analyst action: {decision.get('action', '')}",
-        }
+        return analyst_action_result or {"action": action, "summary": f"完成 analyst action: {action}"}
 
     def execute_refine_requirement(
         self,
@@ -199,6 +192,21 @@ conflict-analyzer：
     ) -> Dict[str, Any]:
         current_REQ = self.requirement_context(artifact)
         current_URL = self.scope_requirement_context(artifact)
+        trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
+        issue_source_ids = [
+            str(item).strip()
+            for item in (trace.get("artifact_ids") or [])
+            if str(item).strip()
+        ]
+        if issue_source_ids:
+            allowed_sources = set(issue_source_ids)
+            current_URL = [
+                row
+                for row in current_URL
+                if str(row.get("id") or row.get("source_id") or "").strip() in allowed_sources
+            ]
+            if not current_URL:
+                current_URL = self.scope_requirement_context(artifact)
         scope = artifact.get("scope") if isinstance(artifact.get("scope"), dict) else {}
         feedback = self.feedback_context(artifact.get("feedback"))
         system_models = self.system_model_context(artifact)
@@ -207,10 +215,12 @@ conflict-analyzer：
         generated_all: List[Dict[str, Any]] = []
         final_coverage: List[Dict[str, Any]] = []
         reasons: List[str] = []
+        warnings: List[str] = []
         max_passes = 3
         coverage_gaps: List[Dict[str, Any]] = []
         for pass_index in range(max_passes):
             current_REQ = self.requirement_context(artifact)
+            req_source_index = self.requirement_source_index(current_REQ)
             requirement_mode = "update" if current_REQ else "create"
             context = {
                 "issue": {
@@ -226,6 +236,8 @@ conflict-analyzer：
                 "feedback": feedback,
                 "system_models": system_models,
                 "discussion": discussion,
+                "req_source_index": req_source_index,
+                "current_req_count": len(current_REQ),
                 "mode": requirement_mode,
                 "coverage_gaps": coverage_gaps,
                 "pass": pass_index + 1,
@@ -240,10 +252,97 @@ conflict-analyzer：
                 context,
                 mode="refine_requirement",
             )
+            title_issues = self.requirement_title_issues(
+                data.get("REQ") if isinstance(data, dict) else []
+            )
+            if title_issues:
+                repair_task = self.refine_requirement_title_repair_task(
+                    title_issues=title_issues,
+                    output=data,
+                )
+                data = self.invoke_requirements_analyst_object_json(
+                    repair_task,
+                    context,
+                    mode="refine_requirement",
+                )
+                title_issues = self.requirement_title_issues(
+                    data.get("REQ") if isinstance(data, dict) else []
+                )
+                if title_issues:
+                    warnings.append(
+                        "refine_requirement title 修復後仍不符合規則: "
+                        + "; ".join(title_issues)
+                    )
+
+            nfr_issues = self.requirement_nfr_field_issues(
+                data.get("REQ") if isinstance(data, dict) else []
+            )
+            if nfr_issues:
+                data = self.ensure_nfr_fields(data)
+                nfr_issues = self.requirement_nfr_field_issues(
+                    data.get("REQ") if isinstance(data, dict) else []
+                )
+                if nfr_issues:
+                    repair_task = self.refine_requirement_nfr_field_repair_task(
+                        nfr_issues=nfr_issues,
+                        output=data,
+                    )
+                    data = self.invoke_requirements_analyst_object_json(
+                        repair_task,
+                        context,
+                        mode="refine_requirement",
+                    )
+                    nfr_issues = self.requirement_nfr_field_issues(
+                        data.get("REQ") if isinstance(data, dict) else []
+                    )
+                    if nfr_issues:
+                        warnings.append(
+                            "refine_requirement non-functional 補欄位後仍不符合規則: "
+                            + "; ".join(nfr_issues)
+                        )
+            mixed_issues = self.requirement_mixed_type_issues(
+                data.get("REQ") if isinstance(data, dict) else []
+            )
+            if mixed_issues:
+                repair_task = self.refine_requirement_mixed_type_repair_task(
+                    mixed_issues=mixed_issues,
+                    output=data,
+                )
+                data = self.invoke_requirements_analyst_object_json(
+                    repair_task,
+                    context,
+                    mode="refine_requirement",
+                )
+                mixed_issues = self.requirement_mixed_type_issues(
+                    data.get("REQ") if isinstance(data, dict) else []
+                )
+                if mixed_issues:
+                    repair_task = self.refine_requirement_targeted_mixed_type_repair_task(
+                        mixed_issues=mixed_issues,
+                        output=data,
+                    )
+                    data = self.invoke_requirements_analyst_object_json(
+                        repair_task,
+                        context,
+                        mode="refine_requirement",
+                    )
+                    mixed_issues = self.requirement_mixed_type_issues(
+                        data.get("REQ") if isinstance(data, dict) else []
+                    )
+                    if mixed_issues:
+                        warnings.append(
+                            "refine_requirement mixed requirement targeted 修復後仍不符合規則: "
+                            + "; ".join(mixed_issues)
+                        )
+                reasons.append("已修正 mixed requirement，拆分或改寫功能、非功能與限制需求。")
+
+            candidate_reqs = data.get("REQ") if isinstance(data, dict) else []
+            if warnings and not candidate_reqs:
+                coverage_gaps = []
+                break
             generated = self.clean_requirement_records(
-                data.get("REQ") if isinstance(data, dict) else [],
+                candidate_reqs,
                 existing=artifact.get("REQ", []),
-                source_ref=source_id,
             )
             if generated:
                 artifact["REQ"] = self.merge_requirement_records(
@@ -273,6 +372,7 @@ conflict-analyzer：
             "coverage_gaps": coverage_gaps,
             "coverage_summary": self.requirement_coverage_summary(final_coverage),
             "reason": "；".join(reasons),
+            "warnings": warnings,
             "source_id": source_id,
         }
 
@@ -290,97 +390,77 @@ conflict-analyzer：
 - 上一輪仍有 {len(coverage_gaps)} 筆 User Requirements 沒有明確去處。
 - 本輪只處理 coverage_gaps 中列出的 URL-*。
 - 對每筆 gap 必須二選一：
-  1. 併入既有 REQ 或新增 REQ，並讓該 URL-* 出現在 REQ.source_ids。
-  2. 若需求分類討論已明確判斷該 URL-* 不需要、超出範圍、仍需確認或只能作為風險/假設，則在 coverage 標為 excluded、needs_clarification、risk 或 assumption，並寫清楚 reason。
+  1. 併入既有 REQ 或新增 REQ，並讓該 URL-* 出現在 REQ.source。
+  2. 若需求正式化討論已明確判斷該 URL-* 不需要、超出範圍或只能作為風險/假設，則在 coverage 標為 excluded、risk 或 assumption，並寫清楚 reason。
 - 不要重寫已完整覆蓋的 REQ；只補缺口。
+- 不要因缺少驗收條件、優先級、量化門檻或細節尚未完整，就把可辨識的需求標成 needs_clarification；先形成 REQ，將不確定內容放入 acceptance_criteria 空欄、assumptions、risks 或 open_questions。
 """
         task = f"""# 任務
-根據最新 current_URL、既有 current_REQ、scope、feedback、system_models 與本議題討論，精煉 requirements.json 中的 REQ-* 需求條目。
-目標是讓 Requirements 更接近可寫入 SRS 的需求規格，而不是重新抽取 User Requirements。
+依照 requirements-analyst skill，根據最新 current_URL、既有 current_REQ、scope、feedback、system_models 與本議題討論，精煉 requirements.json 中的 REQ-* 需求條目。
+目標是把有依據的內容形成可寫入 SRS 的正式需求，而不是重新抽取 User Requirements。
 
 # 模式
 - mode={requirement_mode}
-- create：根據 current_URL、scope、feedback 與 system_models，建立初步 REQ-* 需求條目，並以 type 分為 functional 或 non_functional。
-- update：根據 current_URL、current_REQ、scope、feedback、system_models 與本議題討論修正既有 REQ-*；若 current_URL 或相關 artifact 明確顯示尚未覆蓋的重要功能需求或非功能需求，應新增 REQ。
+- create：根據 current_URL 與相關 artifact 建立初步 REQ-*。
+- update：根據 current_URL、current_REQ 與相關 artifact 修正既有 REQ-*；若有明確未覆蓋內容，應新增 REQ。
+
+# 輸入用途
+- current_URL 是最新 User Requirements，也是形成正式 REQ 的主要需求來源；每筆 URL 都必須被 REQ.source 覆蓋，或在 coverage 中標示為 excluded、needs_clarification、risk 或 assumption。
+- current_REQ 是既有正式需求條目；update 時作為修正基底，仍有效的 REQ 必須保留 id，只更新受 current_URL、會議決議或 artifact 影響的欄位。
+- scope 只用來判斷需求是否屬於本系統範圍，不直接轉成 REQ。
+- feedback 只作為領域背景、限制候選、風險與建議；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- system_models 只作為流程、actor、資料、狀態與邊界參考；可用來發現需求缺口、一致性問題、dependencies 或需要釐清的地方，不能單獨創造 stakeholder 未支持的新需求。
+- discussion 只使用明確表態、已回答問題、已收斂或人類裁決的內容；可用來更新既有 REQ 欄位、補 acceptance criteria、risks、assumptions，或新增有 current_URL / meeting decision 支持的 REQ。
+- previous_draft 只作為閱讀脈絡，不是權威來源；若與 current_URL 或 current_REQ 衝突，以 current_URL / current_REQ 為準。
+- req_source_index 預先提供每個 URL-* / R*-M* / Feedback / SM-* 對應的既有 REQ-*；請直接引用這個索引判斷覆蓋狀態，不要額外呼叫 artifact_query 做逐筆比對。
 
 # 規則
-- current_URL 是最新 User Requirements 的權威來源；current_REQ 是結構化回寫基底。
-- scope 只用來判斷需求是否屬於本系統範圍，不要把 scope 句子直接改寫成需求。
-- feedback 只可作為領域背景、品質限制、風險與建議來源。
-- feedback.findings 只能作為 rationale 或背景依據，不得單獨形成正式需求。
-- feedback.constraints 若會影響系統品質、服務水準、安全、隱私、稽核、可靠性或可用性，可輔助形成 non_functional REQ；若仍不確定，放入 assumptions、risks 或 open_questions。
-- feedback.risks 不得直接變成新的需求；只能寫入受影響 REQ 的 risks，或在風險代表品質底線時輔助形成 non_functional REQ。
-- feedback.recommendations 只能作為建議依據；必須有 current_URL、會議決議或明確來源支持，才可轉成 REQ 欄位。
-- system_models 只可作為流程、actor、資料、狀態或一致性參考，不得從模型單獨創造 stakeholder 未支持的新功能。
-- 若 current_URL、scope、feedback、system_models 或本議題討論沒有呈現的內容，不要自行補入。
-- 每筆新增或更新的 REQ 必須能追蹤到 current_URL 或相關 artifact 中看得到的來源，例如 URL-*、Meeting R*-M*、Feedback、Model SM-* 或既有 REQ-*。
-- 若來源只來自 Feedback，只能形成 non_functional、risk 或 assumption，不得直接形成新的功能需求。
-- 若來源只來自 System Models，只能用來補足流程、角色、資料、狀態或一致性缺口，不得單獨創造 stakeholder 未支持的新功能。
-- User Requirements 可合併成一筆 REQ，但不得無聲略過 current_URL 中明確重要且尚未被 current_REQ 覆蓋的需求群。
-- 本動作只做需求整理與初步正式化，不做業務裁決；來源需求未明確支持的優先順序、例外規則、數值門檻或取捨不要自行決定。
-- 對不明確或有爭議的內容，放入 assumptions、risks 或在會議回覆中提出 open_questions；不要硬寫成確定需求。
-- update 模式若要修正既有項目，必須保留該項 REQ-* id；create 模式不要自行編 id。
-- type 只能是 functional 或 non_functional。
-- 分類規則：
-  - functional：描述系統提供的功能、流程、狀態變更、資料處理、通知、查詢、權限操作或紀錄能力。
-  - non_functional：描述系統品質或服務水準，例如 performance、availability、security、privacy、usability、reliability、auditability、maintainability。若品質目標缺少數值，仍可產生 NFR，但 metric、validation 或 acceptance_criteria 留空，缺口放入 assumptions、risks 或 open_questions。
-- 若同一組 URL 同時包含「系統能力」與「品質、治理或限制條件」，不要硬塞成一筆 functional；應拆成兩筆或多筆 REQ：
-  - functional：功能、流程、資料處理、通知、查詢、操作、狀態變更。
-  - non_functional：安全、隱私、稽核、可靠性、可用性、效能、透明性、公平性、合規、風險控制、資料保存或權限治理。
-- 只有當品質或治理條件會影響驗收、設計、風險、權限、資料保存、稽核、可靠性、效能、可用性、安全、隱私或法規時才拆 non_functional；不要只因為文字出現「簡單、友善、快速、清楚」就拆 NFR，除非來源或討論明確支持可驗收的品質要求。
-- non_functional 必須有 source_ids，且來源必須能在 current_URL、feedback、會議決議或相關 artifact 中找到；不得為了補齊 SRS 自行新增品質要求。
-- 常見拆分例：
-  - 查詢異常事件詳情 → functional。
-  - 查詢需授權、留稽核、保護敏感資料 → non_functional。
-  - 發送異常通知 → functional。
-  - 重大異常通知需具備可靠性、可追蹤與不中斷服務要求 → non_functional。
-- priority 只能是 must、should 或 could。
-- description 使用「系統應...」或等價的可驗證系統行為，不要寫 stakeholder 願望句。
-- acceptance_criteria 只有在來源需求或本議題討論明確支持可觀察結果、狀態、通知、查詢、紀錄、權限、保存或例外行為時才填。
-- 不要把 acceptance_criteria 寫成重述 description；每一點應描述可驗證的系統行為或結果。
-- 若缺少數值、時限、責任角色、例外處理或成功條件，不要硬補 acceptance_criteria；將缺口放入 assumptions、risks 或會議回覆的 open_questions。
-- rationale 只有來源需求、會議討論、衝突決議或領域回饋明確支持時才填；不得用「由來源需求整理而來」這類空泛理由補滿。
-- dependencies 只放已由來源或討論明確支持的 requirement id；不確定的依賴放入 assumptions 或 open_questions，不要猜。
-- risks 只放會影響需求成立、驗收、合規、營運或模型一致性的風險。
-- assumptions 只放目前採用但尚未完全確認的前提。
-- non_functional 可包含 category、metric、validation；缺少明確數值或驗證方式時留空，不要自行補 TPS、延遲、可用性、法規名稱或「待確認」。
-- functional 也可使用 validation 表示驗證方法；只有來源或討論明確支持驗證方法時才填，否則留空。
-- priority 若來源或討論沒有明確優先級，填 should；這只代表預設排序，不代表 stakeholder 已明確表態。
-- title 只能由 description 濃縮，不得新增 description 沒有的語意。
-- status 使用 proposed；source_meeting 固定包含：{source_id}
-- 避免和既有 REQ-* 需求條目重複；若只是同義改寫，不要重複輸出。
-- 請優先補齊 current_URL 與相關 artifact 中可明確形成需求的 Functional 與 Non-Functional；不要只輸出功能需求。
-- update 模式不是只審查 current_REQ；若 current_URL 有尚未被 current_REQ.source_ids 覆蓋、且語意已足以形成系統行為或限制的需求群，必須新增 REQ。
-- 不要因為 current_URL 數量多就只輸出前幾筆或只寫 coverage；應將相近 URL 合併為較高層、可驗收的 REQ，讓每個清楚的 URL 至少被某筆 REQ.source_ids 覆蓋。
-- 只有語意不完整、互相衝突、需要人類裁決或明確超出範圍的 URL，才可在 coverage 標為 needs_clarification、risk、assumption 或 excluded。
-- 若本次輸出後仍有大量清楚 URL 未覆蓋，視為本任務未完成；請回到 current_URL 繼續分群並新增 REQ，而不是把補齊工作留到後續。
-- 採用 coverage-driven refinement：每個 current_URL 中的 URL-* 都必須有去處，不能靜默略過。
-- 若 URL-* 已形成或被合併進 REQ，該 URL-* 必須出現在某筆 REQ.source_ids。
-- 若 URL-* 暫時不能形成 REQ，必須在 coverage 標記為 needs_clarification、assumption、risk 或 excluded，並說明 reason；不要硬寫成確定需求。
-- coverage 必須涵蓋每個 current_URL 的 id，且 covered_by 只能引用本次輸出或既有 current_REQ 中的 REQ-*。
-- 需求分類討論可以確認某個 User Requirement 是否仍需要；若 discussion 中 user/analyst 明確表示不需要、合併後已被取代、超出範圍或暫不納入，coverage 使用 excluded 或 needs_clarification，並在 reason 說明依據。
+- source 是可追蹤來源 ID；優先使用 URL-*。若需求內容來自正式會議決議、feedback 或 system model，可加入 R*-M*、Feedback 或 SM-*。不要只寫 stakeholder 名稱、document、initial 或一般描述。
+- update 模式修正既有項目時必須保留該項 REQ-* id；create 模式不要自行編 id。
+- type 分類依 requirements-analyst skill；不要重新定義 functional / non-functional / constraint。
+- title 是 brief description：用短詞概括需求核心，不寫完整句；完整需求放 description。
+- title 不要寫 stakeholder 名稱，除非該角色就是需求概念不可分割的一部分；例如用「訂單申訴與補償時效揭露」，不要用「消費者訂單申訴與補償時效揭露」。
+- priority 依 requirements-analyst skill 的 Priority Frameworks 判斷，但本專案只使用 must、should、could；沒有足夠依據就省略，不要輸出 wont，也不要預設成 should。
+- description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫；不要寫成 stakeholder 願望或討論摘要。
+- description 必須是單一正式需求敘述；若輸入包含多個獨立系統能力、品質要求或限制，應拆成多筆 REQ，或整理成同一能力群下的清楚條件，不要串成一大段。
+- acceptance_criteria 必須可驗收，不要只重述 description；若只有待確認條件，放入 risks、assumptions 或 open_questions。
+- 明確外部限制、法規、政策、資料保存/刪除、第三方或技術限制用 constraint；品質、安全、隱私、稽核、可靠性或可用性要求用 non-functional；不確定時放入 risks、assumptions 或 open_questions。
+- non-functional 可輸出 category、metric、validation：category 依 ISO/IEC 25010 且不用 functional suitability；metric 從 acceptance_criteria 或需求內容萃取可觀察條件，不假造數字；validation 依 skill 的 Requirement Validation 寫成可執行方式。
+- 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；否則保留為同一筆 REQ 的 acceptance_criteria、risks 或 assumptions。
+- 相近 URL 可合併成一筆 REQ，但不得無聲略過清楚且尚未覆蓋的 URL。
+- 只要 URL 能辨識 stakeholder、need/constraint 與目的或痛點，就應正式化為 REQ 或併入既有 REQ；不需要等待會議逐字確認。
+- 不要只正式化討論中被重複提到的角色或消費者需求；餐廳店員、外送員、平台營運主管等來源也必須同等處理。
+- 不確定、有爭議、超出範圍或需要裁決的內容，不要硬寫成 REQ；請放入 assumptions、risks、open_questions 或 coverage。
+- needs_clarification 只用於無法辨識系統行為、品質要求或限制本體的 URL；缺少驗收細節不是 needs_clarification 的充分理由。
+- 每個 current_URL 都必須有去處：被 REQ.source 覆蓋，或在 coverage 中說明為何不能形成 REQ。
+- coverage.covered_by 只能引用本次輸出或既有 current_REQ 中的 REQ-*。
+- rationale 只寫為什麼需要此需求；risks 只寫可能失敗或不確定處；assumptions 只寫目前採用但尚未完全確認的前提。三者不得重複 description。
+- coverage 只作內部檢查，不是正式需求內容；不要把 coverage reason 寫進 description、rationale、risks 或 assumptions。
 {gap_rule}
+
+# 依據與輸出性質
+- 有依據就填欄位；沒有依據就留空陣列或省略，不要臆測。
+- 只回傳本次新增或需要更新的 REQ；已完整且未變更的既有 REQ 不要重複回傳。
+- reason 只用一句話說明本次整理結果。
 
 # 輸出 JSON
 {{
   "REQ": [
     {{
-      "type": "functional",
+      "type": "functional | non-functional | constraint",
       "id": "update 模式才填既有 REQ-*；create 模式省略或留空",
       "title": "短標題",
       "description": "系統應...",
       "priority": "must",
-      "source_ids": ["URL-1"],
-      "source_meeting": ["{source_id}"],
-	      "acceptance_criteria": [],
-	      "rationale": "為何由這些 User Requirements 形成此需求條目",
-	      "dependencies": [],
-	      "risks": [],
-      "assumptions": [],
-      "category": "",
-      "metric": "",
-      "validation": "",
-      "status": "proposed"
+      "category": "non-functional 才填 ISO/IEC 25010 品質特性",
+      "metric": "non-functional 才填從 acceptance_criteria 或需求內容萃取出的可觀察或可測量條件",
+      "validation": "non-functional 才填依 Requirement Validation 判斷的可執行驗證方式",
+      "source": ["URL-1", "{source_id}"],
+      "acceptance_criteria": [],
+      "rationale": "為何由這些 User Requirements 形成此需求條目",
+      "dependencies": [],
+      "risks": [],
+      "assumptions": []
     }}
   ],
   "coverage": [
@@ -512,7 +592,7 @@ conflict-analyzer：
             if str(row.get("status") or "").strip().lower() == "superseded":
                 continue
             item: Dict[str, Any] = {}
-            for key in ("id", "text", "source", "source_id"):
+            for key in ("id", "text", "source", "source_id", "resolution_reason"):
                 value = row.get(key)
                 if value not in (None, "", [], {}):
                     item[key] = value
@@ -599,7 +679,28 @@ conflict-analyzer：
         ]
 
     @staticmethod
-    def next_requirement_id(rows: List[Dict[str, Any]], req_type: str = "functional") -> str:
+    def requirement_source_index(rows: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """建立 source_id -> REQ-* 的一次性索引，供 refine_requirement 直接做來源覆蓋判斷。"""
+        index: Dict[str, List[str]] = {}
+        if not isinstance(rows, list):
+            return index
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            req_id = str(row.get("id") or "").strip()
+            if not req_id:
+                continue
+            for source_id in AnalystAgent.requirement_sources(row):
+                source = str(source_id).strip()
+                if not source:
+                    continue
+                bucket = index.setdefault(source, [])
+                if req_id not in bucket:
+                    bucket.append(req_id)
+        return index
+
+    @staticmethod
+    def next_requirement_id(rows: List[Dict[str, Any]]) -> str:
         prefix = "REQ"
         max_num = 0
         for row in rows or []:
@@ -615,8 +716,345 @@ conflict-analyzer：
     @staticmethod
     def requirement_key(row: Dict[str, Any]) -> str:
         description = str(row.get("description") or "").strip()
-        sources = ",".join(str(item).strip() for item in row.get("source_ids", []) if str(item).strip())
+        sources = ",".join(AnalystAgent.requirement_sources(row))
         return requirement_dedupe_key(f"{description}|{sources}")
+
+    @staticmethod
+    def requirement_title_issues(rows: Any) -> List[str]:
+        if not isinstance(rows, list):
+            return []
+        stakeholder_prefixes = (
+            "平台營運主管",
+            "平台營運者",
+            "平台營運",
+            "餐廳店員",
+            "店家管理者",
+            "餐廳管理者",
+            "外送員",
+            "消費者",
+            "客服人員",
+            "客服",
+            "財務人員",
+            "財務",
+            "使用者",
+        )
+        issues: List[str] = []
+        for idx, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                continue
+            req_id = str(row.get("id") or f"row-{idx}").strip()
+            title = str(row.get("title") or "").strip()
+            if not title:
+                continue
+            if any(title.startswith(prefix) for prefix in stakeholder_prefixes):
+                issues.append(f"{req_id}: title 含 stakeholder 前綴「{title}」")
+                continue
+            if any(term in title for term in ("系統應", "需要", "必須")):
+                issues.append(f"{req_id}: title 像完整需求句「{title}」")
+                continue
+            if any(mark in title for mark in ("。", "，", "；")):
+                issues.append(f"{req_id}: title 含句子標點「{title}」")
+        return issues
+
+    @staticmethod
+    def refine_requirement_title_repair_task(
+        *,
+        title_issues: List[str],
+        output: Any,
+    ) -> str:
+        return f"""# 任務
+修復 refine_requirement 輸出的 REQ title，使其符合 title 規則。
+
+# title 問題
+{json.dumps(title_issues, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{json.dumps(output, ensure_ascii=False, indent=2)}
+
+# 修復規則
+- 只修正 REQ[*].title。
+- title 是 brief description，只寫需求核心短語，不寫完整句。
+- title 不要寫 stakeholder 名稱，除非該角色就是需求概念不可分割的一部分。
+- 不得改變 description、type、priority、source、acceptance_criteria、rationale、dependencies、risks、assumptions、coverage 或 reason 的語意。
+- 保留原本 JSON 結構與所有欄位。
+- 只輸出修復後 JSON。
+
+# 輸出 JSON
+{{
+  "REQ": [],
+  "coverage": [],
+  "reason": "一句說明"
+}}"""
+
+    @staticmethod
+    def refine_requirement_mixed_type_repair_task(
+        *,
+        mixed_issues: List[str],
+        output: Any,
+    ) -> str:
+        return f"""# 任務
+修復 refine_requirement 輸出的 mixed requirement。
+
+# mixed requirement 問題
+{json.dumps(mixed_issues, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{json.dumps(output, ensure_ascii=False, indent=2)}
+
+# 修復規則
+- 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
+- 若同一筆 REQ 同時包含系統能力與品質要求，且兩者可獨立驗收或追蹤，請拆成 functional 與 non-functional。
+- 若同一筆 REQ 同時包含系統能力與外部限制、法規、政策、資料保存/刪除、第三方或技術限制，請拆成 functional 與 constraint。
+- 若品質要求只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- 不要自動改成預設 type；請依 requirements-analyst skill 與本專案規則修正。
+- 保留原本 source；拆分後的新 REQ 也要保留可追蹤 source。
+- update 模式中若修正既有 REQ，保留原 REQ id；拆出新需求時新項目不要填 id。
+- 只輸出修復後 JSON。
+- 每筆 REQ 只保留一個核心意圖；若能力、品質、限制意圖仍在同一筆中，請拆成多筆。
+
+# 輸出 JSON
+{{
+  "REQ": [],
+  "coverage": [],
+  "reason": "一句說明"
+}}"""
+
+    @staticmethod
+    def refine_requirement_targeted_mixed_type_repair_task(
+        *,
+        mixed_issues: List[str],
+        output: Any,
+    ) -> str:
+        return f"""# 任務
+上一輪 mixed requirement 修復仍失敗。請只針對被點名的 REQ 做定點修復，輸出可直接寫回 requirements.json 的結果。
+
+# 仍不合格的項目
+{json.dumps(mixed_issues, ensure_ascii=False, indent=2)}
+
+# 目前輸出
+{json.dumps(output, ensure_ascii=False, indent=2)}
+
+# 定點修復規則
+- 只修改「仍不合格的項目」中點名的 REQ；其他 REQ 必須原樣保留。
+- 被點名為 functional 但混入品質、穩定性或效能語意時，必須拆成：
+  1. functional：只保留系統能力本體。
+  2. non-functional：只保留品質、穩定性、可用性、可靠性、效能、SLA、錯誤率或高峰負載等要求。
+- 被點名為 functional 但混入限制、法規或政策語意時，必須拆成：
+  1. functional：只保留系統能力本體。
+  2. constraint：只保留系統不能違反或必須遵守的限制。
+- 被點名為 non-functional 但內容主要是系統能力時，請改成 functional；若同時有可獨立追蹤的品質要求，再另外拆出 non-functional。
+- 拆出的新 REQ 不要填 id；由程式配置新 REQ-*。
+- 修正既有 REQ 時保留原 id。
+- 每筆新/修正後的 REQ 都必須保留原本可追蹤 source。
+- description 必須只描述一種主要性質，不要用「並維持穩定」「且高效」「並符合法規」把不同性質重新串在一起。
+- 若某個品質要求只是功能的 acceptance criteria，且不能獨立追蹤，才可留在 acceptance_criteria；否則必須拆出 non-functional。
+- 若該筆仍同時出現兩種以上核心意圖（如能力+品質、能力+限制），請先拆分再輸出，不可以合併字句（「同時」「並且」「且」）硬塞在一筆中。
+- 只輸出完整修復後 JSON；不要解釋。
+
+# 輸出 JSON
+{{
+  "REQ": [],
+  "coverage": [],
+  "reason": "一句說明"
+}}"""
+
+    @staticmethod
+    def refine_requirement_nfr_field_repair_task(
+        *,
+        nfr_issues: List[str],
+        output: Any,
+    ) -> str:
+        return f"""# 任務
+修復 refine_requirement 輸出的 non-functional 缺欄位問題。
+
+# 非完整欄位問題
+{json.dumps(nfr_issues, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{json.dumps(output, ensure_ascii=False, indent=2)}
+
+# 修復規則
+- 只補齊被點名 REQ 的 non-functional 欄位：category、metric、validation。
+- 僅能使用輸入內容可支持的描述，禁止虛構數值與門檻。
+- category 依 ISO/IEC 25010 取值（如 Performance / Reliability / Security / Usability / Maintainability），不使用 functional suitability。
+- metric 以 acceptance_criteria 或 description / rationale 中可觀測條件為準；若只有描述字眼，保留可觀測語句，不用空字串。
+- validation 用可執行驗證方式（測試、稽核、流程驗證），可直接回應「以 acceptance criteria 驗證」。
+- 不能確定時，保留既有欄位，不得新增不實內容。
+- 只輸出修復後 JSON，不要說明。
+
+# 輸出 JSON
+{{
+  "REQ": [],
+  "coverage": [],
+  "reason": "一句說明"
+}}"""
+
+    @staticmethod
+    def requirement_mixed_type_issues(rows: Any) -> List[str]:
+        quality_terms = (
+            "穩定性", "可用性", "可靠性", "效能", "性能", "回應時間",
+            "故障率", "服務中斷", "SLA", "吞吐", "高峰", "負載",
+            "正確率", "錯誤率",
+        )
+        constraint_terms = (
+            "法規", "主管機關", "保存年限", "資料保存", "刪除限制",
+            "第三方", "合規", "隱私", "個資", "稽核", "不能違反",
+        )
+        capability_terms = (
+            "提供", "允許", "支援", "顯示", "查詢", "通知", "建立", "更新",
+            "修改", "刪除", "回報", "申訴", "管理", "設定", "記錄", "匯出",
+            "偵測", "標示", "提示", "處理",
+        )
+        multi_intent_markers = ("且", "並且", "以及", "同時", "；", ";")
+        issues: List[str] = []
+        for idx, row in enumerate(rows or [], 1):
+            if not isinstance(row, dict):
+                continue
+            req_type = str(row.get("type") or "").strip().lower().replace("_", "-")
+            text_parts = [
+                str(row.get(key) or "")
+                for key in ("id", "title", "description")
+            ]
+            text = " ".join(text_parts)
+            has_quality = any(term in text for term in quality_terms)
+            has_constraint = any(term in text for term in constraint_terms)
+            has_capability = any(term in text for term in capability_terms)
+            req_id = str(row.get("id") or f"REQ[{idx}]").strip()
+            marker_count = sum(1 for m in multi_intent_markers if m in text)
+            has_multiple_intents = (
+                (1 if has_capability else 0)
+                + (1 if has_quality else 0)
+                + (1 if has_constraint else 0)
+            ) >= 2
+            if marker_count >= 1 and has_multiple_intents:
+                issues.append(
+                    f"{req_id} 可能混有多核心意圖，請檢查是否為功能、品質、限制同時出現"
+                )
+            if req_type == "functional" and has_capability and has_quality:
+                issues.append(
+                    f"{req_id} 是 functional，但同時包含可獨立追蹤的品質、穩定性或效能語意"
+                )
+            if req_type == "functional" and has_capability and has_constraint:
+                issues.append(
+                    f"{req_id} 是 functional，但同時包含可獨立追蹤的限制、法規或政策語意"
+                )
+            if req_type == "non-functional" and has_capability and not has_quality:
+                issues.append(
+                    f"{req_id} 是 non-functional，但內容主要是系統能力"
+                )
+            if req_type == "constraint" and has_capability and not has_constraint:
+                issues.append(
+                    f"{req_id} 是 constraint，但未明確聚焦於外部/技術限制，包含可執行功能描述"
+                )
+        return issues
+
+    @staticmethod
+    def requirement_nfr_field_issues(rows: Any) -> List[str]:
+        issues: List[str] = []
+        for idx, row in enumerate(rows or [], 1):
+            if not isinstance(row, dict):
+                continue
+            req_type = str(row.get("type") or "").strip().lower().replace("_", "-")
+            if req_type != "non-functional":
+                continue
+            req_id = str(row.get("id") or f"REQ[{idx}]").strip()
+            missing: List[str] = []
+            if not str(row.get("category") or "").strip():
+                missing.append("category")
+            if not str(row.get("metric") or "").strip():
+                missing.append("metric")
+            if not str(row.get("validation") or "").strip():
+                missing.append("validation")
+            if missing:
+                issues.append(f"{req_id} 的 {', '.join(missing)} 未填")
+        return issues
+
+    @staticmethod
+    def infer_nfr_category(text: str) -> str:
+        lower_text = text.lower()
+        if any(k in lower_text for k in ("效能", "性能", "回應時間", "延遲", "吞吐", "負載", "處理時間", "峰值", "高峰")):
+            return "Performance"
+        if any(k in lower_text for k in ("可用性", "可存取", "持續運作", "故障", "錯誤率", "服務中斷", "穩定")):
+            return "Reliability"
+        if any(k in lower_text for k in ("安全", "資安", "隱私", "權限", "授權", "稽核", "法規", "資料保護", "加密")):
+            return "Security"
+        if any(k in lower_text for k in ("可維護", "可擴", "可測", "可配置", "可修改", "可復原")):
+            return "Maintainability"
+        if any(k in lower_text for k in ("可用", "體驗", "好懂", "可理解", "簡單", "易用")):
+            return "Usability"
+        return "Reliability"
+
+    @staticmethod
+    def infer_nfr_metric(row: Dict[str, Any], fallback: str) -> str:
+        for key in ("acceptance_criteria", "description", "rationale"):
+            value = row.get(key)
+            if isinstance(value, list):
+                rows = [str(item).strip() for item in value if str(item).strip()]
+                if rows:
+                    return rows[0]
+            elif str(value or "").strip():
+                text = str(value).strip()
+                return text.split("。", 1)[0].strip()
+        return fallback
+
+    @staticmethod
+    def infer_nfr_validation(row: Dict[str, Any], category: str) -> str:
+        candidate = str(row.get("validation") or "").strip()
+        if candidate:
+            return candidate
+        if category == "Performance":
+            return "執行效能驗證（含高峰或負載情境）"
+        if category == "Reliability":
+            return "可用性與穩定性驗證（含故障與重試情境）"
+        if category == "Security":
+            return "安全與合規驗證（含權限、稽核、資料保護流程檢核）"
+        if category == "Maintainability":
+            return "流程回溯與修改性驗證（含變更追蹤與回滾確認）"
+        return "需求驗證測試（以 acceptance criteria 為核準）"
+
+    def ensure_nfr_fields(self, output: Dict[str, Any]) -> Dict[str, Any]:
+        reqs = output.get("REQ")
+        if not isinstance(reqs, list):
+            return output
+
+        updated = []
+        for req in reqs:
+            if not isinstance(req, dict):
+                continue
+            req_type = str(req.get("type") or "").strip().lower().replace("_", "-")
+            if req_type == "non-functional":
+                fields_text = " ".join(
+                    str(req.get(k) or "") for k in ("title", "description", "rationale")
+                ).strip()
+                category = str(req.get("category") or "").strip()
+                metric = str(req.get("metric") or "").strip()
+                validation = str(req.get("validation") or "").strip()
+                if not category:
+                    category = self.infer_nfr_category(fields_text)
+                if not metric:
+                    metric = self.infer_nfr_metric(req, fields_text)
+                if not validation:
+                    validation = self.infer_nfr_validation(req, category)
+                req = dict(req)
+                req["category"] = category
+                req["metric"] = metric
+                req["validation"] = validation
+            updated.append(req)
+        updated_output = dict(output)
+        updated_output["REQ"] = updated
+        return updated_output
+
+    @staticmethod
+    def requirement_sources(row: Dict[str, Any]) -> List[str]:
+        source_rows: List[str] = []
+        value = row.get("source") if isinstance(row, dict) else None
+        if isinstance(value, list):
+            source_rows.extend(str(item).strip() for item in value if str(item).strip())
+        else:
+            text = str(value or "").strip()
+            if text:
+                source_rows.append(text)
+        return list(dict.fromkeys(source_rows))
 
     @staticmethod
     def requirement_record(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -637,31 +1075,27 @@ conflict-analyzer：
             "title",
             "description",
             "rationale",
-            "status",
-            "category",
-            "metric",
-            "validation",
         ):
             value = str(source.get(key) or "").strip()
-            if key in {"rationale", "category", "metric", "validation"} and value.lower() in placeholder_values:
+            if key == "rationale" and value.lower() in placeholder_values:
                 value = ""
             if value:
                 out[key] = value
-        req_type = str(source.get("type") or "").strip()
-        if req_type == "constraint":
-            req_type = "non_functional"
-        if req_type not in {"functional", "non_functional"}:
-            req_type = "functional"
-        out["type"] = req_type
+        req_type = str(source.get("type") or "").strip().lower().replace("_", "-")
+        if req_type in {"functional", "non-functional", "constraint"}:
+            out["type"] = req_type
+        if req_type == "non-functional":
+            for key in ("category", "metric", "validation"):
+                value = str(source.get(key) or "").strip()
+                if value and value.lower() not in placeholder_values:
+                    out[key] = value
         priority = str(source.get("priority") or "").strip().lower()
-        if priority not in {"must", "should", "could"}:
-            priority = "should"
-        out["priority"] = priority
-        if "status" not in out:
-            out["status"] = "proposed"
+        if priority in {"must", "should", "could"}:
+            out["priority"] = priority
+        sources = AnalystAgent.requirement_sources(source)
+        if sources:
+            out["source"] = sources
         for key in (
-            "source_ids",
-            "source_meeting",
             "acceptance_criteria",
             "dependencies",
             "risks",
@@ -686,7 +1120,6 @@ conflict-analyzer：
         rows: Any,
         *,
         existing: Any,
-        source_ref: str,
     ) -> List[Dict[str, Any]]:
         existing_rows = [
             self.requirement_record(row)
@@ -708,10 +1141,8 @@ conflict-analyzer：
             if not isinstance(row, dict):
                 continue
             item = self.requirement_record(row)
-            if not item.get("description") or not item.get("source_ids"):
+            if not item.get("description") or not item.get("source"):
                 continue
-            if source_ref and source_ref not in item.get("source_meeting", []):
-                item["source_meeting"].append(source_ref)
             item_id = str(item.get("id") or "").strip()
             if item_id and item_id in existing_ids:
                 out.append(item)
@@ -719,7 +1150,7 @@ conflict-analyzer：
             marker = self.requirement_key(item)
             if not marker or marker in seen:
                 continue
-            item["id"] = self.next_requirement_id(existing_rows + out, item.get("type", "functional"))
+            item["id"] = self.next_requirement_id(existing_rows + out)
             out.append(item)
             seen.add(marker)
         return out
@@ -800,7 +1231,7 @@ conflict-analyzer：
             req_id = str(req.get("id") or "").strip()
             if not req_id:
                 continue
-            for source_id in req.get("source_ids") or []:
+            for source_id in self.requirement_sources(req):
                 sid = str(source_id or "").strip()
                 if sid:
                     req_coverage.setdefault(sid, []).append(req_id)
@@ -812,7 +1243,7 @@ conflict-analyzer：
             status = "covered" if covered_by else str(existing.get("status") or "needs_clarification")
             reason = str(existing.get("reason") or "").strip()
             if not covered_by and not reason:
-                reason = "此 User Requirement 尚未被任何 REQ.source_ids 覆蓋。"
+                reason = "此 User Requirement 尚未被任何 REQ.source 覆蓋。"
             coverage.append(
                 {
                     "source_id": source_id,
@@ -855,7 +1286,6 @@ conflict-analyzer：
             for row in current_URL or []
             if isinstance(row, dict) and str(row.get("id") or "").strip()
         }
-        default_reason = "此 User Requirement 尚未被任何 REQ.source_ids 覆蓋。"
         gaps: List[Dict[str, Any]] = []
         for row in coverage or []:
             if not isinstance(row, dict):
@@ -865,7 +1295,7 @@ conflict-analyzer：
                 continue
             status = str(row.get("status") or "").strip()
             reason = str(row.get("reason") or "").strip()
-            if status in {"excluded", "needs_clarification", "assumption", "risk"} and reason and reason != default_reason:
+            if status in {"excluded", "assumption", "risk"} and reason:
                 continue
             source = by_id.get(source_id, {})
             gaps.append(
@@ -873,7 +1303,7 @@ conflict-analyzer：
                     "source_id": source_id,
                     "text": str(source.get("text") or "").strip(),
                     "stakeholder": source.get("stakeholder"),
-                    "reason": reason or default_reason,
+                    "reason": reason,
                 }
             )
         return gaps
@@ -901,7 +1331,7 @@ conflict-analyzer：
             if str(row.get("text") or "").strip()
         }
         added = []
-        source_id = str(issue.get("id") or "").strip()
+        source_id = str(issue.get("meeting_id") or issue.get("id") or "").strip()
         for row in requirements:
             if not isinstance(row, dict):
                 continue
@@ -954,13 +1384,16 @@ conflict-analyzer：
     ) -> Dict[str, Any]:
         from storage.artifact import conflict_payload, reindex_conflict_report_rows
 
-        previous_action_result = (
-            last_result.get("action_result")
-            if isinstance(last_result, dict) and isinstance(last_result.get("action_result"), dict)
-            else {}
-        )
+        previous_action_result = last_result if isinstance(last_result, dict) else {}
+        if isinstance(previous_action_result.get("action_result"), dict):
+            previous_action_result = previous_action_result.get("action_result") or {}
         meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
-        has_new_requirements = self.has_requirement_candidates(previous_action_result.get("output"))
+        candidate_output = (
+            previous_action_result.get("output")
+            if isinstance(previous_action_result.get("output"), dict)
+            else {"URL": previous_action_result.get("URL", [])}
+        )
+        has_new_requirements = self.has_requirement_candidates(candidate_output)
         if not force and not bool(meta.get("requirements_changed")) and not has_new_requirements:
             return {
                 "action": "analyze_conflicts",

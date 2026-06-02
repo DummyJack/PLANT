@@ -82,6 +82,11 @@ def model_targets(values: Any) -> List[Dict[str, str]]:
                 "target_model_id": clean_text(item.get("target_model_id") or item.get("id")),
                 "name": clean_text(item.get("name")),
                 "reason": clean_text(item.get("reason")),
+                "related_requirement_ids": [
+                    clean_text(value)
+                    for value in (item.get("related_requirement_ids") or [])
+                    if clean_text(value)
+                ],
             }
         else:
             continue
@@ -207,6 +212,13 @@ def parse_diagram_model(
     model_id = clean_text(raw.get("id"))
     if model_id:
         row["id"] = model_id
+    related_requirement_ids = [
+        clean_text(value)
+        for value in (raw.get("related_requirement_ids") or [])
+        if clean_text(value)
+    ]
+    if related_requirement_ids:
+        row["related_requirement_ids"] = related_requirement_ids
     description = clean_text(raw.get("description"))
     if diagram_type == "use_case_diagram":
         description = ""
@@ -227,9 +239,9 @@ def parse_diagram_model(
                 "name": clean_text(item.get("name")),
                 "purpose": clean_text(item.get("purpose")),
                 "interface": clean_text(item.get("interface")),
-                "related_requirements": [
+                "related_requirement_ids": [
                     clean_text(value)
-                    for value in (item.get("related_requirements") or [])
+                    for value in (item.get("related_requirement_ids") or [])
                     if clean_text(value)
                 ],
             }
@@ -265,9 +277,9 @@ def parse_use_case_text(raw: Any, *, source: str = "") -> Dict[str, Any]:
             "name": clean_text(item.get("name")),
             "purpose": clean_text(item.get("purpose")),
             "interface": clean_text(item.get("interface")),
-            "related_requirements": [
+            "related_requirement_ids": [
                 clean_text(value)
-                for value in (item.get("related_requirements") or [])
+                for value in (item.get("related_requirement_ids") or [])
                 if clean_text(value)
             ],
         }

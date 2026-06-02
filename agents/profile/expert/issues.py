@@ -6,7 +6,11 @@ from utils.language import current_output_language
 
 from agents.profile.issue_proposal_prompt import build_issue_proposal_prompt
 from agents.profile.conflict_review import conflict_review_text_hint
-from agents.profile.issue_response_prompt import READY_TO_CLOSE_QUALITY_GATE, STANCE_RESPONSE_TEXT_RULES
+from agents.profile.issue_response_prompt import (
+    READY_TO_CLOSE_QUALITY_GATE,
+    STANCE_RESPONSE_TEXT_RULES,
+    issue_response_context_sections,
+)
 from agents.profile.analyst.conflict_store import all_conflict_rows
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
@@ -27,7 +31,7 @@ class ExpertIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 5,
+        max_items: int = 20,
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="expert_issue_proposal",
@@ -52,7 +56,7 @@ class ExpertIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 5),
+            "max_items": kwargs.get("max_items", 20),
             "latest_draft": artifact.get("latest_draft", ""),
             "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
@@ -92,7 +96,7 @@ class ExpertIssues:
                 "format_error": f"Expert issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 5)
+        max_items = int(observation.get("max_items") or 20)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
@@ -191,6 +195,8 @@ class ExpertIssues:
             proposals.append(
                 {
                     "title": title,
+                    "category": str(row.get("category") or "").strip(),
+                    "issue_focus": str(row.get("issue_focus") or "").strip(),
                     "expect_outcome": expect_outcome,
                     "sources": sources,
                     "importance": importance,
@@ -210,39 +216,22 @@ class ExpertIssues:
         previous_responses: Optional[List[Dict[str, Any]]],
         artifact_context: Optional[Dict[str, Any]],
     ) -> str:
-        issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
-        issue_id = str(issue.get("id") or "")
-        target_stakeholders = [
-            str(name).strip()
-            for name in (issue.get("target_stakeholders") or [])
-            if str(name).strip()
-        ]
-
-        prev_text = ""
-        if previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
-
-        context_text = ""
-        if artifact_context:
-            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
-
-        recent_ask_history_text = ""
-        recent_ask_history = issue.get("recent_ask_history") or []
-        if recent_ask_history:
-            recent_ask_history_text = (
-                "\n# 最近幾輪正式提問摘要\n"
-                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
-            )
-        skill_section = ""
         skill_context = self.get_optional_skill_context(issue, artifact_context)
-        if skill_context:
-            skill_section = f"\n# 可用技能參考（本輪自行判斷使用）\n{skill_context}\n"
+        sections = issue_response_context_sections(
+            issue=issue,
+            previous_responses=previous_responses,
+            artifact_context=artifact_context,
+            skill_context=skill_context,
+        )
+        issue_text = sections["issue_text"]
+        issue_id = sections["issue_id"]
+        target_stakeholders = sections["target_stakeholders"]
+        prev_text = sections["prev_text"]
+        context_text = sections["context_text"]
+        recent_ask_history_text = sections["recent_ask_history_text"]
+        skill_section = sections["skill_section"]
         category = (issue.get("category") or "").strip()
-        contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
         expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
         expert_expected = expected_actions.get("expert")
         expert_expected_actions = []
@@ -274,23 +263,25 @@ class ExpertIssues:
         else:
             category_hint = ""
 
-        response_contract = """# 回應契約
+        response_rules = """# 回應契約
     - text 必須有依據，不可只表態或宣告最終決議。
     - 若本輪已產生或更新 feedback，text 必須引用本輪 feedback 結果說明它如何影響本議題的限制、風險、證據強度、驗收邊界或可接受方案；不要只說已更新 feedback。
     - 若本輪沒有更新 feedback，但當前專案資料已有與本議題相關的 feedback.json 內容，可以引用既有 findings、constraints、risks 或 recommendations 來支撐發言；若引用既有 feedback，需明確說出引用的是哪一類內容與它支持或揭露的需求點。
+    - 只有議題涉及法規、外部標準、支付/退款、資料保存、隱私、安全、稽核、可靠性或高風險營運限制時，才需要 domain research；一般需求語意或模型對齊問題優先使用既有 feedback 或直接發言。
+    - 若進行新的 domain research，必須更新 feedback.json，並保留來源 URL；不要只在會議發言中描述研究結論。
     - 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以 Expert 觀點回答。
     - open_questions 只放真正需要後續回答、且會相關限制/風險/驗收邊界的單一具體問題；沒有就輸出空陣列。
     - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。
     - 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的領域限制、風險或處理方案。
 """ + READY_TO_CLOSE_QUALITY_GATE + "\n\n" + STANCE_RESPONSE_TEXT_RULES
         if issue_id == "OQ":
-            response_contract = """# 回應契約
+            response_rules = """# 回應契約
     - 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
     - 回答需保持 Expert 視角，聚焦領域限制、法規/標準、風險、證據強度或 evidence gap。
     - 不更新專案資料，不輸出 stance。
     - open_questions 預設輸出空陣列；只有問題本身無法回答且需要一個關鍵澄清時，才提出一個 open question。"""
         if target_stakeholders:
-            response_contract += (
+            response_rules += (
                 "\n    - 若 open_questions 的 to 是 user，問題必須是問議題規劃指定的利害關係人："
                 + "、".join(target_stakeholders)
                 + "；不得改問其他利害關係人。"
@@ -306,7 +297,7 @@ class ExpertIssues:
             ]
             known_pair_ids_text = json.dumps(known_pair_ids, ensure_ascii=False)
             pair_reviews_json = ""
-            response_contract = """# 回應契約
+            response_rules = """# 回應契約
     - 外層輸出只包含 text 欄位的 JSON object。
     - text 必須是 JSON object 字串，不是巢狀 object。
     - text JSON 結構必須為 {"pair_reviews":[...]}。
@@ -356,7 +347,7 @@ class ExpertIssues:
     {category_hint}
     {elicitation_hint}
 
-    {response_contract}
+    {response_rules}
 
     # 任務
     {task_block}

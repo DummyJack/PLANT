@@ -11,11 +11,16 @@ from .validation import ISSUE_CATEGORY_LABEL, trace_artifact_ids, trace_proposal
 
 class MediatorRecords:
     @staticmethod
-    def extract_traceability_ids(issue: Dict, conversation: List[Dict], resolution: Dict) -> List[str]:
-        """從 trace 與討論/決議文字抓出可追溯 id。"""
+    def allowed_design_source_id(value: Any) -> bool:
+        text = str(value or "").strip()
+        return bool(re.fullmatch(r"(?:REQ-\d+|URL-\d+|CR-\d+|PAIR-\d+|MULTIPLE-\d+|SM-\d+)", text))
+
+    @classmethod
+    def extract_source_ids(cls, issue: Dict, conversation: List[Dict], resolution: Dict) -> List[str]:
+        """從 trace 與討論/決議文字抓出 DR 來源 id。"""
         ids = set()
         for sid in trace_artifact_ids(issue):
-            if isinstance(sid, str) and sid.strip():
+            if isinstance(sid, str) and sid.strip() and cls.allowed_design_source_id(sid):
                 ids.add(sid.strip())
         texts = [
             issue.get("title", ""),
@@ -27,9 +32,143 @@ class MediatorRecords:
             resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
             texts.append(resp.get("text", ""))
         blob = "\n".join(t for t in texts if t)
-        for m in re.findall(r"\b(?:REQ|R|CF)-[A-Za-z0-9-]+\b", blob):
-            ids.add(m)
+        for m in re.findall(r"\b(?:REQ-\d+|URL-\d+|CR-\d+|PAIR-\d+|MULTIPLE-\d+|SM-\d+)\b", blob):
+            if cls.allowed_design_source_id(m):
+                ids.add(m)
         return sorted(ids)
+
+    @staticmethod
+    def _append_unique(target: Dict[str, List[str]], key: str, values: Any) -> None:
+        rows = target.setdefault(key, [])
+        raw_values = values if isinstance(values, list) else [values]
+        for value in raw_values:
+            text = str(value or "").strip()
+            if text and text not in rows:
+                rows.append(text)
+
+    @classmethod
+    def design_changed_artifacts(
+        cls,
+        issue: Dict,
+        action_artifacts: List[Dict[str, Any]],
+        resolution: Dict,
+    ) -> Dict[str, List[str]]:
+        changed: Dict[str, List[str]] = {}
+        meeting_id = str(issue.get("meeting_id") or "").strip()
+        cls._append_unique(changed, "meeting", meeting_id)
+        cls._append_unique(changed, "URL", [
+            req_id
+            for update in (resolution.get("url_updates") or [])
+            if isinstance(update, dict)
+            for req_id in (update.get("ids") or [])
+        ])
+        cls._append_unique(changed, "REQ", resolution.get("affected_requirement_ids") or [])
+        cls._append_unique(changed, "conflict_report", resolution.get("affected_conflict_ids") or [])
+        artifact_updates = resolution.get("artifact_updates") if isinstance(resolution.get("artifact_updates"), dict) else {}
+        for key, source in (
+            ("URL", "URL"),
+            ("REQ", "REQ"),
+            ("conflict_report", "conflict_report"),
+            ("system_models", "system_models"),
+        ):
+            row = artifact_updates.get(source) if isinstance(artifact_updates.get(source), dict) else {}
+            cls._append_unique(changed, key, row.get("ids") or [])
+        for artifact_row in action_artifacts:
+            artifacts = artifact_row.get("artifacts") if isinstance(artifact_row.get("artifacts"), dict) else {}
+            for req in artifacts.get("REQ") or []:
+                if isinstance(req, dict):
+                    cls._append_unique(changed, "REQ", req.get("id"))
+            for req in artifacts.get("URL") or []:
+                if isinstance(req, dict):
+                    cls._append_unique(changed, "URL", req.get("id"))
+            for conflict in artifacts.get("conflict_report") or []:
+                if isinstance(conflict, dict):
+                    cls._append_unique(changed, "conflict_report", conflict.get("id"))
+            for model in artifacts.get("system_models") or []:
+                if isinstance(model, dict):
+                    cls._append_unique(changed, "system_models", model.get("id") or model.get("name"))
+            feedback = artifacts.get("feedback") if isinstance(artifacts.get("feedback"), dict) else {}
+            if feedback:
+                cls._append_unique(
+                    changed,
+                    "feedback",
+                    [
+                        key
+                        for key in ("findings", "constraints", "risks", "recommendations")
+                        if feedback.get(key)
+                    ],
+                )
+        return {key: values for key, values in changed.items() if values}
+
+    @staticmethod
+    def artifact_change_summary(changed_artifacts: Dict[str, List[str]], resolution: Dict) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        labels = {
+            "URL": "User Requirements",
+            "REQ": "REQ-*",
+            "conflict_report": "conflict report",
+            "system_models": "system models",
+            "feedback": "feedback",
+            "open_questions": "open questions",
+        }
+        for key, values in changed_artifacts.items():
+            if key == "meeting":
+                continue
+            label = labels.get(key, key)
+            out[key] = f"{label} affected: {', '.join(values)}"
+        decision = str(resolution.get("decision") or "").strip()
+        summary = str(resolution.get("summary") or "").strip()
+        if summary:
+            out["resolution_summary"] = summary
+        if decision:
+            out["resolution_decision"] = decision
+        return out
+
+    @staticmethod
+    def quality_impact_hints(issue: Dict, resolution: Dict, changed_artifacts: Dict[str, List[str]]) -> List[str]:
+        category = str(issue.get("category") or "").strip()
+        hints: List[str] = []
+        if category == "clarify_requirement":
+            hints.extend(["提升需求完整性", "提升可測試性", "強化來源追蹤"])
+        elif category == "define_boundary":
+            hints.extend(["釐清系統邊界", "降低責任歸屬不清風險"])
+        elif category == "tradeoff":
+            hints.extend(["明確取捨依據", "降低方案選擇不一致風險"])
+        elif category == "align_model":
+            hints.extend(["提升模型與需求一致性", "改善流程、狀態或資料邊界可追蹤性"])
+        elif category == "resolve_conflict":
+            hints.extend(["提升需求一致性", "降低衝突需求造成的驗收與責任風險"])
+        if changed_artifacts.get("REQ"):
+            hints.append("改善 REQ-* 可交付性")
+        if changed_artifacts.get("conflict_report"):
+            hints.append("收斂需求衝突")
+        if changed_artifacts.get("system_models"):
+            hints.append("強化系統模型對需求的支撐")
+        if resolution.get("needs_human"):
+            hints.append("保留人類裁決以避免代理人逕自定案")
+        return list(dict.fromkeys(hints))
+
+    @staticmethod
+    def risk_if_not_decided(issue: Dict, resolution: Dict) -> str:
+        unresolved = [
+            str(value).strip()
+            for value in (resolution.get("unresolved_points") or [])
+            if str(value).strip()
+        ]
+        if unresolved:
+            return "若不處理，仍未解的問題會阻礙需求定稿：" + "；".join(unresolved[:3])
+        category = str(issue.get("category") or "").strip()
+        if category == "resolve_conflict":
+            return "若不先處理需求衝突，後續 REQ 與驗收標準可能建立在互相矛盾的 User Requirements 上。"
+        if category == "clarify_requirement":
+            return "若不釐清並正式化需求，後續 SRS 可能缺少可測試、可追蹤的正式需求條目。"
+        if category == "define_boundary":
+            return "若不界定責任邊界，需求可能混合系統、人工與外部服務責任，造成實作與驗收爭議。"
+        if category == "tradeoff":
+            return "若不形成取捨決策，後續設計可能在多個方案間搖擺，造成需求不一致。"
+        if category == "align_model":
+            return "若不對齊模型與需求，流程、狀態、actor 或資料邊界可能在 SRS 與設計模型間不一致。"
+        return ""
 
     def run_meeting_record_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
@@ -136,47 +275,46 @@ class MediatorRecords:
 {json.dumps(issue_context, ensure_ascii=False, indent=2)}
 
 # 寫作目標
-- 這是設計理由紀錄，不是 MoM，也不是 JSON 摘要。
-- 只整理本議題已存在的討論、resolution、artifact updates 與 traceability。
+- 這是給人閱讀的 Design Rationale，不是 MoM，也不是 JSON 摘要。
+- 只記錄本議題形成的設計決策、採用理由、影響與來源；不要貼會議逐字稿。
 - 不得編造 context、alternative、impact、open issue 或不存在的理由。
-- 不要整段貼上會議逐字稿。
+- 不要寫成會議摘要語氣，例如「討論過程中」「各方表示」「會議中」。
+- Context 寫決策背景；Decision 寫採用結果；Rationale 寫採用理由；Impact 寫此決策造成的需求、模型、草稿、衝突報告或後續工作影響，並說明此決策為什麼重要，例如改善哪些需求完整性、一致性、可測試性、可追溯性、系統邊界、風險降低、模型對齊或 SRS 可交付性；不要只列 artifact 名稱。
+- Decision 與 Impact 優先使用 changed_artifacts、artifact_change_summary、quality_impact_hints、risk_if_not_decided；discussion.text 只作補充脈絡，不得取代結構化變更資料。
+- Source 只寫 artifact 來源 id，且只能使用 REQ-*、URL-*、CR-*、PAIR-*、MULTIPLE-*、SM-*；不要把 meeting id、findings、risks、recommendations、T-* 或一般文字當 Source。
+- 標題第一個 ID 必須使用 issue.meeting_id，例如 R2-M1；不得用 T-* 取代 meeting_id。
 - 不要輸出「待補」。
-- 若某節沒有可用內容，省略該節。
+- 核心章節固定使用 Context、Decision、Rationale、Impact、Source；Alternatives 與 Open Issues 只有真的有資料時才輸出。
 
 # entry 格式
 請輸出 Markdown，且只能輸出單筆 entry：
 
-## {{issue_id}} {{issue_title}}
+## {{meeting_id}} {{issue_title}}
 
 ### Context
-說明本議題要解決的需求問題、衝突、邊界或決策背景。
+用 1-3 句說明需求問題、衝突、邊界或決策背景。
 
 ### Decision
-條列最後採用的決策。若 decision 包含多個 CR/REQ/URL，請拆成多條。
+條列最後採用的可執行決策；若包含多個 CR/REQ/URL/SM，請拆成多條。不得只寫「採用現有內容」「完成整理」或抽象方法名；需說明相關 artifact 要保留、修正、移除、新增或如何反映。
 
 ### Rationale
-條列為什麼採用此決策；需根據 summary、discussion、recommendation 或 agreed_points。
+條列為什麼採用此決策；需根據 resolution summary、discussion、recommendation 或 agreed_points，不要重複 Decision。
 
 ### Alternatives
 只在 options 或 discussion 中真的有方案比較時輸出；列出未採用方案與原因。
 
 ### Impact
-條列此決策影響的 artifact，例如 requirements.json、conflict report、system_models.json、draft。
+條列此決策造成的實際影響，並說明為什麼重要。必須盡量使用 Artifact change、Requirement quality、Risk if not decided 三種角度：哪些 REQ/URL/CR/SM/draft 被影響；改善了哪些完整性/一致性/可測試性/可追溯性/邊界清楚度；若不做此決策會有什麼風險。不要只列 artifact 名稱。
 
 ### Open Issues
 只在仍有 unresolved_points、open questions 或 human decision pending 時輸出。
 
-### Traceability
-條列可追溯 id，例如 CR-*、URL-*、REQ-*、SM-*；去重即可。
-
-### Meeting
-條列 Round、Issue ID、Participants、Generated At。
+### Source
+條列本決策依據的 artifact 來源 id，例如 CR-*、URL-*、REQ-*、SM-*；去重即可。不要稱為 Traceability，不要列 meeting id。
 
 # 輸出限制
 - 只能輸出 Markdown。
-- 不要輸出 H1。
-- 不要使用 JSON 或程式碼區塊。
-- 不要提到 prompt、schema、欄位規則或「根據輸入資料」。
+- 不要輸出 H1、JSON、程式碼區塊、prompt/schema 說明。
 """
 
     def write_meeting_note(
@@ -213,15 +351,12 @@ class MediatorRecords:
         if summary:
             md += f"- **Summary**: {summary}\n"
         decision = resolution.get("decision", "")
-        resolution_status = resolution.get("resolution_status", "")
+        status = resolution.get("status", "")
         if decision:
             md += f"- **Decision**: {decision}\n"
-        if resolution_status:
-            label = "Recommendation status" if resolution_status == "pending_confirmation" else "Resolution"
-            md += f"- **{label}**: {resolution_status}\n"
+        if status:
+            md += f"- **Resolution**: {status}\n"
 
-        if resolution.get("needs_human"):
-            md += "- **Decision status**: pending human decision\n"
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
         if options:
@@ -243,8 +378,6 @@ class MediatorRecords:
             md += f"- **Option**: {recommendation.get('option_id', '')}\n"
             if recommendation.get("rationale"):
                 md += f"- **Rationale**: {recommendation.get('rationale')}\n"
-            if resolution.get("needs_human"):
-                md += "- **Human decision**: pending\n"
             md += "\n"
         agreed_points = resolution.get("agreed_points", []) or []
         unresolved_points = resolution.get("unresolved_points", []) or []
@@ -255,8 +388,6 @@ class MediatorRecords:
             md += f"- **Unresolved points**: {'; '.join(unresolved_points)}\n"
         if affected_requirement_ids:
             md += f"- **Affected requirements**: {', '.join(affected_requirement_ids)}\n"
-        if resolution.get("needs_human"):
-            md += "- **Needs human**: true\n"
         md += "\n"
 
         def clean_for_mom(text: str) -> str:
@@ -332,44 +463,54 @@ class MediatorRecords:
                 return ""
             return f"- {prefix}: {'; '.join(items)}"
 
+        def reason_lines(value: Any) -> List[str]:
+            text = str(value or "").strip()
+            if not text:
+                return []
+            parts = [
+                part.strip(" ；;")
+                for part in re.split(r"[；;]\s*", text)
+                if part.strip(" ；;")
+            ]
+            return parts or [text]
+
         def render_requirements_markdown(rows: Any, reason: Any = None) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
-            out = ["#### Analysis", "", "**Requirements**", "", "| ID | Type | Requirement | Source |", "|---|---|---|---|"]
-            for row in rows:
+            out = [
+                "#### Analysis",
+                "",
+                "| ID | Type | Requirement | Acceptance Criteria | Risks |",
+                "|---|---|---|---|---|",
+            ]
+            display_rows = [row for row in rows if isinstance(row, dict)]
+            for row in display_rows:
                 if not isinstance(row, dict):
                     continue
                 req_id = row.get("id", "")
                 req_type = row.get("type", "")
-                requirement = row.get("requirement") or row.get("description") or row.get("title") or ""
-                source_ids = row.get("source_ids") or row.get("sources") or row.get("source") or []
-                out.append(
-                    f"| {table_cell(req_id)} | {table_cell(req_type)} | {table_cell(requirement)} | {table_cell(source_ids)} |"
-                )
-
-            criteria_lines = []
-            risk_lines = []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                req_id = str(row.get("id") or "").strip()
-                criteria = as_text_list(row.get("acceptance_criteria"))
-                if criteria:
-                    criteria_lines.append(f"- {req_id}: {'; '.join(criteria)}")
+                requirement = row.get("description") or row.get("title") or ""
+                acceptance = as_text_list(row.get("acceptance_criteria"))
                 risks = as_text_list(row.get("risks"))
-                assumptions = as_text_list(row.get("assumptions"))
-                if risks:
-                    risk_lines.append(f"- {req_id} risks: {'; '.join(risks)}")
-                if assumptions:
-                    risk_lines.append(f"- {req_id} assumptions: {'; '.join(assumptions)}")
-
-            if criteria_lines:
-                out.extend(["", "**Acceptance Criteria**", "", *criteria_lines])
-            if risk_lines:
-                out.extend(["", "**Risks / Assumptions**", "", *risk_lines])
+                out.append(
+                    "| "
+                    + " | ".join(
+                        table_cell(value)
+                        for value in (
+                            req_id,
+                            req_type,
+                            requirement,
+                            acceptance,
+                            risks,
+                        )
+                    )
+                    + " |"
+                )
             reason_text = str(reason or "").strip()
             if reason_text:
-                out.extend(["", f"**Reason**: {reason_text}"])
+                lines = reason_lines(reason_text)
+                out.extend(["", "**Reason**:"])
+                out.extend(f"- {line}" for line in lines)
             return "\n".join(out).strip()
 
         def render_user_requirements_markdown(rows: Any) -> str:
@@ -425,27 +566,6 @@ class MediatorRecords:
                 out.extend(["", f"**Reason**: {reason_text}"])
             return "\n".join(out)
 
-        def render_model_consistency_markdown(report: Any) -> str:
-            if not isinstance(report, dict) or not report:
-                return ""
-            out = ["**Model Consistency**"]
-            summary_text = str(report.get("consistency_summary") or report.get("impact_summary") or "").strip()
-            if summary_text:
-                out.extend(["", summary_text])
-            gaps = as_text_list(report.get("gaps"))
-            if gaps:
-                out.extend(["", "Gaps", *[f"- {gap}" for gap in gaps]])
-            targets = report.get("model_targets")
-            if isinstance(targets, list) and targets:
-                out.extend(["", "| Operation | Type | Name | Reason |", "|---|---|---|---|"])
-                for target in targets:
-                    if not isinstance(target, dict):
-                        continue
-                    out.append(
-                        f"| {table_cell(target.get('operation'))} | {table_cell(target.get('type'))} | {table_cell(target.get('name'))} | {table_cell(target.get('reason'))} |"
-                    )
-            return "\n".join(out)
-
         def render_analysis_markdown(artifacts: Dict[str, Any]) -> str:
             parts = []
             user_requirements = render_user_requirements_markdown(artifacts.get("URL"))
@@ -457,9 +577,6 @@ class MediatorRecords:
             scope = render_scope_markdown(artifacts.get("scope"), artifacts.get("scope_reason"))
             if scope:
                 parts.append(scope)
-            model_report = render_model_consistency_markdown(artifacts.get("model_consistency_report"))
-            if model_report:
-                parts.append(model_report)
             reason = str(artifacts.get("requirement_reason") or "").strip()
             if reason and not artifacts.get("REQ"):
                 parts.append(f"**Reason**: {reason}")
@@ -506,81 +623,6 @@ class MediatorRecords:
                 return ""
             return "#### Feedback\n\n" + "\n\n".join(parts)
 
-        def model_display_type(model: Dict[str, Any]) -> str:
-            raw_type = str(model.get("display_type") or model.get("type") or "").strip()
-            labels = {
-                "context_diagram": "Context Diagram",
-                "use_case_diagram": "Use Case Diagram",
-                "activity_diagram": "Activity Diagram",
-                "sequence_diagram": "Sequence Diagram",
-                "state_machine": "State Machine",
-                "class_diagram": "Class Diagram",
-            }
-            return labels.get(raw_type, raw_type or "System Model")
-
-        def render_use_case_text(rows: Any) -> str:
-            if not isinstance(rows, list) or not rows:
-                return ""
-            grouped: Dict[str, List[Dict[str, Any]]] = {}
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                actor = str(row.get("actor") or row.get("role") or "General").strip() or "General"
-                grouped.setdefault(actor, []).append(row)
-            if not grouped:
-                return ""
-            out = ["##### Use Case Text"]
-            roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
-            for index, (actor, actor_rows) in enumerate(grouped.items(), 1):
-                label = roman[index - 1] if index <= len(roman) else str(index)
-                out.append(f"###### {label}. {actor} Use Cases")
-                out.append("| ID | Use Case | Purpose | Interface |")
-                out.append("|---|---|---|---|")
-                for item in actor_rows:
-                    use_case_id = str(item.get("id") or item.get("use_case_id") or "").strip()
-                    name = str(item.get("use_case") or item.get("name") or item.get("title") or "").strip()
-                    purpose = str(item.get("purpose") or item.get("description") or "").strip()
-                    interface = str(item.get("interface") or "").strip()
-                    out.append(f"| {use_case_id} | {name} | {purpose} | {interface} |")
-            return "\n".join(out)
-
-        def render_system_models_markdown(system_models: Any) -> str:
-            if not isinstance(system_models, list) or not system_models:
-                return ""
-            groups: Dict[str, List[Dict[str, Any]]] = {}
-            for model in system_models:
-                if isinstance(model, dict):
-                    groups.setdefault(model_display_type(model), []).append(model)
-            if not groups:
-                return ""
-            sections: List[str] = []
-            for display_type, models in groups.items():
-                single = len(models) == 1
-                for index, model in enumerate(models, 1):
-                    name = str(model.get("name") or "").strip()
-                    if single and model.get("type") not in {"context_diagram", "use_case_diagram"} and name:
-                        heading = f"##### {display_type} -- {name}"
-                    elif single:
-                        heading = f"##### {display_type}"
-                    else:
-                        heading = f"##### {display_type}\n\n{chr(96 + index)}. {name or model.get('id') or 'Model'}"
-                    parts = [heading]
-                    image_path = str(model.get("image_path") or "").strip()
-                    plantuml = str(model.get("plantuml") or "").strip()
-                    if image_path:
-                        alt = name or display_type
-                        parts.append(f"![{alt}]({image_path})")
-                    elif plantuml:
-                        parts.append("```plantuml\n" + plantuml + "\n```")
-                    description = str(model.get("description") or "").strip()
-                    if description and model.get("type") != "use_case_diagram":
-                        parts.append(description)
-                    use_case_text = render_use_case_text(model.get("text") or model.get("use_case_text"))
-                    if use_case_text:
-                        parts.append(use_case_text)
-                    sections.append("\n\n".join(part for part in parts if part))
-            return "\n\n".join(sections)
-
         def render_action_outputs(entry: Dict[str, Any]) -> str:
             sections = []
             artifacts = entry.get("artifacts") if isinstance(entry.get("artifacts"), dict) else {}
@@ -599,10 +641,6 @@ class MediatorRecords:
             rendered_feedback = render_feedback_markdown(feedback)
             if rendered_feedback:
                 sections.append(rendered_feedback)
-            system_models = artifacts.get("system_models")
-            rendered_models = render_system_models_markdown(system_models)
-            if rendered_models:
-                sections.append("#### System Model\n\n" + rendered_models)
             return "\n\n".join(sections)
 
         main_records = [c for c in conversation if not c.get("is_reply", False)]
@@ -622,6 +660,37 @@ class MediatorRecords:
 
         question_pairs: List[Dict[str, Any]] = []
         question_index: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+
+        def labeled_answers(text: Any) -> Dict[str, str]:
+            source = str(text or "").strip()
+            if not source or "【" not in source:
+                return {}
+            matches = list(re.finditer(r"(?:^|\n)\s*【([^】]+)】\s*", source))
+            if not matches:
+                return {}
+            parts: Dict[str, str] = {}
+            for idx, match in enumerate(matches):
+                name = str(match.group(1) or "").strip()
+                start = match.end()
+                end = matches[idx + 1].start() if idx + 1 < len(matches) else len(source)
+                body = source[start:end].strip()
+                body = re.sub(r"^\s*[-—]+\s*", "", body).strip()
+                if name and body:
+                    parts[name] = body
+            return parts
+
+        def answer_lines(pair: Dict[str, Any]) -> List[tuple[str, str]]:
+            answer = str(pair.get("answer") or "").strip()
+            if not answer:
+                return []
+            split = labeled_answers(answer)
+            if split:
+                return [(name, text) for name, text in split.items() if text]
+            answer_agent = str(pair.get("answer_agent") or pair.get("to_agent") or "?").strip() or "?"
+            if answer_agent == "user" and pair.get("to_stakeholder"):
+                answer_agent = str(pair.get("to_stakeholder") or answer_agent).strip()
+            return [(answer_agent, answer)]
+
         for c in conversation:
             if c.get("is_reply"):
                 continue
@@ -633,6 +702,8 @@ class MediatorRecords:
                 if not question_text:
                     continue
                 to_agent = str(q.get("to") or "user").strip() or "user"
+                if to_agent == from_agent:
+                    continue
                 key = (from_agent, to_agent, question_text)
                 if key in question_index:
                     continue
@@ -643,6 +714,8 @@ class MediatorRecords:
                     "answer_agent": "",
                     "answer": "",
                 }
+                if to_agent not in {"user", "analyst", "expert", "modeler", "mediator"}:
+                    pair["to_stakeholder"] = to_agent
                 question_index[key] = pair
                 question_pairs.append(pair)
         for c in conversation:
@@ -660,6 +733,11 @@ class MediatorRecords:
                 if (
                     pair.get("from_agent") == from_agent
                     and pair.get("question") == question_text
+                    and (
+                        pair.get("to_agent") == answer_agent
+                        or (answer_agent == "user" and pair.get("to_stakeholder"))
+                        or not pair.get("answer_agent")
+                    )
                     and not pair.get("answer")
                 ):
                     matched = pair
@@ -683,13 +761,13 @@ class MediatorRecords:
                 from_agent = pair.get("from_agent") or "?"
                 to_agent = pair.get("to_agent") or "?"
                 question = pair.get("question") or ""
-                answer_agent = pair.get("answer_agent") or to_agent
                 answer = str(pair.get("answer") or "").strip()
                 md += f"**{from_agent}**: {question or '（未記錄問題內容）'}\n\n"
                 if answer:
-                    md += f"**{answer_agent}**: {answer}\n\n"
+                    for name, text in answer_lines(pair):
+                        md += f"**{name}**: {text}\n\n"
                 else:
-                    md += f"**Status**: 未回答，待 {to_agent} 回覆\n\n"
+                    md += f"未回答，待 {to_agent} 回覆\n\n"
 
         return md
 
@@ -735,16 +813,27 @@ class MediatorRecords:
                 }
             )
 
+        issue_meeting_id = str(issue.get("meeting_id") or "").strip()
+        issue_context = issue.get("issue_context") if isinstance(issue.get("issue_context"), dict) else {}
+        if not issue_meeting_id:
+            issue_meeting_id = str(issue_context.get("meeting_id") or "").strip()
+
+        changed_artifacts = self.design_changed_artifacts(issue, action_artifacts, resolution)
+        artifact_change_summary = self.artifact_change_summary(changed_artifacts, resolution)
+        quality_hints = self.quality_impact_hints(issue, resolution, changed_artifacts)
+        risk_text = self.risk_if_not_decided(issue, resolution)
+
         return {
             "issue": {
                 "id": issue.get("id", ""),
+                "meeting_id": issue_meeting_id,
                 "title": issue.get("title", ""),
                 "description": issue.get("description", ""),
                 "category": issue.get("category", ""),
                 "category_label": ISSUE_CATEGORY_LABEL.get(issue.get("category", ""), issue.get("category", "")),
                 "discussion_mode": issue.get("discussion_mode", "sequential"),
                 "participants": issue.get("participants", []),
-                "trace": issue.get("trace", {}),
+                "trace": {"artifact_ids": trace_artifact_ids(issue)},
             },
             "discussion": {
                 "texts": texts,
@@ -752,7 +841,7 @@ class MediatorRecords:
                 "action_artifacts": action_artifacts,
             },
             "resolution": {
-                "resolution_status": resolution.get("resolution_status", ""),
+                "status": resolution.get("status", ""),
                 "summary": resolution.get("summary", ""),
                 "decision": resolution.get("decision", ""),
                 "agreed_points": resolution.get("agreed_points", []),
@@ -760,13 +849,21 @@ class MediatorRecords:
                 "new_open_questions": resolution.get("new_open_questions", []),
                 "affected_conflict_ids": resolution.get("affected_conflict_ids", []),
                 "affected_requirement_ids": resolution.get("affected_requirement_ids", []),
+                "requirement_changes": resolution.get("requirement_changes", []),
+                "model_changes": resolution.get("model_changes", []),
+                "open_questions": resolution.get("open_questions", []),
+                "follow_up_actions": resolution.get("follow_up_actions", []),
                 "url_updates": resolution.get("url_updates", []),
                 "artifact_updates": resolution.get("artifact_updates", {}),
                 "needs_human": resolution.get("needs_human", False),
                 "options": resolution.get("options", []),
                 "recommendation": resolution.get("recommendation", {}),
             },
-            "traceability_ids": self.extract_traceability_ids(issue, conversation, resolution),
+            "changed_artifacts": changed_artifacts,
+            "artifact_change_summary": artifact_change_summary,
+            "quality_impact_hints": quality_hints,
+            "risk_if_not_decided": risk_text,
+            "source": self.extract_source_ids(issue, conversation, resolution),
             "metadata": {
                 "round": round_num,
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -780,17 +877,145 @@ class MediatorRecords:
             if value.startswith("```"):
                 value = re.sub(r"^```(?:markdown|md)?\s*", "", value)
                 value = re.sub(r"\s*```$", "", value).strip()
-            return value
+            value = remove_placeholder_sections(value)
+            value = normalize_entry_heading(value)
+            return filter_source_section(value)
+
+        def normalize_entry_heading(value: str) -> str:
+            if not meeting_id:
+                return value
+            lines = str(value or "").splitlines()
+            if not lines:
+                return value
+            first = lines[0].strip()
+            if not first.startswith("## "):
+                return value
+            if meeting_id in first:
+                return value
+            title = str((issue_context.get("issue") or {}).get("title") or "").strip()
+            heading_title = re.sub(r"^##\s+", "", first).strip()
+            heading_title = re.sub(r"\bT-\d+\b", "", heading_title).strip(" -｜|")
+            if title:
+                heading_title = title
+            lines[0] = f"## {meeting_id} {heading_title}".rstrip()
+            return "\n".join(lines).strip()
+
+        def filter_source_section(value: str) -> str:
+            lines = str(value or "").splitlines()
+            out: List[str] = []
+            in_source = False
+            kept_source = False
+            for line in lines:
+                if line.startswith("### "):
+                    if in_source and not kept_source:
+                        while out and not out[-1].strip():
+                            out.pop()
+                        if out and out[-1].strip() == "### Source":
+                            out.pop()
+                    in_source = line.strip() == "### Source"
+                    kept_source = False
+                    out.append(line)
+                    continue
+                if in_source:
+                    candidate = line.strip().lstrip("-").strip()
+                    if not candidate:
+                        out.append(line)
+                        continue
+                    if MediatorRecords.allowed_design_source_id(candidate):
+                        out.append(f"- {candidate}")
+                        kept_source = True
+                        continue
+                    ids = re.findall(r"\b(?:REQ-\d+|URL-\d+|CR-\d+|PAIR-\d+|MULTIPLE-\d+|SM-\d+)\b", candidate)
+                    for source_id in ids:
+                        if MediatorRecords.allowed_design_source_id(source_id):
+                            out.append(f"- {source_id}")
+                            kept_source = True
+                    continue
+                out.append(line)
+            if in_source and not kept_source:
+                while out and not out[-1].strip():
+                    out.pop()
+                if out and out[-1].strip() == "### Source":
+                    out.pop()
+            return "\n".join(out).strip()
+
+        def remove_placeholder_sections(value: str) -> str:
+            lines = [line.rstrip() for line in str(value or "").splitlines()]
+            cleaned: List[str] = []
+            skip_section = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("### "):
+                    skip_section = stripped == "### Meeting"
+                    if skip_section:
+                        continue
+                if skip_section:
+                    continue
+                if "待補" in stripped:
+                    continue
+                if stripped in {"無", "無。", "None", "N/A", "-", "- 無", "- 無。"}:
+                    continue
+                cleaned.append(line)
+
+            sections: List[List[str]] = []
+            current: List[str] = []
+            for line in cleaned:
+                if line.startswith("### "):
+                    if current:
+                        sections.append(current)
+                    current = [line]
+                else:
+                    current.append(line)
+            if current:
+                sections.append(current)
+
+            kept: List[str] = []
+            for section in sections:
+                if section and section[0].startswith("### "):
+                    body = [line.strip() for line in section[1:] if line.strip()]
+                    if not body:
+                        continue
+                kept.extend(section)
+            return "\n".join(kept).strip()
 
         def validate_entry(value: str) -> None:
             if not value.startswith("## "):
                 raise ValueError("design rationale entry must start with '## '")
-            if issue_id and issue_id not in value.splitlines()[0]:
-                raise ValueError(f"design rationale entry heading must include issue id: {issue_id}")
+            if value.startswith("# "):
+                raise ValueError("design rationale entry must not include H1")
+            if "```" in value:
+                raise ValueError("design rationale entry must not include code fences")
+            expected_id = meeting_id
+            heading = value.splitlines()[0]
+            if expected_id:
+                if expected_id not in heading:
+                    raise ValueError(f"design rationale entry heading must include meeting id: {expected_id}")
+                if re.search(r"\bT-\d+\b", heading):
+                    raise ValueError("design rationale entry heading should not use T-* issue id")
             if "待補" in value:
                 raise ValueError("design rationale entry must not contain 待補")
+            source_match = re.search(r"(?ms)^### Source\s*\n(?P<body>.*?)(?=^###\s+|\Z)", value)
+            if source_match:
+                source_ids = re.findall(
+                    r"\b(?:REQ-\d+|URL-\d+|CR-\d+|PAIR-\d+|MULTIPLE-\d+|SM-\d+)\b",
+                    source_match.group("body"),
+                )
+                invalid_lines = [
+                    line.strip()
+                    for line in source_match.group("body").splitlines()
+                    if line.strip()
+                    and not re.search(
+                        r"\b(?:REQ-\d+|URL-\d+|CR-\d+|PAIR-\d+|MULTIPLE-\d+|SM-\d+)\b",
+                        line,
+                    )
+                ]
+                if invalid_lines or not source_ids:
+                    raise ValueError("design rationale Source must contain only valid source ids")
 
         issue_id = str((issue_context.get("issue") or {}).get("id") or "").strip()
+        meeting_id = str((issue_context.get("issue") or {}).get("meeting_id") or "").strip()
+        if not meeting_id:
+            raise ValueError(f"design rationale context missing meeting_id for issue: {issue_id or 'unknown'}")
         prompt = self.design_rationale_entry_prompt(issue_context)
         raw = self.model.chat(
             self.build_direct_messages(prompt),

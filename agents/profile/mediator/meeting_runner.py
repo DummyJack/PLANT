@@ -64,10 +64,6 @@ def conflict_report_requirement_ids(row: Dict[str, Any]) -> List[str]:
         req_id = str(req.get("id") or "").strip()
         if req_id:
             ids.append(req_id)
-    for req_id in row.get("source_ids") or []:
-        req_id = str(req_id or "").strip()
-        if req_id:
-            ids.append(req_id)
     return list(dict.fromkeys(ids))
 
 
@@ -149,7 +145,7 @@ def ingest_round_resolution_effects(
             if str(sid).strip()
         ]))
         decision_id = str(resolution.get("decision_id") or "").strip()
-        if resolution.get("resolution_status") == "human_decision" and affected_conflict_ids and decision_id:
+        if resolution.get("status") == "human_decision" and affected_conflict_ids and decision_id:
             from flow.meeting.conflict_review import mark_conflicts_resolved_by_ids
             mark_conflicts_resolved_by_ids(
                 artifact, affected_conflict_ids, decision_id=decision_id,
@@ -163,7 +159,7 @@ def ingest_round_resolution_effects(
         effect_row = {
             "issue_id": issue_id_value,
             "round": round_num,
-            "resolution_status": resolution.get("resolution_status"),
+            "status": resolution.get("status"),
             "needs_human": needs_human,
         }
         if affected_requirement_ids:
@@ -221,27 +217,20 @@ def human_decision_issue_record(
     normalized = meeting_issue(
         {
             "id": f"{item_prefix}-{index}",
-            "title": (row.get("title") or "待處理事項").strip(),
+            "title": str(row.get("title") or "").strip(),
             "description": "",
-            "category": row.get("category") or "clarify_requirement",
+            "category": row.get("category"),
             "participants": row.get("participants", []),
-            "discussion_mode": row.get("discussion_mode", "sequential"),
+            "discussion_mode": row.get("discussion_mode"),
             "trace": normalize_trace(row.get("trace")),
         },
         allowed_categories=list(ISSUE_CATEGORY_LABEL.keys()),
         registered_agents=list(coordinator.flow.registry.get_names()) if coordinator.flow.registry else ["analyst", "expert", "modeler", "user"],
         index=index,
     )
-    return normalized or {
-        "schema_version": "meeting_issue.v1",
-        "id": f"{item_prefix}-{index}",
-        "title": (row.get("title") or "待處理事項").strip(),
-        "description": "",
-        "category": row.get("category") or "clarify_requirement",
-        "participants": row.get("participants", []),
-        "discussion_mode": row.get("discussion_mode", "sequential"),
-        "trace": normalize_trace(row.get("trace")),
-    }
+    if not normalized:
+        raise ValueError(f"human decision issue 不合法: {item_prefix}-{index}")
+    return normalized
 
 
 def execute_human_decision_queue(
@@ -287,7 +276,7 @@ def execute_human_decision_queue(
         decision_text = str(resolution_raw.get("decision", "")).strip()
         decision_id = f"DEC-HQ-{round_num}-{idx}" if decision_text else ""
         resolution = coordinator.flow.mediator_agent.build_issue_result(
-            resolution_status="human_decision",
+            status="human_decision" if decision_text else "",
             summary=decision_text or "此議題已送人工裁決，但暫未定案。",
             decision=decision_text,
             mediator_compromise={},
@@ -302,6 +291,11 @@ def execute_human_decision_queue(
         )
         if decision_id:
             resolution["decision_id"] = decision_id
+        resolution["human_choice"] = {
+            "chosen_option_id": resolution_raw.get("chosen_option_id", ""),
+            "chosen_option_title": resolution_raw.get("chosen_option_title", ""),
+            "chosen_options": resolution_raw.get("chosen_options", []),
+        }
         runner.meeting_records.append(
             {"issue_id": issue.get("id"), "resolution": resolution}
         )
@@ -474,7 +468,7 @@ class MeetingRunner:
         )
 
     def log_resolution_done(self, issue_id: str, resolution: Dict[str, Any]) -> None:
-        status = str(resolution.get("resolution_status") or "").strip() or "unknown"
+        status = str(resolution.get("status") or "").strip() or "unknown"
         if resolution.get("needs_human"):
             self.logger.info("  收斂結果：需要人類裁決｜%s", resolution.get("summary", ""))
         else:
@@ -489,14 +483,63 @@ class MeetingRunner:
     def issue_open_questions(self, issue_id: str) -> List[Dict]:
         return [q for q in self.open_questions if q.get("issue_id") == issue_id]
 
+    @staticmethod
+    def enrich_resolution_changes(resolution: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(resolution, dict):
+            return {}
+        if not resolution.get("requirement_changes"):
+            requirement_changes = []
+            for req_id in resolution.get("affected_requirement_ids") or []:
+                req_id = str(req_id or "").strip()
+                if req_id:
+                    requirement_changes.append({"id": req_id, "change": "confirmed_or_updated"})
+            for row in resolution.get("url_updates") or []:
+                if not isinstance(row, dict):
+                    continue
+                target = str(row.get("id") or row.get("source_id") or "").strip()
+                action = str(row.get("action") or "").strip()
+                if target and action:
+                    requirement_changes.append({"id": target, "change": action})
+            if requirement_changes:
+                resolution["requirement_changes"] = requirement_changes
+        if not resolution.get("model_changes"):
+            model_updates = []
+            artifact_updates = resolution.get("artifact_updates") if isinstance(resolution.get("artifact_updates"), dict) else {}
+            model_update = artifact_updates.get("system_models") if isinstance(artifact_updates, dict) else None
+            if isinstance(model_update, dict) and model_update:
+                model_updates.append(model_update)
+            elif isinstance(model_update, list):
+                model_updates.extend(row for row in model_update if isinstance(row, dict))
+            if model_updates:
+                resolution["model_changes"] = model_updates
+        if not resolution.get("open_questions") and resolution.get("new_open_questions"):
+            resolution["open_questions"] = resolution.get("new_open_questions") or []
+        if not resolution.get("follow_up_actions"):
+            follow_ups = []
+            if resolution.get("new_open_questions") or resolution.get("unresolved_points"):
+                follow_ups.append("track_open_questions")
+            if resolution.get("affected_requirement_ids") or resolution.get("url_updates"):
+                follow_ups.append("general_update_draft")
+            if resolution.get("model_changes"):
+                follow_ups.append("sync_system_models")
+            if follow_ups:
+                resolution["follow_up_actions"] = follow_ups
+        return resolution
+
     def current_meeting_issues(self) -> List[Dict[str, Any]]:
         rows = []
-        for row in self.artifact.get("meeting_issues", []) or []:
+        source = self.artifact.get("meeting_issues", []) or []
+        if not isinstance(source, list):
+            return rows
+        for row in source:
             if not isinstance(row, dict):
                 continue
-            if int(row.get("round") or -1) != int(self.round_num):
+            row_round = row.get("round")
+            if row_round is not None and int(row_round or -1) != int(self.round_num):
                 continue
-            rows.append(dict(row))
+            normalized = dict(row)
+            normalized.setdefault("round", self.round_num)
+            rows.append(normalized)
         return rows
 
     def load_meeting_issues(self) -> None:
@@ -599,7 +642,7 @@ class MeetingRunner:
         self.artifact.pop("_issue_research_results", None)
         self.artifact.pop("current_issue", None)
         if self.output_artifact is not None:
-            for key in ("URL", "REQ", "scope", "system_models", "model_consistency_report", "feedback", "conflict", "open_questions"):
+            for key in ("URL", "REQ", "scope", "system_models", "feedback", "conflict", "open_questions"):
                 if key in self.artifact:
                     self.output_artifact[key] = self.artifact[key]
             self.store.save_artifact(self.output_artifact)
@@ -804,13 +847,14 @@ class MeetingRunner:
         return {
             "issue": {
                 "id": issue.get("id"),
+                "meeting_id": issue.get("meeting_id"),
                 "title": issue.get("title"),
                 "category": issue.get("category"),
                 "discussion_mode": issue.get("discussion_mode"),
                 "discussion_rounds": issue.get("discussion_rounds"),
             },
             "source_summary": {
-                "source_ids": source_ids,
+                "source": source_ids,
                 "URL": selected_rows(self.artifact.get("URL", []), ("URL-",)),
                 "REQ": selected_rows(self.artifact.get("REQ", []), ("REQ-",)),
                 "conflicts": selected_conflicts,
@@ -974,6 +1018,9 @@ class MeetingRunner:
         resolution: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         meeting_record = self.ensure_meeting_record(issue)
+        meeting_id = str(meeting_record.get("meeting_id") or "").strip()
+        if meeting_id:
+            issue["meeting_id"] = meeting_id
         meeting_record["category"] = issue.get("category", "")
         meeting_record["proposed_by"] = issue.get("proposed_by", "")
         meeting_record["participants"] = self.meeting_record_participants(issue)
@@ -989,6 +1036,7 @@ class MeetingRunner:
             if clean_rows:
                 meeting_record["conversation"] = clean_rows
         if resolution is not None:
+            resolution = self.enrich_resolution_changes(resolution)
             self.apply_conflict_report_resolution(issue, resolution)
             meeting_record["resolution"] = resolution
             self.apply_default_issue_completion(issue, resolution, meeting_record)
@@ -1007,7 +1055,7 @@ class MeetingRunner:
         issue: Dict[str, Any],
         resolution: Dict[str, Any],
     ) -> None:
-        status = str(resolution.get("resolution_status") or "").strip()
+        status = str(resolution.get("status") or "").strip()
         if status not in {"agreed", "human_decision"}:
             return
         conflict = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
@@ -1450,7 +1498,7 @@ class MeetingRunner:
         resolution: Dict[str, Any],
         meeting_record: Optional[Dict[str, Any]] = None,
     ) -> None:
-        status = str(resolution.get("resolution_status") or "").strip()
+        status = str(resolution.get("status") or "").strip()
         if status not in {"agreed", "human_decision"}:
             return
         proposal_ids = {
@@ -1486,7 +1534,7 @@ class MeetingRunner:
             "meeting_id": issue.get("meeting_id"),
             "title": issue.get("title"),
             "category": "align_model",
-            "description": "需求分類完成後，根據最新 REQ-* 建立或更新系統模型。",
+            "description": "需求正式化完成後，根據最新 REQ-* 建立或更新系統模型。",
             "trace": issue.get("trace", {}),
         }
         try:
@@ -1510,7 +1558,7 @@ class MeetingRunner:
             meta["model_alignment_round"] = self.round_num
             meta["model_alignment_cycle"] = int(meta.get("model_alignment_cycle") or 0) + 1
             if self.output_artifact is not None:
-                for key in ("meta", "system_models", "model_consistency_report"):
+                for key in ("meta", "system_models"):
                     if key in self.artifact:
                         self.output_artifact[key] = self.artifact[key]
                 self.store.save_artifact(self.output_artifact)
@@ -1533,23 +1581,16 @@ class MeetingRunner:
         action_result = {
             "action": "model_system",
             "steps": [
-                {
-                    "action": (row.get("decision") or {}).get("action"),
-                    "result": row.get("result", {}),
-                }
+                str((row.get("decision") or {}).get("action") or "").strip()
                 for row in (loop_result.get("opa_trace") or [])
-                if isinstance(row, dict)
+                if isinstance(row, dict) and str((row.get("decision") or {}).get("action") or "").strip()
             ],
             "system_models": self.artifact.get("system_models", []),
-            "model_consistency_report": self.artifact.get("model_consistency_report", {}),
         }
         model_rows = self.artifact.get("system_models") if isinstance(self.artifact.get("system_models"), list) else []
-        report = self.artifact.get("model_consistency_report") if isinstance(self.artifact.get("model_consistency_report"), dict) else {}
         text = (
-            f"需求分類完成後已根據最新 REQ-* 建立或更新系統模型，共 {len(model_rows)} 筆模型。"
+            f"需求正式化完成後已根據最新 REQ-* 建立或更新系統模型，共 {len(model_rows)} 筆模型。"
         )
-        if report.get("consistency_summary"):
-            text += f" 一致性摘要：{report.get('consistency_summary')}"
         raw_record = {
             "agent": "modeler",
             "round_index": "post",
@@ -1644,7 +1685,7 @@ class MeetingRunner:
             )
     
             resolution = self.mediator.build_issue_result(
-                resolution_status="pending_confirmation",
+                status="",
                 summary=decision_analysis.get("summary", ""),
                 decision="",
                 agreed_points=[],
@@ -1656,6 +1697,8 @@ class MeetingRunner:
                 recommendation=decision_analysis.get("recommendation", {}),
                 mediator_compromise=decision_analysis.get("compromise", {}),
             )
+
+        self.settle_requirements_after_issue(issue, conversation, resolution)
     
         source_ids = list(issue_artifact_ids(issue) or [])
         derived_req_ids = [
@@ -1672,6 +1715,99 @@ class MeetingRunner:
             resolution,
         )
         return resolution
+
+    def should_settle_requirements_after_issue(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+    ) -> bool:
+        if self.is_requirement_review_issue(issue):
+            return False
+        if str(issue.get("category") or "").strip() == "resolve_conflict":
+            return False
+        if str(resolution.get("status") or "").strip() not in {"agreed", "human_decision"}:
+            return False
+        if self.issue_states.get(str(issue.get("id") or "").strip(), {}).get("requirements_settled"):
+            return False
+        category = str(issue.get("category") or "").strip()
+        if category == "clarify_requirement":
+            return True
+        if any(resolution.get(key) for key in ("affected_requirement_ids", "requirement_changes", "url_updates")):
+            return True
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            for result in response.get("issue_action_results") or []:
+                if not isinstance(result, dict):
+                    continue
+                if str(result.get("action") or "").strip() in {
+                    "analyze_requirements",
+                }:
+                    return True
+        return False
+
+    def settle_requirements_after_issue(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+    ) -> None:
+        if not self.should_settle_requirements_after_issue(issue, conversation, resolution):
+            return
+        analyst = self.registry.get("analyst") if self.registry is not None else None
+        if analyst is None or not hasattr(analyst, "execute_refine_requirement"):
+            return
+        issue_id = str(issue.get("id") or "").strip()
+        resolution_text = "；".join(
+            part
+            for part in (
+                str(resolution.get("summary") or "").strip(),
+                str(resolution.get("decision") or "").strip(),
+            )
+            if part
+        )
+        synthetic_resolution = {
+            "agent": "mediator",
+            "response": {
+                "text": f"本議題收斂結果：{resolution_text}" if resolution_text else "本議題已收斂，請將可寫入需求的內容沉澱到 REQ。",
+            },
+        }
+        try:
+            action_result = analyst.execute_refine_requirement(
+                artifact=self.artifact,
+                issue=issue,
+                previous_responses=list(conversation or []) + [synthetic_resolution],
+            )
+        except Exception as exc:
+            self.logger.warning("  需求沉澱失敗：%s", exc)
+            return
+        raw_record = {
+            "agent": "analyst",
+            "round_index": "settle",
+            "is_follow_up": True,
+            "response": {
+                "actions": ["refine_requirement"],
+                "text": "根據本議題收斂結果，已將可寫入需求規格的內容沉澱到 REQ。",
+                "issue_action_results": [action_result],
+                "stance": {"state": "ready_to_close"},
+            },
+        }
+        conversation.append(raw_record)
+        self.issue_states.setdefault(issue_id, {})["requirements_settled"] = True
+        req_ids = [
+            str(row.get("id") or "").strip()
+            for row in (action_result.get("REQ") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        ]
+        if req_ids:
+            current = [
+                str(value).strip()
+                for value in (resolution.get("affected_requirement_ids") or [])
+                if str(value).strip()
+            ]
+            resolution["affected_requirement_ids"] = list(dict.fromkeys(current + req_ids))
 
     def conflict_rows_for_issue(self, issue: Dict[str, Any]) -> List[Dict[str, Any]]:
         conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
@@ -1758,7 +1894,7 @@ class MeetingRunner:
                 decision_context=decision_context,
             )
             return self.mediator.build_issue_result(
-                resolution_status="pending_confirmation",
+                status="",
                 summary=decision_analysis.get("summary", ""),
                 decision="",
                 agreed_points=[],
@@ -1811,7 +1947,7 @@ class MeetingRunner:
                 for conflict_id, text in zip(affected_conflict_ids, recommended)
             )
         return self.mediator.build_issue_result(
-            resolution_status="agreed",
+            status="agreed",
             summary=summary,
             decision=decision,
             agreed_points=recommended,
@@ -1832,7 +1968,7 @@ class MeetingRunner:
             if str(item).strip()
         }
         return (
-            title == "需求分類"
+            title == "需求正式化"
             or (
                 category == "clarify_requirement"
                 and any(source_id.endswith("-mediator-requirement-review") for source_id in proposal_ids)
@@ -1911,15 +2047,15 @@ class MeetingRunner:
                             req_ids.append(req_id)
         req_ids = list(dict.fromkeys(req_ids))
         unresolved_points = list(dict.fromkeys(unresolved_points))
-        summary = "需求分類已完成；未完全確認的內容已保留於 REQ 的 assumptions、risks 或 open questions。"
+        summary = "需求正式化已完成；未完全確認的內容已保留於 REQ 的 assumptions、risks 或 open questions。"
         if req_ids:
-            summary = f"需求分類已完成，更新 {len(req_ids)} 筆 REQ；未完全確認的內容已保留於 assumptions、risks 或 open questions。"
+            summary = f"需求正式化已完成，更新 {len(req_ids)} 筆 REQ；未完全確認的內容已保留於 assumptions、risks 或 open questions。"
         decision = (
             "接受目前 REQ 草稿作為下一版需求草稿輸入；"
             "未確認欄位不交由人類裁決，先沉澱為 assumptions、risks 或 open questions，後續正式議題再處理。"
         )
         return self.mediator.build_issue_result(
-            resolution_status="agreed",
+            status="agreed",
             summary=summary,
             decision=decision,
             mediator_compromise={"title": "", "description": "", "rationale": ""},
@@ -1943,7 +2079,7 @@ class MeetingRunner:
             if str(value).strip()
         ]
         if affected_requirements:
-            updates["requirements"] = {
+            updates["REQ"] = {
                 "ids": affected_requirements,
             }
         if resolution.get("url_updates"):
@@ -1970,12 +2106,20 @@ class MeetingRunner:
                 if not isinstance(result, dict):
                     continue
                 action = str(result.get("action") or "").strip()
-                if action in {"analyze_requirements", "refine_requirement", "refine_scope"}:
-                    updates.setdefault("requirements", {}).setdefault("actions", [])
-                    if action not in updates["requirements"]["actions"]:
-                        updates["requirements"]["actions"].append(action)
+                if action == "analyze_requirements":
+                    updates.setdefault("URL", {}).setdefault("actions", [])
+                    if action not in updates["URL"]["actions"]:
+                        updates["URL"]["actions"].append(action)
+                elif action == "refine_requirement":
+                    updates.setdefault("REQ", {}).setdefault("actions", [])
+                    if action not in updates["REQ"]["actions"]:
+                        updates["REQ"]["actions"].append(action)
                     if isinstance(result.get("REQ"), list):
-                        updates["requirements"]["REQ_count"] = len(result.get("REQ") or [])
+                        updates["REQ"]["count"] = len(result.get("REQ") or [])
+                elif action == "refine_scope":
+                    updates.setdefault("scope", {}).setdefault("actions", [])
+                    if action not in updates["scope"]["actions"]:
+                        updates["scope"]["actions"].append(action)
                 elif action == "analyze_conflicts":
                     updates.setdefault("conflict_report", {}).setdefault("actions", [])
                     if action not in updates["conflict_report"]["actions"]:
@@ -2025,7 +2169,7 @@ class MeetingRunner:
             response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
             status = self.response_state(response)
             if status not in status_counts:
-                status = "needs_more_discussion" if response.get("open_questions") else "ready_to_close"
+                continue
             status_counts[status] += 1
             agent_name = str(record_entry.get("agent") or "").strip()
             if proposer and agent_name == proposer and not proposer_status:
@@ -2094,7 +2238,7 @@ class MeetingRunner:
                 decision_context=decision_context,
             )
             status_resolution = self.mediator.build_issue_result(
-                resolution_status="pending_confirmation",
+                status="",
                 summary=decision_analysis.get("summary", ""),
                 decision="",
                 agreed_points=[],
@@ -2133,6 +2277,26 @@ class MeetingRunner:
                 or ""
             )
         resolution = self.collect.human_decision_on_issue(display_issue, options)
+        human_status = str(resolution.get("status") or "").strip()
+        if human_status != "human_decision":
+            pending = self.mediator.build_issue_result(
+                status="",
+                summary=resolution.get("summary") or "人類暫未裁決。",
+                decision="",
+                agreed_points=[],
+                unresolved_points=["等待人類裁決。"],
+                new_open_questions=[],
+                needs_human=True,
+                options=status_resolution.get("options", []),
+                recommendation=status_resolution.get("recommendation", {}),
+                mediator_compromise=status_resolution.get("mediator_compromise", {}),
+            )
+            pending["artifact_updates"] = self.artifact_updates_summary(
+                issue,
+                conversation,
+                pending,
+            )
+            return pending
         decision_text = str(resolution.get("decision", ""))
         affected_conflict_ids = [
             sid for sid in issue_artifact_ids(issue)
@@ -2164,7 +2328,7 @@ class MeetingRunner:
                 )
 
         wrapped = self.mediator.build_issue_result(
-            resolution_status="human_decision",
+            status="human_decision",
             summary=decision_text or "本議題已升級由人類裁決。",
             decision=decision_text,
             mediator_compromise={},
@@ -2175,6 +2339,11 @@ class MeetingRunner:
             url_updates=url_updates,
             needs_human=True,
         )
+        wrapped["human_choice"] = {
+            "chosen_option_id": resolution.get("chosen_option_id", ""),
+            "chosen_option_title": resolution.get("chosen_option_title", ""),
+            "chosen_options": resolution.get("chosen_options", []),
+        }
         wrapped["artifact_updates"] = self.artifact_updates_summary(
             issue,
             conversation,
@@ -2228,6 +2397,7 @@ class MeetingRunner:
         meeting_id = str(meeting_record.get("meeting_id") or "").strip()
         if not meeting_id:
             raise RuntimeError(f"formal meeting record 中 {issue_id} 缺少 meeting_id")
+        issue["meeting_id"] = meeting_id
         conversation = meeting_record.get("conversation") or []
         resolution = meeting_record.get("resolution") or {}
         meeting_md = self.mediator.write_meeting_note(
@@ -2351,12 +2521,6 @@ class MeetingRunner:
                 )
                 if isinstance(system_models, list) and system_models:
                     artifacts["system_models"] = system_models
-                consistency_report = self.issue_action_result_value(
-                    issue_action_results,
-                    "model_consistency_report",
-                )
-                if isinstance(consistency_report, dict) and consistency_report:
-                    artifacts["model_consistency_report"] = consistency_report
             if artifacts:
                 record["artifacts"] = artifacts
             if record_entry.get("is_reply"):
@@ -2419,11 +2583,10 @@ class MeetingRunner:
             if not isinstance(row, dict):
                 continue
             action = str(row.get("action") or "").strip()
-            output = row.get("output")
             if action == "analyze_requirements":
-                if output in (None, "", [], {}):
-                    continue
-                candidates = MeetingRunner.requirement_candidate_summary(output)
+                candidates = MeetingRunner.requirement_candidate_summary(
+                    {"URL": row.get("URL", [])}
+                )
                 if candidates:
                     artifacts["URL"] = candidates
             elif action == "refine_requirement":
@@ -2460,20 +2623,17 @@ class MeetingRunner:
             if not isinstance(row, dict):
                 continue
             item: Dict[str, Any] = {}
-            for key in ("id", "type", "title", "description", "requirement", "priority"):
+            for key in ("id", "type", "title", "description", "priority"):
                 value = row.get(key)
                 if value not in (None, "", [], {}):
                     item[key] = value
-            if "requirement" not in item and item.get("description"):
-                item["requirement"] = item.get("description")
-                item.pop("description", None)
-            source_ids = [
-                str(value).strip()
-                for value in (row.get("source_ids") or [])
-                if str(value).strip()
-            ]
-            if source_ids:
-                item["source_ids"] = source_ids
+            raw_source = row.get("source") or []
+            if isinstance(raw_source, list):
+                source = [str(value).strip() for value in raw_source if str(value).strip()]
+            else:
+                source = [str(raw_source).strip()] if str(raw_source or "").strip() else []
+            if source:
+                item["source"] = list(dict.fromkeys(source))
             for key in ("acceptance_criteria", "risks", "assumptions"):
                 values = [
                     str(value).strip()
@@ -2740,7 +2900,16 @@ class MeetingRunner:
                 for t in issues
             )
             if not all_saved:
-                obs["error"] = "須先將本輪目前所有議題 save_issue 後才能擴充 issue"
+                unsaved_ids = [
+                    str(t.get("id") or "").strip()
+                    for t in issues
+                    if not self.issue_states.get(t.get("id", ""), {}).get("saved", False)
+                ]
+                obs["result"] = {
+                    "added": 0,
+                    "message": "尚有未存檔議題，略過追加議題",
+                    "unsaved_issue_ids": [issue_id for issue_id in unsaved_ids if issue_id],
+                }
                 return obs
             skip = set()
             for disc in self.artifact.get("discussions", []):
@@ -2836,7 +3005,7 @@ class MeetingRunner:
             needs_human = bool(resolution.get("needs_human"))
             obs["result"] = {
                 "issue_id": issue_id,
-                "resolution_status": resolution.get("resolution_status", ""),
+                "status": resolution.get("status", ""),
                 "summary": resolution.get("summary", ""),
                 "agreed_points_count": len(resolution.get("agreed_points", []) or []),
                 "unresolved_points_count": len(resolution.get("unresolved_points", []) or []),
@@ -2844,10 +3013,14 @@ class MeetingRunner:
             }
             obs["status"] = "needs_human" if needs_human else "resolved"
             obs["issue_id"] = issue_id
-            obs["summary"] = resolution.get("summary", "") or resolution.get("resolution_status", "")
+            obs["summary"] = resolution.get("summary", "") or resolution.get("status", "")
             if needs_human:
+                self.issue_states[issue_id]["needs_human"] = True
+                self.issue_states[issue_id]["pending_resolution"] = resolution
                 self.issue_states[issue_id]["resolution"] = None
             else:
+                self.issue_states[issue_id]["needs_human"] = False
+                self.issue_states[issue_id]["pending_resolution"] = None
                 self.persist_formal_meeting_progress(
                     issue,
                     conversation=conversation,
@@ -2873,7 +3046,15 @@ class MeetingRunner:
             )
             decision_text = str(wrapped.get("decision") or "")
             self.log_human_judgment_done(issue_id, decision_text)
+            self.settle_requirements_after_issue(issue, conversation, wrapped)
+            wrapped["artifact_updates"] = self.artifact_updates_summary(
+                issue,
+                conversation,
+                wrapped,
+            )
             self.issue_states[issue_id]["resolution"] = wrapped
+            self.issue_states[issue_id]["needs_human"] = False
+            self.issue_states[issue_id]["pending_resolution"] = None
             self.persist_formal_meeting_progress(
                 issue,
                 conversation=conversation,
@@ -2960,7 +3141,8 @@ class MeetingRunner:
                     "issue_id": issue_id,
                     "discussed": issue_state.get("discussed", False),
                     "resolved": issue_state.get("resolution") is not None,
-                    "resolution": (issue_state.get("resolution") or {}).get("resolution_status"),
+                    "needs_human": bool(issue_state.get("needs_human")),
+                    "resolution": (issue_state.get("resolution") or {}).get("status"),
                     "saved": issue_state.get("saved", False),
                 }
             )

@@ -94,14 +94,15 @@ class ExpertDomainResearch:
         self, artifact,
         research_results, iteration, max_iterations,
     ):
-        user_requirements = research_requirement_candidates(artifact)
+        url_requirements = research_requirement_candidates(artifact)
         existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
         return {
             "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
             "scenario": scenario_prompt_value(scenario_source),
             "scope": artifact.get("scope", {}),
-            "user_requirements": user_requirements,
+            "URL": url_requirements,
+            "REQ": artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else [],
             "stakeholders": research_stakeholders(artifact),
             "open_questions": research_open_questions(artifact),
             "has_existing_research": bool(existing),
@@ -133,7 +134,8 @@ class ExpertDomainResearch:
                 "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": scenario_prompt_value(scenario_source),
                 "scope": artifact.get("scope", {}),
-                "user_requirements": research_requirement_candidates(artifact),
+                "URL": research_requirement_candidates(artifact),
+                "REQ": artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else [],
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
                 "existing_document_evidence": artifact.get("document_evidence", []) or [],
@@ -149,7 +151,7 @@ class ExpertDomainResearch:
 - 只整理和研究問題、source requirements 或目前議題直接相關的文件證據。
 - 若文件沒有相關內容，document_evidence 輸出空陣列，並在 gaps 說明缺口。
 - 每筆 document_evidence 必須包含 source；source 要能追蹤到文件名稱、路徑或片段位置。
-- related_requirement_ids 只能引用輸入 user_requirements 中存在的 id；不能編造 URL-*。
+- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 id；不能編造 URL-*。
 - 不要根據文件證據產生正式需求；只做 evidence summary。
 
 # 輸出 JSON
@@ -199,13 +201,35 @@ class ExpertDomainResearch:
                 "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": scenario_prompt_value(scenario_source),
                 "scope": artifact.get("scope", {}),
-                "user_requirements": research_requirement_candidates(artifact),
+                "URL": research_requirement_candidates(artifact),
+                "REQ": artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else [],
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
                 "document_evidence": artifact.get("document_evidence", []) or [],
             }
             source_ref = research_source(artifact)
-            task = render_prompt('agents_profile_expert_domain_research_task_24', **locals())
+            task = f"""依照 domain-research skill，針對以下問題蒐集並整理領域研究證據。
+
+研究問題：
+{query}
+
+專案邊界：
+- feedback 只作為領域研究輔助資料，不產生正式需求。
+- 優先使用 document_evidence；不足時才用 web_search 補外部公開資料、法規、標準、官方文件、第三方條款或最佳實務。
+- findings、constraints、risks、recommendations 的每個 item 必須包含 text、related_requirement_ids 與 source。
+- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 URL-*；無法對應單一需求時用空陣列。
+- sources 使用純文字來源或完整 URL，不使用 Markdown link；不要放長段分析。
+- constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
+- 本次 item.source 使用：{source_ref}
+
+輸出 JSON：
+{{
+  "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "sources": [],
+  "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}]
+}}"""
             messages = self.build_direct_messages(task, context=context)
             try:
                 raw = (
@@ -242,7 +266,25 @@ class ExpertDomainResearch:
                 "document_evidence": artifact.get("document_evidence", []) or [],
             }
             source_ref = research_source(artifact)
-            task = render_prompt('agents_profile_expert_domain_research_task_25', **locals())
+            task = f"""依照 domain-research skill，綜合 research_results 與 existing_research，整理成本專案 feedback JSON。
+
+專案邊界：
+- 只做合併、去重、保留來源與整理格式；不新增 research_results / existing_research / document_evidence 以外的結論。
+- feedback 只作為領域研究輔助資料，不產生正式需求。
+- findings、constraints、risks、recommendations 的每個 item 保持 text、related_requirement_ids 與 source。
+- related_requirement_ids 只能引用輸入資料中已出現的 URL-*；無法對應單一需求時用空陣列。
+- sources 使用純文字來源或完整 URL，不使用 Markdown link；不要放長段分析。
+- constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
+- 本次新增 item.source 使用：{source_ref}
+
+輸出 JSON：
+{{
+  "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "sources": [],
+  "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+  "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}]
+}}"""
             try:
                 raw = self.invoke_skill("domain-research", task, context=context)
                 dr = clean_domain_research(

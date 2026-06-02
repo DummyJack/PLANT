@@ -11,7 +11,11 @@ from agents.profile.conflict_review import (
     CONFLICT_REVIEW_RESPONSE_CONTRACT,
     conflict_review_text_hint,
 )
-from agents.profile.issue_response_prompt import READY_TO_CLOSE_QUALITY_GATE, STANCE_RESPONSE_TEXT_RULES
+from agents.profile.issue_response_prompt import (
+    READY_TO_CLOSE_QUALITY_GATE,
+    STANCE_RESPONSE_TEXT_RULES,
+    issue_response_context_sections,
+)
 
 from .prompts import (
     ANALYST_ELICITATION_CONTEXT_RULES,
@@ -69,7 +73,7 @@ class AnalystIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 5,
+        max_items: int = 20,
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="analyst_issue_proposal",
@@ -149,7 +153,7 @@ class AnalystIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 5),
+            "max_items": kwargs.get("max_items", 20),
             "latest_draft": artifact.get("latest_draft", ""),
             "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
@@ -189,7 +193,7 @@ class AnalystIssues:
                 "format_error": f"Analyst issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 5)
+        max_items = int(observation.get("max_items") or 20)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
@@ -289,6 +293,8 @@ class AnalystIssues:
             proposals.append(
                 {
                     "title": title,
+                    "category": str(row.get("category") or "").strip(),
+                    "issue_focus": str(row.get("issue_focus") or "").strip(),
                     "expect_outcome": expect_outcome,
                     "sources": sources,
                     "importance": importance,
@@ -308,37 +314,20 @@ class AnalystIssues:
         previous_responses: Optional[List[Dict[str, Any]]],
         artifact_context: Optional[Dict[str, Any]],
     ) -> str:
-        issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
-        issue_id = str(issue.get("id") or "")
-        target_stakeholders = [
-            str(name).strip()
-            for name in (issue.get("target_stakeholders") or [])
-            if str(name).strip()
-        ]
-
-        prev_text = ""
-        if previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n前面的發言:\n" + "\n\n".join(parts)
-
-        context_text = ""
-        if artifact_context:
-            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
-
-        recent_ask_history_text = ""
-        recent_ask_history = issue.get("recent_ask_history") or []
-        if recent_ask_history:
-            recent_ask_history_text = (
-                "\n# 最近幾輪正式提問摘要\n"
-                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
-            )
-        skill_section = ""
         skill_context = self.get_optional_skill_context(issue, artifact_context)
-        if skill_context:
-            skill_section = f"\n# 可用技能參考（本輪自行判斷使用）\n{skill_context}\n"
+        sections = issue_response_context_sections(
+            issue=issue,
+            previous_responses=previous_responses,
+            artifact_context=artifact_context,
+            skill_context=skill_context,
+        )
+        issue_text = sections["issue_text"]
+        issue_id = sections["issue_id"]
+        target_stakeholders = sections["target_stakeholders"]
+        prev_text = sections["prev_text"]
+        context_text = sections["context_text"]
+        recent_ask_history_text = sections["recent_ask_history_text"]
+        skill_section = sections["skill_section"]
         elicitation_hint = ""
         task_block = ANALYST_ISSUE_TASK
         rules_block = ANALYST_ISSUE_RULES
@@ -365,7 +354,7 @@ class AnalystIssues:
                 "\n"
                 + READY_TO_CLOSE_QUALITY_GATE
             )
-        contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
         expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
         analyst_expected = expected_actions.get("analyst")
         analyst_expected_actions = []

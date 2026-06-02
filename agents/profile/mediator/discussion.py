@@ -6,15 +6,52 @@ from typing import Any, Dict, List, Optional
 
 class MediatorDiscussion:
     @staticmethod
+    def retry_issue_response_prompt(
+        issue: Dict[str, Any],
+        previous_responses: Optional[List[Dict[str, Any]]],
+        action_results: List[Dict[str, Any]],
+        *,
+        is_answer_question: bool,
+    ) -> str:
+        output_contract = (
+            '{\n  "text": "直接回答問題",\n  "open_questions": []\n}'
+            if is_answer_question
+            else '{\n  "text": "根據本輪 action 結果提出自然語言會議發言",\n  "open_questions": [],\n  "stance": {"state": "ready_to_close"}\n}'
+        )
+        stance_rule = (
+            ""
+            if is_answer_question
+            else "- stance.state 必須輸出，且只能是 ready_to_close 或 needs_more_discussion。\n"
+        )
+        return (
+            "# 任務\n"
+            "上一個會議發言不符合輸出契約。請根據同一議題、前文與本輪 action 結果，重新產生一次正式會議發言。\n\n"
+            "# 限制\n"
+            "- 不要重跑 action，不要新增或修改 artifact。\n"
+            "- 不要輸出 action 結果 JSON；text 必須是自然語言發言。\n"
+            f"{stance_rule}"
+            "- 若 action 產生或更新模型、需求、feedback 或分析結果，text 要說明這些結果如何支持本議題判斷。\n"
+            "- open_questions 只放本議題仍需要對方回答的關鍵問題；沒有就輸出空陣列。\n\n"
+            "# 議題\n"
+            f"{json.dumps(issue, ensure_ascii=False, indent=2)}\n\n"
+            "# 前文\n"
+            f"{json.dumps(previous_responses or [], ensure_ascii=False, indent=2)}\n\n"
+            "# 本輪 action 結果\n"
+            f"{json.dumps(action_results, ensure_ascii=False, indent=2)}\n\n"
+            "# 輸出 JSON\n"
+            f"{output_contract}"
+        )
+
+    @staticmethod
     def suppress_open_questions_for_issue(issue: Dict[str, Any]) -> bool:
         title = str((issue or {}).get("title") or "").strip()
         category = str((issue or {}).get("category") or "").strip()
         return (
-            title in {"解決需求衝突", "需求分類"}
+            title in {"解決需求衝突", "需求正式化"}
             or category in {"resolve_conflict"}
             or (
                 category == "clarify_requirement"
-                and title == "需求分類"
+                and title == "需求正式化"
             )
         )
 
@@ -44,7 +81,7 @@ class MediatorDiscussion:
             "reason": str(raw.get("reason") or "").strip(),
         }
 
-    def validate_issue_response_contract(
+    def validate_conflict_review_contract(
         self,
         response: Dict[str, Any],
         contract: Optional[Dict[str, Any]],
@@ -175,7 +212,7 @@ class MediatorDiscussion:
         issue: Dict[str, Any],
         agent_name: str,
     ) -> Dict[str, Any]:
-        response = self.validate_issue_response_contract(response, contract)
+        response = self.validate_conflict_review_contract(response, contract)
         return self.validate_requirement_elicitation_response(response, issue, agent_name)
 
     def run_agent_response_loop(
@@ -187,7 +224,7 @@ class MediatorDiscussion:
         artifact_context: Optional[Dict[str, Any]] = None,
         artifact: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        contract = issue.get("response_contract") if isinstance(issue, dict) else None
+        contract = issue.get("conflict_review_contract") if isinstance(issue, dict) else None
         context = {
             "issue": issue,
             "previous_responses": previous_responses,
@@ -256,9 +293,14 @@ class MediatorDiscussion:
             previous_responses=previous_responses,
             artifact_context=final_context,
         )
+        is_pair_review_round = (
+            isinstance(contract, dict)
+            and str(contract.get("type") or "").strip() == "pair_reviews"
+        )
         response = agent.chat_for_issue_response(
             agent.build_direct_messages(user_prompt),
-            include_stance=not is_answer_question,
+            include_stance=not is_answer_question and not is_pair_review_round,
+            allow_pair_reviews=is_pair_review_round,
         )
         response = self.validate_agent_response(
             response,
@@ -266,39 +308,35 @@ class MediatorDiscussion:
             issue=prompt_issue,
             agent_name=getattr(agent, "name", ""),
         )
+        if response.get("format_error") and not is_pair_review_round:
+            retry_prompt = self.retry_issue_response_prompt(
+                prompt_issue,
+                previous_responses,
+                action_results,
+                is_answer_question=is_answer_question,
+            )
+            response = agent.chat_for_issue_response(
+                agent.build_direct_messages(retry_prompt),
+                include_stance=not is_answer_question,
+                allow_pair_reviews=False,
+            )
+            response = self.validate_agent_response(
+                response,
+                contract=contract,
+                issue=prompt_issue,
+                agent_name=getattr(agent, "name", ""),
+            )
         if response.get("format_error"):
             raise ValueError(
                 f"{getattr(agent, 'name', '')} agent response output contract invalid after agent loop: "
                 f"{response.get('format_error')}"
             )
-        is_pair_review_round = (
-            isinstance(contract, dict)
-            and str(contract.get("type") or "").strip() == "pair_reviews"
-        )
         if not is_pair_review_round:
-            response_text = str(response.get("text") or "")
-            if response_text and response_text.startswith("{") and response_text.endswith("}"):
-                try:
-                    parsed = json.loads(response_text)
-                except Exception:
-                    parsed = None
-                else:
-                    if isinstance(parsed, dict) and "pair_reviews" in parsed:
-                        response["text"] = "（本發言無可讀內容）"
             response.pop("pair_reviews", None)
         if not is_answer_question and (not actions or actions[-1] != "respond_issue"):
             actions.append("respond_issue")
         if self.suppress_open_questions_for_issue(issue):
             response["open_questions"] = []
-            stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
-            state = str(stance.get("state") or "").strip()
-            if state not in {"ready_to_close", "needs_more_discussion"}:
-                response["stance"] = {"state": "ready_to_close"}
-        default_state = "ready_to_close"
-        if response.get("open_questions"):
-            default_state = "needs_more_discussion"
-        if not isinstance(response.get("stance"), dict) or not str(response.get("stance", {}).get("state") or "").strip():
-            response["stance"] = {"state": default_state}
         return {
             "agent": getattr(agent, "name", ""),
             "actions": actions or ([result.get("action")] if result.get("action") else []),
@@ -319,75 +357,6 @@ class MediatorDiscussion:
         artifact_context: Optional[Dict[str, Any]] = None,
         artifact: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if getattr(agent, "name", "") == "user":
-            expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
-            user_expected = expected_actions.get("user")
-            if isinstance(user_expected, str):
-                user_expected = [user_expected]
-            action = (
-                "answer_question"
-                if str(issue.get("id") or "").strip() == "OQ"
-                or "answer_question" in [str(item).strip() for item in (user_expected or [])]
-                else "respond_issue"
-            )
-            response = agent.execute_issue_response_action(
-                decision={
-                    "action": action,
-                    "params": {},
-                    "reasoning": (
-                        "回答其他參與者提出的問題。"
-                        if action == "answer_question"
-                        else "以利害關係人視角回應議題。"
-                    ),
-                },
-                issue=issue,
-                previous_responses=previous_responses,
-                artifact_context=artifact_context,
-                artifact=artifact,
-                observation={
-                    "artifact_context": artifact_context
-                    or agent.load_artifact_context_from_files(),
-                },
-            )
-            if response.get("format_error"):
-                raise ValueError(
-                    f"user agent response output contract invalid: {response.get('format_error')}"
-                )
-            response_actions = response.get("actions") if isinstance(response.get("actions"), list) else []
-            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
-            is_pair_review_round = str(contract.get("type") or "").strip() == "pair_reviews"
-            if not is_pair_review_round:
-                response_text = str(response.get("text") or "")
-                if response_text and response_text.startswith("{") and response_text.endswith("}"):
-                    try:
-                        parsed = json.loads(response_text)
-                    except Exception:
-                        parsed = None
-                    else:
-                        if isinstance(parsed, dict) and "pair_reviews" in parsed:
-                            response["text"] = "（本發言無可讀內容）"
-                response.pop("pair_reviews", None)
-            if self.suppress_open_questions_for_issue(issue):
-                response["open_questions"] = []
-                stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
-                state = str(stance.get("state") or "").strip()
-                if state not in {"ready_to_close", "needs_more_discussion"}:
-                    response["stance"] = {"state": "ready_to_close"}
-            return {
-                "agent": getattr(agent, "name", ""),
-                "actions": [
-                    str(action).strip()
-                    for action in response_actions
-                    if str(action).strip()
-                ],
-                "text": response.get("text", ""),
-                "pair_reviews": response.get("pair_reviews", []),
-                "open_questions": response.get("open_questions", []),
-                "speaking_as": response.get("speaking_as", []),
-                "is_follow_up": response.get("is_follow_up", False),
-                "stance": response.get("stance", {}),
-            }
-
         required = (
             "run_action_loop",
             "build_issue_response_observation",
@@ -581,6 +550,7 @@ class MediatorDiscussion:
         for agent_name in self.pending_question_targets(
             list(previous_responses or []) + record,
             registry,
+            issue,
         ):
             answer_records, answer_oq = self.answer_questions_for_agent(
                 list(previous_responses or []) + record,
@@ -598,15 +568,55 @@ class MediatorDiscussion:
             return (record, oq_records)
         return record
 
-    def pending_question_targets(self, record: List[Dict], registry) -> List[str]:
+    def pending_question_targets(
+        self,
+        record: List[Dict],
+        registry,
+        issue: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         targets: List[str] = []
-        for row in self.pending_open_questions(record):
+        for row in self.pending_open_questions(record, issue=issue, registry=registry):
             target = str(row.get("to_agent") or "").strip()
             if target and registry and registry.get(target):
                 targets.append(target)
         return list(dict.fromkeys(targets))
 
-    def pending_open_questions(self, record: List[Dict]) -> List[Dict]:
+    @staticmethod
+    def stakeholder_names_from_issue(issue: Optional[Dict[str, Any]]) -> set[str]:
+        names = {
+            str(name).strip()
+            for name in ((issue or {}).get("target_stakeholders") or [])
+            if str(name).strip()
+        }
+        for row in ((issue or {}).get("stakeholders") or []):
+            if isinstance(row, dict):
+                name = str(row.get("name") or "").strip()
+                if name:
+                    names.add(name)
+        return names
+
+    def normalize_open_question_target(
+        self,
+        raw_target: Any,
+        *,
+        issue: Optional[Dict[str, Any]],
+        registry=None,
+    ) -> tuple[str, List[str]]:
+        target = str(raw_target or "user").strip() or "user"
+        if registry and registry.get(target):
+            return target, []
+        stakeholder_names = self.stakeholder_names_from_issue(issue)
+        if target in stakeholder_names:
+            return "user", [target]
+        return target, []
+
+    def pending_open_questions(
+        self,
+        record: List[Dict],
+        *,
+        issue: Optional[Dict[str, Any]] = None,
+        registry=None,
+    ) -> List[Dict]:
         answered = set()
         for c in record:
             if not c.get("is_reply"):
@@ -631,24 +641,39 @@ class MediatorDiscussion:
                 elif not isinstance(q, dict):
                     continue
                 question = str(q.get("question") or "").strip()
-                to_agent = str(q.get("to") or "user").strip() or "user"
+                to_agent, target_stakeholders = self.normalize_open_question_target(
+                    q.get("to") or "user",
+                    issue=issue,
+                    registry=registry,
+                )
+                if to_agent == from_agent:
+                    continue
                 key = (from_agent, to_agent, question)
                 if not question or key in seen or key in answered:
                     continue
                 seen.add(key)
-                pending.append({
+                pending_row = {
                     "from_agent": from_agent,
                     "to_agent": to_agent,
                     "question": question,
-                })
+                }
+                if target_stakeholders:
+                    pending_row["target_stakeholders"] = target_stakeholders
+                    pending_row["to_stakeholder"] = target_stakeholders[0]
+                pending.append(pending_row)
         return pending
 
     def get_questions_to_agent(
-        self, record: List[Dict], to_agent_name: str
+        self,
+        record: List[Dict],
+        to_agent_name: str,
+        *,
+        issue: Optional[Dict[str, Any]] = None,
+        registry=None,
     ) -> List[Dict]:
         """從 record 中蒐集所有指向 to_agent_name 的 open_questions。"""
         return [
-            q for q in self.pending_open_questions(record)
+            q for q in self.pending_open_questions(record, issue=issue, registry=registry)
             if q.get("to_agent") == to_agent_name
         ]
 
@@ -663,7 +688,7 @@ class MediatorDiscussion:
         added: List[Dict] = []
         oq_records: List[Dict] = []
         current_record = list(record)
-        for agent_name in self.pending_question_targets(current_record, registry):
+        for agent_name in self.pending_question_targets(current_record, registry, issue):
             answer_records, answer_oq = self.answer_questions_for_agent(
                 current_record,
                 agent_name,
@@ -690,7 +715,7 @@ class MediatorDiscussion:
         artifact_context: Optional[Dict[str, Any]] = None,
     ) -> tuple:
         """讓 agent_name 即時回答目前 record 中指向他的問題。回傳 (要 append 的 record, oq_records)。"""
-        questions = self.get_questions_to_agent(record, agent_name)
+        questions = self.get_questions_to_agent(record, agent_name, issue=issue, registry=registry)
         if not questions:
             return ([], [])
         target_agent = registry.get(agent_name) if registry else None
@@ -709,7 +734,8 @@ class MediatorDiscussion:
                         "回答後若尚未發言，可在輪到該 agent 發言時依此問答補充或微調立場。）"
                     ),
                     target_stakeholders=(
-                        (issue or {}).get("target_stakeholders", [])
+                        q_record.get("target_stakeholders")
+                        or (issue or {}).get("target_stakeholders", [])
                         if agent_name == "user"
                         else []
                     ),

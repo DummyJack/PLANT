@@ -51,7 +51,7 @@ Requirement:
   id: REQ-[number]
   title: [brief description]
   type: functional|non-functional|constraint
-  priority: must|should|could|wont
+  priority: must|should|could
   description: [detailed description]
   rationale: [why this is needed]
   source: [stakeholder/document]

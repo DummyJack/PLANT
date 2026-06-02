@@ -33,7 +33,8 @@ VALID_ELICITATION_ACTIONS = {
     "propose_finish",
 }
 VALID_RELATED_ARTIFACTS = {
-    "requirements",
+    "URL",
+    "REQ",
     "conflict_report",
     "conversation",
     "system_models",
@@ -113,9 +114,9 @@ def issue_proposal(
     if not title:
         return None
 
-    importance = (item.get("importance") or "medium").strip().lower()
+    importance = str(item.get("importance") or "").strip().lower()
     if importance not in VALID_PRIORITY_HINTS:
-        importance = "medium"
+        return None
 
     issue_id = (item.get("issue_id") or "").strip()
     if not issue_id:
@@ -126,6 +127,8 @@ def issue_proposal(
     return {
         "issue_id": issue_id,
         "title": title,
+        "category": str(item.get("category") or "").strip(),
+        "issue_focus": str(item.get("issue_focus") or "").strip(),
         "expect_outcome": str(item.get("expect_outcome") or "").strip(),
         "sources": sources,
         "expected_actions": expected_actions,
@@ -378,9 +381,9 @@ def judgment_data(
         summary = str(option.get("summary") or "").strip()
         if not summary:
             continue
-        risk = str(option.get("risk") or "medium").strip().lower() or "medium"
+        risk = str(option.get("risk") or "").strip().lower()
         if risk not in VALID_IMPACT_LEVELS:
-            risk = "medium"
+            raise ValueError(f"decision option risk 不合法: {risk or '<empty>'}")
         clean_options.append(
             {
                 "id": oid,
@@ -466,6 +469,18 @@ def close_issue_data(
         affected_conflict_ids = list(source_conflict_ids)
     elif source_conflict_ids:
         affected_conflict_ids = list(affected_conflict_ids) + list(source_conflict_ids)
+    requirement_changes = data.get("requirement_changes", [])
+    if not isinstance(requirement_changes, list):
+        requirement_changes = []
+    model_changes = data.get("model_changes", [])
+    if not isinstance(model_changes, list):
+        model_changes = []
+    open_questions = data.get("open_questions", [])
+    if not isinstance(open_questions, list):
+        open_questions = []
+    follow_up_actions = data.get("follow_up_actions", [])
+    if not isinstance(follow_up_actions, list):
+        follow_up_actions = []
     return {
         "summary": summary,
         "decision": decision,
@@ -478,4 +493,10 @@ def close_issue_data(
         "affected_conflict_ids": list(dict.fromkeys(
             str(x).strip() for x in affected_conflict_ids if str(x).strip()
         )),
+        "requirement_changes": [row for row in requirement_changes if isinstance(row, dict)],
+        "model_changes": [row for row in model_changes if isinstance(row, dict)],
+        "open_questions": [row for row in open_questions if isinstance(row, dict)],
+        "follow_up_actions": [
+            str(x).strip() for x in follow_up_actions if str(x).strip()
+        ],
     }

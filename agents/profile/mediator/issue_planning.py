@@ -43,6 +43,52 @@ class MediatorIssuePlanning:
             return category
         return None
 
+    @staticmethod
+    def normalize_issue_participants(
+        issue: Dict[str, Any],
+        *,
+        registered_agents: List[str],
+        stakeholder_names: List[str],
+    ) -> Dict[str, Any]:
+        category = str(issue.get("category") or "").strip()
+        title = str(issue.get("title") or "").strip()
+        current = [
+            str(value).strip()
+            for value in (issue.get("participants") or [])
+            if str(value).strip()
+        ]
+        required_by_category = {
+            "clarify_requirement": ["analyst", "user"],
+            "define_boundary": ["analyst", "user", "modeler"],
+            "tradeoff": ["analyst", "user"],
+            "align_model": ["modeler", "analyst"],
+            "resolve_conflict": ["user", "analyst"],
+        }
+        participants = list(current)
+        for agent in required_by_category.get(category, []):
+            if agent not in participants:
+                participants.append(agent)
+        proposed_by = str(issue.get("proposed_by") or "").strip()
+        if proposed_by and proposed_by != "mediator" and proposed_by in registered_agents:
+            if proposed_by not in participants:
+                participants.insert(0, proposed_by)
+        if title == "需求正式化":
+            participants = [agent for agent in ["analyst", "user"] if agent in set(participants)]
+            if "analyst" not in participants:
+                participants.insert(0, "analyst")
+            if "user" not in participants:
+                participants.append("user")
+        issue["participants"] = list(dict.fromkeys(participants))
+        if "user" in issue["participants"]:
+            targets = [
+                str(value).strip()
+                for value in (issue.get("target_stakeholders") or [])
+                if str(value).strip()
+            ]
+            if not targets:
+                issue["target_stakeholders"] = list(stakeholder_names)
+        return issue
+
     def run_meeting_planning_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="meeting_planning",
@@ -278,9 +324,14 @@ class MediatorIssuePlanning:
             if not artifact_name:
                 continue
 
-            if artifact_name in {"requirements", "requirement", "user_requirements"}:
+            if artifact_name == "URL":
                 rows = requirement_discussion_pool(source) or requirement_discussion_pool(meeting_source)
-                add_section("requirements", self.related_items(rows, source_ids))
+                add_section("URL", self.related_items(rows, source_ids))
+                continue
+
+            if artifact_name == "REQ":
+                rows = source.get("REQ") if isinstance(source.get("REQ"), list) else meeting_source.get("REQ", [])
+                add_section("REQ", self.related_items(rows, source_ids))
                 continue
 
             if artifact_name == "conflict_report":
@@ -366,8 +417,38 @@ class MediatorIssuePlanning:
                 "discarded": [],
             }
 
+        def proposal_priority(row: Dict[str, Any]) -> int:
+            focus = str((row or {}).get("issue_focus") or "").strip()
+            category = str((row or {}).get("category") or "").strip()
+            title_reason = " ".join(
+                str((row or {}).get(key) or "")
+                for key in ("title", "expect_outcome", "reason")
+            )
+            if (
+                focus == "requirement_completeness"
+                or "Requirement Completeness" in title_reason
+                or "需求完整" in title_reason
+                or "驗收" in title_reason
+                or "validation" in title_reason
+                or "metric" in title_reason
+            ):
+                return 0
+            if focus == "boundary_responsibility" or category == "define_boundary":
+                return 1
+            if focus == "tradeoff" or category == "tradeoff":
+                return 2
+            if focus == "model_alignment" or category == "align_model":
+                return 3
+            if focus == "new_requirement":
+                return 4
+            return 4
+
         triage = {"issues": [], "backlog": [], "discarded": []}
         if proposals:
+            proposals = sorted(
+                proposals,
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
             prompt = issue_selection_prompt(
                 proposals=proposals,
                 max_items=max_items,
@@ -382,9 +463,10 @@ class MediatorIssuePlanning:
             if not isinstance(triage, dict):
                 raise RuntimeError("Issue triage must return a JSON object")
 
-        selected_proposals = default_proposals + [
-            p for p in (triage.get("issues") or []) if isinstance(p, dict)
-        ]
+        selected_proposals = default_proposals + sorted(
+            [p for p in (triage.get("issues") or []) if isinstance(p, dict)],
+            key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+        )
         general_type_ids = list(active_type_ids or ISSUE_TYPE_IDS)
         is_default_conflict = lambda proposal: (
             isinstance(proposal, dict)
@@ -412,7 +494,7 @@ class MediatorIssuePlanning:
                     proposal.setdefault("participants", ["user", "analyst"])
                     proposal.setdefault("discussion_mode", "sequential")
                     proposal.setdefault("expected_actions", {"analyst": ["discuss_conflict"]})
-                elif default_title == "需求分類":
+                elif default_title == "需求正式化":
                     proposal.setdefault("category", "clarify_requirement")
                     proposal.setdefault("participants", ["analyst", "user"])
                     proposal.setdefault("discussion_mode", "sequential")
@@ -453,14 +535,6 @@ class MediatorIssuePlanning:
                     }
                 )
                 continue
-            proposal_type_ids = list(general_type_ids)
-            proposal_category_definitions = category_definitions
-            if is_default_conflict(proposal):
-                proposal_type_ids = list(dict.fromkeys(proposal_type_ids + ["resolve_conflict"]))
-                proposal_category_definitions = (
-                    category_definitions
-                    + "\n- resolve_conflict：預設需求衝突會議專用；採用或調整既有 resolution，讓需求一致。"
-                ).strip()
             artifact_context = self.related_artifact_context(
                 proposal,
                 artifact or {},
@@ -468,8 +542,8 @@ class MediatorIssuePlanning:
             plan_prompt = issue_meeting_plan_prompt(
                 issue=proposal,
                 artifact_context=artifact_context,
-                active_types=proposal_type_ids,
-                category_definitions=proposal_category_definitions,
+                active_types=general_type_ids,
+                category_definitions=category_definitions,
                 registered=registered,
                 stakeholder_names=stakeholder_names,
             )
@@ -494,11 +568,19 @@ class MediatorIssuePlanning:
         for p in meeting_issues:
             if not isinstance(p, dict):
                 continue
+            p = self.normalize_issue_participants(
+                dict(p),
+                registered_agents=registered,
+                stakeholder_names=stakeholder_names,
+            )
             normalized = meeting_issue(
                 p,
                 allowed_categories=(
-                    list(dict.fromkeys(general_type_ids + ["resolve_conflict"]))
-                    if str(p.get("title") or "").strip() == "解決需求衝突"
+                    ["resolve_conflict"]
+                    if (
+                        str(p.get("title") or "").strip() == "解決需求衝突"
+                        and str(p.get("proposed_by") or "").strip() == "mediator"
+                    )
                     else general_type_ids
                 ),
                 registered_agents=registered,
@@ -506,6 +588,11 @@ class MediatorIssuePlanning:
                 index=len(items) + 1,
             )
             if normalized:
+                normalized = self.normalize_issue_participants(
+                    normalized,
+                    registered_agents=registered,
+                    stakeholder_names=stakeholder_names,
+                )
                 items.append(normalized)
 
         def backlog_rows() -> List[Dict[str, Any]]:
@@ -626,9 +713,10 @@ class MediatorIssuePlanning:
             if (
                 str(item.get("title") or "").strip() == "解決需求衝突"
                 and str(category or "").strip() == "resolve_conflict"
+                and str(item.get("proposed_by") or "").strip() == "mediator"
             ):
                 category = "resolve_conflict"
-                allowed_categories = list(dict.fromkeys(list(active_ids or ISSUE_TYPE_IDS) + ["resolve_conflict"]))
+                allowed_categories = ["resolve_conflict"]
             else:
                 category = self.active_category(category, active_ids)
                 allowed_categories = active_ids or ISSUE_TYPE_IDS

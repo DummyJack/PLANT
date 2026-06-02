@@ -157,9 +157,9 @@ class ModelerAgent(
             "issue": self.model_issue_context(issue),
             "scenario": artifact.get("scenario", "") or artifact.get("rough_idea", ""),
             "stakeholders": self.model_stakeholders(artifact),
-            "requirements": summary_reqs,
+            "model_requirements": summary_reqs,
             "requirement_source": self.model_requirement_source(artifact),
-            "user_requirements": self.model_user_requirements(artifact),
+            "URL": self.model_user_requirements(artifact),
             "REQ": self.model_spec_requirements(artifact),
             "scope": artifact.get("scope", {}),
             "feedback": self.model_feedback(artifact),
@@ -212,9 +212,9 @@ class ModelerAgent(
                 ),
                 "scenario": artifact.get("scenario", "") or artifact.get("rough_idea", ""),
                 "stakeholders": self.model_stakeholders(artifact),
-                "requirements": reqs,
+                "model_requirements": reqs,
                 "requirement_source": self.model_requirement_source(artifact),
-                "user_requirements": self.model_user_requirements(artifact),
+                "URL": self.model_user_requirements(artifact),
                 "REQ": self.model_spec_requirements(artifact),
                 "scope": artifact.get("scope", {}),
                 "feedback": self.model_feedback(artifact),
@@ -305,6 +305,9 @@ class ModelerAgent(
                     new_row["description"] = result.get("description", "")
                 if result.get("text"):
                     new_row["text"] = result.get("text", [])
+                related_requirement_ids = self.model_related_requirement_ids(result, target)
+                if related_requirement_ids:
+                    new_row["related_requirement_ids"] = related_requirement_ids
                 new_row["source"] = artifact.get("model_source") or self.model_source(
                     artifact.get("model_revision_context")
                 )
@@ -324,6 +327,9 @@ class ModelerAgent(
                         artifact_context=artifact,
                     )
                     target_row["text"] = use_case_text.get("text", [])
+                    related_requirement_ids = self.model_related_requirement_ids(target_row)
+                    if related_requirement_ids:
+                        target_row["related_requirement_ids"] = related_requirement_ids
                 label = "更新" if existing else "新建"
                 obs["result"] = {
                     "target_model_id": target_row.get("id"),
@@ -525,13 +531,11 @@ class ModelerAgent(
         if action == "answer_question":
             model_action_result = {
                 "action": action,
-                "output": None,
                 "summary": "回答 open question，不更新專案資料。",
             }
         elif action == "respond_issue":
             model_action_result = {
                 "action": action,
-                "output": None,
                 "summary": "只產生會議回答，不更新專案資料。",
             }
         elif action == "model_system":
@@ -552,19 +556,11 @@ class ModelerAgent(
             model_action_result = {
                 "action": action,
                 "steps": [
-                    {
-                        "decision": row.get("decision", {}),
-                        "result": row.get("result", {}),
-                    }
+                    str((row.get("decision") or {}).get("action") or "").strip()
                     for row in (trace or [])
-                    if isinstance(row, dict)
+                    if isinstance(row, dict) and str((row.get("decision") or {}).get("action") or "").strip()
                 ],
                 "system_models": artifact.get("system_models", []),
                 "model_consistency_report": artifact.get("model_consistency_report", {}),
             }
-        return {
-            "action": decision.get("action", ""),
-            "status": "success",
-            "action_result": model_action_result or {"action": action, "output": None},
-            "summary": f"完成 modeler action: {decision.get('action', '')}",
-        }
+        return model_action_result or {"action": action, "summary": f"完成 modeler action: {action}"}

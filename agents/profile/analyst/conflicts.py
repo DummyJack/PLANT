@@ -469,7 +469,7 @@ class AnalystConflicts:
 
 輸出要求：
 - 兩兩判斷：只需輸出 pair_index、label、reason；若 label 是 Conflict，再輸出 type。
-- 整體判斷：Conflict 需包含 requirement_ids 或 related_requirements。
+- 整體判斷：Conflict 需包含 requirement_ids。
 - 整體判斷的 requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。
 """
 

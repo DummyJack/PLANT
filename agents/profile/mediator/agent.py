@@ -50,7 +50,7 @@ class MediatorAgentSupport:
     @staticmethod
     def build_issue_result(
         *,
-        resolution_status: str,
+        status: str,
         summary: str,
         decision: str,
         mediator_compromise: Optional[Dict[str, Any]] = None,
@@ -60,12 +60,18 @@ class MediatorAgentSupport:
         affected_conflict_ids: Optional[List[str]] = None,
         affected_requirement_ids: Optional[List[str]] = None,
         url_updates: Optional[List[Dict[str, Any]]] = None,
+        requirement_changes: Optional[List[Dict[str, Any]]] = None,
+        model_changes: Optional[List[Dict[str, Any]]] = None,
+        open_questions: Optional[List[Dict[str, Any]]] = None,
+        follow_up_actions: Optional[List[str]] = None,
         needs_human: bool = False,
         options: Optional[List[Dict[str, Any]]] = None,
         recommendation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """統一 issue_result schema。"""
-        resolution_status = (resolution_status or "").strip() or "unresolved"
+        status = (status or "").strip()
+        if status and status not in {"agreed", "human_decision"}:
+            raise ValueError(f"resolution status 不合法: {status}")
         summary = (summary or "").strip()
         decision = (decision or "").strip()
         mediator_compromise = mediator_compromise or {
@@ -91,19 +97,35 @@ class MediatorAgentSupport:
             row for row in (url_updates or [])
             if isinstance(row, dict) and str(row.get("action") or "").strip()
         ]
+        requirement_changes = [row for row in (requirement_changes or []) if isinstance(row, dict)]
+        model_changes = [row for row in (model_changes or []) if isinstance(row, dict)]
+        open_questions = [
+            q for q in (open_questions or [])
+            if isinstance(q, dict) and str(q.get("question") or "").strip()
+        ]
+        follow_up_actions = [
+            str(item).strip()
+            for item in (follow_up_actions or [])
+            if str(item).strip()
+        ]
         options = [row for row in (options or []) if isinstance(row, dict)]
         recommendation = recommendation if isinstance(recommendation, dict) else {}
         result = {
             "summary": summary,
             "decision": decision,
-            "resolution_status": resolution_status,
             "agreed_points": agreed_points,
             "unresolved_points": unresolved_points,
             "new_open_questions": new_open_questions,
             "needs_human": bool(needs_human),
             "options": options,
             "recommendation": recommendation,
+            "requirement_changes": requirement_changes,
+            "model_changes": model_changes,
+            "open_questions": open_questions,
+            "follow_up_actions": follow_up_actions,
         }
+        if status:
+            result["status"] = status
         if affected_conflict_ids:
             result["affected_conflict_ids"] = affected_conflict_ids
         if affected_requirement_ids:

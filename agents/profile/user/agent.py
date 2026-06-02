@@ -42,31 +42,17 @@ class UserAgent(
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        if isinstance(last_result, dict) and not last_result.get("error"):
-            return {
-                "action": "done",
-                "params": {},
-                "reasoning": "上一輪利害關係人回應已完成，結束本次回應。",
-            }
-        issue = observation.get("issue") or {}
-        expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
-        user_expected = expected_actions.get("user")
-        if isinstance(user_expected, str):
-            user_expected = [user_expected]
-        if (
-            str(issue.get("id") or "").strip() == "OQ"
-            or "answer_question" in [str(action).strip() for action in (user_expected or [])]
-        ):
-            return {
-                "action": "answer_question",
-                "params": {},
-                "reasoning": "以議題規劃指定的利害關係人身份回答 open question。",
-            }
-        return {
-            "action": "respond_issue",
-            "params": {},
-            "reasoning": "以利害關係人視角回應議題。",
-        }
+        return self.issue_response_decision(
+            observation,
+            done_reasoning="上一輪利害關係人回應已完成，結束本次回應。",
+            active_reasoning="根據議題類型與 open question 指派，選擇利害關係人回應策略。",
+            available_actions={
+                "answer_question": "使用時機：議題是 OQ（待回答 open question）或 expected_actions 指定 user 回答特定問題。不要使用：一般議題發言。寫回或影響：只回覆問題文字，補 `reply_to_question`、`reply_to_agent` 與 `speaking_as`，不主動更新需求。",
+                "respond_issue": "使用時機：在一般正式會議中代表被指定或最相關利害關係人給出立場、顧慮、底線與可接受條件。不要使用：回答 open question。寫回或影響：只回應發言內容，不直接更新需求。",
+            },
+            default_action="respond_issue",
+            last_result=last_result,
+        )
 
     def execute_issue_response_action(
         self,
@@ -82,24 +68,53 @@ class UserAgent(
         )
         messages = self.build_direct_messages(user_prompt)
         issue_id = str(issue.get("id") or "")
+        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
+        is_pair_review = str(contract.get("type") or "").strip() == "pair_reviews"
+        include_stance = issue_id != "OQ" and not is_pair_review
         response = self.chat_for_issue_response(
             messages,
             temperature=1,
-            include_stance=issue_id != "OQ",
+            include_stance=include_stance,
+            allow_pair_reviews=is_pair_review,
         )
+        if response.get("format_error"):
+            output_contract = (
+                '{\n  "text": "自然語言發言",\n  "open_questions": [],\n  "stance": {"state": "ready_to_close"}\n}'
+                if include_stance
+                else '{\n  "text": "自然語言回答",\n  "open_questions": []\n}'
+            )
+            stance_rule = (
+                "- stance.state 必須輸出，且只能是 ready_to_close 或 needs_more_discussion。\n"
+                if include_stance
+                else ""
+            )
+            retry_prompt = (
+                "# 任務\n"
+                "上一個利害關係人回應格式不合格。請只修正輸出格式與必要欄位，重新產生自然語言回應。\n\n"
+                "# 限制\n"
+                "- text 必須是自然語言，不要輸出 action 結果 JSON。\n"
+                f"{stance_rule}"
+                "- open_questions 沒有就輸出空陣列。\n\n"
+                "# 原始議題提示\n"
+                f"{user_prompt}\n\n"
+                "# 上次錯誤\n"
+                f"{response.get('format_error')}\n\n"
+                "# 輸出 JSON\n"
+                f"{output_contract}"
+            )
+            response = self.chat_for_issue_response(
+                self.build_direct_messages(retry_prompt),
+                temperature=1,
+                include_stance=include_stance,
+                allow_pair_reviews=is_pair_review,
+            )
 
         text = response.get("text", "")
         open_questions = (
             [] if issue_id.startswith("ELICIT-") else response.get("open_questions", [])
         )
-        stance = response.get("stance") if issue_id != "OQ" else {}
-        if issue_id != "OQ":
-            default_state = "ready_to_close"
-            if open_questions:
-                default_state = "needs_more_discussion"
-            if not isinstance(stance, dict) or not str((stance or {}).get("state") or "").strip():
-                stance = {"state": default_state}
-        if response.get("error") or not str(text or "").strip():
+        stance = response.get("stance") if include_stance else {}
+        if response.get("error") or response.get("format_error") or not str(text or "").strip():
             return {
                 "action": decision.get("action", ""),
                 "status": "failed",
@@ -140,16 +155,23 @@ class UserAgent(
                     name for name in target_stakeholders if name in valid_names
                 ]
             if not speaking_as:
-                return {
-                    "action": decision.get("action", ""),
-                    "status": "failed",
-                    "error": "missing_valid_speaking_as",
-                    "format_error": (
-                        "user issue_response must include speaking_as with at least "
-                        "one valid assigned stakeholder name"
-                    ),
-                    "summary": "user issue_response 缺少合法 speaking_as",
-                }
+                if issue_id == "OQ":
+                    speaking_as = list(target_set) if target_set else [
+                        str(sh.get("name", "")).strip()
+                        for sh in self.stakeholders
+                        if str(sh.get("name", "")).strip()
+                    ]
+                else:
+                    return {
+                        "action": decision.get("action", ""),
+                        "status": "failed",
+                        "error": "missing_valid_speaking_as",
+                        "format_error": (
+                            "user issue_response must include speaking_as with at least "
+                            "one valid assigned stakeholder name"
+                        ),
+                        "summary": "user issue_response 缺少合法 speaking_as",
+                    }
         elif len(speaking_as_list) == 1:
             speaking_as = [speaking_as_list[0].get("name", "")]
         if len(speaking_as) > 1:

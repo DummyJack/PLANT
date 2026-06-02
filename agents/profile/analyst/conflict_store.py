@@ -16,15 +16,6 @@ def requirement_ids(row: Dict[str, Any]) -> List[str]:
         req_id = str(req.get("id") or "").strip()
         if req_id:
             ids.append(req_id)
-    idx = 1
-    while True:
-        key = f"req_{idx}"
-        if key not in row:
-            break
-        req_id = str(row.get(key) or "").strip()
-        if req_id:
-            ids.append(req_id)
-        idx += 1
     return list(dict.fromkeys(ids))
 
 

@@ -18,18 +18,10 @@ class IssueResponseSupport:
         payload: Any,
         *,
         include_stance: bool = True,
+        allow_pair_reviews: bool = False,
     ) -> Dict[str, Any]:
         data = dict(payload or {}) if isinstance(payload, dict) else {}
         final_text = self.clean_text(data.get("text"))
-        if not final_text and isinstance(data.get("pair_reviews"), list):
-            compact_payload = {"pair_reviews": data.get("pair_reviews")}
-            review_summary = self.clean_text(data.get("review_summary"))
-            if review_summary:
-                compact_payload = {
-                    "review_summary": review_summary,
-                    "pair_reviews": data.get("pair_reviews"),
-                }
-            final_text = json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"))
         normalized = {
             "text": final_text,
             "open_questions": (
@@ -38,18 +30,22 @@ class IssueResponseSupport:
                 else []
             ),
         }
+        format_errors: List[str] = []
         if include_stance:
             stance = data.get("stance") if isinstance(data.get("stance"), dict) else {}
             status = str(stance.get("state") or "").strip()
             if status not in {"ready_to_close", "needs_more_discussion"}:
-                status = "needs_more_discussion" if normalized["open_questions"] else "ready_to_close"
-            normalized["stance"] = {"state": status}
+                format_errors.append(
+                    "issue response stance.state must be ready_to_close or needs_more_discussion"
+                )
+                normalized["stance"] = {"state": status} if status else {}
+            else:
+                normalized["stance"] = {"state": status}
             proposal = stance.get("proposal") if isinstance(stance.get("proposal"), dict) else None
             if isinstance(proposal, dict) and proposal:
-                normalized["stance"]["proposal"] = proposal
+                normalized.setdefault("stance", {})["proposal"] = proposal
         allowed_extra_response_keys = {
             "actions",
-            "pair_reviews",
             "target_stakeholders",
             "speaking_as",
             "reply_to_question",
@@ -57,31 +53,69 @@ class IssueResponseSupport:
             "issue_action_results",
             "url_updates",
         }
+        if allow_pair_reviews:
+            allowed_extra_response_keys.add("pair_reviews")
         for key, value in data.items():
             if key == "stance" and not include_stance:
                 continue
             if key in allowed_extra_response_keys and key not in normalized:
                 normalized[key] = value
-        if not final_text:
+        has_pair_reviews = allow_pair_reviews and isinstance(normalized.get("pair_reviews"), list)
+        if not final_text and not has_pair_reviews:
             normalized["error"] = "missing_text"
-            normalized["format_error"] = "issue response must include a non-empty text field"
+            format_errors.append("issue response must include a non-empty text field")
+        elif include_stance and final_text.startswith(("{", "[")):
+            try:
+                text_payload = json.loads(final_text)
+            except Exception:
+                text_payload = None
+            if (
+                isinstance(text_payload, dict)
+                and "pair_reviews" in text_payload
+            ) or (
+                isinstance(text_payload, list)
+                and any(isinstance(item, dict) and "pair_reviews" in item for item in text_payload)
+            ):
+                normalized["error"] = "invalid_text"
+                format_errors.append(
+                    "general issue response text must be natural language, not pair_reviews JSON"
+                )
+        if format_errors:
+            normalized["format_error"] = "; ".join(format_errors)
         return normalized
 
     def chat_for_issue_response(
-        self, messages: List[Dict], parse_json: bool = True, **kwargs: Any
+        self,
+        messages: List[Dict],
+        parse_json: bool = True,
+        *,
+        use_tools: bool = False,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """有 tools 則 chat_with_tools，否則 chat_json。"""
+        """有 tools 可切換為 chat_with_tools，否則使用 chat_json。"""
         include_stance = bool(kwargs.pop("include_stance", True))
-        if self.tools:
+        allow_pair_reviews = bool(kwargs.pop("allow_pair_reviews", False))
+        if use_tools and self.tools:
             raw = self.chat_with_tools(messages)
             if parse_json:
                 try:
                     parsed = self.parse_issue_response_json(raw)
                 except ValueError as e:
                     try:
+                        required_fields = (
+                            "text 與 stance.state"
+                            if include_stance
+                            else "text"
+                        )
+                        stance_rule = (
+                            "stance.state 只能是 ready_to_close 或 needs_more_discussion。"
+                            if include_stance
+                            else ""
+                        )
                         repair_messages = self.build_direct_messages(
                             "上一個回覆不是合法 JSON object。請只修正格式，不要重新分析、不要新增內容。"
-                            "輸出必須是單一 JSON object，且至少保留 text 欄位。\n\n"
+                            f"輸出必須是單一 JSON object，且至少保留 {required_fields}。"
+                            f"{stance_rule}\n\n"
                             f"原始回覆：\n{raw}"
                         )
                         repaired = self.model.chat(repair_messages)
@@ -96,6 +130,7 @@ class IssueResponseSupport:
                 return self.issue_response_payload(
                     parsed,
                     include_stance=include_stance,
+                    allow_pair_reviews=allow_pair_reviews,
                 )
             return {"text": "", "open_questions": [], "error": "invalid_issue_response_mode"}
         action = kwargs.pop("action", f"{self.name}.issue.response")
@@ -104,6 +139,7 @@ class IssueResponseSupport:
             return self.issue_response_payload(
                 parsed,
                 include_stance=include_stance,
+                allow_pair_reviews=allow_pair_reviews,
             )
         except Exception as e:
             self.logger.warning("%s issue.response JSON 解析失敗: %s", self.name, e)
@@ -229,17 +265,34 @@ class IssueResponseSupport:
             f"- {name}：{description}"
             for name, description in actions.items()
         )
+        recent_responses = []
+        for row in (observation.get("previous_responses") or [])[-6:]:
+            if not isinstance(row, dict):
+                continue
+            response = row.get("response") if isinstance(row.get("response"), dict) else {}
+            text = str(response.get("text") or "").strip()
+            if not text:
+                continue
+            recent_responses.append(
+                {
+                    "agent": str(row.get("agent") or "").strip(),
+                    "actions": response.get("actions") if isinstance(response.get("actions"), list) else [],
+                    "text": text[:600],
+                    "open_questions": response.get("open_questions") if isinstance(response.get("open_questions"), list) else [],
+                }
+            )
         prompt = issue_response_action_plan_prompt(
             role=role,
             issue=issue,
             issue_category=observation.get("issue_category"),
             previous_response_count=observation.get("previous_response_count", 0),
+            recent_responses=recent_responses,
             has_artifact_context=observation.get("has_artifact_context", False),
             recent_ask_history=observation.get("recent_ask_history", []),
             actions_text=actions_text,
             default_action=default_action,
         )
-        try:
+        def _parse_decision() -> Optional[Dict[str, Any]]:
             decision = self.chat_json(self.build_direct_messages(prompt), action=f"{role}.issue.decide_action")
             action_plan = decision.get("action_plan") if isinstance(decision.get("action_plan"), dict) else {}
             raw_steps = action_plan.get("steps") if isinstance(action_plan.get("steps"), list) else []
@@ -282,21 +335,20 @@ class IssueResponseSupport:
                         "steps": selected_steps,
                     },
                 }
+
+            return None
+
+        try:
+            parsed_decision = _parse_decision()
+            if parsed_decision:
+                return parsed_decision
+            raise RuntimeError("action_plan has no valid steps")
         except Exception as e:
-            self.logger.warning("%s issue action 決策失敗，使用預設 action: %s", role, e)
-        return {
-            "action": "done",
-            "params": {},
-            "reasoning": active_reasoning,
-            "action_plan": {
-                "goal": "本次正式會議發言",
-                "steps": [
-                    {
-                        "id": default_action,
-                        "action": default_action,
-                        "params": {},
-                        "reasoning": active_reasoning,
-                    }
-                ],
-            },
-        }
+            self.logger.warning("%s issue action 決策失敗，重試 action plan: %s", role, e)
+            try:
+                parsed_decision = _parse_decision()
+                if parsed_decision:
+                    return parsed_decision
+                raise RuntimeError("action_plan has no valid steps")
+            except Exception as retry_error:
+                raise RuntimeError(f"{role} issue action plan retry failed: {retry_error}") from retry_error

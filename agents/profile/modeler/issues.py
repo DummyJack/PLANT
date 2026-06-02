@@ -6,7 +6,11 @@ from utils.language import current_output_language
 
 from agents.profile.issue_proposal_prompt import build_issue_proposal_prompt
 from agents.profile.conflict_review import conflict_review_text_hint
-from agents.profile.issue_response_prompt import READY_TO_CLOSE_QUALITY_GATE, STANCE_RESPONSE_TEXT_RULES
+from agents.profile.issue_response_prompt import (
+    READY_TO_CLOSE_QUALITY_GATE,
+    STANCE_RESPONSE_TEXT_RULES,
+    issue_response_context_sections,
+)
 from agents.profile.analyst.requirements import requirement_discussion_pool
 
 from .prompts import (
@@ -28,7 +32,7 @@ class ModelerIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 5,
+        max_items: int = 20,
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="modeler_issue_proposal",
@@ -78,7 +82,7 @@ class ModelerIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 5),
+            "max_items": kwargs.get("max_items", 20),
             "latest_draft": artifact.get("latest_draft", ""),
             "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
@@ -118,7 +122,7 @@ class ModelerIssues:
                 "format_error": f"Modeler issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 5)
+        max_items = int(observation.get("max_items") or 20)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
@@ -217,6 +221,8 @@ class ModelerIssues:
             proposals.append(
                 {
                     "title": title,
+                    "category": str(row.get("category") or "").strip(),
+                    "issue_focus": str(row.get("issue_focus") or "").strip(),
                     "expect_outcome": expect_outcome,
                     "sources": sources,
                     "importance": importance,
@@ -236,37 +242,20 @@ class ModelerIssues:
         previous_responses: Optional[List[Dict[str, Any]]],
         artifact_context: Optional[Dict[str, Any]],
     ) -> str:
-        issue_text = f"議題 [{issue.get('id', '')}]: {issue.get('title', '')}\n描述: {issue.get('description', '')}"
-        issue_id = str(issue.get("id") or "")
-        target_stakeholders = [
-            str(name).strip()
-            for name in (issue.get("target_stakeholders") or [])
-            if str(name).strip()
-        ]
-
-        prev_text = ""
-        if previous_responses:
-            parts = [
-                f"【{r.get('agent', '?')}】\n{r.get('response', {}).get('text', '')}"
-                for r in previous_responses
-            ]
-            prev_text = "\n# 前面的發言\n" + "\n\n".join(parts)
-
-        context_text = ""
-        if artifact_context:
-            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(artifact_context, ensure_ascii=False, indent=2)}"
-
-        recent_ask_history_text = ""
-        recent_ask_history = issue.get("recent_ask_history") or []
-        if recent_ask_history:
-            recent_ask_history_text = (
-                "\n# 最近幾輪正式提問摘要\n"
-                + json.dumps(recent_ask_history, ensure_ascii=False, indent=2)
-            )
-        skill_section = ""
         skill_context = self.get_optional_skill_context(issue, artifact_context)
-        if skill_context:
-            skill_section = f"\n# 可用技能參考（本輪自行判斷使用）\n{skill_context}\n"
+        sections = issue_response_context_sections(
+            issue=issue,
+            previous_responses=previous_responses,
+            artifact_context=artifact_context,
+            skill_context=skill_context,
+        )
+        issue_text = sections["issue_text"]
+        issue_id = sections["issue_id"]
+        target_stakeholders = sections["target_stakeholders"]
+        prev_text = sections["prev_text"]
+        context_text = sections["context_text"]
+        recent_ask_history_text = sections["recent_ask_history_text"]
+        skill_section = sections["skill_section"]
         elicitation_hint = ""
         task_block = MODELER_ISSUE_TASK
         rules_block = MODELER_ISSUE_RULES
@@ -294,7 +283,7 @@ class ModelerIssues:
                 + READY_TO_CLOSE_QUALITY_GATE
             )
         category = (issue.get("category") or "").strip()
-        contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
         expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
         modeler_expected = expected_actions.get("modeler")
         modeler_expected_actions = []
@@ -343,6 +332,10 @@ class ModelerIssues:
                 "\n- 若本輪沒有產生新模型，但當前專案資料已有與本議題相關的 System Models，"
                 "可以引用既有圖中的 actor、use case、流程、狀態、資料或邊界來支撐發言；"
                 "若引用既有圖，需明確說出引用哪張圖與它支持或揭露的需求點。"
+                "\n- 只能引用「當前專案資料」中實際存在的 system_models id/name；不要說有 SM-*、use case diagram 或 activity diagram，除非它真的出現在輸入資料或本輪 action result。"
+                "\n- 若當前專案資料沒有可引用的 system_models，明確說目前沒有可引用模型；若本議題需要模型支撐，應選 model_system，而不是假設已有模型。"
+                "\n- 若模型揭露流程缺口、狀態不明、責任邊界不清或資料流不一致，必須明確說明應轉成哪一類後續處理：更新需求、提出 open question、建立/更新模型，或交由 define_boundary 議題處理。"
+                "\n- 模型新增或更新後，應說明它支援哪些 REQ-*，並避免從模型反推未被需求來源支持的新需求。"
                 "\n- 不要為了引用模型而硬解讀無關的圖；模型與本議題無關時，直接用文字建模觀點回答。"
             )
         if issue_id.startswith("ELICIT-"):

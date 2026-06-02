@@ -22,23 +22,8 @@ MODELER_SYSTEM_PROMPT = """需求建模：根據正式 REQ-*；若尚未產生 R
 2. 精煉既有模型時只修改受影響部分，保留未變動的 actor、use case、流程、資料、狀態與關係。
 3. 發現不一致時只指出模型影響、需求缺口或需要正式討論的問題；不得直接改變需求語意。
 4. 資訊不足時不要硬畫未確認元素，不可臆造 actor、流程、資料物件、class、state 或外部系統。
-5. 不可從模型反推新增需求，也不可把 feedback 或研究建議畫成已確認模型元素。"""
-
-
-SYSTEM_MODEL_TYPE_RULES = """# System Model Type Rules
-- context_diagram：系統邊界圖。只呈現本系統、外部 actor、外部系統/服務與主要互動；不畫內部流程、子模組、資料表、API 或實作元件。
-- use_case_diagram：使用案例圖。呈現 actor 與系統提供的主要可觀察任務；不要把欄位、驗收條件、內部規則、狀態值或技術步驟畫成 use case。
-- use_case_text：使用案例文字表。只作為 use_case_diagram 的補充，整理圖中已出現的 actor/use case 的目的、介面與 related requirements；不是獨立主要模型。
-- activity_diagram：流程圖。呈現單一主要業務流程的步驟、判斷、成功/失敗分支與例外流程；若流程跨多個角色或系統，可用 swimlane 呈現，但 type 仍為 activity_diagram。
-- sequence_diagram：互動順序圖。只在訊息順序、外部服務互動、同步/非同步回應、成功/失敗分支會影響需求理解時使用；一張圖聚焦一個情境。
-- class_diagram：領域資料模型圖。呈現需求層級 domain object、屬性、關係與多重度；不要畫 controller、service、repository、database table 或 API class。
-- state_machine：狀態機圖。呈現單一核心物件的狀態、事件、轉移條件與終止狀態；只有需求明確涉及狀態生命週期時才畫。
-
-選圖規則：
-- 先更新既有且受影響的模型；只有既有模型無法表達新的流程、互動、資料或狀態缺口時才 create。
-- 同一 type 可以有多張圖，但每張圖必須有清楚邊界，例如「顧客下單與付款流程」「訂單狀態生命週期」。
-- 不要為單一欄位、單一驗收條件、單一風險或單一未決事項建立圖。
-- 不要用圖補出需求沒有確認的功能；未確認內容只能寫在 consistency gaps 或 description。"""
+5. 不可從模型反推新增需求，也不可把 feedback 或研究建議畫成已確認模型元素。
+6. context_diagram 在本專案對外視為「系統架構圖」，只呈現本系統、外部角色、外部系統、主要資料/事件流與責任邊界；不得畫成流程圖、use case 圖或內部模組設計圖。"""
 
 
 def model_action_prompt(*, state: dict, last_observation: dict) -> str:
@@ -70,6 +55,12 @@ def model_action_prompt(*, state: dict, last_observation: dict) -> str:
     - validate_model 只在 create_model 或 update_model 後使用。
     - fix_model 只在 validate_model 失敗或回報 PlantUML 語法錯誤後使用。
     - 同一 type 可以有多張模型；更新既有模型時使用 target_model_id，沒有 id 時才用 type + name。
+    - context_diagram 只在系統邊界、外部角色、外部系統、主要資料/事件流或責任邊界改變時處理。
+    - use_case_diagram 只在 actor 可執行能力或系統功能集合改變時處理。
+    - activity_diagram 只在流程步驟、分支、例外、狀態切換或責任交接改變時處理。
+    - sequence_diagram 只在多方互動順序、訊息往返或協作責任需要釐清時處理。
+    - class_diagram 只在需求層級資料物件、概念關係或屬性責任改變時處理。
+    - state_machine 只在某個業務物件的狀態與轉移規則明確需要呈現時處理。
     - use_case_text 由流程在 use_case_diagram 後自動產生；不要單獨選 use_case_text。
     - 需要補專案事實或驗證模型語法時，遵守本輪工具使用資料
     - 每個需處理的模型都走：create_model/update_model → validate_model →（若失敗）fix_model → validate_model
@@ -91,11 +82,9 @@ def model_impact_prompt(*, context: dict) -> str:
     # 輸入資料
     {ctx_text}
 
-    # 系統模型定義
-    {SYSTEM_MODEL_TYPE_RULES}
-
     # 輸出要求
     - model_targets：需處理的模型目標；同一 type 可有多張模型。
+    - 每個 model target 都要輸出 related_requirement_ids，列出此圖預計支援或釐清的 REQ-*；若目前尚未產生 REQ，才可使用 URL-*。
     - operation 只能是 create 或 update。
     - type 限 context_diagram, use_case_diagram, activity_diagram, sequence_diagram, state_machine, class_diagram；use_case_text 會由流程附在 use_case_diagram.text。
     - update 必須盡量指定 target_model_id；若沒有 id，至少提供 type 與 name。
@@ -107,6 +96,8 @@ def model_impact_prompt(*, context: dict) -> str:
     - 未受影響的既有模型不得列入 model_targets。
     - feedback 只作為領域背景、限制、風險、建議與未決事項參考；不得轉成新的模型元素。
     - 未決、建議或研究性內容不可畫成已確認模型元素；只能影響模型邊界、限制註記或缺口說明。
+    - context_diagram 在本專案就是系統架構圖；只有角色/外部系統/主要資料流/責任邊界變動時才列入，不得因一般功能、流程或驗收條件更新就重畫。
+    - use_case_diagram 只處理 actor 與用例能力；activity_diagram 只處理流程；sequence_diagram 只處理互動順序；class_diagram 只處理需求層級資料概念；state_machine 只處理狀態生命週期。
     輸出 JSON:
     {{
     "model_targets": [
@@ -115,6 +106,7 @@ def model_impact_prompt(*, context: dict) -> str:
         "type": "diagram type",
         "target_model_id": "既有模型 id，create 時留空",
         "name": "模型名稱",
+        "related_requirement_ids": ["REQ-1"],
         "reason": "為何需要處理此模型"
       }}
     ],

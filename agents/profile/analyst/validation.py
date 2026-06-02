@@ -139,7 +139,7 @@ def conflict_records(
             label = clean_text(row.get("label"))
             if label not in {"Conflict", "Neutral"}:
                 continue
-            rel = row.get("requirement_ids") or row.get("related_requirements")
+            rel = row.get("requirement_ids")
             rel_ids = clean_list(rel)
             expected_ids = list((pair_requirements or {}).get(pair_index) or [])
             if len(expected_ids) == 2:
@@ -168,7 +168,7 @@ def conflict_records(
         label = clean_text(row.get("label"))
         if label not in {"Conflict", "Neutral"}:
             continue
-        rel_ids = clean_list(row.get("requirement_ids") or row.get("related_requirements"))
+        rel_ids = clean_list(row.get("requirement_ids"))
         if label == "Conflict" and len(rel_ids) < 2:
             continue
         entry: Dict[str, Any] = {"label": label}

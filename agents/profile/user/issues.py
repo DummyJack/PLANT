@@ -48,7 +48,7 @@ class UserIssues:
         artifact: Dict[str, Any],
         *,
         round_num: int,
-        max_items: int = 5,
+        max_items: int = 20,
     ) -> List[Dict[str, Any]]:
         opa = self.run_action_loop(
             name="user_issue_proposal",
@@ -73,7 +73,7 @@ class UserIssues:
             "iteration": kwargs.get("iteration", 0) + 1,
             "max_iterations": kwargs["max_iterations"],
             "round_num": kwargs.get("round_num"),
-            "max_items": kwargs.get("max_items", 5),
+            "max_items": kwargs.get("max_items", 20),
             "latest_draft": artifact.get("latest_draft", ""),
             "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
         }
@@ -113,7 +113,7 @@ class UserIssues:
                 "format_error": f"User issue proposal 不支援 action: {action}",
             }
 
-        max_items = int(observation.get("max_items") or 5)
+        max_items = int(observation.get("max_items") or 20)
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
@@ -212,6 +212,8 @@ class UserIssues:
             proposals.append(
                 {
                     "title": title,
+                    "category": str(row.get("category") or "").strip(),
+                    "issue_focus": str(row.get("issue_focus") or "").strip(),
                     "expect_outcome": expect_outcome,
                     "sources": sources,
                     "importance": importance,
@@ -324,9 +326,9 @@ class UserIssues:
                 "\n# 本議題特別說明（clarify_requirement）\n"
                 "聚焦需求語意、使用條件、成功結果、例外情境與可接受的驗收方式。"
             )
-            if str(issue.get("title") or "").strip() == "需求分類":
+            if str(issue.get("title") or "").strip() == "需求正式化":
                 category_hint = (
-                    "\n# 本議題特別說明（需求分類）\n"
+                    "\n# 本議題特別說明（需求正式化）\n"
                     "先閱讀前面 Analyst 產生或更新的 REQ-* 整理結果，再以 speaking_as 身份檢查："
                     "是否漏掉重要使用情境、業務規則或例外條件；"
                     "驗收條件是否可接受；優先級是否符合實際需要；"
@@ -348,7 +350,7 @@ class UserIssues:
                 "從使用者/利害關係人角度確認流程、狀態、actor 或責任分工是否符合實際情境。"
             )
         elif issue_category == "resolve_conflict":
-            contract = issue.get("response_contract") if isinstance(issue.get("response_contract"), dict) else {}
+            contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
             is_pair_review = (
                 str(contract.get("type") or "").strip() == "pair_reviews"
             )
@@ -381,14 +383,15 @@ class UserIssues:
         open_questions_rule = "" if is_elicitation else "- 若需要他人補資訊，只把當下最重要、會相關決策的一個問題放進 open_questions。\n"
         if is_answer_question:
             open_questions_rule = "- open_questions 預設輸出空陣列；只有問題本身無法回答且需要一個關鍵澄清時，才提出一個 open question。\n"
-        stance_rule = "" if is_elicitation or issue_category == "resolve_conflict" or is_answer_question else (
+        suppress_stance = bool(is_elicitation or is_answer_question or (issue_category == "resolve_conflict" and is_pair_review))
+        stance_rule = "" if suppress_stance else (
             "- stance.state 表示本輪 speaking_as 身份的討論狀態："
             "ready_to_close=資訊已足夠且可結束本議題；"
             "needs_more_discussion=還需要其他參與者補充或回應。\n"
             "- 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議如何處理此議題。\n"
             f"{READY_TO_CLOSE_QUALITY_GATE}\n"
         )
-        stance_json = "" if is_elicitation or issue_category == "resolve_conflict" or is_answer_question else (
+        stance_json = "" if suppress_stance else (
             ', "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
         )
         names_list_text = ", ".join(str(name) for name in names_list if str(name).strip())
@@ -396,7 +399,10 @@ class UserIssues:
             json_hint = conflict_review_text_hint()
         if is_answer_question:
             flow_hint = "以議題規劃指定的 speaking_as 身份，直接回答 description 中的問題。"
-            json_hint = '"text": "直接回答問題", "open_questions": []'
+            if need_speaking_as:
+                json_hint = '"speaking_as": ["本輪回答身份名稱"], "text": "直接回答問題", "open_questions": []'
+            else:
+                json_hint = '"text": "直接回答問題", "open_questions": []'
 
         return f"""{stakeholder_contract}
 
@@ -416,8 +422,9 @@ class UserIssues:
 - 回答必須扣回原始產品情境與 speaking_as 指定身份。
 - 只表達需求、顧慮、底線與可接受條件；不要寫技術解法或最終需求文字。
 - text 必須像該 speaking_as 身份在會議中的發言，不是需求規格文字、JSON、action 結果或專案資料內容貼上。
-- 若本輪是需求分類，請針對前面 Analyst 整理出的 REQ-* 結果回應；若有遺漏或欄位需要修正，具體說明要補哪個使用情境、業務規則、例外條件、驗收條件、限制、優先級、風險或假設。
-- 需求分類不提出 open_questions；若整理結果仍不完整，請在 text 與 stance.proposal 說明需要補充或修正的內容。
+- 在一般正式會議中，user 的作用是利害關係人確認：明確說明目前 REQ 或決策是否符合該身份需求，並補充缺少的條件、例外、驗收方式、風險或不可接受底線。
+- 若本輪是需求正式化，請針對前面 Analyst 整理出的 REQ-* 結果回應；若有遺漏或欄位需要修正，具體說明要補哪個使用情境、業務規則、例外條件、驗收條件、限制、優先級、風險或假設。
+- 需求正式化不提出 open_questions；若整理結果仍不完整，請在 text 與 stance.proposal 說明需要補充或修正的內容。
 - 若本輪是解決需求衝突，必須引用具體 URL id 或 conflict id 表態，說明採用、調整或拒絕既有 resolution 的理由；不要只描述一般痛點。
 - 不得使用其他利害關係人的第一人稱經驗回答；例如不能讓外送員、餐廳、第三方支付或平台營運主管用「我的訂單」這種消費者口吻回答。
 - 若同一題指定多個 speaking_as，text 必須用「【身份名稱】」分段，各段內容要反映該身份不同的責任、痛點、利益或限制，不得複製同一段回答。

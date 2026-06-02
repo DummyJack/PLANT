@@ -134,13 +134,11 @@ class ExpertAgent(
         if action == "answer_question":
             expert_action_result = {
                 "action": action,
-                "output": None,
                 "summary": "回答 open question，不更新專案資料。",
             }
         elif action == "respond_issue":
             expert_action_result = {
                 "action": action,
-                "output": None,
                 "summary": "只產生會議回答，不更新專案資料。",
             }
         elif action == "research_domain":
@@ -163,24 +161,16 @@ class ExpertAgent(
             expert_action_result = {
                 "action": action,
                 "steps": [
-                    {
-                        "decision": row.get("decision", {}),
-                        "result": row.get("result", {}),
-                    }
+                    str((row.get("decision") or {}).get("action") or "").strip()
                     for row in (trace or [])
-                    if isinstance(row, dict)
+                    if isinstance(row, dict) and str((row.get("decision") or {}).get("action") or "").strip()
                 ],
                 "feedback": self.feedback_for_source(
                     artifact.get("feedback", {}),
                     source_ref,
                 ),
             }
-        return {
-            "action": decision.get("action", ""),
-            "status": "success",
-            "action_result": expert_action_result or {"action": action, "output": None},
-            "summary": f"完成 expert action: {decision.get('action', '')}",
-        }
+        return expert_action_result or {"action": action, "summary": f"完成 expert action: {action}"}
 
     def apply_issue_research_context(
         self,

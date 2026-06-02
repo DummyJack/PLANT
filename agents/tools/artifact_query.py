@@ -1,5 +1,6 @@
 # Artifact query tool: read compact project state for agents and skills.
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,7 +53,7 @@ class ArtifactQueryTool(BaseTool):
         },
         "item_id": {
             "type": "string",
-            "description": "related_context 模式用的目標 id，例如 REQ-001 或 CF-01",
+            "description": "related_context 模式用的目標 id，例如 REQ-1 或 CR-1",
             "required": False,
         },
         "fields": {
@@ -75,22 +76,51 @@ class ArtifactQueryTool(BaseTool):
 
     def __init__(self, artifact_path: str):
         self.artifact_path = Path(artifact_path)
+        self._cache: Dict[str, str] = {}
+        self._cache_lock = threading.Lock()
+        self._artifact_cache: Optional[Dict[str, Any]] = None
+        self._artifact_cache_mtime: Optional[float] = None
+        self._artifact_cache_size: Optional[int] = None
 
     def execute(self, **kwargs) -> str:
+        query_key = json.dumps(
+            {
+                "mode": str(kwargs.get("mode") or ""),
+                "section": str(kwargs.get("section") or ""),
+                "filters": kwargs.get("filters"),
+                "item_id": str(kwargs.get("item_id") or ""),
+                "fields": kwargs.get("fields"),
+                "limit": kwargs.get("limit"),
+                "compact": kwargs.get("compact"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        with self._cache_lock:
+            cached = self._cache.get(query_key)
+            if cached is not None:
+                return cached
+
         mode = str(kwargs.get("mode") or "").strip()
         if mode not in {"get_section", "find_items", "related_context", "summarize"}:
-            return json.dumps(
+            out = json.dumps(
                 {"ok": False, "error": f"不支援的 mode: {mode}"},
                 ensure_ascii=False,
                 indent=2,
             )
+            with self._cache_lock:
+                self._cache[query_key] = out
+            return out
         artifact = self.load_artifact()
         if artifact is None:
-            return json.dumps(
+            out = json.dumps(
                 {"ok": False, "error": f"找不到 artifact: {self.artifact_path}"},
                 ensure_ascii=False,
                 indent=2,
             )
+            with self._cache_lock:
+                self._cache[query_key] = out
+            return out
 
         if mode == "get_section":
             result = self.get_section(
@@ -121,15 +151,34 @@ class ArtifactQueryTool(BaseTool):
                 section=str(kwargs.get("section") or "").strip(),
             )
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        out = json.dumps(result, ensure_ascii=False, indent=2)
+        with self._cache_lock:
+            self._cache[query_key] = out
+        return out
 
     def load_artifact(self) -> Optional[Dict[str, Any]]:
         if not self.artifact_path.exists():
             return None
+        mtime = self.artifact_path.stat().st_mtime
+        size = self.artifact_path.stat().st_size
+        if (
+            self._artifact_cache is not None
+            and self._artifact_cache_mtime == mtime
+            and self._artifact_cache_size == size
+        ):
+            return self._artifact_cache
         if self.artifact_path.is_dir():
-            return load_split_artifact(self.artifact_path)
+            artifact = load_split_artifact(self.artifact_path)
+            self._artifact_cache = artifact
+            self._artifact_cache_mtime = mtime
+            self._artifact_cache_size = size
+            return artifact
         with open(self.artifact_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            artifact = json.load(f)
+            self._artifact_cache = artifact
+            self._artifact_cache_mtime = mtime
+            self._artifact_cache_size = size
+            return artifact
 
     def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
         if section == "URL" and not artifact.get("URL"):
@@ -203,7 +252,7 @@ class ArtifactQueryTool(BaseTool):
         requirement_id = filters.get("requirement_id")
         if requirement_id:
             req_key_values = set(conflict_req_values(item))
-            rel = item.get("requirement_ids") or item.get("related_requirements") or []
+            rel = item.get("requirement_ids") or []
             if (
                 str(requirement_id) not in {str(x) for x in rel}
                 and str(requirement_id) not in req_key_values
@@ -330,7 +379,7 @@ class ArtifactQueryTool(BaseTool):
             related_conflicts = [
                 c for c in conflict_rows
                 if (
-                    rid in set((c.get("requirement_ids") or c.get("related_requirements") or []))
+                    rid in set((c.get("requirement_ids") or []))
                     or req_text in set(conflict_req_values(c))
                     or rid in set(conflict_req_values(c))
                 )
@@ -345,7 +394,7 @@ class ArtifactQueryTool(BaseTool):
                 if blob and blob in json.dumps(q, ensure_ascii=False)
             ]
         elif conflict:
-            rel_ids = set(conflict.get("requirement_ids") or conflict.get("related_requirements") or [])
+            rel_ids = set(conflict.get("requirement_ids") or [])
             rel_values = set(conflict_req_values(conflict))
             related_conflicts = [conflict]
             related_decisions = [
@@ -376,7 +425,7 @@ class ArtifactQueryTool(BaseTool):
             "mode": "related_context",
             "item_id": item_id,
             "target": target,
-            "related_requirements": req if isinstance(req, list) else ([req] if isinstance(req, dict) else []),
+            "related_url": req if isinstance(req, list) else ([req] if isinstance(req, dict) else []),
             "related_conflicts": related_conflicts,
             "related_decisions": related_decisions,
             "related_open_questions": related_open_questions,

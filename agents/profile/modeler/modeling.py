@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from agents.skills.base import get_skill
 from utils.language import current_output_language
-from .prompts import SYSTEM_MODEL_TYPE_RULES, uml_skill_subset
+from .prompts import uml_skill_subset
 from .validation import (
     ALLOWED_MODEL_TYPES,
     parse_diagram_model,
@@ -59,7 +59,7 @@ class ModelerModeling:
     @staticmethod
     def model_name(model_type: str) -> str:
         zh_names = {
-            "context_diagram": "系統脈絡圖",
+            "context_diagram": "系統架構圖",
             "use_case_diagram": "使用案例圖",
             "activity_diagram": "活動圖",
             "sequence_diagram": "循序圖",
@@ -115,7 +115,7 @@ class ModelerModeling:
                 continue
             req_id = str(req.get("id") or "").strip()
             title = str(req.get("title") or "").strip()
-            description = str(req.get("description") or req.get("requirement") or "").strip()
+            description = str(req.get("description") or "").strip()
             if not req_id or not (title or description):
                 continue
             row: Dict[str, Any] = {
@@ -126,13 +126,13 @@ class ModelerModeling:
             req_type = str(req.get("type") or "").strip()
             if req_type:
                 row["type"] = req_type
-            source_ids = [
-                str(value).strip()
-                for value in (req.get("source_ids") or [])
-                if str(value).strip()
-            ]
-            if source_ids:
-                row["source_ids"] = source_ids
+            raw_source = req.get("source") or []
+            if isinstance(raw_source, list):
+                source = [str(value).strip() for value in raw_source if str(value).strip()]
+            else:
+                source = [str(raw_source).strip()] if str(raw_source or "").strip() else []
+            if source:
+                row["source"] = source
             acceptance = [
                 str(value).strip()
                 for value in (req.get("acceptance_criteria") or [])
@@ -149,6 +149,28 @@ class ModelerModeling:
 
     def model_requirement_source(self, artifact: Dict[str, Any]) -> str:
         return "REQ" if self.model_spec_requirements(artifact) else "URL"
+
+    @staticmethod
+    def model_related_requirement_ids(
+        model: Dict[str, Any],
+        target: Optional[Dict[str, Any]] = None,
+    ) -> list[str]:
+        rows: list[str] = []
+        for source in (model, target or {}):
+            if not isinstance(source, dict):
+                continue
+            for value in source.get("related_requirement_ids") or []:
+                text = str(value).strip()
+                if text and text not in rows:
+                    rows.append(text)
+            for item in source.get("text") or []:
+                if not isinstance(item, dict):
+                    continue
+                for value in item.get("related_requirement_ids") or []:
+                    text = str(value).strip()
+                    if text and text not in rows:
+                        rows.append(text)
+        return rows
 
     @staticmethod
     def model_stakeholders(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -215,9 +237,9 @@ class ModelerModeling:
         return {
             "scenario": artifact.get("scenario", "") or artifact.get("rough_idea", ""),
             "stakeholders": self.model_stakeholders(artifact),
-            "requirements": self.model_requirements(artifact),
+            "model_requirements": self.model_requirements(artifact),
             "requirement_source": self.model_requirement_source(artifact),
-            "user_requirements": self.model_user_requirements(artifact),
+            "URL": self.model_user_requirements(artifact),
             "REQ": self.model_spec_requirements(artifact),
             "scope": artifact.get("scope", {}) or {},
             "feedback": self.model_feedback(artifact),
@@ -291,14 +313,17 @@ class ModelerModeling:
             "model_target": artifact_context.get("model_target", {}) or {},
         }
         context_text = json.dumps(context_payload, ensure_ascii=False, indent=2)
-        system_model_type_rules = SYSTEM_MODEL_TYPE_RULES
         diagram_layout_hint = ""
         if diagram_type == "context_diagram":
             diagram_layout_hint = """
-    本專案限制：不可把未確認的 provider/API 畫成已定案外部系統；若來源未定，請使用抽象資料來源。
-    context_diagram 只呈現本系統與外部 actor / external systems 的互動；不得把本系統內部功能、子系統、管理模組或實作元件畫成外部系統。只有在 requirements 明確指出某項系統是既有外部系統或第三方服務時，才可畫成 external system。
-    context_diagram 中同一個外部角色只能畫一次；若多筆需求都指向同一角色，必須合併成同一個 actor，並把多個互動合併到同一條或同一組關係標籤。不得因來源需求不同而重複畫出同名或同義 actor。
-    actor 命名必須使用穩定的利害關係人名稱；例如「外送員」「餐廳店員」各只能出現一次，不要分成多個外送員或多個餐廳店員。"""
+    本專案限制：context_diagram 對外作為「系統架構圖」，呈現系統邊界與高層互動，不是功能分解圖、流程圖、使用案例圖或內部元件圖。
+    圖中心只能是本系統；外圍只能放外部 actor 或已明確存在的 external system。
+    線條只標示主要資料流、事件流、請求/回應、通知或責任邊界；不要畫詳細操作步驟、流程分支、use case、資料表、service、database、controller 或內部模組。
+    不可把未確認的 provider/API 畫成已定案外部系統；若來源未定，請使用抽象資料來源。
+    只有 requirements 明確指出某項系統是既有外部系統或第三方服務時，才可畫成 external system。
+    同一個外部角色只能畫一次；若多筆需求都指向同一角色，必須合併成同一個 actor，並把多個互動合併到同一條或同一組關係標籤。不得因來源需求不同而重複畫出同名或同義 actor。
+    actor 命名必須使用穩定的利害關係人名稱；例如「外送員」「餐廳店員」各只能出現一次，不要分成多個外送員或多個餐廳店員。
+    若需求只改變流程步驟、例外條件、驗收標準或功能細節，而沒有改變 actor、外部系統、主要資料/事件流或責任邊界，不應更新 context_diagram。"""
         elif diagram_type == "use_case_diagram":
             diagram_layout_hint = """
     版面要求：actor 與 use case 的關聯要一目了然；若單圖連線過多，可精簡為核心用例或依角色拆分。
@@ -347,16 +372,85 @@ class ModelerModeling:
                 ensure_ascii=False,
                 indent=2,
             ) if use_case_diagram else "{}"
-            task = render_prompt('agents_profile_modeler_modeling_task_16', **locals())
+            task = f"""依照 UML skill，根據已生成的 Use Case Diagram 整理文字版使用案例。
+
+需求 ID 對照（只可用於 related_requirement_ids，不可用來新增 use case）:
+{req_text}
+
+Use Case Diagram:
+{use_case_diagram_text}
+
+補充背景（只作為邊界、限制、風險或未決事項參考）:
+{context_text}
+
+專案邊界：
+- 只能整理圖中已出現的 actor 與 use case；不要補入圖中沒有的 use case。
+- related_requirement_ids 只能引用輸入中存在的 REQ-* 或 URL-*。
+- interface 未明確時，使用需求層級名稱，不臆測 UI 細節。
+
+輸出 JSON:
+{{
+  "type": "use_case_text",
+  "text": [
+    {{
+      "id": "UC-1",
+      "actor": "主要參與者",
+      "name": "使用案例名稱",
+      "purpose": "目的／說明",
+      "interface": "介面或入口",
+      "related_requirement_ids": ["REQ-1"]
+    }}
+  ]
+}}"""
             skill = uml_skill_subset(get_skill("UML"), "use_case_text")
             messages = self.build_skill_messages(skill, "UML", task)
             result = self.chat_json(messages)
             return parse_use_case_text(result)
 
         if existing_model and existing_model.get("plantuml"):
-            task = render_prompt('agents_profile_modeler_modeling_task_17', **locals())
+            task = f"""依照 UML skill，根據更新後的需求輸入精煉以下 {type_name}。
+
+當前 PlantUML:
+{existing_model['plantuml']}
+
+需求輸入（優先為 REQ-*；若尚未產生 REQ，則為 URL-*）:
+{req_text}
+
+補充背景（只作為邊界、限制、風險或未決事項參考）:
+{context_text}
+
+{diagram_layout_hint}
+
+專案邊界：
+- 以上一版 PlantUML 為基礎，只修改受本次需求輸入或修訂脈絡影響的元素。
+- 保留未受影響且仍有效的 actor、use case、流程、資料、狀態或概念。
+- 圖中元素使用目前輸出語系，不混用語言。
+- feedback 不可畫成已確認元素。
+- related_requirement_ids 只能引用輸入中存在的 REQ-*；沒有 REQ 時才可用 URL-*。
+{description_rule}
+
+輸出 JSON:
+{{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "related_requirement_ids": ["REQ-1"]{description_field}}}"""
         else:
-            task = render_prompt('agents_profile_modeler_modeling_task_18', **locals())
+            task = f"""依照 UML skill，根據以下需求輸入產生 {type_name}。
+
+需求輸入（優先為 REQ-*；若尚未產生 REQ，則為 URL-*）:
+{req_text}
+
+補充背景（只作為邊界、限制、風險或未決事項參考）:
+{context_text}
+
+{diagram_layout_hint}
+
+專案邊界：
+- 只根據輸入中的需求與已接受脈絡建模。
+- 圖中元素使用目前輸出語系，不混用語言。
+- feedback 不可畫成已確認元素。
+- related_requirement_ids 只能引用輸入中存在的 REQ-*；沒有 REQ 時才可用 URL-*。
+{description_rule}
+
+輸出 JSON:
+{{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "related_requirement_ids": ["REQ-1"]{description_field}}}"""
 
         skill = uml_skill_subset(get_skill("UML"), "diagram", diagram_type)
         messages = self.build_skill_messages(skill, "UML", task)

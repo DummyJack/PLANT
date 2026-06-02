@@ -161,12 +161,20 @@ class MediatorDecision:
             agreed_points = closed["agreed_points"]
             affected_requirement_ids = closed["affected_requirement_ids"]
             affected_conflict_ids = closed["affected_conflict_ids"]
+            requirement_changes = closed.get("requirement_changes", [])
+            model_changes = closed.get("model_changes", [])
+            open_questions = closed.get("open_questions", [])
+            follow_up_actions = closed.get("follow_up_actions", [])
         except Exception:
             summary = readiness.get("summary") or "所有參與者都表示資訊已足夠，可以結束本議題。"
             decision = readiness.get("decision") or summary
             agreed_points = [decision] if decision else [summary]
+            requirement_changes = []
+            model_changes = []
+            open_questions = []
+            follow_up_actions = []
         return self.build_issue_result(
-            resolution_status="agreed",
+            status="agreed",
             summary=summary,
             decision=decision,
             mediator_compromise={"title": "", "description": "", "rationale": ""},
@@ -175,6 +183,10 @@ class MediatorDecision:
             new_open_questions=[],
             affected_conflict_ids=affected_conflict_ids,
             affected_requirement_ids=affected_requirement_ids,
+            requirement_changes=requirement_changes,
+            model_changes=model_changes,
+            open_questions=open_questions,
+            follow_up_actions=follow_up_actions,
             needs_human=False,
         )
 
