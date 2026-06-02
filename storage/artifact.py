@@ -84,9 +84,12 @@ def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = N
             "type": stakeholder_group(item if isinstance(item, dict) else row),
             "text": row.get("text", []),
         })
-    rough_idea = str(data.get("rough_idea") or "").strip()
-    if not rough_idea and isinstance(existing, dict):
-        rough_idea = str(existing.get("rough_idea") or "").strip()
+    existing_rough_idea = (
+        str(existing.get("rough_idea") or "").strip()
+        if isinstance(existing, dict)
+        else ""
+    )
+    rough_idea = existing_rough_idea or str(data.get("rough_idea") or "").strip()
     scenario = scenario_payload(data.get("scenario", ""))
     if not scenario and isinstance(existing, dict):
         scenario = scenario_payload(existing.get("scenario", ""))
@@ -190,26 +193,45 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key in (
         "id",
-        "type",
         "title",
+        "type",
         "priority",
-        "requirement",
+        "description",
         "rationale",
-        "category",
-        "metric",
-        "validation",
     ):
-        if key == "requirement":
-            value = row.get("requirement")
-            if value in (None, "", [], {}):
-                value = row.get("description")
-        else:
-            value = row.get(key)
+        value = row.get(key)
         if value not in (None, "", [], {}):
             payload[key] = value
+    if not str(payload.get("description") or "").strip():
+        req_id = str(payload.get("id") or row.get("id") or "").strip()
+        raise ValueError(f"REQ description 缺失: {req_id or '(missing id)'}")
+    req_type = str(payload.get("type") or "").strip().lower().replace("_", "-")
+    if req_type in {"functional", "non-functional", "constraint"}:
+        payload["type"] = req_type
+    else:
+        req_id = str(payload.get("id") or row.get("id") or "").strip()
+        raise ValueError(f"REQ type 不合法: {req_id or '(missing id)'}")
+    priority = str(payload.get("priority") or "").strip().lower()
+    if priority in {"must", "should", "could"}:
+        payload["priority"] = priority
+    elif "priority" in payload:
+        payload.pop("priority", None)
+    source_rows: List[str] = []
+    value = row.get("source")
+    if isinstance(value, list):
+        source_rows.extend(str(item).strip() for item in value if str(item).strip())
+    else:
+        text = str(value or "").strip()
+        if text:
+            source_rows.append(text)
+    if source_rows:
+        payload["source"] = list(dict.fromkeys(source_rows))
+    if payload.get("type") == "non-functional":
+        for key in ("category", "metric", "validation"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                payload[key] = value
     for key in (
-        "source_ids",
-        "source_meeting",
         "acceptance_criteria",
         "dependencies",
         "risks",
@@ -229,9 +251,8 @@ def system_requirement_payload_rows(rows: Any, *, include_type: bool = True) -> 
         if not isinstance(item, dict):
             continue
         row = system_requirement_payload(item)
-        req_type = str(item.get("type") or "").strip()
-        if include_type and req_type:
-            row["type"] = req_type
+        if include_type:
+            row["type"] = str(row.get("type") or "").strip()
         if row:
             out.append(row)
     return out
@@ -254,17 +275,12 @@ def system_requirement_rows_from_sections(payload: Dict[str, Any]) -> List[Dict[
     for item in payload.get("REQ", []) or []:
         if not isinstance(item, dict):
             continue
-        row = dict(item)
-        if row.get("description") in (None, "") and row.get("requirement") not in (None, ""):
-            row["description"] = row.get("requirement")
-        row.pop("requirement", None)
-        req_type = str(row.get("type") or "").strip()
-        if req_type == "constraint":
-            req_type = "non_functional"
-        if req_type not in {"functional", "non_functional"}:
-            row["type"] = "functional"
-        else:
-            row["type"] = req_type
+        row = system_requirement_payload(item)
+        req_type = str(row.get("type") or "").strip().lower().replace("_", "-")
+        if req_type not in {"functional", "non-functional", "constraint"}:
+            req_id = str(row.get("id") or "").strip()
+            raise ValueError(f"REQ type 不合法: {req_id or '(missing id)'}")
+        row["type"] = req_type
         rows.append(row)
     return rows
 
@@ -272,26 +288,30 @@ def system_requirement_rows_from_sections(payload: Dict[str, Any]) -> List[Dict[
 def meeting_resolution_payload(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {}
-    status = str(data.get("resolution_status") or "").strip()
+    status = str(data.get("status") or "").strip()
     summary = str(data.get("summary") or "").strip()
     decision = str(data.get("decision") or "").strip()
-    if not any((status, summary, decision)):
+    needs_human = bool(data.get("needs_human"))
+    if not any((status, summary, decision, needs_human)):
         return {}
     payload: Dict[str, Any] = {
-        "resolution_status": status,
         "summary": summary,
         "decision": decision,
     }
+    if status:
+        if status not in {"agreed", "human_decision"}:
+            raise ValueError(f"resolution status 不合法: {status}")
+        payload["status"] = status
     affected_conflict_ids = data.get("affected_conflict_ids", []) or []
     affected_requirement_ids = data.get("affected_requirement_ids", []) or []
     if affected_conflict_ids:
         payload["affected_conflict_ids"] = affected_conflict_ids
     if affected_requirement_ids:
         payload["affected_requirement_ids"] = affected_requirement_ids
-    if status in {"pending_confirmation", "human_decision"} or data.get("needs_human"):
+    if status == "human_decision" or needs_human:
         payload["unresolved_points"] = data.get("unresolved_points", []) or []
         payload["new_open_questions"] = data.get("new_open_questions", []) or []
-        payload["needs_human"] = bool(data.get("needs_human"))
+        payload["needs_human"] = needs_human
         payload["options"] = data.get("options", []) or []
         payload["recommendation"] = data.get("recommendation", {}) or {}
     return payload
@@ -319,14 +339,6 @@ def conflict_requirement_ids(item: Dict[str, Any]) -> List[str]:
         req_id = str(req.get("id") or "").strip()
         if req_id and req_id not in req_ids:
             req_ids.append(req_id)
-    idx = 1
-    while True:
-        value = str(item.get(f"req_{idx}") or "").strip()
-        if not value:
-            break
-        if value not in req_ids:
-            req_ids.append(value)
-        idx += 1
     return req_ids
 
 
@@ -396,13 +408,6 @@ def conflict_requirements_output(
     out = dict(row)
     requirements = conflict_requirement_refs(out, req_refs)
     stakeholders = conflict_stakeholders(out, req_refs)
-    idx = 1
-    while True:
-        key = f"req_{idx}"
-        if key not in out:
-            break
-        out.pop(key, None)
-        idx += 1
     out.pop("requirement_ids", None)
     out.pop("requirements", None)
     ordered: Dict[str, Any] = {}
@@ -422,10 +427,6 @@ def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[
         row["id"] = item["id"]
     req_refs = req_refs or {}
     req_ids = conflict_requirement_ids(item)
-    if not req_ids and isinstance(item.get("meeting"), list) and item["meeting"]:
-        first_meeting = item["meeting"][0]
-        if isinstance(first_meeting, dict):
-            req_ids = conflict_requirement_ids(first_meeting)
     row_source = dict(item)
     if req_ids:
         row_source["requirement_ids"] = req_ids
@@ -733,9 +734,10 @@ def conflict_multiple_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, An
             continue
         new_id = conflict_output_id("MULTIPLE", multiple_num)
         multiple_num += 1
-        row: Dict[str, Any] = {"id": new_id}
-        for idx, req_id in enumerate(req_ids, 1):
-            row[f"req_{idx}"] = req_id
+        row: Dict[str, Any] = {
+            "id": new_id,
+            "requirements": [{"id": req_id} for req_id in req_ids],
+        }
         row["label"] = label
         if isinstance(item.get("meeting"), dict) and item["meeting"]:
             row["meeting"] = item["meeting"]
@@ -841,16 +843,23 @@ def conflict_storage_payload(data: Dict[str, Any]) -> Dict[str, Any]:
 def conflict_runtime_state(conflict_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
     if not isinstance(conflict_payload, dict):
         return {"report": [], "pairs": [], "multiple": []}
+    def runtime_row(item: Dict[str, Any]) -> Dict[str, Any]:
+        row = dict(item)
+        req_ids = conflict_requirement_ids(row)
+        if req_ids:
+            row["requirement_ids"] = req_ids
+        return row
+
     report = [
-        dict(item) for item in (conflict_payload.get("report", []) or [])
+        runtime_row(item) for item in (conflict_payload.get("report", []) or [])
         if isinstance(item, dict)
     ]
     pairs = [
-        dict(item) for item in (conflict_payload.get("pairs", []) or [])
+        runtime_row(item) for item in (conflict_payload.get("pairs", []) or [])
         if isinstance(item, dict)
     ]
     multiple = [
-        dict(item) for item in (conflict_payload.get("multiple", []) or [])
+        runtime_row(item) for item in (conflict_payload.get("multiple", []) or [])
         if isinstance(item, dict)
     ]
     return {"report": report, "pairs": pairs, "multiple": multiple}
@@ -1024,6 +1033,13 @@ def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             row["plantuml"] = str(model.get("plantuml") or "").strip()
         if model.get("image_path"):
             row["image_path"] = str(model.get("image_path") or "").strip()
+        related_requirement_ids = [
+            str(value).strip()
+            for value in (model.get("related_requirement_ids") or [])
+            if str(value).strip()
+        ]
+        if related_requirement_ids:
+            row["related_requirement_ids"] = related_requirement_ids
         if model.get("description") and str(model.get("type") or "").strip() != "use_case_diagram":
             row["description"] = str(model.get("description") or "").strip()
         if isinstance(model.get("text"), list):
@@ -1036,8 +1052,8 @@ def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    out: Dict[str, List[Dict[str, Any]]] = {}
+def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
     agent_rows: Dict[str, List[Dict[str, Any]]] = {}
     keep_keys = (
         "id",
@@ -1067,7 +1083,7 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, List[Dict[str, An
         agent_rows.setdefault(f"r{round_num}", []).append(row)
     if agent_rows:
         out["agents"] = agent_rows
-    meeting_rows: Dict[str, List[Dict[str, Any]]] = {}
+    meeting_rows: List[Dict[str, Any]] = []
     meeting_keep_keys = (
         "id",
         "title",
@@ -1095,7 +1111,8 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, List[Dict[str, An
             round_num = int(item.get("round") or 1)
         except (TypeError, ValueError):
             round_num = 1
-        meeting_rows.setdefault(f"r{round_num}", []).append(row)
+        row["round"] = round_num
+        meeting_rows.append(row)
     if meeting_rows:
         out["meeting_issues"] = meeting_rows
     return out
@@ -1117,21 +1134,13 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
     out: Dict[str, List[Dict[str, Any]]] = {}
 
     def merge(path: Path, payload: Any) -> None:
-        if isinstance(payload, list):
-            raw_num = path.stem[len("formal_meeting_r"):]
-            key = f"r{raw_num}"
-            out.setdefault(key, []).extend(
-                row for row in payload if isinstance(row, dict)
-            )
+        if not isinstance(payload, list):
             return
-        if not isinstance(payload, dict):
-            return
-        for key, rows in payload.items():
-            if not isinstance(rows, list):
-                continue
-            out.setdefault(str(key), []).extend(
-                row for row in rows if isinstance(row, dict)
-            )
+        raw_num = path.stem[len("formal_meeting_r"):]
+        key = f"r{raw_num}"
+        out.setdefault(key, []).extend(
+            row for row in payload if isinstance(row, dict)
+        )
 
     for path in sorted(meeting_dir.glob("formal_meeting_r*.json")):
         merge(path, load_json_path(path, []))
@@ -1171,26 +1180,11 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
             if key == "agents":
                 continue
             if key == "meeting_issues":
-                if isinstance(rows, dict):
-                    for meeting_key, round_rows in rows.items():
-                        try:
-                            meeting_round = int(str(meeting_key)[1:]) if str(meeting_key).startswith("r") else int(meeting_key)
-                        except (TypeError, ValueError):
-                            meeting_round = None
-                        for meeting_item in round_rows if isinstance(round_rows, list) else []:
-                            if not isinstance(meeting_item, dict):
-                                continue
-                            meeting_row = dict(meeting_item)
-                            if meeting_round is not None:
-                                meeting_row["round"] = meeting_round
-                            meeting_issue_rows.append(meeting_row)
+                if isinstance(rows, list):
+                    meeting_issue_rows.extend(
+                        dict(item) for item in rows if isinstance(item, dict)
+                    )
                 continue
-            try:
-                round_num = int(str(key)[1:]) if str(key).startswith("r") else int(key)
-            except (TypeError, ValueError):
-                round_num = None
-            for item in rows if isinstance(rows, list) else []:
-                issue_iter.append((round_num, item))
     else:
         issue_iter = [(None, item) for item in (issues if isinstance(issues, list) else [])]
     for round_num, item in issue_iter:
@@ -1260,15 +1254,16 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_optional_json_path(base_dir, conflict_storage_payload(data), artifact_dir / "conflict.json")
     save_optional_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
     save_optional_json_path(base_dir, elicitation_payload(data), meeting_dir / "elicitation_meeting.json")
-    for path in list(meeting_dir.glob("formal_meeting_r*.json")) + list(meeting_dir.glob("formal_meeting_v*.json")):
-        path.unlink(missing_ok=True)
+    for pattern in ("formal_meeting_r*.json", "formal_meeting_v*.json", "formal_meeting_default.json"):
+        for path in meeting_dir.glob(pattern):
+            path.unlink(missing_ok=True)
     save_optional_json_path(base_dir, None, meeting_dir / "formal_meeting.json")
     meeting_payloads = formal_meeting_payloads(data)
     for filename, payload in meeting_payloads.items():
         save_optional_json_path(base_dir, payload, meeting_dir / filename)
-    save_optional_json_path(base_dir, issue_proposals_payload(data), meeting_dir / "issues.json")
+    if any(key in data for key in ("issue_proposals", "meeting_issues")):
+        save_optional_json_path(base_dir, issue_proposals_payload(data), meeting_dir / "issues.json")
     save_optional_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
-    save_optional_json_path(base_dir, None, artifact_dir / "stage_status.json")
 
 
 def save_draft(artifact_dir: Path, content: str, version: int) -> None:

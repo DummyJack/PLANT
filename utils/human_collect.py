@@ -146,11 +146,12 @@ class Collect:
             idx = len(all_options) + 1
             option = dict(opt)
             title = clean_option_title(opt.get("title", ""))
+            description = str(opt.get("description") or "").strip()
             option["id"] = idx
             option["title"] = title
             print(f"\n  {idx}. {title}")
-            print(f"     來源: {opt.get('source', '?')}")
-            print(f"     內容: {opt.get('description', '')}")
+            if description and description != title:
+                print(f"     內容: {description}")
             all_options.append(option)
 
         if isinstance(compromise, dict) and compromise:
@@ -158,76 +159,108 @@ class Collect:
             option = dict(compromise)
             option["id"] = idx
             option.setdefault("source", "compromise")
-            print(f"\n  {idx}. [折衷] {compromise.get('title', '')}")
-            print(f"     內容: {compromise.get('description', '')}")
+            title = clean_option_title(compromise.get("title", ""))
+            description = str(compromise.get("description") or "").strip()
+            print(f"\n  {idx}. {title}")
+            if description and description != title:
+                print(f"     內容: {description}")
             print(f"     理由: {compromise.get('rationale', '')}")
             all_options.append(option)
 
         print(f"\n{'─' * 40}")
         print("  0. 自行輸入裁決")
 
-        user_input = input("\n請選擇方案編號(或 Enter 跳過)：").strip()
+        user_input = input("\n請選擇方案編號，可多選(或 Enter 跳過)：").strip()
         if not user_input:
             return {
-                "resolution": "unresolved",
                 "summary": "人類選擇暫不裁決",
-                "decision": "暫緩處理",
+                "decision": "",
                 "chosen_option_id": "",
                 "chosen_option_title": "",
             }
 
+        parts = [part.strip() for part in re.split(r"[,，\s]+", user_input) if part.strip()]
         try:
-            choice = int(user_input)
+            choices = [int(part) for part in parts]
         except ValueError:
             print("無效的輸入，暫緩處理")
             return {
-                "resolution": "unresolved",
                 "summary": "無效輸入",
-                "decision": "暫緩處理",
+                "decision": "",
                 "chosen_option_id": "",
                 "chosen_option_title": "",
             }
 
-        if choice == 0:
+        choices = list(dict.fromkeys(choices))
+        if 0 in choices and len(choices) > 1:
+            print("自行輸入裁決不能和其他方案一起選，暫緩處理")
+            return {
+                "summary": "無效輸入",
+                "decision": "",
+                "chosen_option_id": "",
+                "chosen_option_title": "",
+            }
+
+        if choices == [0]:
             custom = input("\n請輸入您的裁決：").strip()
             if not custom:
                 return {
-                    "resolution": "unresolved",
                     "summary": "人類未輸入裁決",
-                    "decision": "暫緩處理",
+                    "decision": "",
                     "chosen_option_id": 0,
                     "chosen_option_title": "自行輸入裁決",
                 }
             return {
-                "resolution": "agreed",
+                "status": "human_decision",
                 "summary": f"由人類裁決: {custom}",
                 "decision": custom,
                 "chosen_option_id": 0,
                 "chosen_option_title": "自行輸入裁決",
             }
 
-        chosen = None
-        for opt in all_options:
-            if opt.get("id") == choice:
-                chosen = opt
-                break
-        if not chosen:
+        chosen_options = [
+            opt for choice in choices for opt in all_options if opt.get("id") == choice
+        ]
+        if len(chosen_options) != len(choices):
             print("無效的選項，暫緩處理")
             return {
-                "resolution": "unresolved",
                 "summary": "無效輸入",
-                "decision": "暫緩處理",
+                "decision": "",
                 "chosen_option_id": "",
                 "chosen_option_title": "",
             }
 
-        title = clean_option_title(chosen.get("title", ""))
-        desc = chosen.get("description", "")
-        source = chosen.get("source", "方案")
+        decision_items = []
+        selected_options = []
+        for opt in chosen_options:
+            title = clean_option_title(opt.get("title", ""))
+            desc = str(opt.get("description") or "").strip()
+            rationale = str(opt.get("rationale") or "").strip()
+            option_text = title
+            if desc and desc != title:
+                option_text = f"{title}，{desc}" if title else desc
+            if rationale:
+                option_text = f"{option_text}。理由：{rationale}" if option_text else f"理由：{rationale}"
+            if option_text:
+                decision_items.append(option_text)
+            selected_options.append({
+                "id": opt.get("id"),
+                "title": title,
+                "description": desc,
+                "rationale": rationale,
+            })
+        decision_text = "\n".join(
+            f"{index}. {text}" for index, text in enumerate(decision_items, 1)
+        )
+        choice_label = ",".join(str(choice) for choice in choices)
+        title_label = "；".join(
+            clean_option_title(opt.get("title", "")) for opt in chosen_options
+        )
         return {
-            "resolution": "agreed",
-            "summary": f"人類採納方案 {choice}（{source}）: {title}",
-            "decision": desc,
-            "chosen_option_id": choice,
-            "chosen_option_title": title,
+            "status": "human_decision",
+            "summary": f"人類採納方案 {choice_label}: {title_label}",
+            "decision": decision_text,
+            "chosen_option_id": choice_label,
+            "chosen_option_title": title_label,
+            "chosen_options": selected_options,
         }
