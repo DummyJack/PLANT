@@ -1,5 +1,10 @@
 import json
+import sys
 from pathlib import Path
+
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
 
 ORDERED_NAMES = [
     "Stock Report Generation System",  # 股票分析報告系統

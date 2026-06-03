@@ -49,6 +49,19 @@ def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bo
     return bool(value)
 
 
+def export_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
+    """讀取輸出匯出設定；預設讀取 config["export"][name]。"""
+    exports = config.get("export") if isinstance(config.get("export"), dict) else {}
+
+    # 提供舊欄位相容（html_export / cost_summary）。
+    if name == "html" and "html_export" in config.get("stage", {}) and "html" not in exports:
+        return bool(config["stage"].get("html_export", default))
+    if name == "cost" and "cost_summary" in config.get("stage", {}) and "cost" not in exports:
+        return bool(config["stage"].get("cost_summary", default))
+
+    return bool(exports.get(name, default))
+
+
 def artifact_path_non_empty(flow: Any, *parts: str) -> bool:
     artifact_dir = getattr(flow.store, "artifact_dir", None)
     if artifact_dir is None:

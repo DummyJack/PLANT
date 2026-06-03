@@ -1,5 +1,10 @@
 # CLI entrypoint: selects project mode, collects input, and starts the flow.
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 import sys
+
 import traceback
 
 from pathlib import Path
@@ -81,7 +86,8 @@ def main():
         config["rounds"] = 0
 
     store = Store(base_dir, session.project_id)
-    logger = Logger(store.log_dir)
+    write_file_log = bool((config.get("export") or {}).get("log", False))
+    logger = Logger(store.log_dir, write_file=write_file_log)
 
     print("開始執行...")
     print()

@@ -13,6 +13,7 @@ from .artifact import (
 )
 from .json import load_json_file, save_json_file
 from .markdown import (
+    save_markdown_as_html,
     load_markdown as markdown_load_markdown,
     markdown_target_dir,
     save_markdown as markdown_save_markdown,
@@ -109,6 +110,14 @@ class Store:
 
     def load_markdown(self, filename: str) -> str:
         return markdown_load_markdown(self.artifact_dir, self.output_dir, filename)
+
+    def save_markdown_as_html(
+        self,
+        md_path: Path,
+        html_path: Path,
+        html_root: Optional[Path] = None,
+    ) -> None:
+        save_markdown_as_html(md_path, html_path, html_root=html_root)
 
     # PlantUML
 

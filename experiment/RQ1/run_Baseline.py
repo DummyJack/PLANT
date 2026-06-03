@@ -11,6 +11,10 @@ from typing import List
 
 from dotenv import load_dotenv
 
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 # 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
 RQ1_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ1_DIR.parent.parent
@@ -34,12 +38,6 @@ DEFAULT_MAX_TASKS = None
 GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 # 未指定 --base-url 且未設 OPENAI_BASE_URL 時的預設 API base（固定於程式，不經 Baseline/config.json）
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-
-# 將 RQ1 目錄加入 Python 路徑，以便匯入 Baseline 套件
-if str(RQ1_DIR) not in sys.path:
-    sys.path.insert(0, str(RQ1_DIR))
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
 
 from Baseline.config import ReqElicitGymConfig
 from Baseline.env import ReqElicitGym

@@ -1,9 +1,12 @@
 # Project flow orchestration: run init, meeting rounds, and finalization.
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import os
 import re
+import shutil
+from pathlib import Path
 
-from utils import stage_enabled
+from utils import stage_enabled, export_enabled
+from storage import markdown as markdown_storage
 
 
 MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
@@ -145,13 +148,94 @@ def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[st
     return artifact
 
 
+def run_export_html_stage(flow) -> None:
+    if not export_enabled(flow.config, "html", True):
+        flow.logger.info("跳過 HTML 匯出")
+        return
+
+    project_dir = flow.store.project_dir
+    results_dir = project_dir / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    html_count = 0
+    model_count = 0
+
+    # 每次都重建結果目錄，確保輸出反映本次最新內容
+    for child in results_dir.glob("*"):
+        if child.is_file():
+            child.unlink()
+        elif child.is_dir():
+            shutil.rmtree(child)
+
+    # 先複製模型資源，避免 HTML 中引用的圖片在轉檔時還沒建立
+    model_counter = {"count": 0}
+    copy_model_assets(flow.store.artifact_dir, results_dir, counter_ref=model_counter)
+    copy_model_assets(flow.store.output_dir, results_dir, counter_ref=model_counter)
+    model_count = model_counter["count"]
+
+    # 再轉換 Markdown 為 HTML
+    artifact_root = flow.store.artifact_dir
+    output_root = flow.store.output_dir
+    source_roots = [artifact_root, output_root]
+
+    for root in source_roots:
+        if not root.exists():
+            continue
+        for md_path in sorted(root.rglob("*.md")):
+            rel = md_path.relative_to(root)
+
+            html_path = results_dir / rel
+            html_path = html_path.with_suffix(".html")
+            markdown_storage.save_markdown_as_html(md_path, html_path, results_dir)
+            html_count += 1
+
+    flow.logger.info("已轉成 html: results/*")
+
+
+
+def copy_model_assets(source_root: Path, results_dir: Path, counter_ref: Optional[dict] = None) -> None:
+    """Only copy model artifacts (models/* and images inside model folders) to results/models."""
+    model_root = source_root / "models"
+    if not model_root.exists() or not model_root.is_dir():
+        return
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+    for model_file in sorted(model_root.rglob("*")):
+        if not model_file.is_file():
+            continue
+        if model_file.suffix.lower() not in image_exts:
+            continue
+        rel = model_file.relative_to(model_root)
+        target = results_dir / "models" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(model_file, target)
+        if counter_ref is not None and isinstance(counter_ref.get("count"), int):
+            counter_ref["count"] += 1
+
+
 def save_cost_summary(flow) -> None:
+    if not export_enabled(flow.config, "cost", True):
+        flow.logger.info("跳過成本統計")
+        return
+
     cost_summary = flow.build_cost_summary()
     if cost_summary:
         flow.store.save_json(cost_summary, flow.store.project_dir / "cost_summary.json")
-        flow.logger.info("✓ 已儲存 cost_summary.json")
+        flow.logger.info("已輸出成本統計：cost_summary.json")
+
+
+def run_output_stage(flow) -> None:
+    flow.logger.info("=== 輸出 ===")
+    html_enabled = export_enabled(flow.config, "html", True)
+    cost_enabled = export_enabled(flow.config, "cost", True)
+
+    if html_enabled:
+        run_export_html_stage(flow)
     else:
-        flow.logger.info("無定價資訊，略過 cost_summary")
+        flow.logger.info("跳過 HTML 匯出")
+
+    if cost_enabled:
+        save_cost_summary(flow)
+    else:
+        flow.logger.info("跳過成本統計")
 
 
 def run_project(flow, rough_idea: str) -> Dict[str, Any]:
@@ -202,7 +286,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         require_srs_draft_inputs(flow)
         flow.finalize(artifact)
         flow.store.save_artifact(artifact)
-    save_cost_summary(flow)
+    run_output_stage(flow)
     flow.logger.info("流程完成！")
     return artifact
 
@@ -254,6 +338,6 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         require_srs_draft_inputs(flow)
         flow.finalize(artifact)
         flow.store.save_artifact(artifact)
-    save_cost_summary(flow)
+    run_output_stage(flow)
     flow.logger.info("流程完成！")
     return artifact

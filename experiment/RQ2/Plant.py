@@ -4,14 +4,13 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 RQ2_DIR = Path(__file__).resolve().parent
 EXP_DIR = RQ2_DIR.parent
 BASE_DIR = EXP_DIR.parent
-
-if str(RQ2_DIR) not in sys.path:
-    sys.path.insert(0, str(RQ2_DIR))
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
 
 from Plant.main import run_experiments
 from Plant.utils import default_csv_path, load_rq2_dataset

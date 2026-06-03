@@ -8,13 +8,12 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 import numpy as np
 
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 RQ1_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ1_DIR.parent.parent
-
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
-if str(RQ1_DIR) not in sys.path:
-    sys.path.insert(0, str(RQ1_DIR))
 
 OUTPUT_PREFIX = "Plant"
 RESULTS_DIR = RQ1_DIR / "results"

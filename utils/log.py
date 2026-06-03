@@ -6,20 +6,21 @@ from pathlib import Path
 
 
 class Logger:
-    def __init__(self, log_dir: str = "log"):
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-
+    def __init__(self, log_dir: str = "log", write_file: bool = True):
         timestamp = datetime.now().strftime("%H%M%S")
-        log_file = self.log_dir / f"system_{timestamp}.log"
+        handlers = [logging.StreamHandler()]
+        if write_file:
+            self.log_dir = Path(log_dir)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = self.log_dir / f"system_{timestamp}.log"
+            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        else:
+            self.log_dir = Path(log_dir)
 
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler(log_file, encoding="utf-8"),
-                logging.StreamHandler(),
-            ],
+            handlers=handlers,
         )
         self.logger = logging.getLogger("Plant")
 

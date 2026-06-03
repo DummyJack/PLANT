@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 import csv
 import random
 from collections import Counter

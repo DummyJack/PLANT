@@ -12,7 +12,14 @@
     "draft": true,
     "default_formal_meeting": true,
     "general_formal_meeting": true,
+    "default_update_draft": true,
+    "general_update_draft": true,
     "SRS": true
+  },
+  "export": {
+    "html": true,
+    "cost": true,
+    "log": true
   },
   "enable_tools": {
     "web_search": true,

@@ -8,13 +8,13 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Optional
 
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
 # 路徑與環境（須先於 metric / utils 匯入）
 RQ2_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ2_DIR.parent.parent
-for root_path in (BASE_DIR, RQ2_DIR):
-    root_s = str(root_path)
-    if root_s not in sys.path:
-        sys.path.insert(0, root_s)
 
 import numpy as np
 from dotenv import load_dotenv

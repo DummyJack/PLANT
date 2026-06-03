@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from utils.clean import apply_entrypoint_bootstrap
+
+apply_entrypoint_bootstrap()
+
+import sys
+
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
