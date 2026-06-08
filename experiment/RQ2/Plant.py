@@ -1,8 +1,14 @@
-# Plant 衝突辨識實驗入口（使用 Flow 與 RQ2 config）
-
+# Runs the RQ2 Plant conflict experiment workflow.
 import sys
 from pathlib import Path
 from typing import Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+EXPERIMENT_ROOT = Path(__file__).resolve().parent
+if str(EXPERIMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_ROOT))
 
 from utils.clean import apply_entrypoint_bootstrap
 
@@ -15,9 +21,11 @@ BASE_DIR = EXP_DIR.parent
 from Plant.main import run_experiments
 from Plant.utils import default_csv_path, load_rq2_dataset
 
-PROMPT_FOR_RUNS = True
+ask_runs = True
 
-
+# ========
+# Defines choose scenarios function for this experiment module.
+# ========
 def choose_scenarios(data_path: Optional[Path]) -> Optional[list[str]]:
     path = data_path or default_csv_path()
     try:
@@ -60,7 +68,9 @@ def choose_scenarios(data_path: Optional[Path]) -> Optional[list[str]]:
         selected.append(scenarios[selected_idx - 1])
     return selected
 
-
+# ========
+# Defines main function for this experiment module.
+# ========
 def main() -> None:
     if len(sys.argv) < 2:
         data_path = None
@@ -71,7 +81,7 @@ def main() -> None:
     scenarios = choose_scenarios(data_path)
     count = 0
 
-    if PROMPT_FOR_RUNS:
+    if ask_runs:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
             print("錯誤：請輸入重複執行次數")
@@ -88,7 +98,6 @@ def main() -> None:
         runs = 1
 
     run_experiments(count=count, runs=runs, data_path=data_path, scenarios=scenarios)
-
 
 if __name__ == "__main__":
     main()

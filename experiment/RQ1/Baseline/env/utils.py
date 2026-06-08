@@ -3,62 +3,43 @@ import re
 from typing import Dict, Any, List
 
 def parse_output_as_json(response_text: str) -> Dict[str, Any]:
-    """
-    Parse the model's response text and extract JSON from it.
-    
-    Args:
-        response_text: Raw response text from the model
-        
-    Returns:
-        Parsed JSON dictionary, or empty dict if parsing fails
-    """
     try:
-        # Try to parse the entire response as JSON
+
         return json.loads(response_text.strip())
     except json.JSONDecodeError:
-        # Look for JSON blocks in the response
+
         json_pattern = r'```json\s*(.*?)\s*```'
         matches = re.findall(json_pattern, response_text, re.DOTALL)
-        
+
         if matches:
             try:
                 return json.loads(matches[0].strip())
             except json.JSONDecodeError:
                 pass
-        
-        # Look for JSON-like content between braces
+
+
         brace_pattern = r'\{.*\}'
         matches = re.findall(brace_pattern, response_text, re.DOTALL)
-        
+
         for match in matches:
             try:
                 return json.loads(match.strip())
             except json.JSONDecodeError:
                 continue
-        
-        # If all parsing attempts fail, return empty dict
+
+
         return {}
 
 def build_history_into_prompt(conversation_history: List[Dict[str, str]], with_note: bool = False) -> str:
-    """
-    Convert conversation history into a formatted prompt string.
-    
-    Args:
-        conversation_history: List of conversation entries with 'role' and 'content' keys
-        with_note: Whether to include notes in the conversation history
-        
-    Returns:
-        Formatted conversation history string
-    """
     if not conversation_history:
         return "No previous conversation."
-    
+
     history_str = ""
     for entry in conversation_history:
         role = entry.get("role", "unknown")
         content = entry.get("content", "")
         note = entry.get("note", "") if with_note else ""
-        
+
         if role == "interviewer":
             history_str += f"Interviewer: {content}\n"
             if with_note and note:
@@ -67,13 +48,12 @@ def build_history_into_prompt(conversation_history: List[Dict[str, str]], with_n
             history_str += f"User: {content}\n"
         else:
             history_str += f"{role.capitalize()}: {content}\n"
-        
+
         history_str += "\n"
-    
+
     return history_str.strip()
 
 def relevant_requirement_ids_from_judgement(judgement: Dict[str, Any]) -> List[str]:
-    """Return relevant requirement ids from new list schema or old single-id schema."""
     if not isinstance(judgement, dict):
         return []
     raw_ids = judgement.get("relevant_implied_requirements_ids")
@@ -167,6 +147,6 @@ Please respond naturally to the interviewer's question or text.
 **Context of this latest utterance:**
 - Action type: {action_type}
 - Is relevant to your requirements: {is_relevant}
-- Relevant Requirements: {relevant_requirement} 
+- Relevant Requirements: {relevant_requirement}
 Note: if is_relevant is false, the relevant_requirements value is null.
 """

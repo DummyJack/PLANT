@@ -1,3 +1,4 @@
+# Provides RQ2 Plant experiment utils helpers.
 import csv
 import json
 import os
@@ -7,13 +8,16 @@ from statistics import mean
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-from agents.profile.analyst.conflict_store import all_conflict_rows
+from agents.profile.analyst.conflicts import all_conflict_rows
 from utils import json_dump_no_scientific
 
 RQ2_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
 
+# ========
+# Defines print multi run summary function for this experiment module.
+# ========
 def print_multi_run_summary(
     *,
     runs: int,
@@ -92,6 +96,9 @@ def print_multi_run_summary(
         json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
     print(f"統計已儲存至：{summary_path}")
 
+# ========
+# Defines is likely english function for this experiment module.
+# ========
 def is_likely_english(text: str) -> bool:
     s = str(text or "").strip()
     if not s:
@@ -104,11 +111,13 @@ def is_likely_english(text: str) -> bool:
         return True
     return len(letters) >= (len(cjk) * 2)
 
+# ========
+# Defines sync config language function for this experiment module.
+# ========
 def sync_config_language(artifact: Dict[str, Any], *, write_artifact_meta: bool = True) -> None:
-    """依輸入內容同步輸出語系，供各 agent prompt 使用。"""
     req_texts = [
         str(r.get("text") or "").strip()
-        for r in ((artifact.get("URL") or []) + (artifact.get("requirements") or []))
+        for r in (artifact.get("URL") or [])
         if isinstance(r, dict)
     ]
     text_for_detect = " ".join(
@@ -124,18 +133,23 @@ def sync_config_language(artifact: Dict[str, Any], *, write_artifact_meta: bool 
         artifact["meta"] = meta
     meta["output_language"] = lang
 
+# ========
+# Defines build type rough idea function for this experiment module.
+# ========
 def build_type_rough_idea(type_name: str) -> str:
-    """依 type 產生情境化 rough_idea。"""
     tn = str(type_name or "").strip() or "Generic System"
     return f"我要做一個 {tn}"
 
+# ========
+# Defines default csv path function for this experiment module.
+# ========
 def default_csv_path() -> Path:
     return DATA_DIR / "cn_pairs.csv"
 
+# ========
+# Defines load rq2 dataset function for this experiment module.
+# ========
 def load_rq2_dataset(path: Path) -> Tuple[List[Dict[str, Any]], str]:
-    """載入實驗列資料。支援 CSV，或 JSON 陣列（打包多筆於單一檔）。
-
-    每筆須含：Text1, Text2, Class；可選 types（與 CSV 相同）。"""
     if not path.exists():
         raise FileNotFoundError(str(path))
     suffix = path.suffix.lower()
@@ -162,10 +176,12 @@ def load_rq2_dataset(path: Path) -> Tuple[List[Dict[str, Any]], str]:
         return rows, path.name
     raise ValueError(f"不支援的副檔名：{suffix}（請使用 .csv 或 .json）")
 
+# ========
+# Defines extract pair preds with missing function for this experiment module.
+# ========
 def extract_pair_preds_with_missing(
     artifact: Dict[str, Any], n_pairs: int
 ) -> Tuple[List[str], List[int]]:
-    """依 pair_index（或 PAIR-xxx id）取得每對最終標籤，並回報未覆蓋 pair。"""
     by_k: Dict[int, str] = {}
     for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
@@ -192,10 +208,12 @@ def extract_pair_preds_with_missing(
     missing = [k for k in range(n_pairs) if k not in by_k]
     return preds, missing
 
+# ========
+# Defines extract conflict review details function for this experiment module.
+# ========
 def extract_conflict_review_details(
     artifact: Dict[str, Any], *, round_num: int = 0
 ) -> Dict[str, Any]:
-    """同一 type 整批只做一次衝突再審查，回傳給 records.py 再整理的中介格式。"""
     details: Dict[str, Any] = {
         "round": int(round_num),
         "changed_count": 0,
@@ -203,70 +221,68 @@ def extract_conflict_review_details(
         "participants": [],
         "decisions": [],
     }
-    log = artifact.get("conflict_review_log")
-    if not isinstance(log, list) or not log:
-        return details
-    entry = None
-    for item in reversed(log):
-        if not isinstance(item, dict):
-            continue
-        try:
-            if int(item.get("round", -1)) == int(round_num):
-                entry = item
-                break
-        except (TypeError, ValueError):
-            continue
-    if entry is None:
-        entry = log[-1] if isinstance(log[-1], dict) else None
-    if not isinstance(entry, dict):
-        return details
+    decisions: List[Dict[str, Any]] = []
+    participants: List[str] = []
 
-    try:
-        details["round"] = int(entry.get("round", round_num))
-    except (TypeError, ValueError):
-        details["round"] = int(round_num)
-    details["changed_count"] = int(entry.get("changed_count", 0) or 0)
-    details["discussion_mode"] = str(entry.get("discussion_mode") or "")
-    details["participants"] = list(entry.get("participants") or [])
-    conflicts_by_id: Dict[str, Dict[str, Any]] = {}
+    # ========
+    # Defines add participant function for this experiment module.
+    # ========
+    def add_participant(name: Any) -> None:
+        text = str(name or "").strip()
+        if text and text not in participants:
+            participants.append(text)
+
     for c in all_conflict_rows(artifact):
         if not isinstance(c, dict):
             continue
         cid = str(c.get("id") or "").strip()
-        if cid:
-            conflicts_by_id[cid] = c
-
-    decision_rows: List[Dict[str, Any]] = []
-    decisions = entry.get("decisions")
-    if isinstance(decisions, list) and decisions:
-        for d in decisions:
-            if not isinstance(d, dict):
+        if not cid:
+            continue
+        meeting = c.get("meeting")
+        if not isinstance(meeting, dict) or not meeting:
+            continue
+        for rows in meeting.values():
+            if not isinstance(rows, list):
                 continue
-            cid = str(d.get("id") or "").strip()
-            nl = str(d.get("new_label") or "").strip()
-            rs = str(d.get("reason") or "").strip()
-            cf = conflicts_by_id.get(cid, {})
-            from_label = str(cf.get("initial_label") or "").strip()
-            to_label = str(cf.get("final_label") or nl).strip()
-            decision_rows.append(
-                {
-                    "id": cid,
-                    "new_label": nl,
-                    "reason": rs,
-                    "from_label": from_label,
-                    "to_label": to_label,
-                    "result": "modify" if from_label and to_label and from_label != to_label else "keep",
-                    "status": str(cf.get("status") or ""),
-                    "requirement_ids": list(cf.get("requirement_ids") or []),
-                    "pair_index": cf.get("pair_index"),
-                    "description": str(cf.get("description") or ""),
-                }
-            )
-    details["decisions"] = decision_rows
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                add_participant(row.get("agent"))
+
+        initial_label = str(c.get("initial_label") or "").strip()
+        final_label = str(c.get("final_label") or c.get("label") or "").strip()
+        description = str(c.get("description") or "").strip()
+        decisions.append(
+            {
+                "id": cid,
+                "new_label": final_label,
+                "reason": description,
+                "from_label": initial_label,
+                "to_label": final_label,
+                "result": (
+                    "modify"
+                    if initial_label and final_label and initial_label != final_label
+                    else "keep"
+                ),
+                "status": str(c.get("status") or "").strip(),
+                "requirement_ids": list(c.get("requirement_ids") or []),
+                "pair_index": c.get("pair_index"),
+                "description": description,
+            }
+        )
+
+    details["changed_count"] = sum(
+        1 for item in decisions if item.get("result") == "modify"
+    )
+    details["discussion_mode"] = "sequential" if decisions else ""
+    details["participants"] = participants
+    details["decisions"] = decisions
     return details
 
+# ========
+# Defines build pair changed flags function for this experiment module.
+# ========
 def build_pair_changed_flags(artifact: Dict[str, Any], n_pairs: int) -> List[bool]:
-    """每對：衝突再審查是否改判（仍用 from/to label 比對，但不輸出這兩個欄位）。"""
     flags: List[bool] = [False] * n_pairs
     by_k: Dict[int, bool] = {}
 
@@ -303,11 +319,13 @@ def build_pair_changed_flags(artifact: Dict[str, Any], n_pairs: int) -> List[boo
         flags[k] = bool(by_k.get(k, False))
     return flags
 
+# ========
+# Defines build pair review details function for this experiment module.
+# ========
 def build_pair_review_details(
     artifact: Dict[str, Any],
     n_pairs: int,
 ) -> Dict[int, Dict[str, Any]]:
-    """用 conflict.pairs[].meeting 組回 RQ2 record 的 pair details。"""
     details_by_k: Dict[int, Dict[str, Any]] = {}
 
     for c in all_conflict_rows(artifact):

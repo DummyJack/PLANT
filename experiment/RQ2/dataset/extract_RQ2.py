@@ -32,7 +32,6 @@ def read_rows(path: Path) -> list[dict]:
 
 
 def balanced_pick(rows: list[dict], n: int, rng: random.Random) -> list[dict]:
-    """從 rows 抽 n 筆，且 Conflict/Neutral 各半。"""
     if n % 2 != 0:
         raise ValueError(f"n 必須為偶數：{n}")
     need = n // 2
@@ -69,7 +68,7 @@ def write_rows(rows: list[dict], out_path: Path) -> None:
         writer.writeheader()
         for idx, row in enumerate(rows):
             out = dict(row)
-            out["ID"] = str(idx)  # ID 重新從 0 開始
+            out["ID"] = str(idx)
             writer.writerow(out)
 
 

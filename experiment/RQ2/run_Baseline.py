@@ -1,3 +1,4 @@
+# Runs the RQ2 baseline conflict classifier and writes evaluation outputs.
 import csv
 import os
 import sys
@@ -8,11 +9,17 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Optional
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+EXPERIMENT_ROOT = Path(__file__).resolve().parent
+if str(EXPERIMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_ROOT))
+
 from utils.clean import apply_entrypoint_bootstrap
 
 apply_entrypoint_bootstrap()
 
-# 路徑與環境（須先於 metric / utils 匯入）
 RQ2_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ2_DIR.parent.parent
 
@@ -28,14 +35,15 @@ CN_PAIRS_CSV = "cn_pairs.csv"
 RESULTS_DIR = RQ2_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 
-# 實驗常數
 BASELINE_PROVIDER = "openai"
 BASELINE_MODEL = "gpt-4.1"
 BASELINE_TEMPERATURE = 0.0
-PROMPT_FOR_RUNS = True
+ask_runs = True
 MAX_WORKERS = 5
 
-# 取得下一個輸出編號（同 prefix 下取現有最大值 +1）。
+# ========
+# Defines next result index function for this experiment module.
+# ========
 def next_result_index(prefix: str, results_dir: Path) -> int:
     pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
@@ -49,7 +57,9 @@ def next_result_index(prefix: str, results_dir: Path) -> int:
             continue
     return max_idx + 1
 
-# 建立衝突判斷的提示詞。
+# ========
+# Defines conflict prompt function for this experiment module.
+# ========
 def conflict_prompt(text1: str, text2: str, req_type: Optional[str] = None) -> str:
     type_line = f"情境: {req_type}\n\n" if req_type else ""
     return (
@@ -57,8 +67,9 @@ def conflict_prompt(text1: str, text2: str, req_type: Optional[str] = None) -> s
         "根據情境，判斷需求 A 和 B 是否有衝突，有衝突輸出 Conflict，沒有則輸出 Neutral，不用再額外生成任何內容。"
     )
 
-
-# 從 Gemini 回傳物件萃取文字內容。
+# ========
+# Defines gemini response text function for this experiment module.
+# ========
 def gemini_response_text(response: Any) -> str:
     try:
         t = getattr(response, "text", None)
@@ -75,10 +86,14 @@ def gemini_response_text(response: Any) -> str:
         return "".join(parts)
     return ""
 
-
-# 單一 LLM 端點，對兩句需求做 Conflict / Neutral 二元判斷。
+# ========
+# Defines BaselineModel class for this experiment module.
+# ========
 class BaselineModel:
 
+    # ========
+    # Defines initialize function for this experiment module.
+    # ========
     def __init__(
         self,
         provider: str = "openai",
@@ -128,17 +143,22 @@ class BaselineModel:
             )
             sys.exit(1)
 
+    # ========
+    # Defines detect conflict function for this experiment module.
+    # ========
     def detect_conflict(
         self, text1: str, text2: str, req_type: Optional[str] = None
     ) -> str:
-        # 對外入口：依 provider 分派到對應推論實作。
+
         user_prompt = conflict_prompt(text1, text2, req_type=req_type)
 
         if self.provider == "openai":
             return self.detect_openai(user_prompt)
         return self.detect_gemini(user_prompt)
 
-    # 使用 OpenAI Chat Completions 做衝突判斷，並累加成本。
+    # ========
+    # Defines detect openai function for this experiment module.
+    # ========
     def detect_openai(self, user_prompt: str) -> str:
         assert self.client is not None
         self.cost_tracker.start()
@@ -154,7 +174,7 @@ class BaselineModel:
 
         usage = getattr(resp, "usage", None) if resp is not None else None
         if usage:
-            self.cost_tracker.addUsage(
+            self.cost_tracker.add_usage(
                 {
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
                     "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
@@ -166,7 +186,9 @@ class BaselineModel:
             return "Neutral"
         return (resp.choices[0].message.content or "").strip()
 
-    # 使用 Gemini 生成內容 API 做衝突判斷，並累加成本。
+    # ========
+    # Defines detect gemini function for this experiment module.
+    # ========
     def detect_gemini(self, user_prompt: str) -> str:
         assert self.genai_client is not None and self.genai_types is not None
         assert self.gemini_lock is not None
@@ -191,7 +213,7 @@ class BaselineModel:
             total = getattr(um, "total_token_count", None)
             if total is None:
                 total = prompt + cand
-            self.cost_tracker.addUsage(
+            self.cost_tracker.add_usage(
                 {
                     "prompt_tokens": prompt,
                     "completion_tokens": cand,
@@ -205,14 +227,16 @@ class BaselineModel:
             raise ValueError("Gemini 無回應內容（可能被安全過濾或無候選）")
         return raw
 
-
-# 成本相關
+# ========
+# Defines build baseline cost payload function for this experiment module.
+# ========
 def build_baseline_cost_payload(model: BaselineModel) -> dict:
-    # 產生單層成本摘要，對齊 RQ1 Baseline cost 結構。
+
     return dict(model.cost_tracker.export_summary_dict())
 
-
-# 載入資料集；可依 types 過濾，limit > 0 時只取前 N 筆。
+# ========
+# Defines load cn pairs function for this experiment module.
+# ========
 def load_cn_pairs(
     csv_path: Path,
     limit: int,
@@ -232,7 +256,9 @@ def load_cn_pairs(
         return rows[:limit]
     return rows
 
-
+# ========
+# Defines choose scenarios function for this experiment module.
+# ========
 def choose_scenarios(csv_path: Path) -> Optional[list[str]]:
     try:
         rows = load_cn_pairs(csv_path, 0)
@@ -274,8 +300,9 @@ def choose_scenarios(csv_path: Path) -> Optional[list[str]]:
         selected.append(scenarios[selected_idx - 1])
     return selected
 
-
-# 單筆資料推論，回傳索引、預測與紀錄。
+# ========
+# Defines predict row function for this experiment module.
+# ========
 def predict_row(model: BaselineModel, idx: int, row: dict) -> tuple[int, Optional[str], dict]:
     text1, text2 = row["Text1"], row["Text2"]
     req_type = (row.get("types") or "").strip()
@@ -289,8 +316,9 @@ def predict_row(model: BaselineModel, idx: int, row: dict) -> tuple[int, Optiona
     }
     return idx, pred, rec
 
-
-# 建立單筆失敗時的保底紀錄。
+# ========
+# Defines failed record function for this experiment module.
+# ========
 def failed_record(data: list[dict], idx: int) -> tuple[None, dict]:
     row = data[idx]
     return (
@@ -303,8 +331,9 @@ def failed_record(data: list[dict], idx: int) -> tuple[None, dict]:
         },
     )
 
-
-# 從單次 result 抽出可跨 run 做 mean/std 的數值指標。
+# ========
+# Defines scalar metrics for summary function for this experiment module.
+# ========
 def scalar_metrics_for_summary(result: dict) -> dict[str, float]:
     out: dict[str, float] = {}
     metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
@@ -324,7 +353,9 @@ def scalar_metrics_for_summary(result: dict) -> dict[str, float]:
                 out[f"conflict_{k}"] = float(v)
     return out
 
-
+# ========
+# Defines run conflict function for this experiment module.
+# ========
 def run_conflict(
     model: BaselineModel,
     count: int = 0,
@@ -332,7 +363,7 @@ def run_conflict(
     paths: dict[str, Path],
     scenarios: Optional[list[str]] = None,
 ) -> dict:
-    # 執行一次完整衝突辨識並輸出 result/record/cost。
+
     csv_path = RQ2_DIR / CN_PAIRS_CSV
     data = load_cn_pairs(csv_path, count, scenarios=scenarios)
     total = len(data)
@@ -397,7 +428,6 @@ def run_conflict(
 
     return result
 
-
 if __name__ == "__main__":
     print(f"Baseline provider={BASELINE_PROVIDER} model={BASELINE_MODEL}")
     csv_path = RQ2_DIR / CN_PAIRS_CSV
@@ -405,7 +435,7 @@ if __name__ == "__main__":
     count = 0
 
     runs: Optional[int] = None
-    if PROMPT_FOR_RUNS:
+    if ask_runs:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
             print("錯誤：請輸入重複執行次數")
@@ -456,7 +486,7 @@ if __name__ == "__main__":
         for m in run_scalar_metrics:
             all_keys.update(m.keys())
         print("\n多次執行結果統計（平均值 ± 標準差）：")
-        # JSON 與終端輸出順序：先 overall（precision→recall→f1），再 conflict（同序）；其餘鍵依字母接於後。
+
         preferred_order = [
             "overall_precision",
             "overall_recall",

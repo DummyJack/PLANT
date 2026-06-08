@@ -1,3 +1,4 @@
+# Provides RQ1 Plant experiment utils helpers.
 import re
 import os
 from pathlib import Path
@@ -5,9 +6,10 @@ from typing import Any, Dict, List
 
 from storage.artifact import project_payload
 
-
+# ========
+# Defines next result index function for this experiment module.
+# ========
 def next_result_index(prefix: str, results_dir: Path) -> int:
-    """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
     pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
     for p in results_dir.glob(f"*_{prefix}_*.json"):
@@ -20,7 +22,9 @@ def next_result_index(prefix: str, results_dir: Path) -> int:
             continue
     return max_idx + 1
 
-
+# ========
+# Defines is likely english function for this experiment module.
+# ========
 def is_likely_english(text: str) -> bool:
     s = str(text or "").strip()
     if not s:
@@ -33,11 +37,15 @@ def is_likely_english(text: str) -> bool:
         return True
     return len(letters) >= (len(cjk) * 2)
 
-
+# ========
+# Defines task initial requirements function for this experiment module.
+# ========
 def task_initial_requirements(task: Dict) -> str:
     return str(task.get("initial_requirements") or "").strip()
 
-
+# ========
+# Defines task implicit requirements function for this experiment module.
+# ========
 def task_implicit_requirements(task: Dict) -> List[Dict[str, str]]:
     normalized: List[Dict[str, str]] = []
     for req in (task.get("Implicit Requirements", []) or []):
@@ -54,7 +62,9 @@ def task_implicit_requirements(task: Dict) -> List[Dict[str, str]]:
         )
     return normalized
 
-
+# ========
+# Defines ensure artifact function for this experiment module.
+# ========
 def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
     initial = task_initial_requirements(task)
     return {
@@ -65,7 +75,7 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         "stakeholders": [
             {
                 "name": "Oracle User",
-                "type": "Primary Users",
+                "type": "primary_user",
                 "text": [initial] if initial else [],
             }
         ],
@@ -88,7 +98,9 @@ def ensure_artifact(task: Dict[str, Any]) -> Dict[str, Any]:
         "elicited_reqts": [],
     }
 
-
+# ========
+# Defines rq1 project payload function for this experiment module.
+# ========
 def rq1_project_payload(artifact: Dict[str, Any]) -> Dict[str, Any]:
     payload = project_payload(artifact)
     stakeholders = []
@@ -104,21 +116,27 @@ def rq1_project_payload(artifact: Dict[str, Any]) -> Dict[str, Any]:
     payload["stakeholders"] = stakeholders
     return payload
 
-
+# ========
+# Defines safe turn no function for this experiment module.
+# ========
 def safe_turn_no(value: Any) -> int:
     try:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
 
-
+# ========
+# Defines trace turn no function for this experiment module.
+# ========
 def trace_turn_no(trace: Dict[str, Any]) -> int:
     turn_no = safe_turn_no(trace.get("mediator_turn"))
     if turn_no <= 0:
         turn_no = safe_turn_no(trace.get("turn"))
     return turn_no
 
-
+# ========
+# Defines print rq1 oracle elicitation trace function for this experiment module.
+# ========
 def print_rq1_oracle_elicitation_trace(
     logger: Any,
     *,
@@ -224,7 +242,9 @@ def print_rq1_oracle_elicitation_trace(
 
     logger.info("[需求擷取會議結束]")
 
-
+# ========
+# Defines run one task function for this experiment module.
+# ========
 def run_one_task(
     flow: Any,
     oracle_user: Any,
@@ -242,7 +262,7 @@ def run_one_task(
     if logger_verbose is not None:
         flow.logger.verbose = False
     try:
-        artifact = flow.meeting.run_requirement_elicitation_meeting(
+        artifact = flow.meeting.run_elicitation(
             artifact,
             round_num=0,
         )

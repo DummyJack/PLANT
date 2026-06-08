@@ -7,10 +7,10 @@ from utils.clean import apply_entrypoint_bootstrap
 apply_entrypoint_bootstrap()
 
 ORDERED_NAMES = [
-    "Stock Report Generation System",  # 股票分析報告系統
-    "Hospital Management and Information System",  # 醫院管理與資訊系統
-    "Bus and Railway Ticket Booking System",  # 公車與鐵路訂票系統
-    "Adult Vocabulary Learning and Quiz System",  # 單字學習與測驗系統
+    "Stock Report Generation System",
+    "Hospital Management and Information System",
+    "Bus and Railway Ticket Booking System",
+    "Adult Vocabulary Learning and Quiz System",
 ]
 
 

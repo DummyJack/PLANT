@@ -118,7 +118,7 @@ def application_type_statistics(task_results: List[Dict[str, Any]]) -> Dict[str,
 
 def compute_overall_metrics(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not task_results:
-        # 與 ReqElicitBench evaluate_all_tasks() 空結果回傳格式一致（精簡版）
+
         return {
             "elicitation_ratio": 0.0,
             "tkqr": 0.0,

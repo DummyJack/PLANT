@@ -1,27 +1,22 @@
-"""
-Configuration management for ReqElicitGym environments.
-"""
-
 from dataclasses import dataclass
 from typing import Optional
 import os
 
 @dataclass
 class ReqElicitGymConfig:
-    """Configuration class for ReqElicitGym environments."""
 
-    # Data configuration - 簡化：直接指定資料檔案路徑
-    data_path: str = "data/test.json"  # 資料檔案路徑
 
-    # Model configuration for judge
+    data_path: str = "data/test.json"
+
+
     judge_api_key: Optional[str] = None
     judge_base_url: Optional[str] = None
     judge_model_name: str = "gpt-5.1"
     judge_temperature: float = 0
     judge_max_tokens: int = 1024
     judge_timeout: float = 30.0
-    
-    # Model configuration for simulated user (GPT-5.1)
+
+
     user_api_key: Optional[str] = None
     user_base_url: Optional[str] = None
     user_model_name: str = "gpt-5.1"
@@ -29,26 +24,25 @@ class ReqElicitGymConfig:
     user_max_tokens: int = 1024
     user_timeout: float = 30.0
 
-    # User answer quality levels: "high", "medium", "low"
+
     user_answer_quality: str = "high"
 
-    # Environment configuration
-    max_turns: int = 20  # Maximum conversation turns
 
-    # Tracking configuration  
+    max_turns: int = 20
+
+
     track_conversation_history: bool = True
     track_elicit_state: bool = True
 
-    # Environment behavior
+
     verbose: bool = False
     seed: Optional[int] = None
-    
-    # Output file paths (optional, if None, must be provided when calling save methods)
-    evaluation_result_path: Optional[str] = None  # Path for evaluation results JSON file
-    conversation_result_path: Optional[str] = None  # Path for conversation results JSON file
+
+
+    evaluation_result_path: Optional[str] = None
+    conversation_result_path: Optional[str] = None
 
     def __post_init__(self):
-        """Post-initialization validation and setup."""
         if self.judge_api_key is None:
             raise ValueError("judge_api_key must be provided")
         if self.user_api_key is None:
@@ -59,7 +53,6 @@ class ReqElicitGymConfig:
             raise ValueError("data_path must be provided")
 
     def validate(self):
-        """Validate configuration parameters."""
         if self.max_turns <= 0:
             raise ValueError("max_turns must be positive")
         if self.judge_temperature < 0:
@@ -74,11 +67,10 @@ class ReqElicitGymConfig:
             raise ValueError("judge_timeout must be positive")
         if self.user_timeout <= 0:
             raise ValueError("user_timeout must be positive")
-        
-        # 檢查資料檔案是否存在
+
+
         if not os.path.exists(self.data_path):
             raise FileNotFoundError(f"Data file not found: {self.data_path}")
 
 def get_default_config() -> ReqElicitGymConfig:
-    """Get the default ReqElicitGym configuration."""
     return ReqElicitGymConfig()

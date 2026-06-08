@@ -1,3 +1,4 @@
+# Provides RQ1 Plant experiment config helpers.
 import json
 import sys
 from pathlib import Path
@@ -8,11 +9,20 @@ from utils import model_has_token_pricing
 
 from .oracle_user import OracleConfigs
 
-
+# ========
+# Defines ExperimentLogger class for this experiment module.
+# ========
 class ExperimentLogger:
+
+    # ========
+    # Defines initialize function for this experiment module.
+    # ========
     def __init__(self, verbose: bool = True):
         self.verbose = bool(verbose)
 
+    # ========
+    # Defines fmt function for this experiment module.
+    # ========
     @staticmethod
     def fmt(args: tuple) -> str:
         if not args:
@@ -26,48 +36,84 @@ class ExperimentLogger:
         except Exception:
             return " ".join(str(x) for x in args)
 
+    # ========
+    # Defines info function for this experiment module.
+    # ========
     def info(self, *args, **kwargs):
         if self.verbose:
             print(self.fmt(args))
 
+    # ========
+    # Defines warning function for this experiment module.
+    # ========
     def warning(self, *args, **kwargs):
         print(f"[Flow][WARN] {self.fmt(args)}")
 
+    # ========
+    # Defines error function for this experiment module.
+    # ========
     def error(self, *args, **kwargs):
         print(f"[Flow][ERROR] {self.fmt(args)}")
 
-
+# ========
+# Defines ExperimentStore class for this experiment module.
+# ========
 class ExperimentStore:
-    """RQ1 experiment store: only keep primary experiment output files."""
 
+    # ========
+    # Defines initialize function for this experiment module.
+    # ========
     def __init__(self, results_dir: Path) -> None:
         self.project_id = "rq1_plant_elicitation"
         self.output_dir = results_dir
         self.project_dir = results_dir
         self.artifact_dir = self.project_dir / "artifact"
 
+    # ========
+    # Defines save artifact function for this experiment module.
+    # ========
     def save_artifact(self, data: Dict[str, Any]):
         pass
 
+    # ========
+    # Defines save json function for this experiment module.
+    # ========
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
         pass
 
+    # ========
+    # Defines save markdown function for this experiment module.
+    # ========
     def save_markdown(self, content: str, filename: str):
         pass
 
+    # ========
+    # Defines save plantuml files function for this experiment module.
+    # ========
     def save_plantuml_files(self, model_data: Dict[str, Any]):
         pass
 
+    # ========
+    # Defines save draft function for this experiment module.
+    # ========
     def save_draft(self, content: str, version: int):
         pass
 
+    # ========
+    # Defines get draft version function for this experiment module.
+    # ========
     def get_draft_version(self) -> int:
         return -1
 
+    # ========
+    # Defines load draft function for this experiment module.
+    # ========
     def load_draft(self, version: int):
         return None
 
-
+# ========
+# Defines load json function for this experiment module.
+# ========
 def load_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -75,7 +121,9 @@ def load_json(path: Path) -> Dict[str, Any]:
         raise TypeError(f"設定檔必須是 JSON object: {path}")
     return data
 
-
+# ========
+# Defines apply rq1 flow overrides function for this experiment module.
+# ========
 def apply_rq1_flow_overrides(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]) -> Dict[str, Any]:
     updated = dict(flow_cfg)
     if isinstance(exp_cfg.get("enable_agents"), dict):
@@ -87,7 +135,9 @@ def apply_rq1_flow_overrides(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]) 
         updated["elicitation_max_turns"] = int(exp_cfg["elicitation_max_turns"])
     return updated
 
-
+# ========
+# Defines assert models have pricing function for this experiment module.
+# ========
 def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]) -> None:
     for agent, info in (flow_cfg.get("agent_models") or {}).items():
         if agent == "default" or not isinstance(info, dict):
@@ -108,7 +158,9 @@ def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]
             )
             sys.exit(1)
 
-
+# ========
+# Defines build flow function for this experiment module.
+# ========
 def build_flow(flow_cfg: Dict[str, Any], *, verbose: bool, results_dir: Path) -> Flow:
     flow = Flow(
         config=flow_cfg,
@@ -118,16 +170,22 @@ def build_flow(flow_cfg: Dict[str, Any], *, verbose: bool, results_dir: Path) ->
     disable_rq1_candidate_extraction(flow)
     return flow
 
-
+# ========
+# Defines disable rq1 candidate extraction function for this experiment module.
+# ========
 def disable_rq1_candidate_extraction(flow: Flow) -> None:
-    """RQ1 metric 只依 oracle_trace.revealed_ids 計分，不需要每輪 LLM candidate extraction。"""
 
+    # ========
+    # Defines skip extract elicited reqts function for this experiment module.
+    # ========
     def skip_extract_elicited_reqts(*args, **kwargs):
         return []
 
     flow.analyst_agent.extract_elicited_reqts = skip_extract_elicited_reqts
 
-
+# ========
+# Defines build oracle configs function for this experiment module.
+# ========
 def build_oracle_configs(exp_cfg: Dict[str, Any], api_key: str, base_url: str) -> OracleConfigs:
     user_cfg = exp_cfg.get("oracle_user") or {}
     judge_cfg = exp_cfg.get("oracle_judge") or {}

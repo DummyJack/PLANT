@@ -1,1 +1,1 @@
-"""RQ2 Plant experiment package."""
+# Initializes the RQ2 Plant experiment package.

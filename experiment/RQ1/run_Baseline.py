@@ -11,32 +11,39 @@ from typing import List
 
 from dotenv import load_dotenv
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+EXPERIMENT_ROOT = Path(__file__).resolve().parent
+if str(EXPERIMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_ROOT))
+
 from utils.clean import apply_entrypoint_bootstrap
 
 apply_entrypoint_bootstrap()
 
-# 路徑：run_Baseline.py 在 RQ1 下，資料 ReqElicitBench.json、套件 Baseline/ 同在 RQ1 下
+
 RQ1_DIR = Path(__file__).resolve().parent
 BASE_DIR = RQ1_DIR.parent.parent
-# 從專案主目錄 .env 讀取（含 OPENAI_API_KEY）
+
 env_path = BASE_DIR / ".env"
 load_dotenv(env_path)
-# Baseline 設定檔位於 Baseline/config.json。
+
 DEFAULT_CONFIG_PATH = RQ1_DIR / "Baseline" / "config.json"
-# 結果輸出目錄與檔名前綴（固定於程式，不經 Baseline/config.json）
+
 RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
-# 預設資料檔、任務數與互動行為（固定於程式，不經 Baseline/config.json）
+
 DEFAULT_DATA_FILE = "ReqElicitBench.json"
-# 未設定 max_tasks 且下方為 None 時，是否在終端機詢問要跑幾題
+
 PROMPT_FOR_MAX_TASKS = True
-# 未設定 runs 時，是否在終端機詢問要跑幾次
+
 PROMPT_FOR_RUNS = True
-# 程式內預設最多任務數：None 表示不預先限定（仍可用互動輸入）
+
 DEFAULT_MAX_TASKS = None
-# Gemini「OpenAI 相容」Chat Completions（官方文件）
+
 GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
-# 未指定 --base-url 且未設 OPENAI_BASE_URL 時的預設 API base（固定於程式，不經 Baseline/config.json）
+
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 from Baseline.config import ReqElicitGymConfig
@@ -48,7 +55,6 @@ from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 
 def resolve_data_path(raw: str) -> str:
-    """相對路徑則相對於 RQ1 目錄解析。"""
     p = Path(raw)
     if p.is_absolute():
         return str(p.resolve())
@@ -66,7 +72,6 @@ def load_baseline_file_config(path: Path) -> dict:
 
 
 def next_result_index(prefix: str, results_dir: Path) -> int:
-    """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
     pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
     for p in results_dir.glob(f"*_{prefix}_*.json"):
@@ -81,7 +86,6 @@ def next_result_index(prefix: str, results_dir: Path) -> int:
 
 
 def main():
-    """主函式：執行 ReqElicitGym-v8 評估（執行全部任務）"""
     cfg_path = DEFAULT_CONFIG_PATH.resolve()
     file_cfg = load_baseline_file_config(cfg_path)
     print(f"設定檔：{cfg_path}")
@@ -90,7 +94,7 @@ def main():
         v = file_cfg.get(key, default)
         return default if v is None else v
 
-    # api_key 不寫入 JSON，僅環境變數；Gemini 請在 Baseline/config.json 設 "use_gemini": true
+
     use_gemini = bool(pick("use_gemini", False))
     api_key = os.environ.get("OPENAI_API_KEY", "")
     base_url = os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
@@ -156,8 +160,7 @@ def main():
     interviewer_max_tokens = int(pick("interviewer_max_tokens", 1024))
     interviewer_max_tokens_thinking = int(pick("interviewer_max_tokens_thinking", 8192))
 
-    # 統一使用同一套 API key 與 base URL
-    # 如需對 judge/user 再細分 key，可繼續用 JUDGE_API_KEY / USER_API_KEY 覆寫
+
     judge_api_key = os.getenv("JUDGE_API_KEY", api_key)
     user_api_key = os.getenv("USER_API_KEY", api_key)
     judge_base_url = os.getenv("JUDGE_BASE_URL", base_url)
@@ -179,13 +182,13 @@ def main():
             )
             sys.exit(1)
 
-    # 檢查資料檔案
+
     if not os.path.exists(data_path):
         print(f"錯誤：找不到檔案 {data_path}")
         print("請確保資料檔案存在")
         sys.exit(1)
 
-    # 載入任務，可選只取前 N 筆
+
     try:
         print(f"\n正在載入資料檔案：{data_path}")
         with open(data_path, "r", encoding="utf-8") as f:
@@ -196,7 +199,7 @@ def main():
             print(f"資料檔案共 {total_tasks_in_file} 個任務，本輪執行前 {len(all_tasks)} 個（--max-tasks={max_tasks}）")
         else:
             print(f"資料檔案包含 {total_tasks_in_file} 個任務，將對全部任務進行評估")
-        # 若限制了數量，寫入暫存檔供 env 載入（env 只認 data_path）
+
         if max_tasks is not None and max_tasks > 0 and len(all_tasks) < total_tasks_in_file:
             subset_path = RQ1_DIR / ".reqelicit_subset.json"
             with open(subset_path, "w", encoding="utf-8") as f:
@@ -210,7 +213,7 @@ def main():
         sys.exit(1)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    llm = interviewer_model  # interviewer 使用的模型
+    llm = interviewer_model
     run_results: List[dict] = []
     run_metrics: List[dict] = []
     run_costs_usd: List[float] = []
@@ -287,7 +290,7 @@ def main():
             elapsed = perf_counter() - start
             if return_usage:
                 question, usage_info = out
-                interviewer_cost_tracker.addUsage(
+                interviewer_cost_tracker.add_usage(
                     usage_info or {},
                     metadata={"action": "baseline.interviewer.ask_question"},
                     run_time_s=elapsed,
@@ -312,7 +315,7 @@ def main():
             )
             elapsed = perf_counter() - start
             if system_prompt == baseline_prompts.PASSIVE_RESPONSE_SYSTEM:
-                user_cost_tracker.addUsage(
+                user_cost_tracker.add_usage(
                     usage_info or {},
                     metadata={"action": "baseline.user.generate_response"},
                     run_time_s=elapsed,
@@ -502,7 +505,7 @@ def main():
         else:
             print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")
 
-        # 固定欄位順序：runs -> metrics -> cost
+
         summary_payload = {"runs": runs}
         if summary_metrics:
             summary_payload["metrics"] = summary_metrics

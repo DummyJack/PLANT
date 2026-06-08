@@ -24,7 +24,6 @@ def read_summary(path: Path) -> Dict[str, Any]:
     return data
 
 
-# 從 summary 的 metrics 或 cost 區塊取出 { 鍵: mean }。
 def nested_means(section: Any) -> Dict[str, float]:
     out: Dict[str, float] = {}
     if not isinstance(section, dict):
@@ -38,7 +37,6 @@ def nested_means(section: Any) -> Dict[str, float]:
     return out
 
 
-# 越大越好指標：(Plant − Baseline) / |Baseline| × 100。
 def plant_over_baseline_pct(plant_mean: float, baseline_mean: float) -> Optional[float]:
     if baseline_mean == 0.0:
         return None
@@ -46,7 +44,6 @@ def plant_over_baseline_pct(plant_mean: float, baseline_mean: float) -> Optional
     return (float(plant_mean) - float(baseline_mean)) / b * 100.0
 
 
-# 成本／token／時間：Plant 為 Baseline 的幾倍（Plant mean ÷ Baseline mean）。
 def plant_over_baseline_ratio(plant_mean: float, baseline_mean: float) -> Optional[float]:
     if baseline_mean == 0.0:
         return None

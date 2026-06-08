@@ -1,3 +1,4 @@
+# Provides RQ1 Plant experiment records helpers.
 import json
 from typing import Any, Dict, List
 
@@ -7,7 +8,9 @@ from metric import compute_ora, compute_overall_metrics, compute_tkqr
 from .oracle_user import OracleUserAgent
 from .utils import task_implicit_requirements, task_initial_requirements
 
-
+# ========
+# Defines resolve role model name function for this experiment module.
+# ========
 def resolve_role_model_name(flow_cfg: Dict[str, Any], role: str) -> str:
     agent_models = flow_cfg.get("agent_models", {})
     if not isinstance(agent_models, dict):
@@ -24,7 +27,9 @@ def resolve_role_model_name(flow_cfg: Dict[str, Any], role: str) -> str:
             return model
     return ""
 
-
+# ========
+# Defines enabled plant roles function for this experiment module.
+# ========
 def enabled_plant_roles(flow_cfg: Dict[str, Any]) -> List[str]:
     base_roles = ["analyst", "expert", "modeler"]
     enabled = flow_cfg.get("enable_agents") or {}
@@ -33,7 +38,9 @@ def enabled_plant_roles(flow_cfg: Dict[str, Any]) -> List[str]:
     out = [r for r in base_roles if bool(enabled.get(r, True))]
     return out or ["analyst"]
 
-
+# ========
+# Defines format plant roles with models function for this experiment module.
+# ========
 def format_plant_roles_with_models(flow_cfg: Dict[str, Any], roles: List[str]) -> str:
     rows: List[str] = []
     for role in roles:
@@ -47,14 +54,18 @@ def format_plant_roles_with_models(flow_cfg: Dict[str, Any], roles: List[str]) -
             rows.append(role_name)
     return ", ".join(rows)
 
-
+# ========
+# Defines build plant models function for this experiment module.
+# ========
 def build_plant_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for role in enabled_plant_roles(flow_cfg):
         out[role] = resolve_role_model_name(flow_cfg, role)
     return out
 
-
+# ========
+# Defines resolve plant model label function for this experiment module.
+# ========
 def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]) -> str:
     participants: List[str] = []
     for tlog in (per_task.get("elicitation_trace", []) or []):
@@ -80,7 +91,9 @@ def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]
 
     return format_plant_roles_with_models(flow_cfg, participants)
 
-
+# ========
+# Defines build cost payload function for this experiment module.
+# ========
 def build_cost_payload(flow: Flow, oracle_user: OracleUserAgent) -> Dict[str, Any]:
     cost_by_agent: Dict[str, Any] = {}
     enabled = flow.config.get("enable_agents") or {}
@@ -108,7 +121,9 @@ def build_cost_payload(flow: Flow, oracle_user: OracleUserAgent) -> Dict[str, An
     }
     return {"agents": cost_by_agent, "totals": totals}
 
-
+# ========
+# Defines extract action type effectiveness function for this experiment module.
+# ========
 def extract_action_type_effectiveness(conversation: List[Dict[str, Any]]) -> Dict[str, Any]:
     stats: Dict[str, Dict[str, float]] = {}
     for turn in conversation:
@@ -130,13 +145,14 @@ def extract_action_type_effectiveness(conversation: List[Dict[str, Any]]) -> Dic
         }
     return out
 
-
+# ========
+# Defines compute aspect type elicitation function for this experiment module.
+# ========
 def compute_aspect_type_elicitation(
     task: Dict[str, Any],
     revealed_ids: set,
 ) -> Dict[str, Any]:
-    # 與 ReqElicitGym 一樣：以 Implicit Requirements 的 Aspect 作為分母，
-    # 命中 requirement id 作為分子。
+
     totals: Dict[str, int] = {}
     elicited: Dict[str, int] = {}
     implicit = task_implicit_requirements(task)
@@ -160,9 +176,10 @@ def compute_aspect_type_elicitation(
         }
     return out
 
-
+# ========
+# Defines split trailing json object function for this experiment module.
+# ========
 def split_trailing_json_object(text: str) -> tuple[str, str]:
-    """Return (prefix, trailing_json) when text ends with a JSON object."""
     value = str(text or "").strip()
     if not value:
         return "", ""
@@ -182,7 +199,9 @@ def split_trailing_json_object(text: str) -> tuple[str, str]:
         return value[:idx].strip(), candidate[:end].strip()
     return value, ""
 
-
+# ========
+# Defines strip metadata json objects function for this experiment module.
+# ========
 def strip_metadata_json_objects(text: str) -> str:
     value = str(text or "")
     if "{" not in value:
@@ -211,9 +230,10 @@ def strip_metadata_json_objects(text: str) -> str:
         pos = idx + end
     return " ".join("".join(parts).split()).strip()
 
-
+# ========
+# Defines strip post meeting analysis sections function for this experiment module.
+# ========
 def strip_post_meeting_analysis_sections(text: str) -> str:
-    """Keep only the interviewer-facing question/suggestion, not later analysis sections."""
     value = str(text or "").strip()
     if not value:
         return ""
@@ -265,35 +285,43 @@ def strip_post_meeting_analysis_sections(text: str) -> str:
             cut_at = min(cut_at, idx)
     return value[:cut_at].strip()
 
-
+# ========
+# Defines keep user record text function for this experiment module.
+# ========
 def keep_user_record_text(text: str) -> str:
-    """User records should keep the natural answer and omit any trailing metadata JSON."""
     prefix, trailing_json = split_trailing_json_object(str(text or "").strip())
     cleaned = prefix if trailing_json and prefix else str(text or "").strip()
     return strip_metadata_json_objects(cleaned)
 
-
+# ========
+# Defines keep interviewer record text function for this experiment module.
+# ========
 def keep_interviewer_record_text(text: str) -> str:
-    """Interviewer records should keep only the formal question/suggestion text."""
     cleaned = strip_post_meeting_analysis_sections(text)
     cleaned = strip_metadata_json_objects(cleaned)
     return cleaned.strip()
 
-
+# ========
+# Defines safe turn no function for this experiment module.
+# ========
 def safe_turn_no(value: Any) -> int:
     try:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
 
-
+# ========
+# Defines trace turn no function for this experiment module.
+# ========
 def trace_turn_no(trace: Dict[str, Any]) -> int:
     turn_no = safe_turn_no(trace.get("mediator_turn"))
     if turn_no <= 0:
         turn_no = safe_turn_no(trace.get("turn"))
     return turn_no
 
-
+# ========
+# Defines format mediator record text function for this experiment module.
+# ========
 def format_mediator_record_text(tlog: Dict[str, Any]) -> str:
     discussion_mode = str(tlog.get("discussion_mode") or "").strip()
     is_finish = bool(tlog.get("judge_finish", False)) or bool(tlog.get("forced_finish", False))
@@ -321,7 +349,9 @@ def format_mediator_record_text(tlog: Dict[str, Any]) -> str:
         parts.append(f"speaker_order=[{', '.join(speaking_order)}]")
     return " | ".join(parts)
 
-
+# ========
+# Defines build task record function for this experiment module.
+# ========
 def build_task_record(
     *,
     task_idx: int,
@@ -333,7 +363,7 @@ def build_task_record(
 ) -> Dict[str, Any]:
     implicit_total = int(per_task.get("implicit_total", 0) or 0)
     turn_logs = per_task.get("elicitation_trace", []) or []
-    # 與 run_one_task 的 oracle_revealed_count 同口徑：以 oracle_trace 的 revealed_ids 去重後計算。
+
     oracle_revealed_ids = {
         str(rid)
         for tr in (per_task.get("oracle_trace", []) or [])
@@ -398,7 +428,7 @@ def build_task_record(
                 if stmt:
                     role_parts[agent].append(stmt)
             else:
-                # 其他角色目前不列為 interviewer 三角色欄位。
+
                 pass
 
         agg = trace_by_turn.get(
@@ -476,7 +506,7 @@ def build_task_record(
     turns = len(conversation)
     tkqr = compute_tkqr(hit_sequence, implicit_total)
     ora = compute_ora(turns, implicit_total)
-    # 面向統計改與 total_elicited 採同一來源，避免 turn 對齊差異導致口徑不一致。
+
     aspect_type_elicitation = compute_aspect_type_elicitation(task, oracle_revealed_ids)
 
     app_type = str(
@@ -495,7 +525,7 @@ def build_task_record(
         "plant_model_label": plant_model_label,
         "conversation": conversation,
         "turns": turns,
-        # 對齊 result.task_results 結構
+
         "total_requirements": implicit_total,
         "total_elicited": elicited,
         "elicitation_ratio": elicitation_ratio,
@@ -507,7 +537,9 @@ def build_task_record(
         "aspect_type_elicitation": aspect_type_elicitation,
     }
 
-
+# ========
+# Defines build result payload function for this experiment module.
+# ========
 def build_result_payload(
     *,
     flow_cfg: Dict[str, Any],
@@ -570,7 +602,9 @@ def build_result_payload(
         ],
     }
 
-
+# ========
+# Defines print final summary function for this experiment module.
+# ========
 def print_final_summary(result: Dict[str, Any], records: List[Dict[str, Any]]) -> None:
     overall = result.get("overall_evaluation", {}) or {}
     app_stats = overall.get("application_type_statistics", {}) or {}

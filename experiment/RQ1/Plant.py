@@ -1,9 +1,17 @@
+# Runs the RQ1 Plant experiment workflow and writes evaluation outputs.
 import json
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+EXPERIMENT_ROOT = Path(__file__).resolve().parent
+if str(EXPERIMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_ROOT))
 
 from dotenv import load_dotenv
 import numpy as np
@@ -20,11 +28,10 @@ RESULTS_DIR = RQ1_DIR / "results"
 DEFAULT_CONFIG_PATH = RQ1_DIR / "Plant" / "config.json"
 FLOW_CONFIG_PATH = (RQ1_DIR / "../../config.json").resolve()
 DEFAULT_DATA_PATH = (RQ1_DIR / "ReqElicitBench.json").resolve()
-PROMPT_FOR_MAX_TASKS = True
-PROMPT_FOR_RUNS = True
+ask_max_tasks = True
+ask_runs = True
 
 load_dotenv(BASE_DIR / ".env")
-
 
 def main() -> None:
     from Plant.config import (
@@ -66,19 +73,19 @@ def main() -> None:
 
     max_tasks = None
     if max_tasks is None:
-        if PROMPT_FOR_MAX_TASKS:
+        if ask_max_tasks:
             raw = input("請輸入要執行的任務數量（Enter: 全做）：").strip()
             if raw:
                 try:
                     max_tasks = int(raw)
                 except ValueError:
                     max_tasks = None
-    # None 或 <=0：跑全部；僅在正整數時切片。
+
     if max_tasks is not None and max_tasks > 0:
         tasks = tasks[:max_tasks]
 
     runs = None
-    if runs is None and PROMPT_FOR_RUNS:
+    if runs is None and ask_runs:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
             print("錯誤：請輸入重複執行次數")
@@ -89,7 +96,7 @@ def main() -> None:
             print("錯誤：重複執行次數必須是整數")
             sys.exit(1)
     if runs is None:
-        if PROMPT_FOR_RUNS:
+        if ask_runs:
             print("錯誤：請在互動模式下輸入重複執行次數（正整數）")
             sys.exit(1)
         runs = 1
@@ -193,7 +200,7 @@ def main() -> None:
         with result_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
         with record_path.open("w", encoding="utf-8") as f:
-            # record 對齊 conversation 結構
+
             json_dump_no_scientific(
                 [
                     {
@@ -287,7 +294,6 @@ def main() -> None:
         else:
             print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")
 
-        # 固定欄位順序：runs -> metrics -> cost
         summary_payload = {"runs": runs}
         if summary_metrics:
             summary_payload["metrics"] = summary_metrics
@@ -298,7 +304,6 @@ def main() -> None:
         with summary_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
         print(f"已儲存至：{summary_path}")
-
 
 if __name__ == "__main__":
     main()

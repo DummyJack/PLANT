@@ -1,3 +1,4 @@
+# Provides RQ2 Plant experiment config helpers.
 import json
 import sys
 import tempfile
@@ -10,9 +11,14 @@ from storage.markdown import load_markdown as load_markdown_file
 from storage.markdown import save_markdown as save_markdown_file
 from utils import model_has_token_pricing
 
+# ========
+# Defines ExperimentLogger class for this experiment module.
+# ========
 class ExperimentLogger:
-    """實驗用 console logger（不寫 log 檔）。"""
 
+    # ========
+    # Defines fmt function for this experiment module.
+    # ========
     @staticmethod
     def fmt(args: tuple) -> str:
         if not args:
@@ -25,21 +31,35 @@ class ExperimentLogger:
         except Exception:
             return " ".join(str(x) for x in args)
 
+    # ========
+    # Defines info function for this experiment module.
+    # ========
     def info(self, *args, **kwargs):
         print(self.fmt(args), flush=True)
 
+    # ========
+    # Defines warning function for this experiment module.
+    # ========
     def warning(self, *args, **kwargs):
         print(f"[Flow][WARN] {self.fmt(args)}", flush=True)
 
+    # ========
+    # Defines error function for this experiment module.
+    # ========
     def error(self, *args, **kwargs):
         print(f"[Flow][ERROR] {self.fmt(args)}", flush=True)
 
+# ========
+# Defines ExperimentStore class for this experiment module.
+# ========
 class ExperimentStore:
-    """實驗用暫存 store；artifact_query 需要 artifact/ 分檔作為唯讀上下文。"""
 
+    # ========
+    # Defines initialize function for this experiment module.
+    # ========
     def __init__(self) -> None:
         self.project_id = "rq2_experiment"
-        # AgendaRunner 會讀取 output_dir；不指向 repo 根目錄，避免誤讀既有 design_rationale.md
+
         self.output_dir = Path(tempfile.gettempdir()) / "plant_rq2_experiment_store"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.base_dir = self.output_dir
@@ -47,38 +67,64 @@ class ExperimentStore:
         self.artifact_dir = self.project_dir / "artifact"
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    # ========
+    # Defines save artifact function for this experiment module.
+    # ========
     def save_artifact(self, data: Dict[str, Any]):
         save_split_artifact(self.project_dir, self.artifact_dir, data)
 
+    # ========
+    # Defines save json function for this experiment module.
+    # ========
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
         pass
 
+    # ========
+    # Defines save markdown function for this experiment module.
+    # ========
     def save_markdown(self, content: str, filename: str):
         save_markdown_file(self.artifact_dir, self.output_dir, content, filename)
 
+    # ========
+    # Defines save plantuml files function for this experiment module.
+    # ========
     def save_plantuml_files(self, model_data: Dict[str, Any]):
         pass
 
+    # ========
+    # Defines save draft function for this experiment module.
+    # ========
     def save_draft(self, content: str, version: int):
         pass
 
+    # ========
+    # Defines get draft version function for this experiment module.
+    # ========
     def get_draft_version(self) -> int:
         return -1
 
+    # ========
+    # Defines load draft function for this experiment module.
+    # ========
     def load_draft(self, version: int):
         return None
 
+    # ========
+    # Defines load markdown function for this experiment module.
+    # ========
     def load_markdown(self, filename: str) -> str:
         return load_markdown_file(self.artifact_dir, self.output_dir, filename)
 
+# ========
+# Defines build plant cost payload function for this experiment module.
+# ========
 def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
-    """彙總 Flow 內各 LLM 的 CostTracker（與 flow.finalize 的 cost_summary 結構相近）。"""
     cost_by_agent: Dict[str, Any] = {}
     for agent_name, m in flow.agent_models.items():
         if not hasattr(m, "costTracker"):
             continue
         summary = m.costTracker.export_summary_dict()
-        # 僅保留本次實驗中實際有 LLM token 使用的 agent。
+
         if int(summary.get("total_tokens", 0) or 0) <= 0:
             continue
         cost_by_agent[agent_name] = summary
@@ -111,10 +157,12 @@ def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
         "totals": totals,
     }
 
-
 RQ2_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 
+# ========
+# Defines assert agent models have token pricing function for this experiment module.
+# ========
 def assert_agent_models_have_token_pricing(config: Dict[str, Any]) -> None:
     for agent, info in (config.get("agent_models") or {}).items():
         if agent == "default" or not isinstance(info, dict):
@@ -130,6 +178,9 @@ def assert_agent_models_have_token_pricing(config: Dict[str, Any]) -> None:
             )
             sys.exit(1)
 
+# ========
+# Defines load rq2 config function for this experiment module.
+# ========
 def load_rq2_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
@@ -137,6 +188,9 @@ def load_rq2_config() -> Dict[str, Any]:
         raise ValueError("Plant/config.json 內容必須是 JSON 物件")
     return cfg
 
+# ========
+# Defines build flow function for this experiment module.
+# ========
 def build_flow(config: Optional[Dict[str, Any]] = None) -> Flow:
     if config is None:
         config = load_rq2_config()
@@ -144,13 +198,21 @@ def build_flow(config: Optional[Dict[str, Any]] = None) -> Flow:
     assert_agent_models_have_token_pricing(config)
     return Flow(config=config, store=ExperimentStore(), logger=ExperimentLogger())
 
+# ========
+# Defines check provider model mismatch function for this experiment module.
+# ========
 def check_provider_model_mismatch(config: Dict[str, Any]) -> None:
-    """檢查 provider/model 是否明顯不匹配；任一不匹配即拋 ValueError 中止。"""
 
+    # ========
+    # Defines looks openai function for this experiment module.
+    # ========
     def looks_openai(model: str) -> bool:
         m = (model or "").lower()
         return m.startswith("gpt-") or m.startswith("o")
 
+    # ========
+    # Defines looks gemini function for this experiment module.
+    # ========
     def looks_gemini(model: str) -> bool:
         return (model or "").lower().startswith("gemini")
 

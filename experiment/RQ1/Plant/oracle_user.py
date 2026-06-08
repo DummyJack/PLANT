@@ -1,22 +1,28 @@
+# Provides RQ1 Plant experiment oracle user helpers.
 import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from agents.profile.user import UserAgent
-from Baseline.env.prompts import generate_user_response, judge_interviewer_action
+from Baseline.env.prompts import generate_user_response, judge_interviewer_action, model_call
 from Baseline.env.utils import relevant_requirement_ids_from_judgement
 from utils import CostTracker
 
 from .utils import task_implicit_requirements, task_initial_requirements
 
-
+# ========
+# Defines OracleConfigs class for this experiment module.
+# ========
 @dataclass
+
 class OracleConfigs:
     judge_model_config: Dict[str, Any]
     user_model_config: Dict[str, Any]
 
-
+# ========
+# Defines parse mediator turn function for this experiment module.
+# ========
 def parse_mediator_turn(topic_id: str) -> int:
     m = re.search(r"ELICIT-R\d+-T(\d+)", str(topic_id or ""))
     if not m:
@@ -26,10 +32,14 @@ def parse_mediator_turn(topic_id: str) -> int:
     except Exception:
         return 0
 
-
+# ========
+# Defines OracleUserAgent class for this experiment module.
+# ========
 class OracleUserAgent(UserAgent):
-    """將 RQ1 oracle user 接到 Plant flow 的 user agent。"""
 
+    # ========
+    # Defines initialize function for this experiment module.
+    # ========
     def __init__(
         self,
         model,
@@ -60,6 +70,9 @@ class OracleUserAgent(UserAgent):
         self.rq1_last_logged_mediator_turn = 0
         self.rq1_pending_turn_log: Dict[str, Any] = {}
 
+    # ========
+    # Defines rq1 log function for this experiment module.
+    # ========
     def rq1_log(self, *args: Any) -> None:
         logger = self.rq1_logger
         if logger is not None and bool(getattr(logger, "verbose", True)):
@@ -77,6 +90,9 @@ class OracleUserAgent(UserAgent):
         except Exception:
             print(" ".join(str(x) for x in args))
 
+    # ========
+    # Defines merge usage function for this experiment module.
+    # ========
     @staticmethod
     def merge_usage(dst: Dict[str, int], usage: Dict[str, Any]) -> None:
         if not isinstance(usage, dict):
@@ -91,15 +107,20 @@ class OracleUserAgent(UserAgent):
             usage.get("total_tokens", 0) or 0
         )
 
+    # ========
+    # Defines estimate cost function for this experiment module.
+    # ========
     @staticmethod
     def estimate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -> float:
         tracker = CostTracker(str(model_name or ""))
-        return float(tracker.estimateCost(int(prompt_tokens or 0), int(completion_tokens or 0)))
+        return float(tracker.estimate_cost(int(prompt_tokens or 0), int(completion_tokens or 0)))
 
+    # ========
+    # Defines export cost summary function for this experiment module.
+    # ========
     def export_cost_summary(self) -> Dict[str, Any]:
         user_usage = self.oracle_usage_total.get("user", {})
 
-        # 成本摘要口徑：僅統計 oracle user，不納入 LLM judge。
         input_tokens = int(user_usage.get("prompt_tokens", 0) or 0)
         output_tokens = int(user_usage.get("completion_tokens", 0) or 0)
         total_tokens = int(user_usage.get("total_tokens", 0) or 0)
@@ -120,6 +141,9 @@ class OracleUserAgent(UserAgent):
             "estimated_cost(USD)": round(float(estimated_cost), 8),
         }
 
+    # ========
+    # Defines set task function for this experiment module.
+    # ========
     def set_task(self, task: Dict[str, Any]) -> None:
         self.current_task = task
         self.conversation_history = []
@@ -149,9 +173,15 @@ class OracleUserAgent(UserAgent):
             }
         ]
 
+    # ========
+    # Defines propose stakeholders function for this experiment module.
+    # ========
     def propose_stakeholders(self, rough_idea: str) -> List[Dict[str, str]]:
         return [{"name": "Oracle User", "reason": "RQ1 oracle stakeholder"}]
 
+    # ========
+    # Defines generate stakeholder requirements function for this experiment module.
+    # ========
     def generate_stakeholder_requirements(
         self, rough_idea: str, selected_stakeholders: List[str]
     ) -> List[Dict[str, Any]]:
@@ -163,6 +193,9 @@ class OracleUserAgent(UserAgent):
             }
         ]
 
+    # ========
+    # Defines latest interviewer inputs function for this experiment module.
+    # ========
     def latest_interviewer_inputs(
         self,
         topic: Dict[str, Any],
@@ -170,7 +203,7 @@ class OracleUserAgent(UserAgent):
     ) -> tuple[Dict[str, str], str]:
         interviewer_roles = ("analyst", "expert", "modeler")
         if previous_responses:
-            answer_all_questions = bool((topic or {}).get("answer_all_interviewer_questions"))
+            answer_all_questions = bool((topic or {}).get("answer_all"))
             if not answer_all_questions:
                 for item in reversed(previous_responses):
                     if not isinstance(item, dict):
@@ -199,6 +232,9 @@ class OracleUserAgent(UserAgent):
         fallback = str(topic.get("description") or topic.get("title") or "").strip()
         return {}, fallback
 
+    # ========
+    # Defines format interviewer actions function for this experiment module.
+    # ========
     @staticmethod
     def format_interviewer_actions(topic: Dict[str, Any], actions_by_role: Dict[str, str]) -> str:
         lines = [
@@ -211,6 +247,9 @@ class OracleUserAgent(UserAgent):
             lines.append(f"  text: {text}")
         return "\n".join(lines)
 
+    # ========
+    # Defines aggregate judgements function for this experiment module.
+    # ========
     @staticmethod
     def aggregate_judgements(judge_details: List[Dict[str, Any]]) -> Dict[str, Any]:
         relevant_ids: List[str] = []
@@ -251,8 +290,10 @@ class OracleUserAgent(UserAgent):
             "reasoning": "\n".join(reasoning_parts),
         }
 
+    # ========
+    # Defines judge interviewer action type function for this experiment module.
+    # ========
     def judge_interviewer_action_type(self, action_text: str) -> str:
-        """用 oracle judge 直接判斷 interviewer 動作型態（clarify/probe/finish）。"""
         text = str(action_text or "").strip()
         if not text:
             return "probe"
@@ -271,6 +312,97 @@ class OracleUserAgent(UserAgent):
             return str(judgement.get("action_type") or "probe").strip().lower() or "probe"
         return "probe"
 
+    # ========
+    # Defines judge revealed requirements function for this experiment module.
+    # ========
+    def judge_revealed_requirements(
+        self,
+        *,
+        interviewer_action: str,
+        user_response: str,
+    ) -> Dict[str, Any]:
+        response_text = str(user_response or "").strip()
+        if not response_text:
+            return {
+                "is_relevant_to_implied_requirements": False,
+                "relevant_implied_requirements_ids": [],
+                "reasoning": "",
+            }
+        remaining_requirements = ""
+        for requirement in self.remaining_requirements:
+            req_id = requirement.get("id", "")
+            aspect = requirement.get("aspect", "")
+            req_text = requirement.get("requirement", "")
+            remaining_requirements += (
+                f"Requirement ID: {req_id}\tAspect: {aspect}\tRequirement: {req_text}\n\n"
+            )
+        system_prompt = """You are an expert evaluator for requirement elicitation experiments.
+
+Task:
+Identify which hidden requirements are explicitly revealed by the user's latest answer.
+
+Rules:
+- Use only the user's latest answer, not your assumptions.
+- A requirement is revealed only when the answer clearly states the same need or a close semantic equivalent.
+- Multiple requirements may be revealed by one answer.
+- Do not count requirements that are merely adjacent, implied by the domain, or contradicted by the answer.
+- Return only JSON."""
+        user_prompt = f"""
+Initial requirement:
+{task_initial_requirements(self.current_task)}
+
+Interviewer question:
+{interviewer_action}
+
+User latest answer:
+{response_text}
+
+Remaining hidden requirements:
+{remaining_requirements.strip() if remaining_requirements.strip() else "No remaining requirements."}
+
+Return JSON:
+{{
+  "is_relevant_to_implied_requirements": true/false,
+  "relevant_implied_requirements_ids": ["IR-01"],
+  "reasoning": "brief evidence from the user answer"
+}}
+"""
+        judge_t0 = time.perf_counter()
+        judgement, usage = model_call(
+            system_prompt,
+            user_prompt,
+            self.oracle.judge_model_config,
+            return_json=True,
+            return_usage=True,
+        )
+        self.oracle_runtime_total_s["judge"] += max(0.0, time.perf_counter() - judge_t0)
+        self.merge_usage(self.oracle_usage_total["judge"], usage or {})
+        if not isinstance(judgement, dict):
+            return {
+                "is_relevant_to_implied_requirements": False,
+                "relevant_implied_requirements_ids": [],
+                "reasoning": "",
+            }
+        raw_ids = judgement.get("relevant_implied_requirements_ids")
+        if isinstance(raw_ids, str):
+            raw_ids = [raw_ids]
+        valid_ids = {str(req.get("id") or "").strip() for req in self.remaining_requirements}
+        ids: List[str] = []
+        if isinstance(raw_ids, list):
+            for raw_id in raw_ids:
+                req_id = str(raw_id or "").strip()
+                if req_id and req_id in valid_ids and req_id not in ids:
+                    ids.append(req_id)
+        return {
+            "is_relevant_to_implied_requirements": bool(ids),
+            "relevant_implied_requirements_ids": ids,
+            "relevant_implied_requirements_id": ids[0] if ids else None,
+            "reasoning": str(judgement.get("reasoning") or "").strip(),
+        }
+
+    # ========
+    # Defines log rq1 turn result function for this experiment module.
+    # ========
     def log_rq1_turn_result(
         self,
         *,
@@ -320,6 +452,9 @@ class OracleUserAgent(UserAgent):
         ):
             self.flush_rq1_turn_log()
 
+    # ========
+    # Defines flush rq1 turn log function for this experiment module.
+    # ========
     def flush_rq1_turn_log(self) -> None:
         pending = self.rq1_pending_turn_log
         if not pending:
@@ -373,17 +508,16 @@ class OracleUserAgent(UserAgent):
         )
         self.rq1_pending_turn_log = {}
 
+    # ========
+    # Defines rq1 expected roles function for this experiment module.
+    # ========
     @staticmethod
     def rq1_expected_roles(issue: Dict[str, Any]) -> List[str]:
         if not isinstance(issue, dict):
             return []
-        agent_actions = (
-            issue.get("agent_actions")
-            if isinstance(issue.get("agent_actions"), dict)
-            else {}
-        )
+        actions = issue.get("actions") if isinstance(issue.get("actions"), dict) else {}
         roles: List[str] = []
-        for agent, action_info in agent_actions.items():
+        for agent, action_info in actions.items():
             if not isinstance(action_info, dict):
                 continue
             action = str(action_info.get("action") or "").strip()
@@ -391,17 +525,16 @@ class OracleUserAgent(UserAgent):
                 roles.append(str(agent).strip())
         return [role for role in roles if role]
 
+    # ========
+    # Defines log rq1 mediator plan function for this experiment module.
+    # ========
     def log_rq1_mediator_plan(self, issue: Dict[str, Any]) -> None:
         if not isinstance(issue, dict):
             return
         goal = str(issue.get("meeting_goal") or "").strip()
-        agent_actions = (
-            issue.get("agent_actions")
-            if isinstance(issue.get("agent_actions"), dict)
-            else {}
-        )
+        actions = issue.get("actions") if isinstance(issue.get("actions"), dict) else {}
         speaking_order_parts: List[str] = []
-        for agent, action_info in agent_actions.items():
+        for agent, action_info in actions.items():
             if not isinstance(action_info, dict):
                 continue
             action = str(action_info.get("action") or "").strip()
@@ -415,6 +548,9 @@ class OracleUserAgent(UserAgent):
         if speaking_order_parts:
             self.rq1_log("    speaking_order: %s", "; ".join(speaking_order_parts))
 
+    # ========
+    # Defines build observation function for this experiment module.
+    # ========
     def build_observation(self, *, mode: str, **kwargs: Any) -> Dict[str, Any]:
         if mode in {"issue_response", "topic_response"}:
             issue = kwargs.get("issue") or kwargs.get("topic") or {}
@@ -425,12 +561,15 @@ class OracleUserAgent(UserAgent):
                 "issue_id": str(issue.get("id") or ""),
                 "issue_category": str(issue.get("category") or ""),
                 "previous_response_count": len(previous_responses),
-                "has_artifact_context": bool(artifact_context),
+                "has_related_context": bool(artifact_context),
                 "iteration": kwargs.get("iteration", 0) + 1,
                 "max_iterations": kwargs["max_iterations"],
             }
         return super().build_observation(mode=mode, **kwargs)
 
+    # ========
+    # Defines decide action function for this experiment module.
+    # ========
     def decide_action(
         self,
         *,
@@ -452,24 +591,32 @@ class OracleUserAgent(UserAgent):
             **kwargs,
         )
 
-    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.build_observation(mode="issue_response", **kwargs)
-
-    def decide_issue_response_action(
+    # ========
+    # Defines plan actions function for this experiment module.
+    # ========
+    def plan_actions(
         self,
         *,
         observation: Dict[str, Any],
         last_result: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        return self.decide_action(
-            mode="issue_response",
-            observation=observation,
-            last_result=last_result,
-            **kwargs,
-        )
+        return {
+            "action": "oracle_user_response",
+            "params": {},
+            "reasoning": "以 oracle user simulator 回應本輪 interviewer action。",
+        }
 
-    def execute_issue_response_action(
+    # ========
+    # Defines build issue response observation function for this experiment module.
+    # ========
+    def build_issue_response_observation(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.build_observation(mode="issue_response", **kwargs)
+
+    # ========
+    # Defines execute action function for this experiment module.
+    # ========
+    def execute_action(
         self,
         *,
         decision: Dict[str, Any],
@@ -493,6 +640,9 @@ class OracleUserAgent(UserAgent):
             "summary": "完成 oracle user issue_response",
         }
 
+    # ========
+    # Defines oracle issue response function for this experiment module.
+    # ========
     def oracle_issue_response(self, issue, previous_responses=None, artifact_context=None):
         interviewer_actions, merged_action = self.latest_interviewer_inputs(
             issue, previous_responses
@@ -531,7 +681,7 @@ class OracleUserAgent(UserAgent):
                         "judgement": judgement or {},
                     }
                 )
-            if bool((issue or {}).get("answer_all_interviewer_questions")) and judge_details:
+            if bool((issue or {}).get("answer_all")) and judge_details:
                 selected_role = "all"
                 selected_action = merged_action
                 selected_judgement = self.aggregate_judgements(judge_details)
@@ -580,9 +730,33 @@ class OracleUserAgent(UserAgent):
             self.oracle_runtime_total_s["user"] += max(0.0, time.perf_counter() - user_t0)
         self.merge_usage(self.oracle_usage_total["user"], user_usage or {})
 
+        response_judgement = self.judge_revealed_requirements(
+            interviewer_action=selected_action,
+            user_response=user_response,
+        )
+
         elicited_req_ids: List[str] = []
         is_relevant = bool(selected_judgement.get("is_relevant_to_implied_requirements", False))
         relevant_req_ids = relevant_requirement_ids_from_judgement(selected_judgement)
+        for rid in relevant_requirement_ids_from_judgement(response_judgement):
+            if rid not in relevant_req_ids:
+                relevant_req_ids.append(rid)
+        if bool(response_judgement.get("is_relevant_to_implied_requirements", False)):
+            is_relevant = True
+            selected_judgement = dict(selected_judgement or {})
+            selected_judgement["is_relevant_to_implied_requirements"] = True
+            selected_judgement["relevant_implied_requirements_ids"] = list(relevant_req_ids)
+            selected_judgement["relevant_implied_requirements_id"] = (
+                relevant_req_ids[0] if relevant_req_ids else None
+            )
+            response_reason = str(response_judgement.get("reasoning") or "").strip()
+            if response_reason:
+                existing_reason = str(selected_judgement.get("reasoning") or "").strip()
+                selected_judgement["reasoning"] = (
+                    f"{existing_reason}\nresponse: {response_reason}"
+                    if existing_reason
+                    else f"response: {response_reason}"
+                )
         if is_relevant and relevant_req_ids:
             relevant_req_id_set = set(relevant_req_ids)
             for req in self.remaining_requirements:
@@ -617,6 +791,7 @@ class OracleUserAgent(UserAgent):
                 "interviewer_action_merged": merged_action,
                 "selected_interviewer_role": selected_role,
                 "judge_per_role": judge_details,
+                "response_judge": response_judgement,
                 "user_response": user_response,
                 "judge": self.last_action_info,
                 "revealed_ids": list(elicited_req_ids or []),

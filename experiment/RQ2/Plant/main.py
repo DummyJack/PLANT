@@ -1,3 +1,4 @@
+# Provides RQ2 Plant experiment main helpers.
 import traceback
 from copy import deepcopy
 from pathlib import Path
@@ -32,6 +33,9 @@ RESULTS_DIR = RQ2_DIR / "results"
 
 load_dotenv(BASE_DIR / ".env")
 
+# ========
+# Defines run type group batch function for this experiment module.
+# ========
 def run_type_group_batch(
     flow: Flow,
     items: List[Tuple[int, Dict[str, Any]]],
@@ -42,10 +46,6 @@ def run_type_group_batch(
     conflict_artifact: Dict[str, Any],
     requirements_artifact: Dict[str, Any],
 ) -> None:
-    """同一 type 內：一次 pairwise 辨識 → 衝突複核。
-
-    會議紀錄只會寫入 ``meetings_by_type[type_name]`` 一次；各資料列的 record 僅含 pairs。
-    """
     n = len(items)
     if n == 0:
         return
@@ -76,7 +76,7 @@ def run_type_group_batch(
     }
     sync_config_language(artifact, write_artifact_meta=False)
 
-    updated = flow.analyst_agent.run_pairwise_conflict_detection(artifact)
+    updated = flow.analyst_agent.detect_pair_conflicts(artifact)
     if not isinstance(updated, dict):
         raise TypeError(
             "flow.analyst_agent.detect_pair_conflicts 必須回傳 dict，"
@@ -160,15 +160,13 @@ def run_type_group_batch(
     remapped_requirements: List[Dict[str, Any]] = []
     for req in requirements:
         old_id = str(req.get("id") or "").strip()
-        new_id = f"REQ-{len(requirements_artifact['requirements']) + len(remapped_requirements) + 1}"
+        new_id = f"REQ-{len(requirements_artifact['URL']) + len(remapped_requirements) + 1}"
         req_id_map[old_id] = new_id
         item = dict(req)
         item["id"] = new_id
         remapped_requirements.append(item)
-    exported_requirements = requirements_payload({"requirements": remapped_requirements})
-    requirements_artifact["requirements"].extend(
-        exported_requirements.get("requirements", []) or []
-    )
+    exported_requirements = requirements_payload({"URL": remapped_requirements})
+    requirements_artifact["URL"].extend(exported_requirements.get("URL", []) or [])
 
     for pair in payload.get("pairs", []) or []:
         item = dict(pair)
@@ -186,6 +184,9 @@ def run_type_group_batch(
             item["requirements"] = remapped_refs
         conflict_artifact["pairs"].append(item)
 
+# ========
+# Defines run conflict function for this experiment module.
+# ========
 def run_conflict(
     flow: Flow,
     model_name: str,
@@ -195,14 +196,6 @@ def run_conflict(
     scenario: Optional[str] = None,
     scenarios: Optional[List[str]] = None,
 ):
-    """執行衝突辨識實驗。
-
-    - 依 CSV/JSON 的 types 分組；**同一 type 內**整批做一次 pairwise 辨識，再全組一次衝突複核。
-    - data_path 為 None：使用預設 cn_pairs.csv；亦可傳入 .json 陣列。
-    - count > 0：只取前 count 筆。
-    - record 輸出為 type-indexed object：``{ "<type 名稱>": [pair, ...] }``，同一 type 僅一筆。
-    - conflict 輸出只保留主流程 conflict.json 的 pairs 區塊：``{"pairs": [...]}``。
-    """
     try:
         if data_path is not None:
             data, _ = load_rq2_dataset(Path(data_path).resolve())
@@ -248,7 +241,7 @@ def run_conflict(
 
     meetings_by_type: Dict[str, Any] = {}
     conflict_artifact: Dict[str, Any] = {"pairs": []}
-    requirements_artifact: Dict[str, Any] = {"requirements": []}
+    requirements_artifact: Dict[str, Any] = {"URL": []}
     for g, items in grouped.items():
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
@@ -341,6 +334,9 @@ def run_conflict(
         else {}
     )
 
+    # ========
+    # Defines m function for this experiment module.
+    # ========
     def m(v: Any) -> float:
         try:
             return float(v or 0.0)
@@ -409,6 +405,9 @@ def run_conflict(
         "paths": paths,
     }
 
+# ========
+# Defines run experiments function for this experiment module.
+# ========
 def run_experiments(
     *,
     count: int,

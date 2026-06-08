@@ -1,3 +1,4 @@
+# Provides RQ2 Plant experiment records helpers.
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -5,11 +6,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from metric import Metric
 from utils import json_dump_no_scientific
 
+# ========
+# Defines record pair id from index function for this experiment module.
+# ========
 def record_pair_id_from_index(index: int) -> str:
     return f"PAIR-{int(index) + 1}"
 
+# ========
+# Defines normalize pair details function for this experiment module.
+# ========
 def normalize_pair_details(details: Any) -> Dict[str, Any]:
-    """移除主流程內部欄位與舊格式欄位，只保留 RQ2 record 要展示的 pair details。"""
     if not isinstance(details, dict):
         details = {}
 
@@ -28,6 +34,9 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
         source.pop("from_label", None)
     source.pop("to_label", None)
 
+    # ========
+    # Defines cleaned review rows function for this experiment module.
+    # ========
     def cleaned_review_rows(rows: Any) -> List[Any]:
         review_rows = []
         if not isinstance(rows, list):
@@ -55,8 +64,10 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
 
     return cleaned
 
+# ========
+# Defines next result index function for this experiment module.
+# ========
 def next_result_index(prefix: str, results_dir: Path) -> int:
-    """取得下一個輸出編號（同 prefix 下取現有最大值 +1）。"""
     pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
     for p in results_dir.glob(f"*_{prefix}_*.json"):
@@ -69,12 +80,14 @@ def next_result_index(prefix: str, results_dir: Path) -> int:
             continue
     return max_idx + 1
 
+# ========
+# Defines build rq2 record by type function for this experiment module.
+# ========
 def build_rq2_record_by_type(
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
     meetings_by_type: Dict[str, Any],
     results_by_idx: Dict[int, Tuple[Any, Dict[str, Any]]],
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """組裝寫入 record 的 type-indexed object。"""
     out: Dict[str, List[Dict[str, Any]]] = {}
     for g, items in grouped.items():
         meeting = meetings_by_type.get(g)
@@ -148,6 +161,9 @@ def build_rq2_record_by_type(
         out[str(g)] = pairs_out
     return out
 
+# ========
+# Defines build rq2 result payload function for this experiment module.
+# ========
 def build_rq2_result_payload(
     *,
     model_name: str,
@@ -155,7 +171,6 @@ def build_rq2_result_payload(
     y_pred: List[str],
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
 ) -> Dict[str, Any]:
-    """組裝 RQ2 result 輸出，包含整體 metrics 與各 type metrics。"""
     n_conflict = y_true.count("Conflict")
     n_neutral = y_true.count("Neutral")
     overall = Metric.macro(y_true, y_pred, labels=["Conflict", "Neutral"])["macro"]
@@ -191,6 +206,9 @@ def build_rq2_result_payload(
         "metrics_by_type": by_type,
     }
 
+# ========
+# Defines write rq2 outputs function for this experiment module.
+# ========
 def write_rq2_outputs(
     *,
     prefix: str,
@@ -201,7 +219,6 @@ def write_rq2_outputs(
     conflict: Optional[Dict[str, Any]] = None,
     requirements: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Path]:
-    """寫入 RQ2 result / record / cost 與 artifact-style 輸出檔案。"""
     results_dir.mkdir(parents=True, exist_ok=True)
     run_idx = next_result_index(prefix, results_dir)
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
@@ -229,8 +246,10 @@ def write_rq2_outputs(
         "requirements": requirements_path,
     }
 
+# ========
+# Defines scalar metrics for summary function for this experiment module.
+# ========
 def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:
-    """抽出可跨多次執行計算 mean/std 的數值指標。"""
     out: Dict[str, float] = {}
     metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
     overall = metrics.get("overall") if isinstance(metrics.get("overall"), dict) else {}
