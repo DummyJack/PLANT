@@ -11,7 +11,7 @@ from .base import BaseTool
 
 logger = logging.getLogger("Plant.ReadFileTool")
 
-SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
+SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".csv", ".pdf", ".docx", ".doc")
 CHUNK_SEP = "##"  # chunk_id = "{relative_posix_path}##{index}"
 
 
@@ -529,9 +529,9 @@ def score_chunk(query_tokens: List[str], chunk_lower: str) -> float:
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
-        "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .pdf, .docx）。"
+        "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .csv, .pdf, .docx）。"
         "索引：.md 依 markdown-it-py 標題斷點（失敗則啟發式）、.txt 依啟發式標題／段落；"
-        ".json 依頂層結構；.pdf 依頁；.docx 依段落；過長再細切。"
+        ".json 依頂層結構；.csv 依內容片段；.pdf 依頁；.docx 依段落；過長再細切。"
         "必須明確填 action。建議流程：action=search_chunks 用 query 與 top_k 檢索相關片段 → "
         "再用 action=read_chunks 帶 chunk_ids 讀全文片段 → 最後由你綜合（Synthesize）。"
         "只有已知檔名且檔案不大時，才用 action=read_full 一次讀整檔。"
@@ -609,7 +609,7 @@ class ReadFileTool(BaseTool):
 
     # Defines read text by type function for this module workflow.
     def read_text_by_type(self, path: Path, suffix: str) -> str:
-        if suffix in (".txt", ".md", ".json"):
+        if suffix in (".txt", ".md", ".json", ".csv"):
             return path.read_text(encoding="utf-8", errors="replace")
         if suffix == ".pdf":
             import PyPDF2
@@ -623,7 +623,7 @@ class ReadFileTool(BaseTool):
             doc = Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
         raise ValueError(
-            f"不支援的副檔名 {suffix}，僅支援 .txt, .md, .json, .pdf, .docx。"
+            f"不支援的副檔名 {suffix}，僅支援 .txt, .md, .json, .csv, .pdf, .docx。"
         )
 
     # Defines current file signature function for this module workflow.

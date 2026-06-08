@@ -540,6 +540,29 @@ class DocumentorDr:
         image_path = re.sub(r"^(?:artifact/|output/)?models/", "", image_path)
         return f"./models/{image_path}" if image_path else ""
 
+    @staticmethod
+    def normalize_dr_model_description(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        purpose_match = re.search(
+            r"\*\*用途\*\*\s*[：:]\s*(.*?)(?=\s*\*\*反映需求\*\*\s*[：:]|$)",
+            text,
+            flags=re.S,
+        )
+        if purpose_match:
+            text = purpose_match.group(1)
+        else:
+            text = re.sub(
+                r"\*\*反映需求\*\*\s*[：:].*$",
+                "",
+                text,
+                flags=re.S,
+            )
+            text = re.sub(r"\*\*Description\*\*\s*[：:]\s*", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
     @classmethod
     def render_dr_appendix(cls, appendix: Dict[str, Any]) -> str:
         sections: List[str] = []
@@ -634,17 +657,17 @@ class DocumentorDr:
 
         table(
             "A. Stakeholder Statements",
-            ["ID", "Stakeholder", "Statement", "Source"],
+            ["ID", "Stakeholder", "Statement"],
             [
-                [cls.dr_link(row.get("id")), row.get("stakeholder"), row.get("text"), row.get("source")]
+                [cls.dr_link(row.get("id")), row.get("stakeholder"), row.get("text")]
                 for row in appendix.get("stakeholder_statements") or []
             ],
         )
         table(
             "B. User Requirements",
-            ["ID", "Stakeholder", "Requirement", "Source"],
+            ["ID", "Stakeholder", "Requirement"],
             [
-                [cls.dr_link(row.get("id")), row.get("stakeholder"), row.get("text"), row.get("source")]
+                [cls.dr_link(row.get("id")), row.get("stakeholder"), row.get("text")]
                 for row in appendix.get("user_requirements") or []
             ],
         )
@@ -689,8 +712,9 @@ class DocumentorDr:
                     sections.append(f"![{model_id}]({image_path})\n")
                 elif plantuml:
                     sections.append("```plantuml\n" + plantuml + "\n```\n")
-                if row.get("description"):
-                    sections.append(f"**Description**: {row.get('description')}\n")
+                description = cls.normalize_dr_model_description(row.get("description"))
+                if description:
+                    sections.append(f"**Description**: {description}\n")
                 sections.append("")
 
         table(
@@ -720,6 +744,7 @@ class DocumentorDr:
         text = re.sub(r"(?m)^REQ-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^(?:FR|NFR|CON)-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^\*\*Title\*\*\s*[:：].*$", "", text)
+        text = re.sub(r"(?m)^\*\*Description\*\*\s*[:：].*$", "", text)
         text = re.sub(
             r"(?is)\*\*Description\*\*\s*[:：].*?(?=\s+\*\*Type\*\*\s*[:：]|\s+\*\*SRS ID\*\*\s*[:：]|\n\s*\n|$)",
             "",
@@ -772,7 +797,6 @@ class DocumentorDr:
             req_id = str(req.get("id") or "").strip()
             title = str(req.get("title") or "").strip()
             description = str(req.get("description") or "").strip()
-            req_type = str(req.get("type") or "").strip()
             srs_id = str(req.get("srs_id") or "").strip()
             if not req_id:
                 continue
@@ -788,7 +812,6 @@ class DocumentorDr:
                 f"### {srs_id}: {title}".rstrip(),
                 "",
                 f"**Description**: {description}  ",
-                f"**Type**: {req_type}",
                 "",
                 "#### Trace",
             ]

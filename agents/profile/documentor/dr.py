@@ -40,7 +40,6 @@ Requirement Context:
 
 ### FR-N | NFR-N | CON-N: title
 **Description**: description
-**Type**: functional | non-functional | constraint
 
 
 1. **Stakeholder**
@@ -66,14 +65,14 @@ Requirement Context:
 
 # Trace Section Rules
 - 每個 block 第一行必須使用 context 中的 srs_id，格式為 `### FR-N: title`、`### NFR-N: title` 或 `### CON-N: title`，不得用 REQ-* 當標題。
-- `Description` 與 `Type` 必須各自獨立成行。
+- `Description` 必須獨立成行。
 - 不要輸出 `SRS ID` 欄位，因為標題已經使用 SRS ID。
 - 有資料才輸出該 Trace 步驟；省略步驟後仍保留語意編號。
 - Stakeholder 與 User Requirement 通常必須存在；若 context 沒有，才可省略。
 
 # Forbidden Output
 - 不得新增 context 沒有的 REQ、URL、ST、CR、FB、SM 或 meeting。
-- 不得輸出 Source、Context、Decision、Rationale、Impact 這些舊章節。
+- 不得輸出 Type、Source、Context、Decision、Rationale、Impact 這些舊章節或欄位。
 - 不要輸出「待補」、空章節、JSON、程式碼區塊或 prompt 說明。
 - 不要只列 ID；每個 Trace 步驟都必須用自然語言說明該 evidence 對 REQ 形成的影響。
 """

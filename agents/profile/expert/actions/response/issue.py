@@ -66,16 +66,20 @@ def render_response_prompt(
 def category_rules(category: str) -> str:
     if category == "tradeoff":
         return """# 本議題特別要求（tradeoff）
-- 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。"""
+- 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。
+- 若本議題涉及 NFR，說明品質底線、可接受風險、FR/NFR priority 影響與驗證依據；constraint 不作 priority 取捨。"""
     if category == "clarify_requirement":
         return """# 本議題特別要求（clarify_requirement）
-- 說明需求語意、驗收邊界或風險條件是否需要外部證據支撐。"""
+- 說明需求語意、驗收邊界或風險條件是否需要外部證據支撐。
+- 若本議題涉及 NFR，協助釐清 category、metric、validation 或適用條件；明確 NFR 不需因為是 NFR 而開會。"""
     if category == "define_boundary":
         return """# 本議題特別要求（define_boundary）
-- 說明本系統、第三方服務、人工流程或角色責任的外部限制與風險邊界。"""
+- 說明本系統、第三方服務、人工流程或角色責任的外部限制與風險邊界。
+- 若本議題涉及 NFR，說明品質要求適用範圍與外部責任邊界；constraint 只討論成立、例外與遵守方式。"""
     if category == "align_model":
         return """# 本議題特別要求（align_model）
-- 說明模型揭露的流程、資料、狀態或角色責任是否受到外部限制或風險影響。"""
+- 說明模型揭露的流程、資料、狀態或角色責任是否受到外部限制或風險影響。
+- 若本議題涉及 NFR，說明品質要求對可靠性、安全性、可用性或驗證方式的外部依據。"""
     return ""
 
 
@@ -88,9 +92,12 @@ def expert_response_contract() -> str:
 - 若進行新的 domain research，必須更新 feedback.json，並保留來源 URL；不要只在會議發言中描述研究結論。
 - 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以 Expert 觀點回答。
 - open_questions 只放真正需要後續回答、且會影響限制、風險、驗收邊界或本議題結論的具體問題；沒有就輸出空陣列。
+- ready_to_close 仍可提出 open_questions；若目前已有可落地結論，但某個具體答案會影響限制、風險、驗收邊界、合規假設或需求可接受條件，應輸出 open_questions，而不是只寫進風險或假設。
 - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。
 - 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的領域限制、風險或處理方案。
-- ready_to_close 表示本輪已足以產生下一版 draft、resolution 或 human decision options；不代表所有細節都已完美。
+- ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。
+- 若本議題已有可收束內容，但仍需要人類在多個可行需求規則中裁決，stance.needs_human_decision=true。
+- ready_to_close 可以同時帶 open_questions；這表示本議題可先收斂，但仍有需要後續回答並追蹤的具體問題。
 - needs_more_discussion 必須同時提供最小可行 proposal，說明目前建議如何處理，以及仍缺哪個關鍵答案。
 
 {base_response_rules}

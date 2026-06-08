@@ -50,6 +50,9 @@ def proposal_prompt(
 {gates}
 - sources.evidence 必須指出 draft 中的具體缺口、弱欄位、矛盾、未決問題、角色衝突、限制、模型缺口或來源 id。
 - 單一 REQ 的 acceptance criteria、NFR category、metric、validation、rationale、risks、assumptions、source trace 或模型關聯若影響 SRS 可驗收性或可追蹤性，可以提出。
+- NFR 不另開專屬會議類型；只有在品質要求不明確、不可驗收、metric/validation 缺失、priority 會影響 FR/NFR 版本取捨、或品質要求會影響設計/成本/模型/外部限制時才提出。
+- 明確且已有來源支持的 NFR 不要只因為是 NFR 就提出會議；應由 update_requirement 或 refine_requirement 直接寫回 type=non-functional。
+- constraint 是限制或底線，不作 priority 議題；若需要討論 constraint，聚焦是否成立、適用邊界、例外與如何遵守。
 - expect_outcome 必須是會議後可落地的結果。
 - 下列「不要提出」是低價值提醒，不是硬性 triage；若你能提供具體 source/evidence/reason，仍可提出給 Mediator 判斷。
 {reject_rule}
@@ -82,7 +85,8 @@ def proposal_prompt(
 
 close_gate = """# 收斂品質門檻
 - stance.state 只有 ready_to_close 或 needs_more_discussion。
-- ready_to_close 表示本輪已足以產生下一版 draft、resolution 或 human decision options；不代表所有細節都已完美。
+- ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。
+- 若本議題已有可收束內容，但仍需要人類在多個可行需求規則中裁決，stance.state 仍填 ready_to_close，並加上 stance.needs_human_decision=true。
 - 符合以下條件時，應填 ready_to_close：
   - 本議題的主要需求語意、成功結果、責任邊界或取捨方向已能落地記錄。
   - 若會形成或更新 system requirement，已有可追溯來源。
@@ -102,6 +106,7 @@ response_rules = """# response.text 規則
 
 question_rules = """# open_questions 規則
 - 不用限制題數；只有真的會影響本議題結論、需求內容、驗收條件、風險、假設、責任邊界或模型判斷的問題才放入。
+- ready_to_close 仍可提出 open_questions；若目前已有可落地結論，但某個具體答案會影響 REQ 欄位、驗收條件、責任邊界、風險、假設或模型一致性，應輸出 open_questions，而不是只寫進 assumptions / risks。
 - 每題必須指定 to，且 to 只能是本議題參與者或議題指定的利害關係人。
 - 每題必須附 reason，說明這個答案會如何影響本議題是否能收斂或寫入 artifact。
 - 不要詢問自己可以透過 action 或 artifact_query 取得的既有資料；先查 artifact，再決定是否需要問人。
@@ -229,7 +234,9 @@ def response_stance_rules(*, issue_id: str, category: str, proposal_subject: str
     return f"""
 - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。
 - 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的{proposal_subject}。
-- ready_to_close 表示本輪已足以產生下一版 draft、resolution 或 human decision options；不代表所有細節都已完美。
+- ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。
+- 若本議題已有可收束內容，但仍需要人類在多個可行需求規則中裁決，stance.needs_human_decision=true。
+- ready_to_close 可以同時帶 open_questions；這表示本議題可先收斂，但仍有需要後續回答並追蹤的具體問題。
 - needs_more_discussion 必須同時提供最小可行 proposal，說明目前建議如何處理，以及仍缺哪個關鍵答案。"""
 
 
@@ -272,7 +279,7 @@ def response_output_fields(
     return (
         f"    {text_hint},\n"
         '    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "會影響本議題結論的具體問題", "reason": "此答案會如何影響本議題結論"}]'
-        ',\n    "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
+        ',\n    "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
     )
 
 
@@ -464,7 +471,7 @@ def retry_response(
             "- target_stakeholders 必須使用議題中已指定的利害關係人。\n"
         )
     else:
-        output_contract = '{\n  "text": "根據本輪 action 結果提出自然語言會議發言",\n  "open_questions": [],\n  "stance": {"state": "ready_to_close"}\n}'
+        output_contract = '{\n  "text": "根據本輪 action 結果提出自然語言會議發言",\n  "open_questions": [],\n  "stance": {"state": "ready_to_close", "needs_human_decision": false}\n}'
         stance_rule = "- stance.state 必須輸出，且只能是 ready_to_close 或 needs_more_discussion。\n"
         task_line = "重新產生一次正式會議發言。"
         text_rule = "- text 必須是自然語言發言。\n"

@@ -203,6 +203,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # 修復規則
 - 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
+- priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，若 constraint 有 priority 請移除。
 - 最外層必須只有 requirement_update。
 - 若同一筆 REQ 同時包含系統能力與品質要求，且兩者可獨立驗收或追蹤，請拆成 functional 與 non-functional。
 - 若同一筆 REQ 同時包含系統能力與外部限制、法規、政策、資料保存/刪除、第三方或技術限制，請拆成 functional 與 constraint。
@@ -241,6 +242,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 修正既有 REQ 時保留原 id。
 - id 只能是既有的 REQ-數字；不得輸出 REQ-文字、中文標題或自行編造的新 id。
 - 每筆新/修正後的 REQ 都必須保留原本可追蹤 source。
+- priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，若 constraint 有 priority 請移除。
 - 若原始輸出包含 remove_REQ，必須原樣保留。
 - description 必須只描述一種主要性質，不要用「並維持穩定」「且高效」「並符合法規」把不同性質重新串在一起。
 - 若某個品質要求只是功能的 acceptance criteria，且不能獨立追蹤，才可留在 acceptance_criteria；否則必須拆出 non-functional。

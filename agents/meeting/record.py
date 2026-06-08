@@ -925,6 +925,10 @@ class MediatorRecords:
                 return ""
             return "\n\n".join(sections)
 
+        # Defines nested markdown headings function for this module workflow.
+        def nested_markdown_headings(text: str) -> str:
+            return re.sub(r"(?m)^(#{1,5})(\s+)", r"#\1\2", str(text or "").strip())
+
         main_records = [c for c in conversation if not c.get("is_reply", False)]
         md += "## 討論紀錄\n\n"
         if not main_records:
@@ -936,10 +940,9 @@ class MediatorRecords:
                 text = clean_for_mom(resp.get("text", ""))
                 md += f"### {agent}\n\n"
                 md += f"{text or '（本發言無可讀內容）'}\n\n"
-
-        meeting_outputs = render_meeting_outputs(main_records)
-        if meeting_outputs:
-            md += meeting_outputs + "\n\n"
+                record_outputs = render_meeting_outputs([c])
+                if record_outputs:
+                    md += nested_markdown_headings(record_outputs) + "\n\n"
 
         question_pairs: List[Dict[str, Any]] = []
         question_index: Dict[tuple[str, str, str], Dict[str, Any]] = {}

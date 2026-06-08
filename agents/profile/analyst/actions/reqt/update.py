@@ -26,6 +26,7 @@ def update_requirement(
 - update：根據 current_URL 與 current_REQ 更新 REQ-*；若有清楚未覆蓋內容，新增 REQ。
 - 本 action 只負責 URL / User Requirements → REQ，不修單一議題、不更新 draft、不跑衝突辨識。
 - 若發現單一 REQ 需要拆分功能、品質或限制，或需要合併/調整粒度，只標記為後續 refine_requirement 的清理對象；不要在本 action 內做議題式精修。
+- 明確且有來源支持的 NFR 直接寫成 type=non-functional；只有 metric、validation、適用範圍、FR/NFR priority 或品質取捨需要決策時，才留作 open_questions、risks 或後續會議。
 - 不直接更新 artifact；runtime 會驗證 requirement_update 後才寫入 artifact.REQ / artifact.coverage。
 - 最外層只能輸出 requirement_update。
 - update 模式若發現既有多筆 REQ 其實只是同一能力、同一限制或同一品質面向的細節拆分，請保留最合適的一筆既有 REQ id，將來源合併到該 REQ.source，並在 remove_REQ 列出被合併移除的舊 REQ id。

@@ -19,6 +19,7 @@ def refine_requirement(*, source_id: str) -> str:
 - current_REQ 是修正基底；只更新本議題影響到的 REQ。
 - current_URL 只作為本議題 trace 或來源查核，不是全量整理清單。
 - 若 context.mode=refine_granularity_cleanup 或 context.cleanup_issues 有值，本次只處理 cleanup_issues 點名的 REQ 粒度、類型或合併問題，不做其他需求精修。
+- 明確且已由會議或來源收斂的 NFR 直接寫回 type=non-functional、category、metric、validation 與 priority；仍未決的品質取捨放入 risks、assumptions 或 open_questions，不要硬寫成定案。
 - 若本次需要合併多筆既有 REQ，請保留最合適的一筆既有 REQ id，合併 source 與驗收條件，並在 remove_REQ 列出被合併移除的舊 REQ id。
 
 # Input

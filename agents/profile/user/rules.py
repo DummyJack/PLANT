@@ -138,7 +138,9 @@ def stance_rule(*, suppress_stance: bool) -> str:
         "ready_to_close=資訊已足夠且可結束本議題；"
         "needs_more_discussion=還需要其他參與者補充或回應。\n"
         "- 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議如何處理此議題。\n"
-        "- ready_to_close 表示本輪已足以產生下一版 draft、resolution 或 human decision options；不代表所有細節都已完美。\n"
+        "- ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。\n"
+        "- 若本議題已有可收束內容，但仍需要人類在多個可行需求規則中裁決，stance.needs_human_decision=true。\n"
+        "- ready_to_close 可以同時帶 open_questions；這表示本議題可先收斂，但仍有需要後續回答並追蹤的具體問題。\n"
         "- needs_more_discussion 必須同時提供最小可行 proposal，說明目前建議如何處理，以及仍缺哪個關鍵答案。\n"
     )
 
@@ -149,7 +151,7 @@ def stance_rule(*, suppress_stance: bool) -> str:
 def stance_json(*, suppress_stance: bool) -> str:
     if suppress_stance:
         return ""
-    return ', "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
+    return ', "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
 
 
 # ========

@@ -267,6 +267,12 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 obs["summary"] = "文件讀取失敗：未提供查詢問題"
                 return obs
             scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
+            meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+            attached_references = [
+                str(path).strip()
+                for path in (meta.get("attached_references") or [])
+                if str(path).strip()
+            ]
             context = {
                 "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": str(scenario_source or "").strip(),
@@ -276,8 +282,9 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
                 "existing_document_evidence": artifact.get("document_evidence", []) or [],
+                "attached_references": attached_references,
             }
-            task = read_docs(query=query)
+            task = read_docs(query=query, attached_references=attached_references)
             try:
                 skill = domain_skill_subset(get_skill("domain-research"), "read_docs")
                 raw = self.chat_with_tools(
@@ -410,13 +417,14 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 )
                 if dr:
                     dr = normalize_feedback_links(dr, artifact)
-                    artifact["feedback"] = dr
-                    obs["result"] = {"feedback": dr}
+                    merged = self.merge_feedback(existing, dr)
+                    artifact["feedback"] = merged
+                    obs["result"] = {"feedback": dr, "merged_feedback": merged}
                     obs["summary"] = "已更新領域研究資料"
                 else:
-                    artifact["feedback"] = empty_feedback_marker("domain research produced no valid feedback rows")
-                    obs["result"] = {"feedback": artifact["feedback"]}
-                    obs["summary"] = "無有效 feedback rows，已標記領域研究完成"
+                    artifact["feedback"] = existing or empty_feedback_marker("domain research produced no valid feedback rows")
+                    obs["result"] = {"feedback": {}, "merged_feedback": artifact["feedback"]}
+                    obs["summary"] = "無新增有效 feedback rows"
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"更新失敗: {e}"
@@ -476,6 +484,52 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 seen.add(url)
         payload["sources"] = merged
         return payload
+
+    @staticmethod
+    # Defines merge feedback function for this module workflow.
+    def merge_feedback(existing, delta):
+        def row_key(row):
+            if not isinstance(row, dict):
+                return ""
+            text = " ".join(str(row.get("text") or "").split()).lower()
+            related = tuple(
+                sorted(
+                    str(value).strip()
+                    for value in (row.get("related_requirement_ids") or [])
+                    if str(value).strip()
+                )
+            )
+            source = str(row.get("source") or "").strip()
+            return json.dumps([text, related, source], ensure_ascii=False)
+
+        merged = {"findings": [], "constraints": [], "risks": [], "recommendations": [], "sources": []}
+        for section in ("findings", "constraints", "risks", "recommendations"):
+            seen = set()
+            for payload in (existing, delta):
+                rows = payload.get(section) if isinstance(payload, dict) else []
+                for row in rows or []:
+                    if not isinstance(row, dict):
+                        continue
+                    key = row_key(row)
+                    if not key or key in seen:
+                        continue
+                    merged[section].append(dict(row))
+                    seen.add(key)
+
+        seen_urls = set()
+        for payload in (existing, delta):
+            for source in source_records((payload.get("sources") if isinstance(payload, dict) else []) or []):
+                url = str(source.get("url") or "").strip()
+                if not url or url in seen_urls:
+                    continue
+                merged["sources"].append(source)
+                seen_urls.add(url)
+
+        return {
+            key: value
+            for key, value in merged.items()
+            if value
+        }
 
     @staticmethod
     # Defines missing URL sources function for this module workflow.

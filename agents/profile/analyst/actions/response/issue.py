@@ -87,12 +87,16 @@ def issue_response(
     )
     if category == "clarify_requirement":
         rules_block += "\n- 本議題聚焦釐清需求語意、條件、成功結果與驗收方式；不要擴張未被來源支持的新需求。"
+        rules_block += "\n- 若本議題涉及 NFR，只釐清 category、metric、validation、適用範圍或 FR/NFR priority；明確 NFR 應建議直接寫回 REQ。"
     elif category == "define_boundary":
         rules_block += "\n- 本議題聚焦系統、外部服務、人工流程與角色責任邊界；請明確指出應寫入 scope、requirement 或 open question 的結果。"
+        rules_block += "\n- 若本議題涉及 NFR，請說明品質要求套用在哪些流程、角色、資料或情境；constraint 不討論 priority，只討論適用邊界與遵守方式。"
     elif category == "tradeoff":
         rules_block += "\n- 本議題聚焦方案比較、取捨與推薦；stance.proposal 必須提出可落地的需求處理方案。"
+        rules_block += "\n- 若本議題涉及 NFR，請比較品質目標、成本、使用體驗、技術可行性與 FR/NFR priority；constraint 不作 priority 取捨。"
     elif category == "align_model":
         rules_block += "\n- 本議題聚焦模型揭露的流程、狀態、actor、資料或權限不一致；請指出應更新需求、模型或 open question。"
+        rules_block += "\n- 若本議題涉及 NFR，請指出品質要求是否影響流程、狀態、資料、權限或模型驗證方式。"
     return render_response_prompt(
         issue=issue,
         previous_responses=previous_responses,

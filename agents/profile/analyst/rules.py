@@ -107,9 +107,12 @@ def requirement_quality_rules() -> str:
 - 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
 - 若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；不是因 URL 筆數拆分。
 - 若品質或限制只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional，不要只因為它是 NFR 就留待會議。
+- NFR 只有在 metric、validation、適用範圍或 FR/NFR priority 需要決策，或會造成品質/成本/設計/模型取捨時，才放入 open_questions、risks 或正式會議處理。
 - title 是 brief description：用短詞概括需求核心，不寫完整句；title 應命名系統能力、限制、品質屬性或政策本體，不用利害關係人角色作為開頭。
 - 若需求只是在描述某角色提出的目標，角色資訊放在 description、source 或 trace，不放在 title 前綴。
-- priority 依本專案優先級規則判斷，但本專案只使用 must、should、could；沒有足夠依據就省略。
+- priority 只用於 functional 與 non-functional 需求，討論 FR/NFR 的實作、品質或版本優先順序；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
+- functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略。
 - description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
 - acceptance_criteria 必須可驗收，不要只重述 description；若只有待確認條件，放入 risks、assumptions 或 open_questions。
 - non-functional 可輸出 category、metric、validation：category 依 ISO/IEC 25010 且不用 functional suitability；metric 從 acceptance_criteria 或需求內容萃取可觀察條件；validation 寫成可執行方式。
@@ -165,7 +168,7 @@ def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> st
         "id": "既有 REQ-*；新增時省略或留空",
         "title": "短標題",
         "description": "系統應...",
-        "priority": "must | should | could",
+        "priority": "functional / non-functional 才填 must | should | could；constraint 不填",
         "category": "non-functional 才填 ISO/IEC 25010 品質特性",
         "metric": "non-functional 才填從 acceptance_criteria 或需求內容萃取出的可觀察或可測量條件",
         "validation": "non-functional 才填依 Requirement Validation 判斷的可執行驗證方式",

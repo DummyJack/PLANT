@@ -103,12 +103,16 @@ def issue_response(
     )
     if category == "align_model":
         rules_block += "\n- 本議題聚焦模型揭露的流程、狀態、actor、use case、資料或權限不一致；請明確指出需求與模型如何對齊。"
+        rules_block += "\n- 若本議題涉及 NFR，請指出品質要求如何影響流程、狀態、互動、資料或驗證路徑。"
     elif category == "define_boundary":
         rules_block += "\n- 本議題聚焦系統邊界、外部系統、人工流程與角色責任；請用模型觀點說明邊界影響。"
+        rules_block += "\n- 若本議題涉及 NFR，請說明品質要求套用的系統邊界、外部責任與例外情境。"
     elif category == "clarify_requirement":
         rules_block += "\n- 本議題聚焦需求語意、條件、成功結果與驗收方式；請指出模型是否需要補充流程或狀態。"
+        rules_block += "\n- 若本議題涉及 NFR，請協助釐清 metric、validation 與可觀察的流程或狀態條件。"
     elif category == "tradeoff":
         rules_block += "\n- 本議題聚焦方案取捨；請比較各方案對流程、狀態、資料與 actor 的影響。"
+        rules_block += "\n- 若本議題涉及 NFR，請比較品質目標對流程複雜度、資料需求、狀態設計與 FR/NFR priority 的影響；constraint 不作 priority 取捨。"
     rules_block += model_reference_rules()
     return render_response_prompt(
         issue=issue,

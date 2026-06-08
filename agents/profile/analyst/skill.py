@@ -75,7 +75,9 @@ def requirements_skill_guidance(content: str, mode: str) -> str:
         override = """# 本專案覆寫規則
 - type 分類依已注入的需求分析規則；不要在本 prompt 重新定義 functional / non-functional / constraint。
 - feedback.constraints 是 Expert 的限制候選與證據，不等於正式需求；只有來源可追蹤且可寫成系統必須遵守的限制時，才正式化為 type=constraint。
-- priority 只使用 must、should、could；沒有足夠依據就省略，不輸出 wont，也不要預設。
+- 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional；只有 metric、validation、適用範圍、FR/NFR priority 或品質取捨需要決策時，才留待會議或 open question。
+- priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
+- functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略，不輸出 wont，也不要預設。
 - 每筆 REQ 只保留一個核心意圖；若來源同時包含功能、品質與限制，且可獨立追蹤，請拆成多筆 REQ。
 - non-functional 可輸出 category、metric、validation；category 依 ISO/IEC 25010 且不用 functional suitability。
 - source 只放已存在且可追蹤的 artifact ID。

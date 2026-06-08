@@ -62,7 +62,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 輸出必須是 JSON array。
 - 只修正缺失欄位、欄位型別或 JSON 結構，不得改變 PlantUML 的需求語意、角色、流程、資料關係或狀態。
 - 每個 diagram model 必須包含 name、type、plantuml、description。
-- 若是 class_diagram，PlantUML 圖內所有 class、attribute、operation、enum value、association label 必須使用英文；class/enum 用 PascalCase，attribute 用 camelCase，attribute 必須保留需求層級型別（UUID、String、Int、Decimal、Date、DateTime、Boolean、List<T> 或 enum type）。
+- 若是 class_diagram，class 與 enum 顯示名稱可維持目前輸出語言；attribute 名稱、attribute type、association label 與 enum value 固定使用英文，PlantUML 語法關鍵字與型別標註必須保持可解析。
 - context_diagram 的 description 只用一段話說明此圖用來釐清的系統邊界、外部角色、外部系統、主要互動或責任邊界。
 - use_case_diagram 的 description 只用一段話說明此圖用來釐清哪些 actor 與系統能力。
 - 其他 diagram 的 description 必須使用兩段固定格式：**用途**：...\n**反映需求**：...
@@ -80,7 +80,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
     "related_requirement_ids": ["REQ-1"]
   }}
 ]'''),
-    'modeler_plantuml_repair': (True, '# 任務\n    以下 PlantUML 程式碼有語法錯誤，請修正後回傳。\n\n    # 模型名稱\n    {model.get(\'name\', \'\')}\n\n    # 原始程式碼\n    {model.get(\'plantuml\', \'\')}\n\n    # 驗證錯誤\n    {error_msg}\n\n    - 只修正 PlantUML 語法，不得改變圖的需求語意、範圍、角色、流程或資料關係。\n    - 修正語法時必須維持原圖元素語言；例外是 class_diagram 圖內元素必須維持英文，不可改成繁體中文。\n    - 不要新增或移除需求內容；如果資訊不足，維持原本抽象元素，不要臆測補齊。\n\n    # Output JSON\n    {{\n    "plantuml": "@startuml\\\\n...修正後的完整程式碼...\\\\n@enduml"\n    }}'),
+    'modeler_plantuml_repair': (True, '# 任務\n    以下 PlantUML 程式碼有語法錯誤，請修正後回傳。\n\n    # 模型名稱\n    {model.get(\'name\', \'\')}\n\n    # 原始程式碼\n    {model.get(\'plantuml\', \'\')}\n\n    # 驗證錯誤\n    {error_msg}\n\n    - 只修正 PlantUML 語法，不得改變圖的需求語意、範圍、角色、流程或資料關係。\n    - 修正語法時必須維持原圖元素語言；但若是 class_diagram，attribute 名稱、attribute type、association label 與 enum value 必須維持或修正為英文。\n    - 不要新增或移除需求內容；如果資訊不足，維持原本抽象元素，不要臆測補齊。\n\n    # Output JSON\n    {{\n    "plantuml": "@startuml\\\\n...修正後的完整程式碼...\\\\n@enduml"\n    }}'),
 }
 
 

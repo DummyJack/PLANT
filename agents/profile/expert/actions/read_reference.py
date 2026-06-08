@@ -1,9 +1,21 @@
 # Defines action prompts and output contracts.
 
 
-def read_docs(*, query: str) -> str:
+from typing import List, Optional
+
+
+def read_docs(*, query: str, attached_references: Optional[List[str]] = None) -> str:
+    priority_block = ""
+    if attached_references:
+        listed = "\n".join(f"- {path}" for path in attached_references)
+        priority_block = f"""
+# Priority References
+本次工作坊使用者特別附上以下參考文件，請優先從這些檔案搜尋與讀取相關證據：
+{listed}
+"""
     return f"""# 任務
 針對以下研究問題，先查找 doc/ 內專案參考文件並整理文件證據。
+{priority_block}
 
 # Action Boundary
 - action=expert.read_reference_docs

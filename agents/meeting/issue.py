@@ -75,6 +75,8 @@ class IssueResponseSupport:
                 normalized["stance"] = {"state": status} if status else {}
             else:
                 normalized["stance"] = {"state": status}
+                if bool(stance.get("needs_human_decision")):
+                    normalized["stance"]["needs_human_decision"] = True
             proposal = stance.get("proposal") if isinstance(stance.get("proposal"), dict) else None
             if isinstance(proposal, dict) and proposal:
                 normalized.setdefault("stance", {})["proposal"] = proposal

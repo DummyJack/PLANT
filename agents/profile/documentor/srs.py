@@ -181,6 +181,12 @@ class DocumentorSrs:
             lambda match: f"{match.group(1)} {match.group(2).strip()}",
             srs_md or "",
         )
+        field_names = "Priority|Acceptance Criteria|Category|Metric|Validation"
+        text = re.sub(
+            rf"\s+(\*\*(?:{field_names})\*\*[:：])",
+            r"\n\n\1",
+            text,
+        )
         field_pattern = re.compile(
             r"^\*\*(?:Description|Priority|Acceptance Criteria|Category|Metric|Validation)\*\*[:：]"
         )
@@ -231,7 +237,7 @@ class DocumentorSrs:
             if not body:
                 return f"{heading}\n\n"
             lines = [
-                re.sub(r"^\s*[-*]\s+", "", line).strip()
+                re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", line).strip()
                 for line in body.splitlines()
                 if line.strip()
             ]

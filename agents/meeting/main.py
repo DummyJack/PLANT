@@ -514,11 +514,33 @@ class MeetingRunner:
     # Defines log resolution done function for this module workflow.
     def log_resolution_done(self, issue_id: str, resolution: Dict[str, Any]) -> None:
         status = str(resolution.get("status") or "").strip()
-        if not status:
-            raise RuntimeError(f"{issue_id} resolution 缺少 status")
         if resolution.get("needs_human"):
-            self.logger.info("  收斂結果：需要人類裁決｜%s", resolution.get("summary", ""))
+            trigger = resolution.get("human_decision_trigger") if isinstance(resolution.get("human_decision_trigger"), dict) else {}
+            agents = [
+                str(agent).strip()
+                for agent in (trigger.get("agents") or [])
+                if str(agent).strip()
+            ]
+            agent_text = f"｜觸發 agent: {', '.join(agents)}" if agents else ""
+            option_count = len(resolution.get("options", []) or [])
+            recommendation = resolution.get("recommendation") if isinstance(resolution.get("recommendation"), dict) else {}
+            recommendation_text = str(
+                recommendation.get("option_id")
+                or recommendation.get("summary")
+                or recommendation.get("rationale")
+                or ""
+            ).strip()
+            recommendation_log = f"｜建議: {recommendation_text}" if recommendation_text else ""
+            self.logger.info(
+                "  收斂結果：需要人類裁決%s｜選項 %s 個%s｜%s",
+                agent_text,
+                option_count,
+                recommendation_log,
+                resolution.get("summary", ""),
+            )
         else:
+            if not status:
+                raise RuntimeError(f"{issue_id} resolution 缺少 status")
             self.logger.info("  收斂結果：%s｜%s", status, resolution.get("summary", ""))
 
     # Defines log human judgment done function for this module workflow.
@@ -1855,7 +1877,17 @@ class MeetingRunner:
     ) -> Dict[str, Any]:
         readiness = self.collect_stance_summary(issue, conversation)
 
-        if str(issue.get("category") or "").strip() == "resolve_conflict":
+        if readiness.get("needs_human_decision"):
+            resolution = self.prepare_human_decision_resolution(
+                issue,
+                conversation,
+                trigger={
+                    "reason": "stance.needs_human_decision",
+                    "agents": readiness.get("human_decision_agents", []),
+                    "status_counts": readiness.get("status_counts", {}),
+                },
+            )
+        elif str(issue.get("category") or "").strip() == "resolve_conflict":
             resolution = self.close_conflict(issue, conversation, readiness)
         elif readiness.get("ready_to_close"):
             resolution = self.mediator.close_issue(
@@ -1864,24 +1896,14 @@ class MeetingRunner:
         elif self.is_requirement_review_issue(issue):
             resolution = self.close_requirement(issue, conversation, readiness)
         else:
-            decision_context = self.judgment_context(issue)
-            decision_analysis = self.mediator.prepare_judgment(
+            resolution = self.prepare_human_decision_resolution(
                 issue,
                 conversation,
-                decision_context=decision_context,
-            )
-    
-            resolution = self.mediator.build_issue_result(
-                status="",
-                summary=decision_analysis.get("summary", ""),
-                decision="",
-                agreed_points=[],
-                unresolved_points=decision_analysis.get("unresolved_points", []),
-                affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
-                needs_human=True,
-                options=decision_analysis.get("options", []),
-                recommendation=decision_analysis.get("recommendation", {}),
-                mediator_compromise=decision_analysis.get("compromise", {}),
+                trigger={
+                    "reason": "not_ready_to_close",
+                    "agents": [],
+                    "status_counts": readiness.get("status_counts", {}),
+                },
             )
 
         source_ids = list(issue_artifact_ids(issue) or [])
@@ -1898,6 +1920,37 @@ class MeetingRunner:
             conversation,
             resolution,
         )
+        return resolution
+
+    # Defines prepare human decision resolution function for this module workflow.
+    def prepare_human_decision_resolution(
+        self,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        *,
+        trigger: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        decision_context = self.judgment_context(issue)
+        decision_analysis = self.mediator.prepare_judgment(
+            issue,
+            conversation,
+            decision_context=decision_context,
+        )
+
+        resolution = self.mediator.build_issue_result(
+            status="",
+            summary=decision_analysis.get("summary", ""),
+            decision="",
+            agreed_points=[],
+            unresolved_points=decision_analysis.get("unresolved_points", []),
+            affected_requirement_ids=decision_analysis.get("affected_requirement_ids", []),
+            needs_human=True,
+            options=decision_analysis.get("options", []),
+            recommendation=decision_analysis.get("recommendation", {}),
+            mediator_compromise=decision_analysis.get("compromise", {}),
+        )
+        if trigger:
+            resolution["human_decision_trigger"] = trigger
         return resolution
 
     # Defines conflict rows for issue function for this module workflow.
@@ -2260,6 +2313,7 @@ class MeetingRunner:
             "ready_to_close": 0,
             "needs_more_discussion": 0,
         }
+        human_decision_agents: List[str] = []
         participant_status: List[Dict[str, Any]] = []
         proposer = str(issue.get("proposed_by") or self.find_issue_proposer(issue) or "").strip()
         proposer_status = ""
@@ -2276,10 +2330,14 @@ class MeetingRunner:
             agent_name = str(record_entry.get("agent") or "").strip()
             if proposer and agent_name == proposer and not proposer_status:
                 proposer_status = status
+            needs_human_decision = bool((response.get("stance") or {}).get("needs_human_decision"))
+            if needs_human_decision:
+                human_decision_agents.append(agent_name)
             participant_status.append(
                 {
                     "agent": agent_name,
                     "status": status,
+                    "needs_human_decision": needs_human_decision,
                     "has_open_questions": bool(response.get("open_questions")),
                     "is_proposer": bool(proposer and agent_name == proposer),
                 }
@@ -2291,6 +2349,8 @@ class MeetingRunner:
                 "summary": "本議題沒有足夠發言可形成結論。",
                 "decision": "",
                 "status_counts": status_counts,
+                "needs_human_decision": False,
+                "human_decision_agents": [],
                 "participant_status": participant_status,
             }
         ready_count = status_counts["ready_to_close"]
@@ -2308,18 +2368,24 @@ class MeetingRunner:
                 "summary": reason,
                 "decision": "",
                 "status_counts": status_counts,
+                "needs_human_decision": bool(human_decision_agents),
+                "human_decision_agents": human_decision_agents,
                 "participant_status": participant_status,
             }
         summary = (
             f"多數參與者認為可收束，且提案者 {proposer or '未指定'} "
             "未要求更多討論，可以結束本議題。"
         )
+        if human_decision_agents:
+            summary += f" 但 {', '.join(human_decision_agents)} 要求人類裁決可行需求規則。"
         return {
             "ready_to_close": True,
             "reason": summary,
             "summary": summary,
             "decision": summary,
             "status_counts": status_counts,
+            "needs_human_decision": bool(human_decision_agents),
+            "human_decision_agents": human_decision_agents,
             "participant_status": participant_status,
         }
 

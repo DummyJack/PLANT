@@ -17,7 +17,7 @@ def retry_response(
         else ""
     )
     stance_field = (
-        ',\n  "stance": {"state": "ready_to_close"}'
+        ',\n  "stance": {"state": "ready_to_close", "needs_human_decision": false}'
         if include_stance
         else ""
     )

@@ -165,7 +165,6 @@ class UserStakeholder:
             "external_party",
         ]
         counts = {category: 0 for category in categories}
-        current_order = 0
         for row in proposed:
             if not isinstance(row, dict):
                 raise ValueError("each proposed stakeholder must be an object")
@@ -178,15 +177,14 @@ class UserStakeholder:
                 )
             if stakeholder_type not in counts:
                 raise ValueError(f"invalid stakeholder type: {stakeholder_type}")
-            order = categories.index(stakeholder_type)
-            if order < current_order:
-                raise ValueError("stakeholders must be ordered by type priority")
-            current_order = order
             counts[stakeholder_type] += 1
 
         if len(proposed) < 2:
             raise ValueError("propose_stakeholders must return at least 2 stakeholders")
-        return proposed
+        return sorted(
+            proposed,
+            key=lambda row: categories.index(str(row.get("type") or "").strip()),
+        )
 
     # Defines generate needs function for this module workflow.
     def generate_needs(

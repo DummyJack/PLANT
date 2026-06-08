@@ -1098,7 +1098,7 @@ class AnalystRequirementFlow:
                 if value and value.lower() not in placeholder_values:
                     out[key] = value
         priority = str(source.get("priority") or "").strip().lower()
-        if priority in {"must", "should", "could"}:
+        if req_type != "constraint" and priority in {"must", "should", "could"}:
             out["priority"] = priority
         sources = AnalystRequirementFlow.requirement_sources(source)
         if sources:
