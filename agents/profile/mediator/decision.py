@@ -1,17 +1,90 @@
-# Mediator decision logic: human decision option analysis.
+# Handles shared agent profile prompts and helper behavior.
 from typing import Any, Dict, List, Optional
 
-from .prompts import (
-    close_issue_prompt,
-    judge_options_prompt,
-)
+from .actions.judge import judge_options
+from .actions.resolve import close_issue
 from .validation import (
     close_issue_data,
     judgment_data,
     trace_artifact_ids,
 )
 
+# Defines MediatorDecision class for this module workflow.
 class MediatorDecision:
+    # Defines obs meeting action function for this module workflow.
+    def obs_meeting_action(self, **kwargs: Any) -> Dict[str, Any]:
+        state_summary = kwargs.get("state_summary") or {}
+        return {
+            "state_summary": state_summary,
+            "issues_count": len(state_summary.get("issues") or []),
+            "open_issues_count": len(state_summary.get("open_issues") or []),
+            "human_decision_pending_count": int(
+                (state_summary.get("human_decision_status") or {}).get("human_decision_queue_count")
+                or 0
+            ),
+            "can_add_issues": bool(state_summary.get("can_add_issues")),
+            "iteration": kwargs.get("iteration", 0) + 1,
+            "max_iterations": kwargs["max_iterations"],
+        }
+
+    # Defines decide meeting action function for this module workflow.
+    def decide_meeting_action(
+        self,
+        *,
+        observation: Dict[str, Any],
+        last_result: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if (
+            isinstance(last_result, dict)
+            and last_result.get("status") == "planned"
+            and last_result.get("action")
+        ):
+            return {
+                "action": "done",
+                "params": {},
+                "reasoning": "上一輪已完成 meeting action 規劃，結束本次規劃。",
+            }
+        return self.plan_meeting_action_internal(
+            kwargs.get("state_summary") or {},
+            last_result,
+        )
+
+    # Defines execute meeting action function for this module workflow.
+    def execute_meeting_action(
+        self,
+        *,
+        decision: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return {
+            "action": decision.get("action", "finish_round"),
+            "status": "planned",
+            "summary": f"meeting issue action selected: {decision.get('action', 'finish_round')}",
+            "params": decision.get("params") or {},
+        }
+
+    # Defines plan meeting action via opa function for this module workflow.
+    def plan_meeting_action_via_opa(
+        self,
+        state_summary: Dict[str, Any],
+        last_observation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        opa = self.run_action_loop(
+            name="meeting_action",
+            context={
+                "state_summary": state_summary,
+                "last_result": last_observation,
+            },
+            obs_fn=self.obs_meeting_action,
+            decide_action=self.decide_meeting_action,
+            execute_action=self.execute_meeting_action,
+        )
+        trace = opa.get("opa_trace") or []
+        decision = dict((trace[-1].get("decision") if trace else {}) or {})
+        return decision
+
+    # Defines run decision loop function for this module workflow.
     def run_decision_loop(
         self,
         action: str,
@@ -28,7 +101,7 @@ class MediatorDecision:
                 "conversation": conversation,
                 "decision_context": decision_context or {},
             },
-            build_observation=self.build_decision_observation,
+            obs_fn=self.obs_decision,
             decide_action=self.decide_decision_action,
             execute_action=self.execute_decision_action,
         )
@@ -38,7 +111,8 @@ class MediatorDecision:
             raise RuntimeError(result.get("error"))
         return result.get("output", {})
 
-    def build_decision_observation(self, **kwargs: Any) -> Dict[str, Any]:
+    # Defines obs decision function for this module workflow.
+    def obs_decision(self, **kwargs: Any) -> Dict[str, Any]:
         issue = kwargs.get("issue") or {}
         conversation = kwargs.get("conversation") or []
         main_records = [c for c in conversation if not c.get("is_reply", False)]
@@ -52,6 +126,7 @@ class MediatorDecision:
             "main_conversation_count": len(main_records),
         }
 
+    # Defines decide decision action function for this module workflow.
     def decide_decision_action(
         self,
         *,
@@ -72,6 +147,7 @@ class MediatorDecision:
             "reasoning": f"執行會議收斂與決議任務：{action}。",
         }
 
+    # Defines execute decision action function for this module workflow.
     def execute_decision_action(
         self,
         *,
@@ -101,6 +177,7 @@ class MediatorDecision:
             "summary": f"完成 decision: {action}",
         }
 
+    # Defines prepare judgment function for this module workflow.
     def prepare_judgment(
         self,
         issue: Dict,
@@ -114,13 +191,13 @@ class MediatorDecision:
             decision_context=decision_context,
         )
 
+    # Defines close issue function for this module workflow.
     def close_issue(
         self,
         issue: Dict,
         conversation: List[Dict],
         readiness: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """所有參與者都表示資訊足夠時，直接產出 agreed resolution。"""
         affected_conflict_ids = [
             sid for sid in trace_artifact_ids(issue)
             if isinstance(sid, str)
@@ -145,7 +222,7 @@ class MediatorDecision:
             if isinstance(proposal, dict) and proposal:
                 discussion_text += f"proposal: {proposal}\n"
         try:
-            user_prompt = close_issue_prompt(
+            user_prompt = close_issue(
                 issue=issue,
                 discussion_text=discussion_text,
                 readiness=readiness,
@@ -164,7 +241,6 @@ class MediatorDecision:
             requirement_changes = closed.get("requirement_changes", [])
             model_changes = closed.get("model_changes", [])
             open_questions = closed.get("open_questions", [])
-            follow_up_actions = closed.get("follow_up_actions", [])
         except Exception:
             summary = readiness.get("summary") or "所有參與者都表示資訊已足夠，可以結束本議題。"
             decision = readiness.get("decision") or summary
@@ -172,7 +248,6 @@ class MediatorDecision:
             requirement_changes = []
             model_changes = []
             open_questions = []
-            follow_up_actions = []
         return self.build_issue_result(
             status="agreed",
             summary=summary,
@@ -180,23 +255,21 @@ class MediatorDecision:
             mediator_compromise={"title": "", "description": "", "rationale": ""},
             agreed_points=agreed_points,
             unresolved_points=[],
-            new_open_questions=[],
             affected_conflict_ids=affected_conflict_ids,
             affected_requirement_ids=affected_requirement_ids,
             requirement_changes=requirement_changes,
             model_changes=model_changes,
             open_questions=open_questions,
-            follow_up_actions=follow_up_actions,
             needs_human=False,
         )
 
+    # Defines build judgment function for this module workflow.
     def build_judgment(
         self,
         issue: Dict,
         conversation: List[Dict],
         decision_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """將未收斂議題整理為可供人類裁決的決策選項，不由 agents 投票定案。"""
         discussion_text = ""
         for c in conversation:
             agent = c.get("agent", "?")
@@ -204,7 +277,7 @@ class MediatorDecision:
             reply_label = "（回覆提問）" if c.get("is_reply") else ""
             discussion_text += f"\n【{agent}{reply_label}】\n{text}\n"
 
-        user_prompt = judge_options_prompt(
+        user_prompt = judge_options(
             issue=issue,
             discussion_text=discussion_text,
             decision_context=decision_context,

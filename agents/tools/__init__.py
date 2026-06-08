@@ -1,4 +1,4 @@
-# Agent 工具模組
+# Initializes package exports and module loading.
 from .base import BaseTool
 from .policy import AgentSkillToolPolicy
 from .registry import ToolRegistry

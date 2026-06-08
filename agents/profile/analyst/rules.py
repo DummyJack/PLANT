@@ -1,0 +1,285 @@
+# Defines action usage timing and output rules.
+from agents.profile.base import label_rules, reason_rules, review_contract
+from agents.profile.base import elicitation_action_rules, elicitation_action_task, elicitation_context
+
+
+# ========
+# Defines skill usage policy function for this module workflow.
+# ========
+def skill_usage_policy() -> str:
+    return """requirements-analyst：
+- 用於需求品質、需求文字、需求欄位完整性、acceptance criteria、可驗收性、歧義與 scope 邊界判斷。
+- 用於 ELICIT 或會議回答需要轉成 requirement candidate、requirement change candidate 或 open question 時。
+- 輸出限於需求品質與需求資料整理；遇到無法由需求證據支持的內容，改列 open question 或 change candidate。
+
+conflict-analyzer：
+- 用於 requirement pair conflict classification、conflict_discussion、需求間互斥/重疊/語義關係、SRS 條文衝突、驗收衝突、責任不清、scope 不清、重複但不一致，以及 requirement-level resolution options。
+- 輸出限於需求間關係判斷與 resolution options；缺乏判斷依據時保留不確定性。
+
+若議題只需要 Analyst 根據目前專案資料做一般需求分析，不要使用 skill。"""
+
+
+# ========
+# Defines tool usage policy function for this module workflow.
+# ========
+def tool_usage_policy() -> str:
+    return """- artifact_query 用於查詢目前需求、衝突、open_questions、decisions 與相關來源。
+- 若議題、trace、source 或前文出現 URL-*、REQ-*、SM-*、CR-*，優先用 artifact_query mode=related_context, item_id=<id>, compact=true 取得關聯脈絡；不要逐筆 find_items 查同一批來源。
+- 使用工具取得專案事實後，仍須以 Analyst 角色判斷需求品質、可測試性、追蹤性與 scope 邊界。
+- 工具結果不得直接覆蓋已定案需求；有不確定性時提出 open question 或 change candidate。"""
+
+
+# ========
+# Defines url extraction rules function for this module workflow.
+# ========
+def url_extraction_rules() -> str:
+    return """1. 只抽取輸入明確支持的需求。
+2. 保持粗粒度；同一個利害關係人目標下的細節要合併。
+3. 不要把按鈕、欄位、通知、狀態變化、例外、SOP 步驟或驗收細節拆成獨立需求。
+4. 每筆 text 應能回答：哪個利害關係人在什麼目標或情境下，需要什麼能力、結果或限制。
+5. 抽取時以 skill 的 User Story 三要素判斷需求是否成立：as_a、i_want、so_that。
+6. 輸出時不要使用 User Story 欄位；請合併成一條中性的 User Requirement text。
+7. 若輸入包含數值門檻、驗收條件、系統處理方式或技術限制，URL 只保留 stakeholder goal；細節留到 refine_requirement。
+8. 不要產生系統規格、實作細節、量化指標、驗證方式、優先級、相依性、風險或假設。
+9. 不使用第一人稱；不要輸出「我需要」「我希望」「我擔心」等發言語氣。請改寫為以利害關係人為主詞的中性需求描述。
+10. 若輸入有利害關係人名稱，沿用原名稱。
+
+# 輸出
+- 只輸出 requirement_candidates JSON object。
+- requirement_candidates 每筆只包含 text。
+- text 用中性需求描述，表達該利害關係人的目標、需求或限制。"""
+
+
+# ========
+# Defines requirement context rules function for this module workflow.
+# ========
+def requirement_context_rules() -> str:
+    return """# Context Rules
+- current_URL 是最新 User Requirements，也是正式 REQ 的主要來源。
+- current_REQ 是既有正式需求；仍有效的 REQ 必須保留 id，只更新受來源或本議題決議影響的欄位。
+- scope 只用來判斷需求是否屬於本系統範圍，不直接轉成 REQ。
+- feedback 只作為領域背景、限制候選、風險與建議；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- system_models 只作為流程、actor、資料、狀態與邊界參考；不能單獨創造 stakeholder 未支持的新需求。
+- discussion 只使用明確表態、已回答問題、已收斂或人類裁決的內容。
+- req_source_index 提供 source_id 到既有 REQ-* 的索引；請直接引用，不要逐筆 artifact_query 比對。"""
+
+
+# ========
+# Defines requirement formalization rules function for this module workflow.
+# ========
+def requirement_formalization_rules() -> str:
+    return """# Formalization Rules
+- 每筆 current_URL 必須被 REQ.source 覆蓋，或在 coverage 中標示 excluded、needs_clarification、risk 或 assumption。
+- coverage.covered_by 只能引用本次輸出或既有 current_REQ 中的 REQ-*。
+- coverage 是來源去向檢查，不是 REQ 粒度規則；不要因為每筆 URL 都要 coverage，就把每筆 URL 都轉成一筆 REQ。
+- update 模式修正既有項目時必須保留該項 REQ-* id；create 模式不要自行編 id。
+- remove_REQ 只能放已被合併到其他 REQ 的既有 REQ-*；不得移除未被 coverage 指向其他 REQ 的來源。
+- 正式化前先把 current_URL 依「同一 stakeholder、同一使用目標、同一系統能力或同一限制/品質面向」分群；一個群組通常形成一筆 REQ。
+- 多筆 URL 描述同一能力的不同情境、介面、通知內容、例外、驗收細節或補充條件時，必須合併成同一筆 REQ，並把所有來源 URL-* 放入該 REQ.source。
+- 相近 URL 應合併成一筆 REQ；只有在 stakeholder 目標、系統行為、品質屬性或限制本體明顯不同，且可獨立驗收或追蹤時，才拆成不同 REQ。
+- create 模式下，合理輸出通常少於 current_URL 筆數；若 REQ 數量接近 URL 數量，必須確認不是把來源逐條改寫。
+- 只要 URL 能辨識 stakeholder、need/constraint 與目的或痛點，就應正式化為 REQ 或併入既有 REQ；不需要等待會議逐字確認。
+- needs_clarification 只用於無法辨識系統行為、品質要求或限制本體的 URL；缺少驗收細節不是 needs_clarification 的充分理由。"""
+
+
+# ========
+# Defines requirement refinement rules function for this module workflow.
+# ========
+def requirement_refinement_rules(source_id: str) -> str:
+    return f"""# Refinement Rules
+- 修正既有項目時必須保留該項 REQ-* id。
+- 只回傳本議題新增或需要更新的 REQ；未受本議題影響的既有 REQ 不要重複回傳。
+- 除非會議已明確收斂出新的可追蹤需求，否則不要新增 REQ。
+- 新增 REQ 必須有 current_URL 或明確會議決議支持，source 必須包含 URL-* 或 {source_id}。
+- 不要因 current_URL 中還有未覆蓋來源，就在本次一般議題主動補齊全量 REQ。
+- coverage 只回報本議題實際處理的 source；不要為未進入本議題的 URL 建立 coverage。
+- cleanup 模式處理的是正式化後品質：同一能力、限制或品質面向被拆太細時要合併，不是逐條重寫全部 REQ。
+- 合併既有 REQ 時，保留最能代表群組的一筆 id，把被合併 REQ 的 source、驗收條件、風險與假設整合進保留項，並將被合併 id 放入 remove_REQ。"""
+
+
+# ========
+# Defines requirement quality rules function for this module workflow.
+# ========
+def requirement_quality_rules() -> str:
+    return """# Requirement Quality Rules
+- source 是可追蹤來源 ID；優先使用 URL-*。若內容來自正式會議決議、feedback 或 system model，可加入 R*-M*、Feedback 或 SM-*。
+- type 分類依本專案需求規則；不要重新定義 functional / non-functional / constraint。
+- 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
+- 若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；不是因 URL 筆數拆分。
+- 若品質或限制只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- title 是 brief description：用短詞概括需求核心，不寫完整句；title 應命名系統能力、限制、品質屬性或政策本體，不用利害關係人角色作為開頭。
+- 若需求只是在描述某角色提出的目標，角色資訊放在 description、source 或 trace，不放在 title 前綴。
+- priority 依本專案優先級規則判斷，但本專案只使用 must、should、could；沒有足夠依據就省略。
+- description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
+- acceptance_criteria 必須可驗收，不要只重述 description；若只有待確認條件，放入 risks、assumptions 或 open_questions。
+- non-functional 可輸出 category、metric、validation：category 依 ISO/IEC 25010 且不用 functional suitability；metric 從 acceptance_criteria 或需求內容萃取可觀察條件；validation 寫成可執行方式。
+- rationale 只寫為什麼需要此需求；risks 只寫可能失敗或不確定處；assumptions 只寫目前採用但尚未完全確認的前提。三者不得重複 description。
+- 不確定、有爭議、超出範圍或需要裁決的內容，不要硬寫成 REQ；請放入 assumptions、risks、open_questions 或 coverage。
+- coverage 只作內部檢查，不是正式需求內容；不要把 coverage reason 寫進 description、rationale、risks 或 assumptions。
+- 有依據就填欄位；沒有依據就留空陣列或省略，不要臆測。"""
+
+
+# ========
+# Defines requirement coverage gap rules function for this module workflow.
+# ========
+def requirement_coverage_gap_rules(coverage_gaps=None) -> str:
+    if not coverage_gaps:
+        return ""
+    return f"""# Coverage Gap Rules
+- 上一輪仍有 {len(coverage_gaps)} 筆 User Requirements 沒有明確去處。
+- 本輪只處理 coverage_gaps 中列出的 URL-*。
+- 對每筆 gap 必須二選一：
+  1. 併入既有 REQ 或新增 REQ，並讓該 URL-* 出現在 REQ.source。
+  2. 若需求正式化討論已明確判斷該 URL-* 不需要、超出範圍或只能作為風險/假設，則在 coverage 標為 excluded、risk 或 assumption，並寫清楚 reason。
+- 不要重寫已完整覆蓋的 REQ；只補缺口。
+- 不要因缺少驗收條件、優先級、量化門檻或細節尚未完整，就把可辨識的需求標成 needs_clarification；先形成 REQ，將不確定內容放入 acceptance_criteria 空欄、assumptions、risks 或 open_questions。"""
+
+
+# ========
+# Defines requirement candidates output schema function for this module workflow.
+# ========
+def requirement_candidates_output_schema() -> str:
+    return """# Output JSON
+{
+  "requirement_candidates": [
+    {"text": "候選 User Requirement"}
+  ]
+}"""
+
+
+# ========
+# Defines requirement output schema function for this module workflow.
+# ========
+def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> str:
+    remove_req = (
+        '\n  "remove_REQ": ["update 模式才可填；列出已被合併進其他 REQ 的舊 REQ-*"],'
+        if include_remove_req
+        else ""
+    )
+    return f"""# Output JSON
+{{
+  "requirement_update": {{
+    "REQ": [
+      {{
+        "type": "functional | non-functional | constraint",
+        "id": "既有 REQ-*；新增時省略或留空",
+        "title": "短標題",
+        "description": "系統應...",
+        "priority": "must | should | could",
+        "category": "non-functional 才填 ISO/IEC 25010 品質特性",
+        "metric": "non-functional 才填從 acceptance_criteria 或需求內容萃取出的可觀察或可測量條件",
+        "validation": "non-functional 才填依 Requirement Validation 判斷的可執行驗證方式",
+        "source": ["URL-1", "{source_id}"],
+        "acceptance_criteria": [],
+        "rationale": "為何需要此需求",
+        "dependencies": [],
+        "risks": [],
+        "assumptions": []
+      }}
+    ],{remove_req}
+    "coverage": [
+      {{
+        "source_id": "URL-1 或 {source_id}",
+        "status": "covered | needs_clarification | assumption | risk | excluded",
+        "covered_by": ["REQ-1"],
+        "reason": "為何已覆蓋或為何暫不能形成 REQ"
+      }}
+    ],
+    "reason": "一句說明"
+  }}
+}}"""
+
+
+# ========
+# Defines conflict detection base task function for this module workflow.
+# ========
+def conflict_detection_base_task() -> str:
+    return """# 任務
+僅根據輸入的 User Requirements 判斷 Conflict / Neutral；本步不看系統模型或其他回饋。
+
+# Action Boundary
+- action=detect_conflicts
+- 本 action 只輸出 conflicts JSON。
+- 不產生 resolution options、不做 signoff、不整理 final reason、不更新 artifact。
+- 不新增、改寫、刪除 URL 或 REQ。
+
+# Generation Rules
+- 本步只做 requirement candidate conflict classification，不做報告或解決方案建議。
+- 保持原需求文字不變；輸出不包含新增需求、解決方案或 meeting decision。
+- 只輸出呼叫端指定的 JSON。
+- 產品情境與需求範圍只作為產品邊界背景；Conflict / Neutral 仍以 User Requirements 原文為主要依據。
+
+# 判斷要求
+- label 只用英文 "Conflict" 或 "Neutral"。
+- 若 label 是 "Conflict"，必須輸出 type；type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- 若無法歸入前八類但仍是 Conflict，type 使用 other。
+- Neutral 項目只輸出 label 與 reason。
+- 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
+- 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
+
+# 輸出要求
+- 兩兩判斷：只需輸出 pair_index、label、reason；若 label 是 Conflict，再輸出 type。
+- 整體判斷：Conflict 需包含 requirement_ids。
+- 整體判斷的 requirement_ids 必須精確對應直接涉及的需求；無法明確對應就不要臆測。"""
+
+
+analyst_elicitation = f"""{elicitation_context}
+
+- 聚焦 User Requirement 是否能成立：使用者目標、使用價值、產出內容、成功標準與待確認缺口。
+- 若需要提問，只提出最會影響需求文字、範圍或可驗證性的那一個問題。
+- 若資訊足以支撐需求草稿，提出收束，不要為了角色分工硬問。"""
+
+
+# ========
+# Defines analyst elicitation action task function for this module workflow.
+# ========
+def analyst_elicitation_action_task(stop_phrase: str) -> str:
+    return elicitation_action_task(stop_phrase)
+
+
+# ========
+# Defines analyst elicitation action rules function for this module workflow.
+# ========
+def analyst_elicitation_action_rules(stop_phrase: str) -> str:
+    return f"""{elicitation_action_rules(stop_phrase)}
+- target_stakeholders 優先選擇能說明需求目標、使用情境、成功標準或待確認缺口的 stakeholder。
+- 問題應直接補足最關鍵的需求判斷缺口；不要只問一般動機。
+- 不要詢問領域法規、系統狀態建模或技術流程細節；這些分別交給 expert 或 modeler。"""
+
+issue_task = (
+    "聚焦需求意圖、需求範圍、需求條目品質、驗收條件、"
+    "來源追蹤與未決缺口。"
+)
+issue_rules = """- text 需說明：此議題對需求的相關、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
+- 依據優先引用 requirement id、conflict id、stakeholder 觀點、既有討論或議題描述。
+- 判斷重點是需求是否清楚、可驗收、可追蹤、範圍是否穩定、是否需要拆成功能需求、非功能需求、限制條件或保留為未決問題。
+- 若提出需求修正，必須指出要改哪個欄位：需求文字、優先級、驗收條件或來源追蹤。
+- 若資訊不足，請說明缺少哪個可寫入需求的必要訊號，而不是只說需要更多資訊。
+- 若需要他人補資訊，才在 open_questions 中提出能直接支援需求修正的具體問題。
+- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
+- 若建議新增或修改需求，請說明應落在需求、驗收條件或未決問題哪一類。"""
+resolution_task = (
+    "直接針對既有衝突報告中的解決選項與建議解法做取捨。"
+)
+resolution_rules = """- 不重新判斷 Conflict/Neutral，也不重新執行 conflict detection。
+- 以衝突報告已提供的解決選項與建議解法為主要討論對象。
+- text 需說明：哪些既有方案可採用、哪些需要調整、調整理由、以及會影響哪些需求或驗收條件。
+- 必須把結論落到 URL 層級：在 stance.proposal.url_updates 輸出 keep / revise / remove；revise 必須給出改寫後 text。
+- url_updates 不得把多筆 URL 串成一筆巨大需求；若需要語意整合，應保留 URL 粒度並在後續 REQ 中整合。
+- 若會議內容已足以採用或調整某個 resolution，stance.state 填 ready_to_close，stance.proposal 填具體建議方案與 url_updates。
+- 若缺少業務取捨、領域規則或模型影響判斷，stance.state 填 needs_more_discussion，stance.proposal 仍須填目前最合理的候選方案或可裁決選項；不要提出 open_questions。
+- 若無法在會議中做出內容抉擇，stance.proposal 應整理可交由人類裁決的方案，而不是要求重新分析衝突或延長討論。"""
+conflict_task = (
+    "請逐筆再審查目前這批 Conflict/Neutral 項目，"
+    "先根據 User Requirements（URL-*）原文獨立重判，並將重判結果填入 proposed_label。"
+)
+conflict_rules = f"""{review_contract}
+- 先只根據 User Requirements（URL-*）原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
+- reason 必須寫成完整審查意見：說明獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
+{label_rules}
+{reason_rules}
+- 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
+- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 不要跳到實作方案或最終決策。"""

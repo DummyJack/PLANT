@@ -1,9 +1,9 @@
-# Modeler validation: normalize model artifacts, diagram payloads, and impact outputs.
+# Validates and normalizes agent output data formats.
 import re
 from typing import Any, Dict, List, Optional
 
 
-ALLOWED_DIAGRAM_TYPES = {
+diagram_type_set = {
     "context_diagram",
     "use_case_diagram",
     "activity_diagram",
@@ -12,16 +12,149 @@ ALLOWED_DIAGRAM_TYPES = {
     "class_diagram",
 }
 
-ALLOWED_MODEL_TYPES = ALLOWED_DIAGRAM_TYPES | {"use_case_text"}
-ALLOWED_MODEL_OPERATIONS = {"create", "update"}
+model_type_set = diagram_type_set | {"use_case_text"}
+model_op_set = {"create", "update"}
+max_model_targets = 4
+primitive_type_re = re.compile(
+    r"^([+#~\-\s]*[^:\n{}()]+):\s*(string|str|int|integer|decimal|float|double|number|datetime|date|time|boolean|bool)\s*$",
+    re.IGNORECASE,
+)
+generic_interface_values = {
+    "平台前台",
+    "平台前台（app或web）",
+    "平台前台(app或web)",
+    "平台後台",
+    "平台後台（app或web）",
+    "平台後台(app或web)",
+    "平台管理後台",
+    "管理後台",
+    "app",
+    "web",
+    "app或web",
+}
+generic_interface_prefixes = {
+    "平台前台",
+    "平台前台app或web",
+    "平台後台",
+    "平台後台app或web",
+    "平台管理後台",
+    "管理後台",
+    "app或web",
+}
+interface_entry_re = re.compile(r"^[^－-]+[－-].+入口(?:（.*）)?$")
 
 
+# ========
+# Defines clean text function for this module workflow.
+# ========
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
 
 
+# ========
+# Defines compact text key function for this module workflow.
+# ========
+def compact_text_key(value: Any) -> str:
+    return re.sub(r"[\s　,，、（）()]+", "", clean_text(value).lower())
+
+
+# ========
+# Defines use case interface pages function for this module workflow.
+# ========
+def use_case_interface_pages(actor: str, name: str, interface: str = "") -> str:
+    actor_text = clean_text(actor)
+    name_text = clean_text(name)
+    interface_text = clean_text(interface)
+    value = f"{actor_text} {name_text} {interface_text}"
+
+    if "瀏覽" in value or "搜尋" in value:
+        if "餐廳" in value:
+            return "首頁搜尋列、餐廳列表頁、餐廳詳情頁"
+        return "搜尋頁、結果列表頁、詳情頁"
+    if "購物車" in value or "加點" in value:
+        return "餐廳菜單頁、購物車頁"
+    if "建立" in value or "下單" in value or "訂單" in value and "管理" in value and "消費" in actor_text:
+        return "購物車頁、結帳頁、訂單確認頁、訂單列表頁"
+    if "付款" in value or "退款" in value or "金流" in value:
+        return "結帳頁、支付頁面（整合第三方金流介面）、退款狀態頁"
+    if "申訴" in value or "異常" in value or "客訴" in value:
+        if "外送" in actor_text:
+            return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
+        return "訂單詳情頁、異常回報頁、申訴處理進度頁"
+    if "聯絡" in value:
+        return "訂單詳情頁、外送員聯絡頁"
+    if "新訂單" in value or "備餐" in value:
+        return "餐廳後台訂單列表頁、訂單詳情頁、備餐狀態頁"
+    if "菜單" in value or "庫存" in value:
+        return "餐廳後台菜單管理頁、庫存管理頁、餐點編輯頁"
+    if "取餐" in value:
+        if "外送" in actor_text and "路線" in value:
+            return "外送員配送任務頁、取餐資訊頁、路線地圖頁"
+        return "餐廳後台訂單詳情頁、取餐通知介面"
+    if "接收" in value and "外送" in actor_text:
+        return "外送員任務列表頁、配送任務詳情頁"
+    if "路線" in value:
+        return "外送員配送任務頁、路線地圖頁"
+    if "回報" in value and "外送" in actor_text:
+        return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
+    if "監控" in value or "營運數據" in value:
+        return "營運後台儀表板、訂單監控頁、營運報表頁"
+    if "活動" in value or "促銷" in value:
+        return "營運後台活動管理頁、通知規則設定頁"
+    if ("追蹤" in value or "進度" in value or "配送" in value) and "消費" in actor_text:
+        return "訂單追蹤頁（顯示地圖與狀態列）、訂單詳情頁"
+    if "通知" in value:
+        channels = [
+            hint for hint in ("App 推播", "簡訊", "Email")
+            if hint.replace(" ", "") in interface_text.replace(" ", "") or hint in interface_text
+        ]
+        suffix = "、" + "、".join(dict.fromkeys(channels)) if channels else ""
+        return f"通知中心、訂單詳情頁、通知偏好設定頁{suffix}"
+    if "合作夥伴" in value or "表現" in value:
+        return "營運後台合作夥伴管理頁、餐廳表現頁、外送員表現頁"
+    if "糾紛" in value or "濫用" in value:
+        return "營運後台申訴案件頁、交易糾紛處理頁、濫用風險審查頁"
+    if "穩定" in value or "彈性" in value or "維護" in value:
+        return "營運後台系統狀態頁、服務監控頁、維護設定頁"
+    if "餐廳" in actor_text:
+        return f"餐廳後台{name_text}頁"
+    if "外送" in actor_text:
+        return f"外送員{name_text}頁"
+    if "營運" in actor_text or "主管" in actor_text:
+        return f"營運後台{name_text}頁"
+    return f"{name_text}頁"
+
+
+# ========
+# Defines normalize use case interface function for this module workflow.
+# ========
+def normalize_use_case_interface(actor: str, name: str, interface: str) -> str:
+    actor_text = clean_text(actor)
+    name_text = clean_text(name)
+    interface_text = clean_text(interface)
+    value = f"{actor_text} {name_text} {interface_text}"
+    if "餐廳" in actor_text and "取餐" in value:
+        return "餐廳後台訂單詳情頁、取餐通知介面"
+    if "外送" in actor_text and "回報" in value:
+        return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
+    if "外送" in actor_text and "路線" in value:
+        return "外送員配送任務頁、取餐資訊頁、路線地圖頁"
+    if ("營運" in actor_text or "主管" in actor_text) and ("活動" in value or "促銷" in value):
+        return "營運後台活動管理頁、通知規則設定頁"
+    compact = compact_text_key(interface_text)
+    is_generic = compact in generic_interface_values or any(
+        compact.startswith(prefix) for prefix in generic_interface_prefixes
+    ) or bool(interface_entry_re.match(interface_text))
+    if interface_text and not is_generic:
+        return interface_text
+    return use_case_interface_pages(actor, name, interface)
+
+
+# ========
+# Defines clean list function for this module workflow.
+# ========
 def clean_list(values: Any) -> List[Any]:
     if values is None:
         return []
@@ -46,42 +179,37 @@ def clean_list(values: Any) -> List[Any]:
     return rows
 
 
-def diagram_types(values: Any) -> List[str]:
-    out: List[str] = []
-    for value in values or []:
-        diagram_type = clean_text(value)
-        if diagram_type in ALLOWED_DIAGRAM_TYPES and diagram_type not in out:
-            out.append(diagram_type)
-    return out
-
-
-def model_types(values: Any) -> List[str]:
+# ========
+# Defines clean model types function for this module workflow.
+# ========
+def clean_model_types(values: Any) -> List[str]:
     out: List[str] = []
     for value in values or []:
         model_type = clean_text(value)
-        if model_type in ALLOWED_MODEL_TYPES and model_type not in out:
+        if model_type in model_type_set and model_type not in out:
             out.append(model_type)
     return out
 
 
+# ========
+# Defines model targets function for this module workflow.
+# ========
 def model_targets(values: Any) -> List[Dict[str, str]]:
     if not isinstance(values, list):
         return []
     out: List[Dict[str, str]] = []
     seen = set()
-    for item in values:
+    for idx, item in enumerate(values, 1):
         if isinstance(item, str):
-            target = {
-                "operation": "update",
-                "type": clean_text(item),
-            }
+            raise ValueError(f"model_targets[{idx}] must be an object with explicit operation")
         elif isinstance(item, dict):
             target = {
-                "operation": clean_text(item.get("operation")).lower() or "update",
+                "operation": clean_text(item.get("operation")).lower(),
                 "type": clean_text(item.get("type")),
                 "target_model_id": clean_text(item.get("target_model_id") or item.get("id")),
                 "name": clean_text(item.get("name")),
                 "reason": clean_text(item.get("reason")),
+                "value_reason": clean_text(item.get("value_reason")),
                 "related_requirement_ids": [
                     clean_text(value)
                     for value in (item.get("related_requirement_ids") or [])
@@ -90,12 +218,24 @@ def model_targets(values: Any) -> List[Dict[str, str]]:
             }
         else:
             continue
-        if target.get("type") not in ALLOWED_DIAGRAM_TYPES:
+        if target.get("type") not in diagram_type_set:
             continue
         if target.get("type") == "use_case_text":
             continue
-        if target.get("operation") not in ALLOWED_MODEL_OPERATIONS:
-            target["operation"] = "update"
+        if target.get("operation") not in model_op_set:
+            raise ValueError(
+                f"model_targets[{idx}] operation must be create or update"
+            )
+        if target.get("operation") == "update" and not (
+            target.get("target_model_id") or (target.get("type") and target.get("name"))
+        ):
+            raise ValueError(
+                f"model_targets[{idx}] update requires target_model_id or type + name"
+            )
+        if target.get("operation") == "create" and not target.get("name"):
+            raise ValueError(f"model_targets[{idx}] create requires name")
+        if not target.get("value_reason"):
+            raise ValueError(f"model_targets[{idx}] requires value_reason")
         clean_target = {
             key: value for key, value in target.items()
             if value not in (None, "", [], {})
@@ -110,9 +250,14 @@ def model_targets(values: Any) -> List[Dict[str, str]]:
             continue
         seen.add(key)
         out.append(clean_target)
+        if len(out) >= max_model_targets:
+            break
     return out
 
 
+# ========
+# Defines valid plantuml function for this module workflow.
+# ========
 def valid_plantuml(value: Any) -> str:
     text = clean_text(value)
     if "@startuml" not in text or "@enduml" not in text:
@@ -120,25 +265,34 @@ def valid_plantuml(value: Any) -> str:
     return text
 
 
-NAMED_ELEMENT_DECL_RE = re.compile(
+# ========
+# Defines clean class plantuml function for this module workflow.
+# ========
+def clean_class_plantuml(plantuml: str) -> str:
+    return plantuml
+
+
+element_decl_re = re.compile(
     r'^\s*(?P<kind>actor|usecase|class|state|participant|boundary|control|entity|database|collections|queue)\s+'
     r'(?:"(?P<quoted>[^"]+)"|(?P<plain>[\w\u4e00-\u9fff][^\s]*))\s+as\s+'
     r'(?P<alias>[A-Za-z_][A-Za-z0-9_]*)\s*$'
 )
-SELF_RELATION_RE = re.compile(
+self_relation_re = re.compile(
     r'^\s*(?P<left>[A-Za-z_][A-Za-z0-9_]*)\s+[-.<ox]*[->]+[-.<ox]*\s+(?P=left)\b'
 )
 
 
-def normalize_duplicate_named_elements(plantuml: str) -> str:
-    """Merge duplicate named PlantUML elements that use different aliases for the same label."""
+# ========
+# Defines dedupe elements function for this module workflow.
+# ========
+def dedupe_elements(plantuml: str) -> str:
     lines = plantuml.splitlines()
     label_to_alias: Dict[tuple[str, str], str] = {}
     alias_redirects: Dict[str, str] = {}
     kept_lines: List[str] = []
 
     for line in lines:
-        match = NAMED_ELEMENT_DECL_RE.match(line)
+        match = element_decl_re.match(line)
         if not match:
             kept_lines.append(line)
             continue
@@ -164,7 +318,7 @@ def normalize_duplicate_named_elements(plantuml: str) -> str:
         new_line = line
         for old_alias, new_alias in alias_redirects.items():
             new_line = re.sub(rf"\b{re.escape(old_alias)}\b", new_alias, new_line)
-        if new_line != line and SELF_RELATION_RE.match(new_line):
+        if new_line != line and self_relation_re.match(new_line):
             continue
         relation_key = re.sub(r"\s+", " ", new_line.strip())
         if relation_key and relation_key in seen_relation_lines:
@@ -175,6 +329,9 @@ def normalize_duplicate_named_elements(plantuml: str) -> str:
     return "\n".join(normalized_lines)
 
 
+# ========
+# Defines parse diagram model function for this module workflow.
+# ========
 def parse_diagram_model(
     raw: Any,
     *,
@@ -184,8 +341,8 @@ def parse_diagram_model(
     if not isinstance(raw, dict):
         raise ValueError("diagram output must be a JSON object")
 
-    diagram_type = clean_text(raw.get("type") or expected_type)
-    if diagram_type not in ALLOWED_DIAGRAM_TYPES:
+    diagram_type = clean_text(raw.get("type"))
+    if diagram_type not in diagram_type_set:
         raise ValueError(f"diagram type is invalid: {diagram_type or '<empty>'}")
     if expected_type and diagram_type != expected_type:
         raise ValueError(f"diagram type must be {expected_type}, got {diagram_type}")
@@ -193,6 +350,8 @@ def parse_diagram_model(
     plantuml = valid_plantuml(raw.get("plantuml"))
     if not plantuml:
         raise ValueError("diagram plantuml must include @startuml and @enduml")
+    if diagram_type == "class_diagram":
+        plantuml = clean_class_plantuml(plantuml)
     if diagram_type in {
         "context_diagram",
         "use_case_diagram",
@@ -200,9 +359,11 @@ def parse_diagram_model(
         "sequence_diagram",
         "state_machine",
     }:
-        plantuml = normalize_duplicate_named_elements(plantuml)
+        plantuml = dedupe_elements(plantuml)
 
-    name = clean_text(raw.get("name")) or diagram_type
+    name = clean_text(raw.get("name"))
+    if not name:
+        raise ValueError("diagram name is required")
 
     row = {
         "name": name,
@@ -220,9 +381,7 @@ def parse_diagram_model(
     if related_requirement_ids:
         row["related_requirement_ids"] = related_requirement_ids
     description = clean_text(raw.get("description"))
-    if diagram_type == "use_case_diagram":
-        description = ""
-    elif not description:
+    if not description:
         raise ValueError("diagram description is required")
     if description:
         row["description"] = description
@@ -233,18 +392,25 @@ def parse_diagram_model(
         for idx, item in enumerate(text_rows, 1):
             if not isinstance(item, dict):
                 continue
+            row_id = clean_text(item.get("id"))
+            if not row_id:
+                raise ValueError(f"use case text[{idx}] id is required")
             text_row = {
-                "id": clean_text(item.get("id")) or f"UC-{idx}",
+                "id": row_id,
                 "actor": clean_text(item.get("actor")),
                 "name": clean_text(item.get("name")),
                 "purpose": clean_text(item.get("purpose")),
-                "interface": clean_text(item.get("interface")),
                 "related_requirement_ids": [
                     clean_text(value)
                     for value in (item.get("related_requirement_ids") or [])
                     if clean_text(value)
                 ],
             }
+            text_row["interface"] = normalize_use_case_interface(
+                text_row["actor"],
+                text_row["name"],
+                item.get("interface"),
+            )
             if not text_row["name"] or not text_row["purpose"]:
                 continue
             key = (text_row["actor"], text_row["name"], text_row["purpose"])
@@ -254,16 +420,19 @@ def parse_diagram_model(
             clean_rows.append(text_row)
         if clean_rows:
             row["text"] = clean_rows
-    source_text = clean_text(raw.get("source") or source)
+    source_text = clean_text(raw.get("source"))
     if source_text:
         row["source"] = source_text
     return row
 
 
-def parse_use_case_text(raw: Any, *, source: str = "") -> Dict[str, Any]:
+# ========
+# Defines parse use case function for this module workflow.
+# ========
+def parse_use_case(raw: Any, *, source: str = "") -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("use case text output must be a JSON object")
-    model_type = clean_text(raw.get("type")) or "use_case_text"
+    model_type = clean_text(raw.get("type"))
     if model_type != "use_case_text":
         raise ValueError(f"model type must be use_case_text, got {model_type}")
     rows: List[Dict[str, Any]] = []
@@ -271,18 +440,25 @@ def parse_use_case_text(raw: Any, *, source: str = "") -> Dict[str, Any]:
     for idx, item in enumerate(raw.get("text") or [], 1):
         if not isinstance(item, dict):
             continue
+        row_id = clean_text(item.get("id"))
+        if not row_id:
+            raise ValueError(f"use_case_text[{idx}] id is required")
         row = {
-            "id": clean_text(item.get("id")) or f"UC-{idx}",
+            "id": row_id,
             "actor": clean_text(item.get("actor")),
             "name": clean_text(item.get("name")),
             "purpose": clean_text(item.get("purpose")),
-            "interface": clean_text(item.get("interface")),
             "related_requirement_ids": [
                 clean_text(value)
                 for value in (item.get("related_requirement_ids") or [])
                 if clean_text(value)
             ],
         }
+        row["interface"] = normalize_use_case_interface(
+            row["actor"],
+            row["name"],
+            item.get("interface"),
+        )
         if not row["name"] or not row["purpose"]:
             continue
         key = (row["actor"], row["name"], row["purpose"])
@@ -299,21 +475,27 @@ def parse_use_case_text(raw: Any, *, source: str = "") -> Dict[str, Any]:
     model_id = clean_text(raw.get("id"))
     if model_id:
         result["id"] = model_id
-    source_text = clean_text(raw.get("source") or source)
+    source_text = clean_text(raw.get("source"))
     if source_text:
         result["source"] = source_text
     return result
 
 
+# ========
+# Defines parse model function for this module workflow.
+# ========
 def parse_model(raw: Any, *, source: str = "") -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("model output must be a JSON object")
     model_type = clean_text(raw.get("type"))
     if model_type == "use_case_text":
-        return parse_use_case_text(raw, source=source)
+        return parse_use_case(raw, source=source)
     return parse_diagram_model(raw, source=source)
 
 
+# ========
+# Defines parse model list function for this module workflow.
+# ========
 def parse_model_list(raw: Any, *, source: str = "") -> List[Dict[str, Any]]:
     if not isinstance(raw, list):
         raise ValueError("model output must be a JSON list")
@@ -326,35 +508,30 @@ def parse_model_list(raw: Any, *, source: str = "") -> List[Dict[str, Any]]:
     return models
 
 
+# ========
+# Defines parse impact assessment function for this module workflow.
+# ========
 def parse_impact_assessment(raw: Any) -> Dict[str, Any]:
     source = raw if isinstance(raw, dict) else {}
-    targets = model_targets(source.get("model_targets"))
-    if not targets:
-        targets = [
-            {"operation": "update", "type": model_type}
-            for model_type in model_types(source.get("models_to_update"))
-        ] + [
-            {"operation": "create", "type": model_type}
-            for model_type in model_types(source.get("models_to_create"))
-        ]
+    if not isinstance(source.get("model_plan"), dict):
+        raise ValueError("model plan output must contain model_plan object")
+    plan_source = source["model_plan"]
+    targets = model_targets(plan_source.get("model_targets"))
     return {
-        "model_targets": targets,
-        "models_to_update": [
-            target.get("type")
-            for target in targets
-            if target.get("operation") == "update" and target.get("type")
-        ],
-        "models_to_create": [
-            target.get("type")
-            for target in targets
-            if target.get("operation") == "create" and target.get("type")
-        ],
-        "impact_summary": clean_text(source.get("impact_summary")),
-        "consistency_summary": clean_text(source.get("consistency_summary")),
-        "gaps": clean_list(source.get("gaps")),
+        "model_plan": {
+            "phase_decision": clean_text(plan_source.get("phase_decision")),
+            "model_targets": targets,
+            "skipped_targets": clean_list(plan_source.get("skipped_targets")),
+            "impact_summary": clean_text(plan_source.get("impact_summary")),
+            "consistency_summary": clean_text(plan_source.get("consistency_summary")),
+            "gaps": clean_list(plan_source.get("gaps")),
+        }
     }
 
 
+# ========
+# Defines parse plantuml fix function for this module workflow.
+# ========
 def parse_plantuml_fix(raw: Any) -> Dict[str, str]:
     source = raw if isinstance(raw, dict) else {}
     plantuml = valid_plantuml(source.get("plantuml"))

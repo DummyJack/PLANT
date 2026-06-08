@@ -1,16 +1,23 @@
-# Mediator profile export.
-from .agent import MediatorAgent
+# Initializes package exports and module loading.
 from .validation import (
-    MEETING_ACTIONS,
-    ISSUE_CATEGORY_LABEL,
-    ISSUE_TYPE_IDS,
-    ISSUE_TYPES,
+    meeting_actions,
+    category_labels,
+    issue_type_ids,
+    issue_types,
 )
 
 __all__ = [
-    "MEETING_ACTIONS",
-    "ISSUE_CATEGORY_LABEL",
-    "ISSUE_TYPE_IDS",
-    "ISSUE_TYPES",
+    "meeting_actions",
+    "category_labels",
+    "issue_type_ids",
+    "issue_types",
     "MediatorAgent",
 ]
+
+
+def __getattr__(name):
+    if name == "MediatorAgent":
+        from .agent import MediatorAgent
+
+        return MediatorAgent
+    raise AttributeError(name)

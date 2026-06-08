@@ -122,11 +122,14 @@ Combine research results:
 - Identify requirements implications
 - Note confidence levels
 - Flag items needing validation
+- Preserve the exact URL for every external source used.
+- Do not cite external laws, standards, official documents, third-party policies, or best practices unless a URL is available from the gathered evidence.
 
 ### Step 5: Return Findings
 
 Return structured findings to the caller using the caller's requested format.
 If no format is provided, summarize findings, constraints, risks, recommendations, sources, confidence, and validation gaps.
+When a `sources` field is requested, put only complete URL strings in `sources`.
 
 ## Examples
 

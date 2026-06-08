@@ -1,0 +1,54 @@
+# Defines action prompts and output contracts.
+
+
+def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> str:
+    return f"""# 任務
+針對以下問題蒐集並整理領域研究證據。
+
+# Action Boundary
+- action=expert.research_issue
+- 本 action 只輸出 research_evidence JSON。
+- 不產生 feedback；feedback 整理由 update_feedback 負責。
+- 不新增或修改 REQ、URL、scope、conflict 或 draft。
+- 不把外部研究結果定案為正式需求。
+- artifact 寫回由 runtime 負責。
+
+# Input
+研究問題:
+{query}
+
+研究價值:
+{value_reason or "此問題會影響後續需求品質。"}
+
+# Generation Rules
+- feedback 只作為領域研究輔助資料，不產生正式需求。
+- 研究價值只用來聚焦，不需要寫入正式 feedback item。
+- 優先使用 document_evidence；不足時才用 web_search 補外部公開資料、法規、標準、官方文件、第三方條款或最佳實務。
+- 外部 URL 只接受可信來源：政府/主管機關、法規資料庫、標準組織、學術/研究機構、消費者保護組織，或官方公司條款/隱私/安全/合規文件。
+- 不引用部落格、社群媒體、論壇、新聞稿、行銷文章、一般心得文或內容農場；即使搜尋結果出現也不要寫入 sources。
+- 若 context 內有 web_search_evidence / web_search_urls，必須只從這些搜尋證據中引用外部 URL。
+- findings、constraints、risks、recommendations 的每個 item 只包含 text、related_requirement_ids 與 source；不要在 item 內放 sources。
+- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 URL-*；無法對應單一需求時用空陣列。
+- sources 集中放在最外層，每筆使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}；沒有 URL 時輸出空陣列。
+- title 使用人可讀的法規、標準、官方文件、組織文章或案例名稱。
+- 若輸出任何外部法規、標準、官方文件、第三方條款或最佳實務，sources 必須至少包含對應完整 URL；找不到 URL 或 context 沒有可用 URL 時不要輸出該外部結論。
+- constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
+- 本次 item.source 使用：{source_ref}
+
+# Output JSON
+{{
+  "research_evidence": {{
+    "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+    "sources": [{{"title": "電子支付機構管理條例", "url": "https://..."}}],
+    "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+    "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+    "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}]
+  }}
+}}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 feedback。
+- 不輸出正式需求、決策或 artifact 全文。
+- 不引用不可信來源。
+- 不編造外部 URL、法規、標準或 requirement id。"""

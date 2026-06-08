@@ -1,4 +1,4 @@
-# Web search tool wrapper: gather external evidence with redundancy controls.
+# Defines available agent tools and tool execution behavior.
 import copy
 import logging
 import re
@@ -10,6 +10,9 @@ from .base import BaseTool
 logger = logging.getLogger("Plant.WebSearchTool")
 
 
+# ========
+# Defines token set function for this module workflow.
+# ========
 def token_set(text: str, min_len: int = 2) -> Set[str]:
     if not text:
         return set()
@@ -20,6 +23,9 @@ def token_set(text: str, min_len: int = 2) -> Set[str]:
     }
 
 
+# ========
+# Defines jaccard function for this module workflow.
+# ========
 def jaccard(a: Set[str], b: Set[str]) -> float:
     if not a and not b:
         return 1.0
@@ -28,6 +34,9 @@ def jaccard(a: Set[str], b: Set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
+# ========
+# Defines netloc function for this module workflow.
+# ========
 def netloc(url: str) -> str:
     try:
         return (urlparse(url).netloc or "").lower().lstrip("www.")
@@ -35,6 +44,22 @@ def netloc(url: str) -> str:
         return ""
 
 
+# ========
+# Defines credible source URL function for this module workflow.
+# ========
+def credible_source_url(url: str) -> bool:
+    try:
+        from agents.profile.expert.validation import credible_source_url as is_credible
+
+        return is_credible(url)
+    except Exception:
+        host = netloc(url)
+        return bool(host and (".gov" in host or ".edu" in host or ".org" in host))
+
+
+# ========
+# Defines WebSearchTool class for this module workflow.
+# ========
 class WebSearchTool(BaseTool):
     name = "web_search"
     description = (
@@ -61,6 +86,7 @@ class WebSearchTool(BaseTool):
         },
     }
 
+    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -78,6 +104,7 @@ class WebSearchTool(BaseTool):
         self.min_domain_tokens = int(cfg.get("min_domain_tokens", 8))
         self.reset_session()
 
+    # Defines reset session function for this module workflow.
     def reset_session(self) -> None:
         self.halted = False
         self.halt_messages: List[str] = []
@@ -87,6 +114,7 @@ class WebSearchTool(BaseTool):
         self.domain_tokens: Dict[str, Set[str]] = {}
         self.user_question: Optional[str] = None
 
+    # Defines get client function for this module workflow.
     def get_client(self):
         if self.client is None:
             api_key = self.api_key
@@ -103,11 +131,13 @@ class WebSearchTool(BaseTool):
             self.client = TavilyClient(api_key=api_key)
         return self.client
 
+    # Defines maybe set user question function for this module workflow.
     def maybe_set_user_question(self, kwargs: Dict[str, Any]) -> None:
         uq = kwargs.get("user_question")
         if isinstance(uq, str) and uq.strip() and self.user_question is None:
             self.user_question = uq.strip()
 
+    # Defines query redundant function for this module workflow.
     def query_redundant(self, query: str) -> bool:
         q_tokens = token_set(query)
         if len(q_tokens) < 2:
@@ -117,6 +147,7 @@ class WebSearchTool(BaseTool):
                 return True
         return False
 
+    # Defines two consistent sources function for this module workflow.
     def two_consistent_sources(self) -> bool:
         hosts = [
             h
@@ -134,6 +165,7 @@ class WebSearchTool(BaseTool):
                     return True
         return False
 
+    # Defines can answer user question function for this module workflow.
     def can_answer_user_question(self) -> bool:
         if not self.user_question:
             return False
@@ -143,10 +175,8 @@ class WebSearchTool(BaseTool):
         hits = sum(1 for t in g if t in self.cumulative_tokens)
         return hits / len(g) >= self.thr_user_coverage
 
+    # Defines merge result batch function for this module workflow.
     def merge_result_batch(self, items: List[Dict[str, Any]]) -> Tuple[int, float]:
-        """
-        更新累積狀態；回傳 (本輪新 URL 數, 本輪內容中「相對於更新前累積」的新 token 比例)。
-        """
         pre = set(self.cumulative_tokens)
         new_urls = 0
         batch_tokens: Set[str] = set()
@@ -169,6 +199,7 @@ class WebSearchTool(BaseTool):
         self.cumulative_tokens |= batch_tokens
         return new_urls, ratio
 
+    # Defines evaluate stop after batch function for this module workflow.
     def evaluate_stop_after_batch(
         self, new_urls: int, novel_ratio: float, items: List[Dict[str, Any]]
     ) -> List[str]:
@@ -187,6 +218,7 @@ class WebSearchTool(BaseTool):
             )
         return reasons
 
+    # Defines footer stop function for this module workflow.
     def footer_stop(self, reasons: List[str]) -> str:
         if not reasons:
             return ""
@@ -198,6 +230,7 @@ class WebSearchTool(BaseTool):
             f"{lines}\n"
         )
 
+    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         query = kwargs.get("query", "")
         if not isinstance(query, str):
@@ -242,17 +275,24 @@ class WebSearchTool(BaseTool):
             return f"搜尋失敗: {str(e)}"
 
         self.queries.append(query)
-        items = results.get("results") or []
+        raw_items = results.get("results") or []
+        items = [
+            item for item in raw_items
+            if credible_source_url(str(item.get("url") or ""))
+        ]
         if not items:
-            body = "未找到相關結果。"
+            body = "未找到符合可信來源條件的相關結果。"
         else:
-            body = self.format_results(results)
+            filtered_results = dict(results)
+            filtered_results["results"] = items
+            body = self.format_results(filtered_results)
 
         new_urls, novel_ratio = self.merge_result_batch(items)
         reasons = self.evaluate_stop_after_batch(new_urls, novel_ratio, items)
         footer = self.footer_stop(reasons)
         return body + footer
 
+    # Defines format results function for this module workflow.
     def format_results(self, results: Dict[str, Any]) -> str:
         items = results.get("results", [])
         if not items:

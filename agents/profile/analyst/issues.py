@@ -1,73 +1,15 @@
-# Analyst issue logic: propose meeting issues and build analyst meeting responses.
+# Handles issue proposal and issue response flow.
 import json
 from typing import Any, Dict, List, Optional
 
-from utils.language import current_output_language
+from agents.profile.base import proposal_prompt
+from .actions.response import issue_response
 
-from agents.profile.issue_proposal_prompt import build_issue_proposal_prompt
-from agents.profile.conflict_review import (
-    CONFLICT_REVIEW_LABEL_RULES,
-    CONFLICT_REVIEW_REASON_RULES,
-    CONFLICT_REVIEW_RESPONSE_CONTRACT,
-    conflict_review_text_hint,
-)
-from agents.profile.issue_response_prompt import (
-    READY_TO_CLOSE_QUALITY_GATE,
-    STANCE_RESPONSE_TEXT_RULES,
-    issue_response_context_sections,
-)
-
-from .prompts import (
-    ANALYST_ELICITATION_CONTEXT_RULES,
-    analyst_elicitation_action_rules,
-    analyst_elicitation_action_task,
-)
-
-
-ANALYST_ISSUE_TASK = (
-    "聚焦需求意圖、需求範圍、需求條目品質、驗收條件、"
-    "來源追蹤與未決缺口。"
-)
-
-ANALYST_ISSUE_RULES = """- text 需說明：此議題對需求的相關、目前可確認的需求內容、仍不可寫入正式需求的缺口、以及建議的需求處理方式。
-- 依據優先引用 requirement id、conflict id、stakeholder 觀點、既有討論或議題描述。
-- 判斷重點是需求是否清楚、可驗收、可追蹤、範圍是否穩定、是否需要拆成功能需求、非功能需求、限制條件或保留為未決問題。
-- 若提出需求修正，必須指出要改哪個欄位：需求文字、優先級、驗收條件或來源追蹤。
-- 若資訊不足，請說明缺少哪個可寫入需求的必要訊號，而不是只說需要更多資訊。
-- 若需要他人補資訊，才在 open_questions 中提出能直接支援需求修正的具體問題。
-- open_questions 的 to 欄位只能用系統角色名：user、analyst、expert、modeler；禁止用利害關係人名稱。
-- 若建議新增或修改需求，請說明應落在需求、驗收條件或未決問題哪一類。"""
-
-ANALYST_CONFLICT_RESOLUTION_TASK = (
-    "直接針對既有衝突報告中的解決選項與建議解法做取捨。"
-)
-
-ANALYST_CONFLICT_RESOLUTION_RULES = """- 不重新判斷 Conflict/Neutral，也不重新執行 conflict detection。
-- 以衝突報告已提供的解決選項與建議解法為主要討論對象。
-- text 需說明：哪些既有方案可採用、哪些需要調整、調整理由、以及會影響哪些需求或驗收條件。
-- 必須把結論落到 URL 層級：在 stance.proposal.url_updates 輸出 keep / revise / remove；revise 必須給出改寫後 text。
-- url_updates 不得把多筆 URL 串成一筆巨大需求；若需要語意整合，應保留 URL 粒度並在後續 REQ 中整合。
-- 若會議內容已足以採用或調整某個 resolution，stance.state 填 ready_to_close，stance.proposal 填具體建議方案與 url_updates。
-- 若缺少業務取捨、領域規則或模型影響判斷，stance.state 填 needs_more_discussion，stance.proposal 仍須填目前最合理的候選方案或可裁決選項；不要提出 open_questions。
-- 若無法在會議中做出內容抉擇，stance.proposal 應整理可交由人類裁決的方案，而不是要求重新分析衝突或延長討論。"""
-
-ANALYST_CONFLICT_ISSUE_TASK = (
-    "請逐筆再審查目前這批 Conflict/Neutral 項目，"
-    "先根據 User Requirements（URL-*）原文獨立重判，並將重判結果填入 proposed_label。"
-)
-
-ANALYST_CONFLICT_ISSUE_RULES = f"""{CONFLICT_REVIEW_RESPONSE_CONTRACT}
-- 先只根據 User Requirements（URL-*）原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
-- reason 必須寫成完整審查意見：說明獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
-{CONFLICT_REVIEW_LABEL_RULES}
-{CONFLICT_REVIEW_REASON_RULES}
-- 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
-- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
-- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
-- 不要跳到實作方案或最終決策。"""
-
-
+# ========
+# Defines AnalystIssues class for this module workflow.
+# ========
 class AnalystIssues:
+    # Defines propose issues function for this module workflow.
     def propose_issues(
         self,
         artifact: Dict[str, Any],
@@ -82,7 +24,7 @@ class AnalystIssues:
                 "round_num": round_num,
                 "max_items": max(1, max_items),
             },
-            build_observation=self.build_analyst_issue_observation,
+            obs_fn=self.obs_issue,
             decide_action=self.decide_analyst_issue_action,
             execute_action=self.execute_analyst_issue_action,
         )
@@ -92,6 +34,7 @@ class AnalystIssues:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
+    # Defines build requirement issue signals function for this module workflow.
     def build_requirement_issue_signals(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         signals: List[Dict[str, Any]] = []
         for c in all_conflict_rows(artifact):
@@ -147,7 +90,8 @@ class AnalystIssues:
 
         return signals
 
-    def build_analyst_issue_observation(self, **kwargs: Any) -> Dict[str, Any]:
+    # Defines obs issue function for this module workflow.
+    def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
         return {
             "iteration": kwargs.get("iteration", 0) + 1,
@@ -155,9 +99,10 @@ class AnalystIssues:
             "round_num": kwargs.get("round_num"),
             "max_items": kwargs.get("max_items", 20),
             "latest_draft": artifact.get("latest_draft", ""),
-            "proposal_context": artifact.get("proposal_context") if isinstance(artifact.get("proposal_context"), dict) else {},
+            "artifact_slices": artifact.get("artifact_slices") if isinstance(artifact.get("artifact_slices"), dict) else {},
         }
 
+    # Defines decide analyst issue action function for this module workflow.
     def decide_analyst_issue_action(
         self,
         *,
@@ -177,6 +122,7 @@ class AnalystIssues:
             "reasoning": "根據需求品質、需求範圍、可驗收性、可追蹤性與未決缺口提出需要會議處理的議題。",
         }
 
+    # Defines execute analyst issue action function for this module workflow.
     def execute_analyst_issue_action(
         self,
         *,
@@ -197,28 +143,19 @@ class AnalystIssues:
         context = {
             "round_num": observation.get("round_num"),
             "latest_draft": observation.get("latest_draft", ""),
-            "proposal_context": observation.get("proposal_context") or {},
+            "artifact_slices": observation.get("artifact_slices") or {},
         }
-        prompt = build_issue_proposal_prompt(
+        prompt = proposal_prompt(
             agent_label="需求工程",
             focus="需求語意、範圍、驗收條件、來源追蹤或需求規格化",
-            common_problem_examples=[
-                "同一流程下多筆需求的狀態規則不清楚",
-                "一組需求的責任邊界或 scope 影響未定",
-                "多筆需求缺少共同驗收標準或來源追蹤",
-            ],
             value_gate=[
                 "會阻礙需求規格定稿、需求可驗收性、scope 穩定或來源追蹤。",
-                "需要正式會議中的至少兩方觀點、取捨、確認或決策；若 analyst 可直接修稿或整理，不要提出。",
+                "可能需要正式會議中的至少兩方觀點、取捨、確認或決策；若不確定是否需要開會，也可以提出給 Mediator 判斷。",
             ],
             reject_rule=(
-                "不要提出：措辭潤飾、單一欄位補字、單一 acceptance criteria 補充、"
-                "一般最佳實務提醒、無 source id 的猜測、小型重複問題。"
-                "若單一 id 代表較大的流程、狀態、責任邊界、驗收標準或風險面向，"
-                "可以提出，但 reason 必須說清楚共同問題。"
+                "通常不值得提出：純措辭潤飾、無 source id 的猜測、小型重複問題。"
+                "單一欄位、單一 acceptance criteria 或單一 id 若可能影響驗收、追蹤、責任邊界或風險，也可以提出。"
             ),
-            max_items=max_items,
-            proposal_context=context["proposal_context"],
         )
         try:
             data = self.chat_json(self.build_direct_messages(prompt, context=context))
@@ -242,6 +179,7 @@ class AnalystIssues:
             "summary": f"Analyst 提出 {len(proposals)} 筆 issue proposal",
         }
 
+    # Defines analyst issue proposals payload function for this module workflow.
     def analyst_issue_proposals_payload(
         self,
         data: Dict[str, Any],
@@ -285,6 +223,9 @@ class AnalystIssues:
             importance = str(row.get("importance") or "").strip().lower()
             if importance not in allowed_importance:
                 raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
+            issue_level = str(row.get("issue_level") or "").strip().lower()
+            if issue_level not in {"blocking", "improvement"}:
+                issue_level = "blocking" if importance == "high" else "improvement"
 
             key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:
@@ -297,6 +238,7 @@ class AnalystIssues:
                     "issue_focus": str(row.get("issue_focus") or "").strip(),
                     "expect_outcome": expect_outcome,
                     "sources": sources,
+                    "issue_level": issue_level,
                     "importance": importance,
                     "reason": reason,
                     "proposed_by": "analyst",
@@ -307,137 +249,117 @@ class AnalystIssues:
                 break
         return proposals
 
-    def build_issue_response_prompt(
+    # Defines build response function for this module workflow.
+    def build_response(
         self,
         *,
         issue: Dict[str, Any],
         previous_responses: Optional[List[Dict[str, Any]]],
-        artifact_context: Optional[Dict[str, Any]],
+        related_context: Optional[Dict[str, Any]],
     ) -> str:
-        skill_context = self.get_optional_skill_context(issue, artifact_context)
-        sections = issue_response_context_sections(
+        return issue_response(
             issue=issue,
             previous_responses=previous_responses,
-            artifact_context=artifact_context,
-            skill_context=skill_context,
+            related_context=related_context,
         )
-        issue_text = sections["issue_text"]
-        issue_id = sections["issue_id"]
-        target_stakeholders = sections["target_stakeholders"]
-        prev_text = sections["prev_text"]
-        context_text = sections["context_text"]
-        recent_ask_history_text = sections["recent_ask_history_text"]
-        skill_section = sections["skill_section"]
-        elicitation_hint = ""
-        task_block = ANALYST_ISSUE_TASK
-        rules_block = ANALYST_ISSUE_RULES
-        if issue_id == "OQ":
-            task_block = "以需求分析角度直接回答提問。"
-            rules_block = """- 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
-- 回答需聚焦需求語意、scope、驗收條件、來源追蹤或需求缺口。
-- 不更新專案資料，不輸出 stance。
-- open_questions 預設輸出空陣列；只有問題本身無法回答且需要一個關鍵澄清時，才提出一個 open question。"""
-        if target_stakeholders and issue_id != "OQ":
-            rules_block += (
-                "\n- 若 open_questions 的 to 是 user，問題必須是問議題規劃指定的利害關係人："
-                + "、".join(target_stakeholders)
-                + "；不得改問其他利害關係人。"
-            )
-        if issue_id != "OQ" and not issue_id.startswith("ELICIT-"):
-            rules_block += "\n" + STANCE_RESPONSE_TEXT_RULES
-        if issue_id != "OQ" and not issue_id.startswith("ELICIT-") and issue.get("category") != "resolve_conflict":
-            rules_block += (
-                "\n- stance.state 表示本次發言的討論狀態："
-                "ready_to_close=資訊已足夠且可讓 mediator 結束本議題；"
-                "needs_more_discussion=還需要其他參與者補充或回應。"
-                "\n- 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的需求處理方案。"
-                "\n"
-                + READY_TO_CLOSE_QUALITY_GATE
-            )
-        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
-        expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
-        analyst_expected = expected_actions.get("analyst")
-        analyst_expected_actions = []
-        if isinstance(analyst_expected, str):
-            analyst_expected_actions = [str(analyst_expected).strip()]
-        elif isinstance(analyst_expected, list):
-            analyst_expected_actions = [str(a).strip() for a in analyst_expected]
-        is_pair_review = (
-            issue.get("category") == "resolve_conflict"
-            and str(contract.get("type") or "").strip() == "pair_reviews"
-        )
-        if is_pair_review:
-            known_pair_ids = [
-                str(pair_id).strip()
-                for pair_id in (contract.get("known_pair_ids") or [])
-                if str(pair_id).strip()
-            ]
-            task_block = ANALYST_CONFLICT_ISSUE_TASK
-            rules_block = (
-                ANALYST_CONFLICT_ISSUE_RULES
-                + "\n- 外層輸出只包含 text 欄位的 JSON object。"
-                + "\n- text 必須是 JSON object 字串，不是巢狀 object。"
-                + "\n- text JSON 結構必須為 {\"pair_reviews\":[...]}。"
-                + "\n- pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。"
-                + "\n- 每筆 pair_reviews 都必須有 id、proposed_label、reason。"
-                + "\n- proposed_label 只能是 Conflict 或 Neutral。"
-                + "\n- 本輪必須涵蓋的 pair id：" + json.dumps(known_pair_ids, ensure_ascii=False)
-            )
-        elif issue.get("category") == "resolve_conflict":
-            task_block = ANALYST_CONFLICT_RESOLUTION_TASK
-            rules_block = ANALYST_CONFLICT_RESOLUTION_RULES
-        elif issue.get("category") == "clarify_requirement":
-            rules_block += "\n- 本議題聚焦釐清需求語意、條件、成功結果與驗收方式；不要擴張未被來源支持的新需求。"
-        elif issue.get("category") == "define_boundary":
-            rules_block += "\n- 本議題聚焦系統、外部服務、人工流程與角色責任邊界；請明確指出應寫入 scope、requirement 或 open question 的結果。"
-        elif issue.get("category") == "tradeoff":
-            rules_block += "\n- 本議題聚焦方案比較、取捨與推薦；stance.proposal 必須提出可落地的需求處理方案。"
-        elif issue.get("category") == "align_model":
-            rules_block += "\n- 本議題聚焦模型揭露的流程、狀態、actor、資料或權限不一致；請指出應更新需求、模型或 open question。"
-        if issue_id.startswith("ELICIT-"):
-            stop_phrase = (
-                "I have gathered enough information"
-                if current_output_language() == "en"
-                else "我已蒐集足夠資訊"
-            )
-            elicitation_hint = ANALYST_ELICITATION_CONTEXT_RULES
-            task_block = analyst_elicitation_action_task(stop_phrase)
-            rules_block = analyst_elicitation_action_rules(stop_phrase)
-        if issue_id == "OQ":
-            output_fields = (
-                '    "text": "直接回答問題",\n'
-                '    "open_questions": []'
-            )
-        elif is_pair_review:
-            text_hint = conflict_review_text_hint()
-            output_fields = f"    {text_hint}"
-        else:
-            text_hint = '"text": "依需求分析立場對此議題的自然會議發言"'
-            if issue_id.startswith("ELICIT-"):
-                output_fields = (
-                    f"    {text_hint},\n"
-                    '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
-                )
-            else:
-                output_fields = (
-                    f"    {text_hint},\n"
-                    '    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "當下最重要、會相關決策的問題"}]'
-                    ',\n    "stance": {"state": "ready_to_close | needs_more_discussion", "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
-                )
-        return f"""{issue_text}
-{prev_text}
-{context_text}
-{recent_ask_history_text}
-    {skill_section}
-    {elicitation_hint}
 
-# 任務
-{task_block}
 
-# 規則
-{rules_block}
 
-# 輸出 JSON
-{{
-{output_fields}
-}}"""
+# ========
+# Defines AnalystResponse class for this module workflow.
+# ========
+class AnalystResponse:
+    # Defines obs response function for this module workflow.
+    def obs_response(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.issue_response_observation(**kwargs)
+
+    # Defines execute action function for this module workflow.
+    def execute_action(
+        self,
+        *,
+        decision: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        action = str(decision.get("action") or "").strip()
+        artifact = kwargs.get("artifact")
+        analyst_action_result = None
+        if isinstance(artifact, dict):
+            try:
+                if action == "analyze_requirements":
+                    meeting_stakeholders = self.meeting_requirement_sources(
+                        kwargs.get("previous_responses"),
+                        kwargs["issue"],
+                    )
+                    output = self.run_requirements_analyst(
+                        "analyze_requirements",
+                        stakeholders=meeting_stakeholders,
+                        artifact=artifact,
+                    )
+                    self.merge_meeting_requirements(
+                        artifact,
+                        output,
+                        issue=kwargs["issue"],
+                    )
+                    analyst_action_result = {
+                        "action": action,
+                        "requirements": output if isinstance(output, list) else [],
+                    }
+                elif action == "refine_scope":
+                    analyst_action_result = self.execute_refine_scope(
+                        artifact=artifact,
+                        issue=kwargs["issue"],
+                        previous_responses=kwargs.get("previous_responses"),
+                    )
+                elif action == "update_requirement":
+                    analyst_action_result = self.execute_update_requirement(
+                        artifact=artifact,
+                        issue=kwargs["issue"],
+                        previous_responses=kwargs.get("previous_responses"),
+                    )
+                elif action == "refine_requirement":
+                    analyst_action_result = self.execute_refine_requirement(
+                        artifact=artifact,
+                        issue=kwargs["issue"],
+                        previous_responses=kwargs.get("previous_responses"),
+                    )
+                elif action == "analyze_conflicts":
+                    analyst_action_result = self.analyze_conflicts(
+                        artifact=artifact,
+                        last_result=kwargs.get("last_result"),
+                    )
+                elif action == "discuss_conflict":
+                    analyst_action_result = {
+                        "action": action,
+                        "summary": "讀取既有衝突報告，針對解決選項與建議解法討論取捨，不重新執行衝突辨識。",
+                    }
+                elif action == "respond_issue":
+                    analyst_action_result = {
+                        "action": action,
+                        "summary": "只產生會議回答，不更新專案資料。",
+                    }
+                elif action == "answer_question":
+                    analyst_action_result = {
+                        "action": action,
+                        "summary": "回答 open question，不更新專案資料。",
+                    }
+            except Exception as e:
+                analyst_action_result = {
+                    "action": action,
+                    "error": str(e),
+                    "summary": f"analyst action failed: {action}",
+                }
+        elif action in {
+            "analyze_requirements",
+            "refine_scope",
+            "update_requirement",
+            "refine_requirement",
+            "analyze_conflicts",
+        }:
+            return {
+                "action": action,
+                "status": "failed",
+                "error": "missing_artifact",
+                "format_error": f"{action} requires artifact context",
+                "summary": f"analyst {action} 缺少 artifact，無法執行分析",
+            }
+        return analyst_action_result or {"action": action, "summary": f"完成 analyst action: {action}"}

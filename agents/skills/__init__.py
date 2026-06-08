@@ -1,5 +1,4 @@
-# Skill package for agent skill loaders and local skill content.
-"""Skill package for agent skill loaders and content."""
+# Initializes package exports and module loading.
 
 from .base import SkillSupport, get_skill
 

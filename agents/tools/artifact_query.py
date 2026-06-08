@@ -1,14 +1,17 @@
-# Artifact query tool: read compact project state for agents and skills.
+# Defines available agent tools and tool execution behavior.
 import json
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import BaseTool
-from agents.profile.analyst.requirements import requirement_discussion_pool
+from storage.requirements import requirement_discussion_pool
 from storage.artifact import load_artifact as load_split_artifact
 
 
+# ========
+# Defines conflict req keys function for this module workflow.
+# ========
 def conflict_req_keys(item: Dict[str, Any]) -> List[str]:
     return sorted(
         [k for k in item.keys() if k.startswith("req_") and k[4:].isdigit()],
@@ -16,6 +19,9 @@ def conflict_req_keys(item: Dict[str, Any]) -> List[str]:
     )
 
 
+# ========
+# Defines conflict req values function for this module workflow.
+# ========
 def conflict_req_values(item: Dict[str, Any]) -> List[str]:
     return [
         str(item.get(k) or "").strip()
@@ -24,16 +30,18 @@ def conflict_req_values(item: Dict[str, Any]) -> List[str]:
     ]
 
 
+# ========
+# Defines ArtifactQueryTool class for this module workflow.
+# ========
 class ArtifactQueryTool(BaseTool):
     name = "artifact_query"
     description = (
         "查詢目前專案 artifact 中的需求、衝突、決議、議題、模型與研究資料。唯讀，不修改 artifact。\n"
         "用法：\n"
         "- summarize：只回摘要，可只填 mode；若要摘要單一區塊，再填 section。\n"
-        "- get_section：必填 section。若該 section 是列表，必填 limit 與 compact；若是單一區塊，例如 conflict，不需要 limit/compact。\n"
-        "- find_items：必填 section、非空 filters、limit、compact。沒有查詢條件時不要用 find_items，改用 get_section。\n"
-        "- related_context：必填 item_id 與 compact。\n"
-        "建議：一般查詢使用 compact=true；只有需要完整欄位時才用 compact=false。\n"
+        "- get_section：必填 section。不填 limit 時回傳完整列表；不填 compact 時回傳完整欄位。\n"
+        "- find_items：必填 section 與非空 filters。不填 limit 時回傳完整結果；不填 compact 時回傳完整欄位。\n"
+        "- related_context：必填 item_id。不填 compact 時回傳完整欄位。\n"
     )
     parameters = {
         "mode": {
@@ -43,7 +51,7 @@ class ArtifactQueryTool(BaseTool):
         },
         "section": {
             "type": "string",
-            "description": "artifact 區塊名稱，例如 URL/REQ/conflict/conflict_report/conflict_pairs/conflict_multiple/decisions/open_questions。get_section/find_items 必填；summarize 可選。",
+            "description": "artifact 區塊名稱，例如 URL/REQ/system_models/feedback/conflict/conflict_report/conflict_pairs/conflict_multiple/decisions/open_questions。get_section/find_items 必填；summarize 可選。",
             "required": False,
         },
         "filters": {
@@ -53,7 +61,7 @@ class ArtifactQueryTool(BaseTool):
         },
         "item_id": {
             "type": "string",
-            "description": "related_context 模式用的目標 id，例如 REQ-1 或 CR-1",
+            "description": "related_context 模式用的目標 id，例如 URL-1、REQ-1、SM-1 或 CR-1",
             "required": False,
         },
         "fields": {
@@ -64,16 +72,17 @@ class ArtifactQueryTool(BaseTool):
         },
         "limit": {
             "type": "integer",
-            "description": "回傳列表時必填。最多回傳幾筆",
+            "description": "選填。最多回傳幾筆；省略時回傳全部",
             "required": False,
         },
         "compact": {
             "type": "boolean",
-            "description": "回傳列表或 related_context 時必填。是否回傳精簡欄位",
+            "description": "選填。是否回傳精簡欄位；省略時回傳完整欄位",
             "required": False,
         },
     }
 
+    # Defines __init__ function for this module workflow.
     def __init__(self, artifact_path: str):
         self.artifact_path = Path(artifact_path)
         self._cache: Dict[str, str] = {}
@@ -82,6 +91,7 @@ class ArtifactQueryTool(BaseTool):
         self._artifact_cache_mtime: Optional[float] = None
         self._artifact_cache_size: Optional[int] = None
 
+    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         query_key = json.dumps(
             {
@@ -156,6 +166,7 @@ class ArtifactQueryTool(BaseTool):
             self._cache[query_key] = out
         return out
 
+    # Defines load artifact function for this module workflow.
     def load_artifact(self) -> Optional[Dict[str, Any]]:
         if not self.artifact_path.exists():
             return None
@@ -180,9 +191,12 @@ class ArtifactQueryTool(BaseTool):
             self._artifact_cache_size = size
             return artifact
 
+    # Defines as list function for this module workflow.
     def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
         if section == "URL" and not artifact.get("URL"):
             return requirement_discussion_pool(artifact)
+        if section == "feedback":
+            return self.feedback_items(artifact)
         if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
             conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
             if section == "conflict_report":
@@ -195,20 +209,40 @@ class ArtifactQueryTool(BaseTool):
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
+    # Defines feedback items function for this module workflow.
+    def feedback_items(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+        feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+        rows: List[Dict[str, Any]] = []
+        for section in ("findings", "constraints", "risks", "recommendations"):
+            for idx, item in enumerate(feedback.get(section) or [], 1):
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                row.setdefault("id", f"{section}-{idx}")
+                row["section"] = section
+                rows.append(row)
+        return rows
+
+    # Defines parse limit function for this module workflow.
     def parse_limit(self, limit: Any) -> Optional[int]:
         try:
             return max(1, int(limit))
         except (TypeError, ValueError):
             return None
 
+    # Defines parse compact function for this module workflow.
     def parse_compact(self, compact: Any) -> Optional[bool]:
         if isinstance(compact, bool):
             return compact
         return None
 
+    # Defines compact item function for this module workflow.
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
             "URL": ["id", "text", "priority", "source"],
+            "REQ": ["id", "type", "title", "description", "priority", "source"],
+            "system_models": ["id", "name", "type", "source", "related_requirement_ids", "image_path"],
+            "feedback": ["id", "section", "text", "related_requirement_ids", "source"],
             "decisions": ["id", "decision", "summary", "status"],
             "open_questions": ["from_agent", "to_agent", "question", "status", "issue_id"],
             "issue_proposals": ["issue_id", "title", "importance", "proposed_by", "round"],
@@ -225,11 +259,13 @@ class ArtifactQueryTool(BaseTool):
             return dict(item)
         return {k: item.get(k) for k in fields if k in item}
 
+    # Defines select fields function for this module workflow.
     def select_fields(self, item: Dict[str, Any], fields: Any) -> Dict[str, Any]:
         if not isinstance(fields, list) or not fields:
             return dict(item)
         return {k: item.get(k) for k in fields if isinstance(k, str)}
 
+    # Defines match filters function for this module workflow.
     def match_filters(self, item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         if not isinstance(filters, dict):
             return True
@@ -265,16 +301,19 @@ class ArtifactQueryTool(BaseTool):
                 return False
         return True
 
+    # Defines post process function for this module workflow.
     def post_process(
-        self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, max_n: int
+        self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, max_n: Optional[int]
     ) -> List[Dict[str, Any]]:
         out = []
-        for item in items[:max_n]:
+        selected = items if max_n is None else items[:max_n]
+        for item in selected:
             row = self.compact_item(section, item) if compact else dict(item)
             row = self.select_fields(row, fields)
             out.append(row)
         return out
 
+    # Defines get section function for this module workflow.
     def get_section(
         self, artifact: Dict[str, Any], *, section: str, fields: Any, limit: Any, compact: bool
     ) -> Dict[str, Any]:
@@ -292,10 +331,8 @@ class ArtifactQueryTool(BaseTool):
         if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
             max_n = self.parse_limit(limit)
             compact_value = self.parse_compact(compact)
-            if max_n is None:
-                return {"ok": False, "error": "get_section 回傳列表時需要 limit，且必須是大於 0 的整數"}
             if compact_value is None:
-                return {"ok": False, "error": "get_section 回傳列表時需要 compact，且必須是 boolean"}
+                compact_value = False
             items = self.post_process(section, self.as_list(artifact, section), fields, compact_value, max_n)
             return {
                 "ok": True,
@@ -309,10 +346,8 @@ class ArtifactQueryTool(BaseTool):
         if isinstance(raw, list):
             max_n = self.parse_limit(limit)
             compact_value = self.parse_compact(compact)
-            if max_n is None:
-                return {"ok": False, "error": "get_section 回傳列表時需要 limit，且必須是大於 0 的整數"}
             if compact_value is None:
-                return {"ok": False, "error": "get_section 回傳列表時需要 compact，且必須是 boolean"}
+                compact_value = False
             items = self.post_process(section, raw, fields, compact_value, max_n)
             return {
                 "ok": True,
@@ -330,6 +365,7 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 為單一區塊",
         }
 
+    # Defines find items function for this module workflow.
     def find_items(
         self, artifact: Dict[str, Any], *, section: str, filters: Any, fields: Any, limit: Any, compact: Any
     ) -> Dict[str, Any]:
@@ -339,10 +375,8 @@ class ArtifactQueryTool(BaseTool):
             return {"ok": False, "error": "find_items 需要非空 filters"}
         max_n = self.parse_limit(limit)
         compact_value = self.parse_compact(compact)
-        if max_n is None:
-            return {"ok": False, "error": "find_items 需要 limit，且必須是大於 0 的整數"}
         if compact_value is None:
-            return {"ok": False, "error": "find_items 需要 compact，且必須是 boolean"}
+            compact_value = False
         rows = [it for it in self.as_list(artifact, section) if self.match_filters(it, filters)]
         items = self.post_process(section, rows, fields, compact_value, max_n)
         return {
@@ -354,28 +388,52 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 符合條件 {len(items)} 筆",
         }
 
+    # Defines related context function for this module workflow.
     def related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: Any) -> Dict[str, Any]:
         if not item_id:
             return {"ok": False, "error": "related_context 需要 item_id"}
         compact_value = self.parse_compact(compact)
         if compact_value is None:
-            return {"ok": False, "error": "related_context 需要 compact，且必須是 boolean"}
-        req = next((r for r in self.as_list(artifact, "URL") if r.get("id") == item_id), None)
+            compact_value = False
+        url_row = next((r for r in self.as_list(artifact, "URL") if r.get("id") == item_id), None)
+        req_row = next((r for r in self.as_list(artifact, "REQ") if r.get("id") == item_id), None)
+        model_row = next((m for m in self.as_list(artifact, "system_models") if m.get("id") == item_id), None)
         conflict_rows = self.as_list(artifact, "conflict_pairs") + self.as_list(artifact, "conflict_multiple")
         conflict = next((c for c in conflict_rows if c.get("id") == item_id), None)
         decision = next((d for d in self.as_list(artifact, "decisions") if d.get("id") == item_id), None)
-        target = req or conflict or decision
-        target_section = "URL" if req else ("conflict_pairs" if conflict else ("decisions" if decision else ""))
+        target = url_row or req_row or model_row or conflict or decision
+        target_section = (
+            "URL"
+            if url_row
+            else (
+                "REQ"
+                if req_row
+                else (
+                    "system_models"
+                    if model_row
+                    else ("conflict_pairs" if conflict else ("decisions" if decision else ""))
+                )
+            )
+        )
         if not target:
             return {"ok": False, "error": f"找不到 item_id: {item_id}"}
 
+        related_url = []
+        related_req = []
+        related_models = []
+        related_feedback = []
         related_conflicts = []
         related_decisions = []
         related_open_questions = []
 
-        if req:
-            rid = req.get("id")
-            req_text = str(req.get("text") or "").strip()
+        if url_row:
+            rid = url_row.get("id")
+            req_text = str(url_row.get("text") or "").strip()
+            related_url = [url_row]
+            related_req = [
+                r for r in self.as_list(artifact, "REQ")
+                if rid in {str(x) for x in (r.get("source") or [])}
+            ]
             related_conflicts = [
                 c for c in conflict_rows
                 if (
@@ -393,6 +451,57 @@ class ArtifactQueryTool(BaseTool):
                 q for q in self.as_list(artifact, "open_questions")
                 if blob and blob in json.dumps(q, ensure_ascii=False)
             ]
+        elif req_row:
+            rid = req_row.get("id")
+            source_ids = {str(x) for x in (req_row.get("source") or []) if str(x).strip()}
+            related_req = [req_row]
+            related_url = [
+                r for r in self.as_list(artifact, "URL")
+                if str(r.get("id") or "") in source_ids
+            ]
+            related_conflicts = [
+                c for c in conflict_rows
+                if (
+                    rid in set((c.get("requirement_ids") or []))
+                    or source_ids.intersection({str(x) for x in (c.get("requirement_ids") or [])})
+                    or source_ids.intersection(set(conflict_req_values(c)))
+                )
+            ]
+            blob_ids = {rid, *source_ids}
+            related_decisions = [
+                d for d in self.as_list(artifact, "decisions")
+                if any(x and x in json.dumps(d, ensure_ascii=False) for x in blob_ids)
+            ]
+            related_open_questions = [
+                q for q in self.as_list(artifact, "open_questions")
+                if any(x and x in json.dumps(q, ensure_ascii=False) for x in blob_ids)
+            ]
+        elif model_row:
+            rel_ids = {str(x) for x in (model_row.get("related_requirement_ids") or []) if str(x).strip()}
+            related_models = [model_row]
+            related_req = [
+                r for r in self.as_list(artifact, "REQ")
+                if str(r.get("id") or "") in rel_ids
+            ]
+            req_source_ids = {
+                str(src)
+                for req in related_req
+                for src in (req.get("source") or [])
+                if str(src).strip()
+            }
+            related_url = [
+                r for r in self.as_list(artifact, "URL")
+                if str(r.get("id") or "") in rel_ids or str(r.get("id") or "") in req_source_ids
+            ]
+            blob_ids = {model_row.get("id"), *rel_ids, *req_source_ids}
+            related_decisions = [
+                d for d in self.as_list(artifact, "decisions")
+                if any(x and x in json.dumps(d, ensure_ascii=False) for x in blob_ids)
+            ]
+            related_open_questions = [
+                q for q in self.as_list(artifact, "open_questions")
+                if any(x and x in json.dumps(q, ensure_ascii=False) for x in blob_ids)
+            ]
         elif conflict:
             rel_ids = set(conflict.get("requirement_ids") or [])
             rel_values = set(conflict_req_values(conflict))
@@ -405,17 +514,38 @@ class ArtifactQueryTool(BaseTool):
                 q for q in self.as_list(artifact, "open_questions")
                 if item_id in json.dumps(q, ensure_ascii=False)
             ]
-            req = [
+            related_url = [
                 r for r in self.as_list(artifact, "URL")
                 if r.get("id") in rel_ids or str(r.get("text") or "").strip() in rel_values
             ]
 
+        if not related_models:
+            related_ids = {
+                str(row.get("id") or "")
+                for row in related_url + related_req
+                if str(row.get("id") or "").strip()
+            }
+            related_models = [
+                m for m in self.as_list(artifact, "system_models")
+                if related_ids.intersection({str(x) for x in (m.get("related_requirement_ids") or [])})
+            ]
+        if not related_feedback:
+            related_ids = {
+                str(row.get("id") or "")
+                for row in related_url + related_req
+                if str(row.get("id") or "").strip()
+            }
+            related_feedback = [
+                f for f in self.as_list(artifact, "feedback")
+                if related_ids.intersection({str(x) for x in (f.get("related_requirement_ids") or [])})
+            ]
+
         if compact_value:
             target = self.compact_item(target_section, target) if target_section else dict(target)
-            if isinstance(req, dict):
-                req = self.compact_item("URL", req)
-            elif isinstance(req, list):
-                req = [self.compact_item("URL", x) for x in req]
+            related_url = [self.compact_item("URL", x) for x in related_url]
+            related_req = [self.compact_item("REQ", x) for x in related_req]
+            related_models = [self.compact_item("system_models", x) for x in related_models]
+            related_feedback = [self.compact_item("feedback", x) for x in related_feedback]
             related_conflicts = [self.compact_item("conflict_pairs", x) for x in related_conflicts]
             related_decisions = [self.compact_item("decisions", x) for x in related_decisions]
             related_open_questions = [self.compact_item("open_questions", x) for x in related_open_questions]
@@ -425,13 +555,17 @@ class ArtifactQueryTool(BaseTool):
             "mode": "related_context",
             "item_id": item_id,
             "target": target,
-            "related_url": req if isinstance(req, list) else ([req] if isinstance(req, dict) else []),
+            "related_url": related_url,
+            "related_req": related_req,
+            "related_models": related_models,
+            "related_feedback": related_feedback,
             "related_conflicts": related_conflicts,
             "related_decisions": related_decisions,
             "related_open_questions": related_open_questions,
             "summary": f"{item_id} 相關上下文已整理",
         }
 
+    # Defines summarize function for this module workflow.
     def summarize(self, artifact: Dict[str, Any], *, section: str) -> Dict[str, Any]:
         if section:
             raw = artifact.get(section)
@@ -445,6 +579,9 @@ class ArtifactQueryTool(BaseTool):
             }
         summary = {
             "URL": len(self.as_list(artifact, "URL")),
+            "REQ": len(self.as_list(artifact, "REQ")),
+            "system_models": len(self.as_list(artifact, "system_models")),
+            "feedback": len(self.as_list(artifact, "feedback")),
             "conflict_report": len(self.as_list(artifact, "conflict_report")),
             "conflict_pairs": len(self.as_list(artifact, "conflict_pairs")),
             "conflict_multiple": len(self.as_list(artifact, "conflict_multiple")),

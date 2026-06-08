@@ -1,9 +1,9 @@
-# Analyst output validation: normalize complex LLM-produced requirement and conflict payloads.
+# Validates and normalizes agent output data formats.
 import re
 from typing import Any, Dict, List, Optional
 
 
-CONFLICT_TYPES = {
+conflict_types = {
     "logical",
     "technical",
     "resource",
@@ -16,10 +16,16 @@ CONFLICT_TYPES = {
 }
 
 
+# ========
+# Defines clean text function for this module workflow.
+# ========
 def clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+# ========
+# Defines clean list function for this module workflow.
+# ========
 def clean_list(value: Any) -> List[str]:
     if isinstance(value, list):
         return [clean_text(x) for x in value if clean_text(x)]
@@ -27,6 +33,9 @@ def clean_list(value: Any) -> List[str]:
     return [text] if text else []
 
 
+# ========
+# Defines requirement text function for this module workflow.
+# ========
 def requirement_text(text: Any) -> str:
     value = clean_text(text)
     if not value:
@@ -42,6 +51,9 @@ def requirement_text(text: Any) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+# ========
+# Defines requirement record function for this module workflow.
+# ========
 def requirement_record(
     req: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -49,11 +61,7 @@ def requirement_record(
     out: Dict[str, Any] = {}
     if clean_text(source.get("id")):
         out["id"] = clean_text(source.get("id"))
-    out["text"] = requirement_text(
-        source.get("text")
-        or source.get("description")
-        or source.get("requirement")
-    )
+    out["text"] = requirement_text(source.get("text"))
 
     stakeholder = source.get("stakeholder")
     if isinstance(stakeholder, dict):
@@ -67,6 +75,9 @@ def requirement_record(
     return out
 
 
+# ========
+# Defines requirement records function for this module workflow.
+# ========
 def requirement_records(
     rows: Any,
 ) -> List[Dict[str, Any]]:
@@ -80,6 +91,9 @@ def requirement_records(
     return normalized
 
 
+# ========
+# Defines scope payload function for this module workflow.
+# ========
 def scope_payload(scope: Any) -> Dict[str, Any]:
     if not isinstance(scope, dict):
         return {"in_scope": [], "out_of_scope": []}
@@ -89,6 +103,9 @@ def scope_payload(scope: Any) -> Dict[str, Any]:
     }
 
 
+# ========
+# Defines validate elicited reqts function for this module workflow.
+# ========
 def validate_elicited_reqts(
     rows: Any,
     *,
@@ -116,6 +133,9 @@ def validate_elicited_reqts(
     return candidates
 
 
+# ========
+# Defines conflict records function for this module workflow.
+# ========
 def conflict_records(
     rows: Any,
     *,
@@ -157,7 +177,7 @@ def conflict_records(
                 entry["initial_reason"] = reason
             conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
             if label == "Conflict":
-                entry["initial_type"] = conflict_type if conflict_type in CONFLICT_TYPES else "other"
+                entry["initial_type"] = conflict_type if conflict_type in conflict_types else "other"
             by_pair[pair_index] = entry
         return [by_pair[i] for i in range(pair_count) if i in by_pair]
 
@@ -185,11 +205,14 @@ def conflict_records(
             entry["related_pairs"] = related_pairs
         conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
         if label == "Conflict":
-            entry["initial_type"] = conflict_type if conflict_type in CONFLICT_TYPES else "other"
+            entry["initial_type"] = conflict_type if conflict_type in conflict_types else "other"
         conflicts.append(entry)
     return conflicts
 
 
+# ========
+# Defines signoff decisions function for this module workflow.
+# ========
 def signoff_decisions(rows: Any) -> List[Dict[str, Any]]:
     raw_rows = rows.get("decisions") if isinstance(rows, dict) else rows
     if not isinstance(raw_rows, list):
@@ -210,49 +233,3 @@ def signoff_decisions(rows: Any) -> List[Dict[str, Any]]:
             }
         )
     return decisions
-
-
-def resolution_options_payload(data: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(data, dict):
-        return None
-    raw_options = data.get("resolution_options") or []
-    if not isinstance(raw_options, list):
-        raw_options = []
-    best_options: List[Dict[str, Any]] = []
-    for index, row in enumerate(raw_options, 1):
-        if not isinstance(row, dict):
-            continue
-        option = clean_text(row.get("option"))
-        strategy = clean_text(row.get("strategy"))
-        title = strategy or option or f"方案 {index}"
-        if option and strategy:
-            title = f"方案 {option}: {strategy}"
-        desc = clean_text(row.get("description"))
-        parts = []
-        pros = clean_list(row.get("pros"))
-        cons = clean_list(row.get("cons"))
-        if pros:
-            parts.append("優點：" + ", ".join(pros))
-        if cons:
-            parts.append("缺點：" + ", ".join(cons))
-        if parts:
-            desc = desc + "\n" + "\n".join(parts) if desc else "\n".join(parts)
-        best_options.append(
-            {
-                "id": index,
-                "title": title,
-                "description": desc or "(無描述)",
-                "source": "analyst",
-            }
-        )
-    recommended = clean_text(data.get("recommended_resolution"))
-    compromise = None
-    if recommended:
-        compromise = {
-            "id": 4,
-            "title": "需求處理建議（Analyst）",
-            "description": recommended,
-        }
-    if not best_options and not compromise:
-        return None
-    return {"best_options": best_options, "compromise": compromise}

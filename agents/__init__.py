@@ -1,4 +1,8 @@
-# Agents 根目錄 — 核心基礎設施（Base、Registry、Policy、ToolRegistry）
+# Initializes package exports and module loading.
+from utils.clean import disable_pycache
+
+disable_pycache()
+
 from agents.base import BaseAgent
 from agents.base import AgentRegistry
 from agents.tools.policy import AgentSkillToolPolicy

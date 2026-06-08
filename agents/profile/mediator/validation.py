@@ -1,15 +1,15 @@
-# Mediator validation helpers: normalize issue proposals and formal meeting issues.
+# Validates and normalizes agent output data formats.
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 
 with open(Path(__file__).resolve().parent / "issue_types.json", "r", encoding="utf-8") as f:
-    ISSUE_TYPES = tuple(json.load(f))
-ISSUE_TYPE_IDS = [t["id"] for t in ISSUE_TYPES]
-ISSUE_CATEGORY_LABEL = {t["id"]: t["label"] for t in ISSUE_TYPES}
+    issue_types = tuple(json.load(f))
+issue_type_ids = [t["id"] for t in issue_types]
+category_labels = {t["id"]: t["label"] for t in issue_types}
 
-MEETING_ACTIONS = [
+meeting_actions = [
     "plan_issues",
     "add_issues",
     "start_issue",
@@ -19,20 +19,20 @@ MEETING_ACTIONS = [
     "finish_round",
 ]
 
-VALID_DISCUSSION_MODES = {"sequential", "simultaneous"}
-VALID_PRIORITY_HINTS = {"high", "medium", "low"}
-VALID_IMPACT_LEVELS = {"high", "medium", "low"}
-VALID_ELICITATION_PHASES = {
+discussion_modes = {"sequential", "simultaneous"}
+priority_hints = {"high", "medium", "low"}
+impact_levels = {"high", "medium", "low"}
+elicitation_phases = {
     "initial_requirement",
     "requirement_discussion",
     "conclusion",
 }
-VALID_ELICITATION_ACTIONS = {
+elicitation_actions = {
     "ask_user",
     "supplement_question",
     "propose_finish",
 }
-VALID_RELATED_ARTIFACTS = {
+related_artifacts = {
     "URL",
     "REQ",
     "conflict_report",
@@ -44,6 +44,9 @@ VALID_RELATED_ARTIFACTS = {
 }
 
 
+# ========
+# Defines normalize sources function for this module workflow.
+# ========
 def normalize_sources(value: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -51,7 +54,7 @@ def normalize_sources(value: Any) -> List[Dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         artifact = str(item.get("artifact") or "").strip()
-        if artifact not in VALID_RELATED_ARTIFACTS:
+        if artifact not in related_artifacts:
             continue
         ids = [
             str(x).strip()
@@ -70,6 +73,9 @@ def normalize_sources(value: Any) -> List[Dict[str, Any]]:
     return rows
 
 
+# ========
+# Defines normalize trace function for this module workflow.
+# ========
 def normalize_trace(value: Any) -> Dict[str, List[str]]:
     if not isinstance(value, dict):
         value = {}
@@ -89,14 +95,23 @@ def normalize_trace(value: Any) -> Dict[str, List[str]]:
     }
 
 
+# ========
+# Defines trace artifact ids function for this module workflow.
+# ========
 def trace_artifact_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return normalize_trace((issue or {}).get("trace")).get("artifact_ids", [])
 
 
+# ========
+# Defines trace proposal ids function for this module workflow.
+# ========
 def trace_proposal_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return normalize_trace((issue or {}).get("trace")).get("proposal_ids", [])
 
 
+# ========
+# Defines issue proposal function for this module workflow.
+# ========
 def issue_proposal(
     item: Dict[str, Any],
     *,
@@ -106,7 +121,6 @@ def issue_proposal(
     round_num: int,
     index: int,
 ) -> Optional[Dict[str, Any]]:
-    """驗證並正規化 agent issue proposal（固定 schema）。"""
     if not isinstance(item, dict):
         return None
 
@@ -115,16 +129,33 @@ def issue_proposal(
         return None
 
     importance = str(item.get("importance") or "").strip().lower()
-    if importance not in VALID_PRIORITY_HINTS:
+    if importance not in priority_hints:
         return None
+    issue_level = str(item.get("issue_level") or "").strip().lower()
+    if issue_level not in {"blocking", "improvement"}:
+        issue_level = "blocking" if importance == "high" else "improvement"
 
     issue_id = (item.get("issue_id") or "").strip()
     if not issue_id:
         issue_id = f"I-R{round_num}-{proposed_by}-{index}"
     sources = normalize_sources(item.get("sources"))
     expected_actions = normalize_expected_actions(item.get("expected_actions"))
+    suggested_participants = [
+        str(value).strip()
+        for value in (item.get("suggested_participants") or [])
+        if str(value).strip()
+    ]
+    participant_reasoning = item.get("participant_reasoning")
+    if isinstance(participant_reasoning, dict):
+        participant_reasoning = {
+            str(agent).strip(): str(reason or "").strip()
+            for agent, reason in participant_reasoning.items()
+            if str(agent).strip() and str(reason or "").strip()
+        }
+    else:
+        participant_reasoning = {}
 
-    return {
+    proposal = {
         "issue_id": issue_id,
         "title": title,
         "category": str(item.get("category") or "").strip(),
@@ -132,13 +163,22 @@ def issue_proposal(
         "expect_outcome": str(item.get("expect_outcome") or "").strip(),
         "sources": sources,
         "expected_actions": expected_actions,
+        "issue_level": issue_level,
         "importance": importance,
         "reason": str(item.get("reason") or "").strip(),
         "proposed_by": proposed_by,
         "round": round_num,
     }
+    if suggested_participants:
+        proposal["suggested_participants"] = list(dict.fromkeys(suggested_participants))
+    if participant_reasoning:
+        proposal["participant_reasoning"] = participant_reasoning
+    return proposal
 
 
+# ========
+# Defines normalize expected actions function for this module workflow.
+# ========
 def normalize_expected_actions(value: Any) -> Dict[str, List[str]]:
     if not isinstance(value, dict):
         return {}
@@ -161,6 +201,9 @@ def normalize_expected_actions(value: Any) -> Dict[str, List[str]]:
     return out
 
 
+# ========
+# Defines meeting issue function for this module workflow.
+# ========
 def meeting_issue(
     item: Dict[str, Any],
     *,
@@ -169,7 +212,6 @@ def meeting_issue(
     allowed_stakeholders: Optional[Sequence[str]] = None,
     index: int,
 ) -> Optional[Dict[str, Any]]:
-    """驗證並正規化正式會議議題（固定 schema）。"""
     if not isinstance(item, dict):
         return None
     title = (item.get("title") or "").strip()
@@ -194,13 +236,16 @@ def meeting_issue(
         return None
 
     discussion_mode = (item.get("discussion_mode") or "").strip()
-    if discussion_mode not in VALID_DISCUSSION_MODES:
+    if discussion_mode not in discussion_modes:
+        return None
+    if item.get("discussion_rounds") in (None, ""):
         return None
     try:
-        discussion_rounds = int(item.get("discussion_rounds") or item.get("rounds") or 1)
+        discussion_rounds = int(item.get("discussion_rounds"))
     except (TypeError, ValueError):
-        discussion_rounds = 1
-    discussion_rounds = max(1, min(3, discussion_rounds))
+        return None
+    if discussion_rounds < 1 or discussion_rounds > 3:
+        return None
 
     allowed_stakeholder_set = {
         str(name).strip()
@@ -221,11 +266,25 @@ def meeting_issue(
 
     trace = normalize_trace(item.get("trace"))
     issue_id = (item.get("id") or "").strip() or f"T-{index}"
+    issue_level = str(item.get("issue_level") or "").strip().lower()
+    if issue_level not in {"blocking", "improvement"}:
+        issue_level = "blocking"
     expected_actions = {
         agent: actions
         for agent, actions in normalize_expected_actions(item.get("expected_actions")).items()
         if agent in set(participants)
     }
+    participant_reasoning = item.get("participant_reasoning")
+    if isinstance(participant_reasoning, dict):
+        participant_reasoning = {
+            str(agent).strip(): str(reason or "").strip()
+            for agent, reason in participant_reasoning.items()
+            if str(agent).strip() in set(participants) and str(reason or "").strip()
+        }
+    else:
+        participant_reasoning = {}
+    if set(participants) - set(participant_reasoning):
+        return None
     return {
         "schema_version": "meeting_issue.v1",
         "id": issue_id,
@@ -238,16 +297,20 @@ def meeting_issue(
         "target_stakeholders": target_stakeholders,
         "trace": trace,
         "proposed_by": proposed_by,
+        "issue_level": issue_level,
         "expected_actions": expected_actions,
+        "participant_reasoning": participant_reasoning,
     }
 
 
+# ========
+# Defines meeting action decision function for this module workflow.
+# ========
 def meeting_action_decision(data: Dict[str, Any]) -> Dict[str, Any]:
-    """驗證並正規化 meeting loop 的下一步 action。"""
     if not isinstance(data, dict):
         raise ValueError("meeting action 必須輸出 JSON object")
     action = str(data.get("action") or "").strip()
-    if action not in MEETING_ACTIONS:
+    if action not in meeting_actions:
         raise ValueError(f"meeting action 不合法: {action or '<empty>'}")
     params = data.get("params") or {}
     if not isinstance(params, dict):
@@ -259,13 +322,15 @@ def meeting_action_decision(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ========
+# Defines elicitation plan function for this module workflow.
+# ========
 def elicitation_plan(
     data: Dict[str, Any],
     *,
     default_participants: Sequence[str],
     stakeholder_names: Sequence[str],
 ) -> Dict[str, Any]:
-    """驗證並正規化 requirement elicitation 每輪會議策略。"""
     if not isinstance(data, dict):
         raise ValueError("逐輪策略決策必須輸出 JSON object")
 
@@ -286,22 +351,22 @@ def elicitation_plan(
         raise ValueError("逐輪策略 participants 必須包含 user")
 
     phase = str(data.get("meeting_phase") or "").strip()
-    if phase not in VALID_ELICITATION_PHASES:
+    if phase not in elicitation_phases:
         raise ValueError(f"逐輪策略 meeting_phase 不合法: {phase or '<empty>'}")
 
-    raw_agent_actions = data.get("agent_actions") if isinstance(data.get("agent_actions"), dict) else {}
-    if not isinstance(raw_agent_actions, dict):
-        raise ValueError("逐輪策略 agent_actions 必須是 object")
-    agent_actions: Dict[str, Dict[str, Any]] = {}
+    raw_actions = data.get("actions") if isinstance(data.get("actions"), dict) else {}
+    if not isinstance(raw_actions, dict):
+        raise ValueError("逐輪策略 actions 必須是 object")
+    actions: Dict[str, Dict[str, Any]] = {}
     stakeholder_list = [str(x).strip() for x in stakeholder_names if str(x).strip()]
     stakeholder_set = set(stakeholder_list)
     for role in [p for p in participants if p != "user"]:
-        raw_action = raw_agent_actions.get(role) if isinstance(raw_agent_actions, dict) else {}
+        raw_action = raw_actions.get(role) if isinstance(raw_actions, dict) else {}
         if not isinstance(raw_action, dict):
-            raise ValueError(f"逐輪策略 agent_actions.{role} 必須是 object")
+            raise ValueError(f"逐輪策略 actions.{role} 必須是 object")
         action = str(raw_action.get("action") or "").strip().lower()
-        if action not in VALID_ELICITATION_ACTIONS:
-            raise ValueError(f"逐輪策略 agent_actions.{role}.action 不合法: {action or '<empty>'}")
+        if action not in elicitation_actions:
+            raise ValueError(f"逐輪策略 actions.{role}.action 不合法: {action or '<empty>'}")
         targets = [
             str(name).strip()
             for name in (raw_action.get("target_stakeholders") or [])
@@ -310,19 +375,16 @@ def elicitation_plan(
         normalized_action: Dict[str, Any] = {"action": action}
         if action in {"ask_user", "supplement_question"}:
             if not targets:
-                targets = stakeholder_list[:1]
-                if not targets:
-                    raise ValueError(f"逐輪策略 agent_actions.{role}.target_stakeholders 必須指定有效利害關係人")
-                normalized_action["target_inferred"] = True
+                raise ValueError(f"逐輪策略 actions.{role}.target_stakeholders 必須指定有效利害關係人")
             normalized_action["target_stakeholders"] = list(dict.fromkeys(targets))
-        agent_actions[role] = normalized_action
+        actions[role] = normalized_action
 
     has_finish_proposal = any(
-        row.get("action") == "propose_finish" for row in agent_actions.values()
+        row.get("action") == "propose_finish" for row in actions.values()
     )
     has_user_question = any(
         row.get("action") in {"ask_user", "supplement_question"}
-        for row in agent_actions.values()
+        for row in actions.values()
     )
     if not has_finish_proposal and not has_user_question:
         raise ValueError("逐輪策略必須至少包含一個 ask_user 或 supplement_question，除非 propose_finish")
@@ -334,20 +396,22 @@ def elicitation_plan(
         "participants": participants,
         "meeting_phase": phase,
         "goal": goal,
-        "agent_actions": agent_actions,
+        "actions": actions,
     }
 
 
+# ========
+# Defines conflict review plan function for this module workflow.
+# ========
 def conflict_review_plan(
     data: Dict[str, Any],
     *,
     allowed_participants: Sequence[str],
 ) -> Dict[str, Any]:
-    """驗證並正規化衝突再審查的模式與參與者。"""
     if not isinstance(data, dict):
         raise ValueError("plan_conflict_review 必須輸出 JSON object")
     mode = str(data.get("discussion_mode") or "").strip().lower()
-    if mode not in VALID_DISCUSSION_MODES:
+    if mode not in discussion_modes:
         raise ValueError(f"plan_conflict_review discussion_mode 不合法: {mode or '<empty>'}")
 
     allowed_set = {str(x).strip() for x in allowed_participants if str(x).strip()}
@@ -362,12 +426,14 @@ def conflict_review_plan(
     return {"discussion_mode": mode, "participants": participants}
 
 
+# ========
+# Defines judgment data function for this module workflow.
+# ========
 def judgment_data(
     data: Dict[str, Any],
     *,
     source_requirement_ids: Sequence[str],
 ) -> Dict[str, Any]:
-    """驗證並正規化未收斂議題的人類裁決選項。"""
     if not isinstance(data, dict):
         raise ValueError("decision option analysis 必須輸出 JSON object")
     options = data.get("options", [])
@@ -382,7 +448,7 @@ def judgment_data(
         if not summary:
             continue
         risk = str(option.get("risk") or "").strip().lower()
-        if risk not in VALID_IMPACT_LEVELS:
+        if risk not in impact_levels:
             raise ValueError(f"decision option risk 不合法: {risk or '<empty>'}")
         clean_options.append(
             {
@@ -443,13 +509,15 @@ def judgment_data(
     }
 
 
+# ========
+# Defines close issue data function for this module workflow.
+# ========
 def close_issue_data(
     data: Dict[str, Any],
     *,
     source_requirement_ids: Sequence[str],
     source_conflict_ids: Sequence[str],
 ) -> Dict[str, Any]:
-    """驗證並正規化已收斂議題的決議內容。"""
     if not isinstance(data, dict):
         raise ValueError("closed resolution 必須輸出 JSON object")
     summary = str(data.get("summary") or "").strip()
@@ -478,9 +546,6 @@ def close_issue_data(
     open_questions = data.get("open_questions", [])
     if not isinstance(open_questions, list):
         open_questions = []
-    follow_up_actions = data.get("follow_up_actions", [])
-    if not isinstance(follow_up_actions, list):
-        follow_up_actions = []
     return {
         "summary": summary,
         "decision": decision,
@@ -496,7 +561,4 @@ def close_issue_data(
         "requirement_changes": [row for row in requirement_changes if isinstance(row, dict)],
         "model_changes": [row for row in model_changes if isinstance(row, dict)],
         "open_questions": [row for row in open_questions if isinstance(row, dict)],
-        "follow_up_actions": [
-            str(x).strip() for x in follow_up_actions if str(x).strip()
-        ],
     }

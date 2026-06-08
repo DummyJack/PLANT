@@ -1,5 +1,4 @@
-# Read-file tool: search and read chunks from doc reference files.
-"""doc/ 檔案工具：search_chunks / read_chunks / read_full；依副檔名切塊（md、txt、json、pdf、doc）。"""
+# Defines available agent tools and tool execution behavior.
 from __future__ import annotations
 
 import json
@@ -16,6 +15,9 @@ SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".pdf", ".docx", ".doc")
 CHUNK_SEP = "##"  # chunk_id = "{relative_posix_path}##{index}"
 
 
+# ========
+# Defines has supported files function for this module workflow.
+# ========
 def has_supported_files(base_dir: Path) -> bool:
     if not base_dir.is_dir():
         return False
@@ -25,10 +27,16 @@ def has_supported_files(base_dir: Path) -> bool:
     )
 
 
+# ========
+# Defines rel posix function for this module workflow.
+# ========
 def rel_posix(path: Path, base: Path) -> str:
     return path.resolve().relative_to(base.resolve()).as_posix()
 
 
+# ========
+# Defines tokenize function for this module workflow.
+# ========
 def tokenize(q: str) -> List[str]:
     raw = re.findall(r"[\w\u4e00-\u9fff]+", (q or "").lower())
     out: List[str] = []
@@ -40,10 +48,12 @@ def tokenize(q: str) -> List[str]:
     return out
 
 
+# ========
+# Defines iter chunks function for this module workflow.
+# ========
 def iter_chunks(
     text: str, max_size: int = 1200, overlap: int = 150
 ) -> Iterator[Tuple[int, int, str]]:
-    """依字元窗口切塊，盡量在換行處截斷。"""
     max_size = int(max_size)
     overlap = int(overlap)
     if max_size < 1:
@@ -66,20 +76,21 @@ def iter_chunks(
         pos = nxt if nxt > pos else end
 
 
+# ========
+# Defines iter chunks shifted function for this module workflow.
+# ========
 def iter_chunks_shifted(
     full: str, lo: int, hi: int, max_size: int, overlap: int
 ) -> Iterator[Tuple[int, int, str]]:
-    """對 full[lo:hi] 做字元窗口切塊，回傳座標為 full 內的絕對位置。"""
     sub = full[lo:hi]
     for ls, le, ck in iter_chunks(sub, max_size, overlap):
         yield lo + ls, lo + le, ck
 
 
+# ========
+# Defines yaml front matter end exclusive function for this module workflow.
+# ========
 def yaml_front_matter_end_exclusive(text: str) -> int:
-    """
-    偵測開頭 YAML front matter（第一行 ---，之後直到單獨一行的 ---）。
-    回傳結束後第一個字元索引；若無則 0。
-    """
     if not text.startswith("---"):
         return 0
     first_nl = text.find("\n")
@@ -102,11 +113,10 @@ def yaml_front_matter_end_exclusive(text: str) -> int:
     return 0
 
 
+# ========
+# Defines heading break offsets function for this module workflow.
+# ========
 def heading_break_offsets(body: str) -> List[int]:
-    """
-    在 body 內偵測「新 section 起點」字元偏移：fenced code 區塊外之
-    ATX 標題行、Setext 標題之首行（標題+底線兩行視為一個起點）。
-    """
     lines = body.splitlines(keepends=True)
     breaks: List[int] = []
     pos = 0
@@ -135,7 +145,6 @@ def heading_break_offsets(body: str) -> List[int]:
                     i += 2
                     continue
                 if is_dash:
-                    # 避免把「清單項 + 分隔線 ---」誤判成 Setext H2
                     if re.match(r"^\s*[-*+]\s", s) or re.match(r"^\s*\d+\.\s", s):
                         pass
                     else:
@@ -148,8 +157,10 @@ def heading_break_offsets(body: str) -> List[int]:
     return breaks
 
 
+# ========
+# Defines line start offsets function for this module workflow.
+# ========
 def line_start_offsets(text: str) -> List[int]:
-    """各行起點在 text 內的字元索引（0-based 行號對應）。"""
     if not text:
         return [0]
     out = [0]
@@ -159,12 +170,10 @@ def line_start_offsets(text: str) -> List[int]:
     return out
 
 
+# ========
+# Defines md heading breaks markdown it function for this module workflow.
+# ========
 def md_heading_breaks_markdown_it(body: str) -> Optional[List[int]]:
-    """
-    使用 markdown-it-py 解析 body，回傳每個標題**區塊起行**在 body 內的字元偏移（相對 body）。
-    - []：解析成功但無標題（呼叫端應改用段落合併）
-    - None：無法使用 parser（未安裝或解析異常），呼叫端應 fallback 啟發式
-    """
     try:
         from markdown_it import MarkdownIt  # type: ignore[import-not-found]
     except ImportError:
@@ -187,10 +196,12 @@ def md_heading_breaks_markdown_it(body: str) -> Optional[List[int]]:
     return sorted(set(breaks))
 
 
+# ========
+# Defines spans from breaks function for this module workflow.
+# ========
 def spans_from_breaks(
     text: str, breaks: List[int], start_floor: int
 ) -> List[Tuple[int, int]]:
-    """breaks 為全文絕對偏移；僅使用 >= start_floor 者，組出 [start,end) section 列表。"""
     br = sorted({b for b in breaks if b >= start_floor})
     if not br:
         return []
@@ -203,8 +214,10 @@ def spans_from_breaks(
     return spans
 
 
+# ========
+# Defines paragraph spans local function for this module workflow.
+# ========
 def paragraph_spans_local(sub: str) -> List[Tuple[int, int]]:
-    """依空白行分段；索引相對於 sub 開頭。"""
     if not sub.strip():
         return []
     pat = re.compile(r"\n\s*\n+")
@@ -222,10 +235,12 @@ def paragraph_spans_local(sub: str) -> List[Tuple[int, int]]:
     return spans
 
 
+# ========
+# Defines merge spans to budget function for this module workflow.
+# ========
 def merge_spans_to_budget(
     text: str, spans: List[Tuple[int, int]], max_size: int
 ) -> List[Tuple[int, int]]:
-    """將相鄰 [start,end) 合併，使總長（含中間原文縫隙）不超過 max_size。"""
     if not spans:
         return []
     out: List[Tuple[int, int]] = []
@@ -249,17 +264,15 @@ def merge_spans_to_budget(
     return out
 
 
+# ========
+# Defines iter chunks by sections then window function for this module workflow.
+# ========
 def iter_chunks_by_sections_then_window(
     text: str,
     suffix: str,
     max_size: int,
     overlap: int,
 ) -> Iterator[Tuple[int, int, str]]:
-    """
-    .md / .txt：front matter（僅 md）→ 標題 section →
-    無標題則空白行段落合併；過長一律再細切字元窗口。
-    .md 標題優先由 markdown-it-py 決定斷點。
-    """
     if suffix not in (".md", ".txt"):
         yield from iter_chunks(text, max_size, overlap)
         return
@@ -308,13 +321,15 @@ def iter_chunks_by_sections_then_window(
         yield from emit_sized_block(a, section, max_size, overlap)
 
 
+# ========
+# Defines emit sized block function for this module workflow.
+# ========
 def emit_sized_block(
     base: int,
     block: str,
     max_size: int,
     overlap: int,
 ) -> Iterator[Tuple[int, int, str]]:
-    """block 在完整文字中起於 base；過長則在區域內滑動窗口。"""
     max_size = max(1, int(max_size))
     overlap = max(0, min(int(overlap), max_size - 1))
     if len(block) <= max_size:
@@ -324,8 +339,10 @@ def emit_sized_block(
         yield base + ls, base + le, sub
 
 
+# ========
+# Defines json dumps safe function for this module workflow.
+# ========
 def json_dumps_safe(data: Any) -> str:
-    """避免不可序列化值或非有限浮點數導致建索引時崩潰。"""
     try:
         return json.dumps(data, ensure_ascii=False, indent=2)
     except (TypeError, ValueError):
@@ -337,8 +354,10 @@ def json_dumps_safe(data: Any) -> str:
             return repr(data)
 
 
+# ========
+# Defines json top level pieces function for this module workflow.
+# ========
 def json_top_level_pieces(obj: Any) -> List[str]:
-    """每段為可獨立閱讀的 JSON 片段字串（pretty）。"""
     if isinstance(obj, dict):
         keys = list(obj.keys())
         out: List[str] = []
@@ -350,6 +369,9 @@ def json_top_level_pieces(obj: Any) -> List[str]:
     return [json_dumps_safe(obj)]
 
 
+# ========
+# Defines iter json structured then window function for this module workflow.
+# ========
 def iter_json_structured_then_window(
     text: str, max_size: int, overlap: int
 ) -> Iterator[Tuple[int, int, str]]:
@@ -388,6 +410,9 @@ def iter_json_structured_then_window(
         i = j + 1
 
 
+# ========
+# Defines iter pdf page chunks function for this module workflow.
+# ========
 def iter_pdf_page_chunks(
     path: Path, max_size: int, overlap: int
 ) -> Iterator[Tuple[int, int, str]]:
@@ -415,6 +440,9 @@ def iter_pdf_page_chunks(
         yield from emit_sized_block(start, block, max_size, overlap)
 
 
+# ========
+# Defines iter docx paragraph chunks function for this module workflow.
+# ========
 def iter_docx_paragraph_chunks(
     path: Path, max_size: int, overlap: int
 ) -> Iterator[Tuple[int, int, str]]:
@@ -451,6 +479,9 @@ def iter_docx_paragraph_chunks(
         i = j + 1
 
 
+# ========
+# Defines iter index chunks function for this module workflow.
+# ========
 def iter_index_chunks(
     *,
     path: Path,
@@ -460,7 +491,6 @@ def iter_index_chunks(
     overlap: int,
     read_text: Callable[[Path, str], str],
 ) -> Iterator[Tuple[int, int, str]]:
-    """依副檔名選擇結構化切塊；失敗時內部回退字元窗口。"""
     if suffix == ".json":
         yield from iter_json_structured_then_window(text, max_size, overlap)
         return
@@ -481,6 +511,9 @@ def iter_index_chunks(
     yield from iter_chunks_by_sections_then_window(text, suffix, max_size, overlap)
 
 
+# ========
+# Defines score chunk function for this module workflow.
+# ========
 def score_chunk(query_tokens: List[str], chunk_lower: str) -> float:
     if not query_tokens:
         return 0.0
@@ -490,6 +523,9 @@ def score_chunk(query_tokens: List[str], chunk_lower: str) -> float:
     return s
 
 
+# ========
+# Defines ReadFileTool class for this module workflow.
+# ========
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
@@ -533,6 +569,7 @@ class ReadFileTool(BaseTool):
         },
     }
 
+    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         base_dir: Optional[Path] = None,
@@ -550,12 +587,13 @@ class ReadFileTool(BaseTool):
         self.chunks: List[Dict[str, Any]] = []
         self.chunk_by_id: Dict[str, Dict[str, Any]] = {}
 
+    # Defines reset session function for this module workflow.
     def reset_session(self) -> None:
-        """新一段 tool 對話時清空索引，下次 search 會重建。"""
         self.file_sig.clear()
         self.chunks.clear()
         self.chunk_by_id.clear()
 
+    # Defines safe resolve function for this module workflow.
     def safe_resolve(self, file_path: str) -> Tuple[Optional[Path], Optional[str]]:
         try:
             path = (self.base_dir / file_path.strip()).resolve()
@@ -569,6 +607,7 @@ class ReadFileTool(BaseTool):
             return None, f"錯誤：檔案不存在或非檔案：{path}"
         return path, None
 
+    # Defines read text by type function for this module workflow.
     def read_text_by_type(self, path: Path, suffix: str) -> str:
         if suffix in (".txt", ".md", ".json"):
             return path.read_text(encoding="utf-8", errors="replace")
@@ -587,6 +626,7 @@ class ReadFileTool(BaseTool):
             f"不支援的副檔名 {suffix}，僅支援 .txt, .md, .json, .pdf, .docx。"
         )
 
+    # Defines current file signature function for this module workflow.
     def current_file_signature(self) -> Dict[str, Tuple[float, int]]:
         sig: Dict[str, Tuple[float, int]] = {}
         if not self.base_dir.is_dir():
@@ -604,6 +644,7 @@ class ReadFileTool(BaseTool):
                 continue
         return sig
 
+    # Defines rebuild index function for this module workflow.
     def rebuild_index(self) -> None:
         self.chunks.clear()
         self.chunk_by_id.clear()
@@ -653,6 +694,7 @@ class ReadFileTool(BaseTool):
                 logger.warning("索引切塊失敗 %s: %s", rel, e, exc_info=True)
                 continue
 
+    # Defines ensure index function for this module workflow.
     def ensure_index(self) -> Optional[str]:
         sig = self.current_file_signature()
         if sig == self.file_sig and self.chunks:
@@ -661,6 +703,7 @@ class ReadFileTool(BaseTool):
         self.rebuild_index()
         return None
 
+    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         raw_action = kwargs.get("action")
         if not isinstance(raw_action, str) or not raw_action.strip():
@@ -675,6 +718,7 @@ class ReadFileTool(BaseTool):
             return self.execute_read_full(kwargs)
         return f"錯誤：不支援的 action「{action}」，請用 read_full、search_chunks 或 read_chunks。"
 
+    # Defines execute read full function for this module workflow.
     def execute_read_full(self, kwargs: Dict[str, Any]) -> str:
         file_path = kwargs.get("file_path")
         output_format = (kwargs.get("output_format") or "text").strip()
@@ -706,6 +750,7 @@ class ReadFileTool(BaseTool):
         }
         return json.dumps(payload, ensure_ascii=False)
 
+    # Defines execute search chunks function for this module workflow.
     def execute_search_chunks(self, kwargs: Dict[str, Any]) -> str:
         query = kwargs.get("query")
         if not query or not isinstance(query, str) or not query.strip():
@@ -760,6 +805,7 @@ class ReadFileTool(BaseTool):
             ensure_ascii=False,
         )
 
+    # Defines execute read chunks function for this module workflow.
     def execute_read_chunks(self, kwargs: Dict[str, Any]) -> str:
         raw = kwargs.get("chunk_ids")
         ids: List[str] = []

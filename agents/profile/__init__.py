@@ -1,5 +1,4 @@
-# Agent profile package exports concrete agent classes lazily.
-"""Lazy exports for concrete agent profiles."""
+# Initializes package exports and module loading.
 
 __all__ = [
     "UserAgent",

@@ -1,17 +1,19 @@
-# Tool registry: builds configured tools for each agent.
+# Defines available agent tools and tool execution behavior.
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# Defines ToolRegistry class for this module workflow.
 class ToolRegistry:
-    """宣告式工具註冊與配置入口。"""
 
+    # Defines __init__ function for this module workflow.
     def __init__(self, config: Dict[str, Any], policy, artifact_path: Optional[str] = None):
         self.config = config
         self.policy = policy
         self.enable_tools = config.get("enable_tools") or {}
         self.artifact_path = artifact_path
 
+    # Defines build tools for agent function for this module workflow.
     def build_tools_for_agent(self, agent_name: str) -> List[Any]:
         from .artifact_query import ArtifactQueryTool
         from .plantuml_validator import PlantUMLValidatorTool

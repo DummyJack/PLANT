@@ -1,4 +1,4 @@
-# PlantUML validator tool: validate diagrams with the PlantUML server.
+# Defines available agent tools and tool execution behavior.
 import logging
 import re
 import socket
@@ -13,6 +13,7 @@ logger = logging.getLogger("Plant.PlantUMLValidator")
 DEFAULT_ONLINE_SERVER = "https://www.plantuml.com/plantuml"
 
 
+# Defines PlantUMLValidatorTool class for this module workflow.
 class PlantUMLValidatorTool(BaseTool):
     name = "plantuml_validate"
     description = (
@@ -27,9 +28,11 @@ class PlantUMLValidatorTool(BaseTool):
         }
     }
 
+    # Defines __init__ function for this module workflow.
     def __init__(self, server_url: str = ""):
         self.server_url = (server_url or DEFAULT_ONLINE_SERVER).rstrip("/")
 
+    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         code = kwargs.get("plantuml_code", "")
         if not code:
@@ -40,12 +43,12 @@ class PlantUMLValidatorTool(BaseTool):
 
         return self.validate_online(code)
 
+    # Defines encode hex function for this module workflow.
     def encode_hex(self, code: str) -> str:
-        """PlantUML 官方支援的 HEX 編碼：~h + UTF-8 的十六進位"""
         return "~h" + code.encode("utf-8").hex()
 
+    # Defines validate online function for this module workflow.
     def validate_online(self, code: str) -> str:
-        """用 PlantUML 線上伺服器驗證；任何錯誤都回傳驗證失敗。"""
         url = ""
         try:
             encoded = self.encode_hex(code)

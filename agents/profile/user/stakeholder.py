@@ -1,19 +1,19 @@
-# User stakeholder helpers: derive stakeholder voices and initial requirements.
-from agents.profile.prompt_catalog import render_prompt
+# Handles module workflow behavior.
+from .actions.simulate import suggest_stakeholders, write_stakeholder_text
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from agents.profile.scenario import scenario_prompt_value
-
-
-STAKEHOLDER_CATEGORIES = {
-    "Primary Users",
-    "System Owners & Management",
-    "External Parties",
+stakeholder_types = {
+    "primary_user",
+    "system_owner",
+    "external_party",
 }
 
 
-def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
+# ========
+# Defines parse selection function for this module workflow.
+# ========
+def parse_selection(selected: List[Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for item in selected or []:
         if not isinstance(item, dict):
@@ -22,13 +22,16 @@ def selected_stakeholders(selected: List[Any]) -> List[Dict[str, Any]]:
         stakeholder_type = str(item.get("type") or "").strip()
         if not name:
             continue
-        if stakeholder_type not in STAKEHOLDER_CATEGORIES:
+        if stakeholder_type not in stakeholder_types:
             raise ValueError(f"利害關係人 type 不合法: {name} -> {stakeholder_type or '<empty>'}")
         records.append({"name": name, "type": stakeholder_type})
     return records
 
 
-def merge_stakeholder_inputs(
+# ========
+# Defines merge stakeholder text function for this module workflow.
+# ========
+def merge_stakeholder_text(
     selected_records: List[Dict[str, Any]],
     generated_rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -54,21 +57,26 @@ def merge_stakeholder_inputs(
     return merged
 
 
+# ========
+# Defines UserStakeholder class for this module workflow.
+# ========
 class UserStakeholder:
     @staticmethod
-    def scenario_context_text(value: Any) -> str:
-        return json.dumps(scenario_prompt_value(value), ensure_ascii=False, indent=2)
+    # Defines scenario json function for this module workflow.
+    def scenario_json(value: Any) -> str:
+        return json.dumps(str(value or "").strip(), ensure_ascii=False, indent=2)
 
-    def propose_stakeholders(self, rough_idea: Any) -> List[Dict]:
+    # Defines suggest stakeholders function for this module workflow.
+    def suggest_stakeholders(self, rough_idea: Any) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_setup",
             context={
-                "action": "propose_stakeholders",
+                "action": "suggest_stakeholders",
                 "rough_idea": rough_idea,
             },
-            build_observation=self.build_stakeholder_observation,
-            decide_action=self.decide_stakeholder_action,
-            execute_action=self.execute_stakeholder_action,
+            obs_fn=self.obs_setup,
+            decide_action=self.plan_stakeholder,
+            execute_action=self.run_setup_action,
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
@@ -76,19 +84,20 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    def write_stakeholders(
+    # Defines write stakeholder text function for this module workflow.
+    def write_stakeholder_text(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_text",
             context={
-                "action": "write_stakeholders",
+                "action": "write_stakeholder_text",
                 "rough_idea": rough_idea,
                 "selected_stakeholders": selected_stakeholders,
             },
-            build_observation=self.build_stakeholder_observation,
-            decide_action=self.decide_stakeholder_action,
-            execute_action=self.execute_stakeholder_action,
+            obs_fn=self.obs_setup,
+            decide_action=self.plan_stakeholder,
+            execute_action=self.run_setup_action,
         )
         trace = opa.get("opa_trace") or []
         result = dict((trace[-1].get("result") if trace else {}) or {})
@@ -96,7 +105,8 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    def build_stakeholder_observation(self, **kwargs) -> Dict:
+    # Defines obs setup function for this module workflow.
+    def obs_setup(self, **kwargs: Any) -> Dict[str, Any]:
         selected = kwargs.get("selected_stakeholders") or []
         return {
             "action": kwargs.get("action", ""),
@@ -106,27 +116,8 @@ class UserStakeholder:
             "selected_stakeholder_count": len(selected),
         }
 
-    def decide_stakeholder_action(
-        self,
-        *,
-        observation: Dict,
-        last_result: Optional[Dict] = None,
-        **kwargs,
-    ) -> Dict:
-        if isinstance(last_result, dict) and not last_result.get("error"):
-            return {
-                "action": "done",
-                "params": {},
-                "reasoning": "上一輪利害關係人需求擴展已完成，結束本次任務。",
-            }
-        action = str(observation.get("action") or "").strip()
-        return {
-            "action": action,
-            "params": {},
-            "reasoning": f"以 User agent 情境利害關係人視角執行：{action}。",
-        }
-
-    def execute_stakeholder_action(
+    # Defines run setup action function for this module workflow.
+    def run_setup_action(
         self,
         *,
         decision: Dict,
@@ -134,10 +125,10 @@ class UserStakeholder:
     ) -> Dict:
         action = str(decision.get("action") or "").strip()
         try:
-            if action == "propose_stakeholders":
-                output = self.propose_stakeholders_via_llm(kwargs.get("rough_idea", ""))
-            elif action == "write_stakeholders":
-                output = self.write_stakeholders_via_llm(
+            if action == "suggest_stakeholders":
+                output = self.generate_candidates(kwargs.get("rough_idea", ""))
+            elif action == "write_stakeholder_text":
+                output = self.generate_needs(
                     kwargs.get("rough_idea", ""),
                     kwargs.get("selected_stakeholders") or [],
                 )
@@ -157,9 +148,10 @@ class UserStakeholder:
             "summary": f"完成 stakeholder elicitation: {action}",
         }
 
-    def propose_stakeholders_via_llm(self, rough_idea: Any) -> List[Dict]:
-        scenario_context = self.scenario_context_text(rough_idea)
-        user_prompt = render_prompt('agents_profile_user_stakeholder_user_prompt_21', **locals())
+    # Defines generate candidates function for this module workflow.
+    def generate_candidates(self, rough_idea: Any) -> List[Dict]:
+        scenario_context = self.scenario_json(rough_idea)
+        user_prompt = suggest_stakeholders(scenario_context=scenario_context)
 
         messages = self.build_direct_messages(user_prompt)
         response = self.chat_json(messages, temperature=1)
@@ -168,9 +160,9 @@ class UserStakeholder:
             raise ValueError("proposed_stakeholders must be a list")
 
         categories = [
-            "Primary Users",
-            "System Owners & Management",
-            "External Parties",
+            "primary_user",
+            "system_owner",
+            "external_party",
         ]
         counts = {category: 0 for category in categories}
         current_order = 0
@@ -192,24 +184,15 @@ class UserStakeholder:
             current_order = order
             counts[stakeholder_type] += 1
 
-        if len(proposed) != 10:
-            raise ValueError("propose_stakeholders must return exactly 10 stakeholders")
-        expected_counts = {
-            "Primary Users": 4,
-            "System Owners & Management": 4,
-            "External Parties": 2,
-        }
-        if counts != expected_counts:
-            raise ValueError(
-                "propose_stakeholders must return exactly 4 Primary Users, "
-                "4 System Owners & Management, and 2 External Parties"
-            )
+        if len(proposed) < 2:
+            raise ValueError("propose_stakeholders must return at least 2 stakeholders")
         return proposed
 
-    def write_stakeholders_via_llm(
+    # Defines generate needs function for this module workflow.
+    def generate_needs(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
-        scenario_context = self.scenario_context_text(rough_idea)
+        scenario_context = self.scenario_json(rough_idea)
         stakeholder_rows = []
         for i, sh in enumerate(selected_stakeholders, 1):
             if isinstance(sh, dict):
@@ -221,7 +204,7 @@ class UserStakeholder:
             stakeholder_rows.append(f"{i}. {name}")
         stakeholder_list = "\n".join(stakeholder_rows)
 
-        user_prompt = render_prompt('agents_profile_user_stakeholder_user_prompt_22', **locals())
+        user_prompt = write_stakeholder_text(stakeholder_list=stakeholder_list, scenario_context=scenario_context)
 
         try:
             messages = self.build_direct_messages(user_prompt)

@@ -1,19 +1,42 @@
-# Mediator agent: plans meeting issue actions and coordinates formal requirement meetings.
+# Defines agent profile initialization, system prompt, and public interface.
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent
 
-from .prompts import (
-    MEDIATOR_SYSTEM_PROMPT,
-    closure_vote_prompt as build_closure_vote_prompt,
-)
-from .issue_planning import MediatorIssuePlanning
-from .discussion import MediatorDiscussion
-from .records import MediatorRecords
+from .actions.judge import closure_vote as build_closure_vote
+from .plan import MediatorIssuePlanning
+from agents.meeting.discussion import MediatorDiscussion
+from agents.meeting.record import MediatorRecords
 from .decision import MediatorDecision
+from .rules import tool_usage_policy as mediator_tool_usage_policy
+
+mediator_system = """你是一位專業需求會議主持人。
+
+目標：
+- 規劃正式會議議題，主持討論，促成需求、衝突、取捨與責任邊界的收斂。
+- 將會議結果整理成可追蹤的 resolution 與 MoM 依據。
+
+工作原則：
+- 根據目前專案資料、agent 提案、會議狀態與人類決策推進流程。
+- 引導參與者釐清需求、衝突、取捨、責任邊界與未決問題。
+- 無法自然收斂時，整理方案、影響與建議，交由人類裁決。
+
+邊界：
+- 只根據既有專案資料、議題來源與會議討論形成會議結果。
+- 會議結果應可被 Analyst 後續沉澱成需求。
+- 可主持討論與整理決議，但不替專家、建模者或需求分析師產生其專屬 artifact。
+
+不可做：
+- 不自行新增需求來源。
+- 不替人類做高風險或有爭議裁決。
+- 不把未討論或未確認內容寫成會議決議。"""
 
 
+# ========
+# Defines MediatorAgentSupport class for this module workflow.
+# ========
 class MediatorAgentSupport:
+    # Defines conflict review description function for this module workflow.
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
             "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
@@ -28,18 +51,18 @@ class MediatorAgentSupport:
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
 
+    # Defines build reply issue function for this module workflow.
     def build_reply_issue(
         self,
         *,
         question: str,
         from_agent: str,
-        follow_up_hint: str,
         target_stakeholders=None,
     ) -> Dict[str, Any]:
         return {
             "id": "OQ",
             "title": f"回答 {from_agent} 的問題",
-            "description": f"{question}\n\n{follow_up_hint}",
+            "description": question,
             "target_stakeholders": [
                 str(name).strip()
                 for name in (target_stakeholders or [])
@@ -48,6 +71,7 @@ class MediatorAgentSupport:
         }
 
     @staticmethod
+    # Defines build issue result function for this module workflow.
     def build_issue_result(
         *,
         status: str,
@@ -56,19 +80,16 @@ class MediatorAgentSupport:
         mediator_compromise: Optional[Dict[str, Any]] = None,
         agreed_points: Optional[List[str]] = None,
         unresolved_points: Optional[List[str]] = None,
-        new_open_questions: Optional[List[Dict[str, Any]]] = None,
         affected_conflict_ids: Optional[List[str]] = None,
         affected_requirement_ids: Optional[List[str]] = None,
         url_updates: Optional[List[Dict[str, Any]]] = None,
         requirement_changes: Optional[List[Dict[str, Any]]] = None,
         model_changes: Optional[List[Dict[str, Any]]] = None,
         open_questions: Optional[List[Dict[str, Any]]] = None,
-        follow_up_actions: Optional[List[str]] = None,
         needs_human: bool = False,
         options: Optional[List[Dict[str, Any]]] = None,
         recommendation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """統一 issue_result schema。"""
         status = (status or "").strip()
         if status and status not in {"agreed", "human_decision"}:
             raise ValueError(f"resolution status 不合法: {status}")
@@ -81,10 +102,6 @@ class MediatorAgentSupport:
         }
         agreed_points = [p.strip() for p in (agreed_points or []) if isinstance(p, str) and p.strip()]
         unresolved_points = [p.strip() for p in (unresolved_points or []) if isinstance(p, str) and p.strip()]
-        new_open_questions = [
-            q for q in (new_open_questions or [])
-            if isinstance(q, dict) and ((q.get("question") or "").strip())
-        ]
         affected_conflict_ids = [
             cid.strip() for cid in (affected_conflict_ids or [])
             if isinstance(cid, str) and cid.strip()
@@ -103,11 +120,6 @@ class MediatorAgentSupport:
             q for q in (open_questions or [])
             if isinstance(q, dict) and str(q.get("question") or "").strip()
         ]
-        follow_up_actions = [
-            str(item).strip()
-            for item in (follow_up_actions or [])
-            if str(item).strip()
-        ]
         options = [row for row in (options or []) if isinstance(row, dict)]
         recommendation = recommendation if isinstance(recommendation, dict) else {}
         result = {
@@ -115,14 +127,12 @@ class MediatorAgentSupport:
             "decision": decision,
             "agreed_points": agreed_points,
             "unresolved_points": unresolved_points,
-            "new_open_questions": new_open_questions,
             "needs_human": bool(needs_human),
             "options": options,
             "recommendation": recommendation,
             "requirement_changes": requirement_changes,
             "model_changes": model_changes,
             "open_questions": open_questions,
-            "follow_up_actions": follow_up_actions,
         }
         if status:
             result["status"] = status
@@ -136,6 +146,9 @@ class MediatorAgentSupport:
             result["mediator_compromise"] = mediator_compromise
         return result
 
+# ========
+# Defines MediatorAgent class for this module workflow.
+# ========
 class MediatorAgent(
     MediatorAgentSupport,
     MediatorIssuePlanning,
@@ -146,11 +159,12 @@ class MediatorAgent(
 ):
     name = "mediator"
 
-    system_prompt = MEDIATOR_SYSTEM_PROMPT
+    system_prompt = mediator_system
 
     enabled_issue_type_ids: Optional[List[str]] = None
     enable_human_judgment: bool = True
 
+    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -162,11 +176,11 @@ class MediatorAgent(
             model, tools=tools, registry=registry, project_config=project_config
         )
 
+    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
-        return """- artifact_query 用於查詢目前需求、衝突、未決問題、決策、討論紀錄與議題池相關脈絡。
-- 工具只能補足主持、分類、分流、收斂判斷所需的專案事實。
-- 若資訊不足或未收斂，整理成待決選項或升級人類裁決，不得自行替利害關係人定案。"""
+        return mediator_tool_usage_policy()
 
+    # Defines closure vote prompt function for this module workflow.
     def closure_vote_prompt(
         self,
         *,
@@ -178,7 +192,7 @@ class MediatorAgent(
         candidate_texts: List[str],
         recent_ask_history: List[Dict[str, Any]],
     ) -> str:
-        return build_closure_vote_prompt(
+        return build_closure_vote(
             role=role,
             proposer_role=proposer_role,
             role_focus=role_focus,
@@ -187,72 +201,3 @@ class MediatorAgent(
             candidate_texts=candidate_texts,
             recent_ask_history=recent_ask_history,
         )
-
-    def build_meeting_action_observation(self, **kwargs: Any) -> Dict[str, Any]:
-        state_summary = kwargs.get("state_summary") or {}
-        return {
-            "state_summary": state_summary,
-            "issues_count": len(state_summary.get("issues") or []),
-            "open_issues_count": len(state_summary.get("open_issues") or []),
-            "human_decision_pending_count": int(
-                (state_summary.get("human_decision_status") or {}).get("human_decision_queue_count")
-                or 0
-            ),
-            "can_add_issues": bool(state_summary.get("can_add_issues")),
-            "iteration": kwargs.get("iteration", 0) + 1,
-            "max_iterations": kwargs["max_iterations"],
-        }
-
-    def decide_meeting_action(
-        self,
-        *,
-        observation: Dict[str, Any],
-        last_result: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        if (
-            isinstance(last_result, dict)
-            and last_result.get("status") == "planned"
-            and last_result.get("action")
-        ):
-            return {
-                "action": "done",
-                "params": {},
-                "reasoning": "上一輪已完成 meeting action 規劃，結束本次規劃。",
-            }
-        return self.plan_meeting_action_internal(
-            kwargs.get("state_summary") or {},
-            last_result,
-        )
-
-    def execute_meeting_action(
-        self,
-        *,
-        decision: Dict[str, Any],
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        return {
-            "action": decision.get("action", "finish_round"),
-            "status": "planned",
-            "summary": f"meeting issue action selected: {decision.get('action', 'finish_round')}",
-            "params": decision.get("params") or {},
-        }
-
-    def plan_meeting_action_via_opa(
-        self,
-        state_summary: Dict[str, Any],
-        last_observation: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        opa = self.run_action_loop(
-            name="meeting_action",
-            context={
-                "state_summary": state_summary,
-                "last_result": last_observation,
-            },
-            build_observation=self.build_meeting_action_observation,
-            decide_action=self.decide_meeting_action,
-            execute_action=self.execute_meeting_action,
-        )
-        trace = opa.get("opa_trace") or []
-        decision = dict((trace[-1].get("decision") if trace else {}) or {})
-        return decision
