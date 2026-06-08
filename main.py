@@ -59,7 +59,7 @@ def main():
         print(f"錯誤：{str(e)}")
         sys.exit(1)
 
-    # 只有一般正式會議啟用時才需要由人類設定討論回合數；預設正式會議固定跑 1 輪。
+    # 只有一般正式會議啟用時才需要由人類設定討論回合數；輸入值會覆蓋 config rounds。
     if general_formal_meeting_enabled(config):
         while True:
             rounds_input = input("請輸入討論回合數：").strip()

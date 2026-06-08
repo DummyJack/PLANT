@@ -1,4 +1,4 @@
-# LLM base layer: provider factory, usage tracking, and API key validation.
+# Handles base logic for model provider integration and shared LLM client behavior.
 import inspect
 import os
 
@@ -16,6 +16,9 @@ PROVIDER_API_KEY_ENV = {
 }
 
 
+# ========
+# Defines providers from agent models function for this module workflow.
+# ========
 def providers_from_agent_models(config: Dict[str, Any]) -> set:
     agent_models = config.get("agent_models") or {}
     providers = set()
@@ -25,6 +28,9 @@ def providers_from_agent_models(config: Dict[str, Any]) -> set:
     return providers
 
 
+# ========
+# Defines validate provider api keys function for this module workflow.
+# ========
 def validate_provider_api_keys(config: Dict[str, Any]) -> None:
     providers_to_check = providers_from_agent_models(config)
     if not providers_to_check:
@@ -45,9 +51,14 @@ def validate_provider_api_keys(config: Dict[str, Any]) -> None:
             )
 
 
+# ========
+# Defines BaseLLM class for this module workflow.
+# ========
 class BaseLLM(ABC):
-    """統一 LLM 介面，支援 OpenAI / Claude / Google Gemini"""
 
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
         self.default_temperature = kwargs.pop("temperature", None)
@@ -58,6 +69,9 @@ class BaseLLM(ABC):
         self.kwargs = kwargs
         self.costTracker = CostTracker(model_name=model_name)
 
+    # ========
+    # Defines build kwargs function for this module workflow.
+    # ========
     def build_kwargs(
         self,
         temperature: Optional[float] = None,
@@ -78,6 +92,9 @@ class BaseLLM(ABC):
             kwargs["max_tokens"] = self.default_max_tokens
         return kwargs
 
+    # ========
+    # Defines chat function for this module workflow.
+    # ========
     @abstractmethod
     def chat(
         self,
@@ -88,6 +105,9 @@ class BaseLLM(ABC):
         action: Optional[str] = None,
     ) -> str: ...
 
+    # ========
+    # Defines chat json function for this module workflow.
+    # ========
     @abstractmethod
     def chat_json(
         self,
@@ -98,8 +118,10 @@ class BaseLLM(ABC):
         action: Optional[str] = None,
     ) -> Dict: ...
 
+    # ========
+    # Defines infer usage action function for this module workflow.
+    # ========
     def infer_usage_action(self) -> str:
-        """嘗試從呼叫堆疊推斷這次 API 呼叫在做什麼。"""
         stack = inspect.stack(context=0)
         try:
             for frame_info in stack[2:]:
@@ -124,26 +146,38 @@ class BaseLLM(ABC):
             del stack
         return "unknown"
 
-    def addUsage(
+    # ========
+    # Defines add usage function for this module workflow.
+    # ========
+    def add_usage(
         self,
         usage: Optional[Dict[str, Any]],
         action: Optional[str] = None,
         run_time_s: Optional[float] = None,
     ):
         usage_action = action or self.infer_usage_action()
-        self.costTracker.addUsage(
+        self.costTracker.add_usage(
             usage,
             metadata={"action": usage_action},
             run_time_s=run_time_s,
         )
 
-    def getCostSummary(self) -> Optional[Dict[str, Any]]:
+    # ========
+    # Defines get cost summary function for this module workflow.
+    # ========
+    def get_cost_summary(self) -> Optional[Dict[str, Any]]:
         return self.costTracker.summary()
 
-    def getUsageCallRecords(self) -> List[Dict[str, Any]]:
+    # ========
+    # Defines get usage call records function for this module workflow.
+    # ========
+    def get_usage_call_records(self) -> List[Dict[str, Any]]:
         return self.costTracker.get_call_records()
 
 
+# ========
+# Defines create model function for this module workflow.
+# ========
 def create_model(provider: str, model_name: str, **kwargs) -> BaseLLM:
     from .claude import ClaudeModel
     from .gemini import GeminiModel

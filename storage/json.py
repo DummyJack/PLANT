@@ -1,4 +1,4 @@
-# JSON storage helpers with no-scientific-number serialization.
+# Handles json logic for project artifact storage and file export behavior.
 import json
 import re
 
@@ -9,13 +9,15 @@ from typing import Any, Dict, Union
 SCI_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
 
 
+# ========
+# Defines json dumps no scientific function for this module workflow.
+# ========
 def json_dumps_no_scientific(
     obj: Any,
     *,
     indent: int = 2,
     ensure_ascii: bool = False,
 ) -> str:
-    """json.dumps 後將數字字面上的科學記號改為十進位（避免 1.98e-05）。"""
     text = json.dumps(obj, indent=indent, ensure_ascii=ensure_ascii)
 
     def repl(m: re.Match) -> str:
@@ -28,6 +30,9 @@ def json_dumps_no_scientific(
     return SCI_JSON_NUMBER.sub(repl, text)
 
 
+# ========
+# Defines json dump no scientific function for this module workflow.
+# ========
 def json_dump_no_scientific(
     obj: Any,
     fp,
@@ -40,6 +45,43 @@ def json_dump_no_scientific(
     )
 
 
+# ========
+# Defines parse first json function for this module workflow.
+# ========
+def parse_first_json(raw: str) -> Dict[str, Any]:
+    if not raw or not isinstance(raw, str):
+        raise ValueError("Agent output must be a valid JSON object.")
+    text = raw.strip()
+    candidates = [text]
+    if "```" in text:
+        for part in text.split("```"):
+            value = part.strip()
+            if value.lower().startswith("json"):
+                value = value[4:].strip()
+            if value.startswith("{") and value.endswith("}"):
+                candidates.append(value)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_error = e
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    if last_error is not None:
+        raise ValueError(f"Agent output must be a valid JSON object: {last_error}") from last_error
+    raise ValueError("Agent output must be a JSON object.")
+
+
+# ========
+# Defines load json file function for this module workflow.
+# ========
 def load_json_file(base_dir: Path, filepath: Union[str, Path]) -> Dict[str, Any]:
     path = Path(filepath)
     if not path.is_absolute():
@@ -50,6 +92,9 @@ def load_json_file(base_dir: Path, filepath: Union[str, Path]) -> Dict[str, Any]
         return json.load(f)
 
 
+# ========
+# Defines save json file function for this module workflow.
+# ========
 def save_json_file(
     base_dir: Path,
     data: Dict[str, Any],

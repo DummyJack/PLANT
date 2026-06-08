@@ -1,4 +1,4 @@
-# Local OpenAI-compatible model adapter.
+# Handles local logic for model provider integration and shared LLM client behavior.
 import json
 import os
 
@@ -12,7 +12,7 @@ except Exception:  # pragma: no cover - optional dependency at import-time
     OpenAI = None
 
 
-def _parse_json_payload(raw: str) -> Dict[str, Any]:
+def parse_json_payload(raw: str) -> Dict[str, Any]:
     if not raw or not isinstance(raw, str):
         return {}
     text = raw.strip()
@@ -46,9 +46,14 @@ def _parse_json_payload(raw: str) -> Dict[str, Any]:
     raise ValueError("Local model output must be a valid JSON object.")
 
 
+# ========
+# Defines LocalModel class for this module workflow.
+# ========
 class LocalModel(BaseLLM):
-    """OpenAI-compatible local LLM, e.g. Ollama, LM Studio, or vLLM."""
 
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, model_name: str, **kwargs):
         base_url = kwargs.pop("base_url", None) or os.getenv("LOCAL_MODEL_BASE_URL")
         api_key = kwargs.pop("api_key", None) or os.getenv("LOCAL_MODEL_API_KEY") or "local"
@@ -61,11 +66,14 @@ class LocalModel(BaseLLM):
         self.base_url = base_url
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
-    def _record_usage(self, response: Any, action: Optional[str], run_time_s: Optional[float]) -> None:
+    # ========
+    # Defines record usage function for this module workflow.
+    # ========
+    def record_usage(self, response: Any, action: Optional[str], run_time_s: Optional[float]) -> None:
         usage = getattr(response, "usage", None) if response is not None else None
         if not usage:
             return
-        self.addUsage(
+        self.add_usage(
             {
                 "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                 "completion_tokens": getattr(usage, "completion_tokens", 0),
@@ -75,6 +83,9 @@ class LocalModel(BaseLLM):
             run_time_s=run_time_s,
         )
 
+    # ========
+    # Defines chat function for this module workflow.
+    # ========
     def chat(
         self,
         messages: List[Dict],
@@ -94,9 +105,12 @@ class LocalModel(BaseLLM):
             )
         finally:
             run_s = self.costTracker.end_segment()
-        self._record_usage(response, action, run_s)
+        self.record_usage(response, action, run_s)
         return response.choices[0].message.content or ""
 
+    # ========
+    # Defines chat json function for this module workflow.
+    # ========
     def chat_json(
         self,
         messages: List[Dict],
@@ -129,5 +143,5 @@ class LocalModel(BaseLLM):
                 )
         finally:
             run_s = self.costTracker.end_segment()
-        self._record_usage(response, action, run_s)
-        return _parse_json_payload(response.choices[0].message.content or "")
+        self.record_usage(response, action, run_s)
+        return parse_json_payload(response.choices[0].message.content or "")

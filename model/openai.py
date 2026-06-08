@@ -1,4 +1,4 @@
-# OpenAI model adapter for chat and JSON responses.
+# Handles openai logic for model provider integration and shared LLM client behavior.
 import json
 import os
 
@@ -12,7 +12,13 @@ except Exception:  # pragma: no cover - optional dependency at import-time
     OpenAI = None
 
 
+# ========
+# Defines OpenAIModel class for this module workflow.
+# ========
 class OpenAIModel(BaseLLM):
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
         if OpenAI is None:
@@ -22,6 +28,9 @@ class OpenAIModel(BaseLLM):
             raise ValueError("OPENAI_API_KEY not found in environment")
         self.client = OpenAI(api_key=api_key)
 
+    # ========
+    # Defines chat function for this module workflow.
+    # ========
     def chat(
         self,
         messages: List[Dict],
@@ -43,7 +52,7 @@ class OpenAIModel(BaseLLM):
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None
         if usage:
-            self.addUsage(
+            self.add_usage(
                 {
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                     "completion_tokens": getattr(usage, "completion_tokens", 0),
@@ -54,6 +63,9 @@ class OpenAIModel(BaseLLM):
             )
         return response.choices[0].message.content
 
+    # ========
+    # Defines chat json function for this module workflow.
+    # ========
     def chat_json(
         self,
         messages: List[Dict],
@@ -77,7 +89,7 @@ class OpenAIModel(BaseLLM):
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None
         if usage:
-            self.addUsage(
+            self.add_usage(
                 {
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                     "completion_tokens": getattr(usage, "completion_tokens", 0),

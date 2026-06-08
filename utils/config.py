@@ -1,10 +1,12 @@
-# Config helpers for model summaries and human settings.
+# Handles config logic for shared utility behavior for the Plant runtime.
 import json
 from typing import Any, Dict
 
 
+# ========
+# Defines format loaded models summary function for this module workflow.
+# ========
 def format_loaded_models_summary(config: dict) -> str:
-    """僅依 config 內 agent_models 原樣列出；不顯示 default 槽位。"""
     am = config.get("agent_models") or {}
     parts: list[str] = []
     for name, slot in am.items():
@@ -20,48 +22,46 @@ def format_loaded_models_summary(config: dict) -> str:
     return "✓ 載入配置 — " + " | ".join(parts)
 
 
+# ========
+# Defines human setting function for this module workflow.
+# ========
 def human_setting(config: Dict[str, Any], key: str, default: Any) -> Any:
-    """與人類互動／核准／挖掘流程相關設定。
-
-    優先讀 config["human"][key]；若無則讀頂層同名鍵；再否則 default。
-    """
     block = config.get("human")
     if isinstance(block, dict) and key in block:
         return block[key]
     return config.get(key, default)
 
 
+# ========
+# Defines meeting setting function for this module workflow.
+# ========
 def meeting_setting(config: Dict[str, Any], key: str, default: Any) -> Any:
-    """讀取會議開關設定。
-
-    優先讀 config["enable_meeting"][key]；若無則 default。
-    """
     block = config.get("enable_meeting")
     if isinstance(block, dict) and key in block:
         return block[key]
     return default
 
 
+# ========
+# Defines stage enabled function for this module workflow.
+# ========
 def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
-    """讀取 stage 開關；true 表示執行，false 表示跳過。"""
     stages = config.get("stage") if isinstance(config.get("stage"), dict) else {}
     value = stages.get(name, default)
     return bool(value)
 
 
+# ========
+# Defines export enabled function for this module workflow.
+# ========
 def export_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
-    """讀取輸出匯出設定；預設讀取 config["export"][name]。"""
     exports = config.get("export") if isinstance(config.get("export"), dict) else {}
-
-    # 提供舊欄位相容（html_export / cost_summary）。
-    if name == "html" and "html_export" in config.get("stage", {}) and "html" not in exports:
-        return bool(config["stage"].get("html_export", default))
-    if name == "cost" and "cost_summary" in config.get("stage", {}) and "cost" not in exports:
-        return bool(config["stage"].get("cost_summary", default))
-
     return bool(exports.get(name, default))
 
 
+# ========
+# Defines artifact path non empty function for this module workflow.
+# ========
 def artifact_path_non_empty(flow: Any, *parts: str) -> bool:
     artifact_dir = getattr(flow.store, "artifact_dir", None)
     if artifact_dir is None:
@@ -70,6 +70,9 @@ def artifact_path_non_empty(flow: Any, *parts: str) -> bool:
     return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
+# ========
+# Defines artifact json payload function for this module workflow.
+# ========
 def artifact_json_payload(flow: Any, *parts: str) -> Any:
     artifact_dir = getattr(flow.store, "artifact_dir", None)
     if artifact_dir is None:
@@ -84,6 +87,9 @@ def artifact_json_payload(flow: Any, *parts: str) -> Any:
         return None
 
 
+# ========
+# Defines payload non empty function for this module workflow.
+# ========
 def payload_non_empty(payload: Any) -> bool:
     if payload is None:
         return False
@@ -96,10 +102,16 @@ def payload_non_empty(payload: Any) -> bool:
     return True
 
 
+# ========
+# Defines artifact json non empty function for this module workflow.
+# ========
 def artifact_json_non_empty(flow: Any, *parts: str) -> bool:
     return payload_non_empty(artifact_json_payload(flow, *parts))
 
 
+# ========
+# Defines has draft payload function for this module workflow.
+# ========
 def has_draft_payload(flow: Any) -> bool:
     if not hasattr(flow.store, "get_draft_version") or not hasattr(flow.store, "load_draft"):
         return False
@@ -107,10 +119,16 @@ def has_draft_payload(flow: Any) -> bool:
     return draft_version >= 0 and bool(str(flow.store.load_draft(draft_version) or "").strip())
 
 
+# ========
+# Defines has candidate requirements function for this module workflow.
+# ========
 def has_candidate_requirements(artifact: Dict[str, Any]) -> bool:
     return bool(artifact.get("URL"))
 
 
+# ========
+# Defines has stakeholder text function for this module workflow.
+# ========
 def has_stakeholder_text(artifact: Dict[str, Any]) -> bool:
     for row in artifact.get("stakeholders", []) or []:
         if not isinstance(row, dict):
@@ -126,19 +144,30 @@ def has_stakeholder_text(artifact: Dict[str, Any]) -> bool:
     return False
 
 
+# ========
+# Defines has scope payload function for this module workflow.
+# ========
 def has_scope_payload(artifact: Dict[str, Any]) -> bool:
     scope = artifact.get("scope") if isinstance(artifact.get("scope"), dict) else {}
     return bool(scope.get("in_scope") or scope.get("out_of_scope"))
 
 
+# ========
+# Defines has feedback payload function for this module workflow.
+# ========
 def has_feedback_payload(artifact: Dict[str, Any]) -> bool:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    if feedback.get("status") == "no_applicable_feedback":
+        return True
     return any(
         bool(feedback.get(key))
         for key in ("findings", "sources", "constraints", "risks", "recommendations")
     )
 
 
+# ========
+# Defines has system models payload function for this module workflow.
+# ========
 def has_system_models_payload(artifact: Dict[str, Any]) -> bool:
     return bool([
         row for row in (artifact.get("system_models", []) or [])
@@ -146,6 +175,9 @@ def has_system_models_payload(artifact: Dict[str, Any]) -> bool:
     ])
 
 
+# ========
+# Defines has project scope requirements function for this module workflow.
+# ========
 def has_project_scope_requirements(flow: Any, artifact: Dict[str, Any]) -> bool:
     return (
         artifact_json_non_empty(flow, "project.json")
@@ -156,6 +188,9 @@ def has_project_scope_requirements(flow: Any, artifact: Dict[str, Any]) -> bool:
     )
 
 
+# ========
+# Defines require stage inputs function for this module workflow.
+# ========
 def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -> None:
     if stage_name == "init":
         if (
@@ -183,11 +218,11 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
         raise RuntimeError(
             "stage.conflict_detection 缺少輸入；需要 artifact/requirements.json 且 artifact 內已有 requirements"
         )
-    if stage_name == "domain_research":
+    if stage_name == "research_domain":
         if has_project_scope_requirements(flow, artifact):
             return
         raise RuntimeError(
-            "stage.domain_research 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json"
+            "stage.research_domain 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json"
         )
     if stage_name == "system_model":
         if has_project_scope_requirements(flow, artifact):
@@ -207,9 +242,9 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
         raise RuntimeError(
             "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/system_models.json"
         )
-    if stage_name == "SRS":
+    if stage_name in {"DR", "SRS"}:
         if has_draft_payload(flow):
             return
         raise RuntimeError(
-            "stage.SRS 缺少輸入；需要 artifact/drafts/draft_v0.md 或更新版本"
+            f"stage.{stage_name} 缺少輸入；需要 artifact/drafts/draft_v0.md 或更新版本"
         )

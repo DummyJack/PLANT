@@ -1,5 +1,6 @@
-# Artifact storage helpers: load/save split artifact files and draft markdown files.
+# Handles artifact logic for project artifact storage and file export behavior.
 import json
+import re
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,9 @@ from typing import Any, Dict, List, Optional
 from .json import save_json_file
 
 
+# ========
+# Defines load json path function for this module workflow.
+# ========
 def load_json_path(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
@@ -14,11 +18,17 @@ def load_json_path(path: Path, default: Any) -> Any:
         return json.load(f)
 
 
+# ========
+# Defines save json path function for this module workflow.
+# ========
 def save_json_path(base_dir: Path, data: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     save_json_file(base_dir, data, path)
 
 
+# ========
+# Defines has payload content function for this module workflow.
+# ========
 def has_payload_content(data: Any) -> bool:
     if data is None:
         return False
@@ -31,6 +41,31 @@ def has_payload_content(data: Any) -> bool:
     return True
 
 
+# ========
+# Defines compact markdown context function for this module workflow.
+# ========
+def compact_markdown_context(markdown: Any) -> Dict[str, Any]:
+    text = str(markdown or "").strip()
+    if not text:
+        return {"content": ""}
+
+    headings: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^#{1,4}\s+", stripped):
+            headings.append(stripped)
+
+    return {
+        "content": text,
+        "headings": headings,
+        "truncated": False,
+        "source_length": len(text),
+    }
+
+
+# ========
+# Defines save optional json path function for this module workflow.
+# ========
 def save_optional_json_path(base_dir: Path, data: Any, path: Path) -> None:
     if has_payload_content(data):
         save_json_path(base_dir, data, path)
@@ -38,6 +73,9 @@ def save_optional_json_path(base_dir: Path, data: Any, path: Path) -> None:
     path.unlink(missing_ok=True)
 
 
+# ========
+# Defines stakeholder record function for this module workflow.
+# ========
 def stakeholder_record(row: Any) -> Dict[str, Any]:
     if not isinstance(row, dict):
         return {"name": "", "text": [str(row).strip()] if str(row).strip() else []}
@@ -56,23 +94,32 @@ def stakeholder_record(row: Any) -> Dict[str, Any]:
     return record
 
 
-STAKEHOLDER_GROUPS = (
-    "Primary Users",
-    "System Owners & Management",
-    "External Parties",
+STAKEHOLDER_TYPES = (
+    "primary_user",
+    "system_owner",
+    "external_party",
 )
 
+# ========
+# Defines stakeholder group function for this module workflow.
+# ========
 def stakeholder_group(row: Dict[str, Any]) -> str:
     stakeholder_type = str(row.get("type") or "").strip()
-    if stakeholder_type in STAKEHOLDER_GROUPS:
+    if stakeholder_type in STAKEHOLDER_TYPES:
         return stakeholder_type
-    return "Primary Users"
+    raise ValueError(f"stakeholder type invalid: {stakeholder_type or '<empty>'}")
 
 
+# ========
+# Defines scenario payload function for this module workflow.
+# ========
 def scenario_payload(data: Any) -> str:
     return str(data or "").strip()
 
 
+# ========
+# Defines project payload function for this module workflow.
+# ========
 def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     stakeholders: List[Dict[str, Any]] = []
     for item in data.get("stakeholders", []) or []:
@@ -102,6 +149,9 @@ def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = N
     }
 
 
+# ========
+# Defines stakeholder rows function for this module workflow.
+# ========
 def stakeholder_rows(payload: Any) -> List[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -115,6 +165,9 @@ def stakeholder_rows(payload: Any) -> List[Dict[str, Any]]:
     return []
 
 
+# ========
+# Defines scope payload function for this module workflow.
+# ========
 def scope_payload(data: Dict[str, Any]) -> Dict[str, List[Any]]:
     scope = data.get("scope") if isinstance(data.get("scope"), dict) else {}
     payload = {
@@ -124,6 +177,9 @@ def scope_payload(data: Dict[str, Any]) -> Dict[str, List[Any]]:
     return payload if has_payload_content(payload) else {}
 
 
+# ========
+# Defines stakeholder names function for this module workflow.
+# ========
 def stakeholder_names(data: Dict[str, Any]) -> set[str]:
     names = set()
     for item in data.get("stakeholders", []) or []:
@@ -135,6 +191,9 @@ def stakeholder_names(data: Dict[str, Any]) -> set[str]:
     return names
 
 
+# ========
+# Defines requirement candidates function for this module workflow.
+# ========
 def requirement_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -153,6 +212,9 @@ def requirement_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+# ========
+# Defines requirement payload function for this module workflow.
+# ========
 def requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key in (
@@ -176,6 +238,9 @@ def requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# ========
+# Defines requirement payload rows function for this module workflow.
+# ========
 def requirement_payload_rows(rows: Any, *, active_only: bool = False) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for item in rows or []:
@@ -189,6 +254,9 @@ def requirement_payload_rows(rows: Any, *, active_only: bool = False) -> List[Di
     return out
 
 
+# ========
+# Defines system requirement payload function for this module workflow.
+# ========
 def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key in (
@@ -215,7 +283,8 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     if priority in {"must", "should", "could"}:
         payload["priority"] = priority
     elif "priority" in payload:
-        payload.pop("priority", None)
+        req_id = str(payload.get("id") or row.get("id") or "").strip()
+        raise ValueError(f"REQ priority 不合法: {req_id or '(missing id)'}")
     source_rows: List[str] = []
     value = row.get("source")
     if isinstance(value, list):
@@ -245,19 +314,9 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def system_requirement_payload_rows(rows: Any, *, include_type: bool = True) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for item in rows or []:
-        if not isinstance(item, dict):
-            continue
-        row = system_requirement_payload(item)
-        if include_type:
-            row["type"] = str(row.get("type") or "").strip()
-        if row:
-            out.append(row)
-    return out
-
-
+# ========
+# Defines split system requirement payload function for this module workflow.
+# ========
 def split_system_requirement_payload(data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     sections = {"REQ": []}
     for item in data.get("REQ", []) or []:
@@ -270,6 +329,9 @@ def split_system_requirement_payload(data: Dict[str, Any]) -> Dict[str, List[Dic
     return sections
 
 
+# ========
+# Defines system requirement rows from sections function for this module workflow.
+# ========
 def system_requirement_rows_from_sections(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for item in payload.get("REQ", []) or []:
@@ -285,6 +347,9 @@ def system_requirement_rows_from_sections(payload: Dict[str, Any]) -> List[Dict[
     return rows
 
 
+# ========
+# Defines meeting resolution payload function for this module workflow.
+# ========
 def meeting_resolution_payload(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {}
@@ -310,13 +375,15 @@ def meeting_resolution_payload(data: Any) -> Dict[str, Any]:
         payload["affected_requirement_ids"] = affected_requirement_ids
     if status == "human_decision" or needs_human:
         payload["unresolved_points"] = data.get("unresolved_points", []) or []
-        payload["new_open_questions"] = data.get("new_open_questions", []) or []
         payload["needs_human"] = needs_human
         payload["options"] = data.get("options", []) or []
         payload["recommendation"] = data.get("recommendation", {}) or {}
     return payload
 
 
+# ========
+# Defines requirements payload function for this module workflow.
+# ========
 def requirements_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "URL": requirement_payload_rows(data.get("URL", []) or [], active_only=True),
@@ -327,6 +394,9 @@ def requirements_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# ========
+# Defines conflict requirement ids function for this module workflow.
+# ========
 def conflict_requirement_ids(item: Dict[str, Any]) -> List[str]:
     req_ids = [
         str(req_id).strip()
@@ -342,10 +412,16 @@ def conflict_requirement_ids(item: Dict[str, Any]) -> List[str]:
     return req_ids
 
 
+# ========
+# Defines conflict output id function for this module workflow.
+# ========
 def conflict_output_id(prefix: str, index: int) -> str:
     return f"{prefix}-{index}"
 
 
+# ========
+# Defines requirement refs by id function for this module workflow.
+# ========
 def requirement_refs_by_id(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     rows = requirement_candidates(data)
     rows.extend([
@@ -371,6 +447,9 @@ def requirement_refs_by_id(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return refs
 
 
+# ========
+# Defines conflict requirement refs function for this module workflow.
+# ========
 def conflict_requirement_refs(
     item: Dict[str, Any],
     req_refs: Dict[str, Dict[str, Any]],
@@ -388,6 +467,9 @@ def conflict_requirement_refs(
     return [row for row in out if row.get("id") or row.get("text")]
 
 
+# ========
+# Defines conflict stakeholders function for this module workflow.
+# ========
 def conflict_stakeholders(
     item: Dict[str, Any],
     req_refs: Dict[str, Dict[str, Any]],
@@ -401,6 +483,9 @@ def conflict_stakeholders(
     return names
 
 
+# ========
+# Defines conflict requirements output function for this module workflow.
+# ========
 def conflict_requirements_output(
     row: Dict[str, Any],
     req_refs: Dict[str, Dict[str, Any]],
@@ -421,6 +506,9 @@ def conflict_requirements_output(
     return ordered
 
 
+# ========
+# Defines conflict report row function for this module workflow.
+# ========
 def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     row = {}
     if "id" in item:
@@ -447,7 +535,13 @@ def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[
     ).strip()
     if final_label:
         row["label"] = final_label
-    conflict_type = str(item.get("final_type") or meeting_row.get("final_type") or "").strip()
+    conflict_type = str(
+        item.get("final_type")
+        or meeting_row.get("final_type")
+        or item.get("initial_type")
+        or item.get("type")
+        or ""
+    ).strip()
     if final_label == "Conflict" and conflict_type:
         row["type"] = conflict_type
     description = str(item.get("description") or meeting_row.get("description") or "").strip()
@@ -462,6 +556,9 @@ def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[
     return row
 
 
+# ========
+# Defines reindex conflict report rows function for this module workflow.
+# ========
 def reindex_conflict_report_rows(rows: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for idx, row in enumerate(
@@ -478,70 +575,9 @@ def reindex_conflict_report_rows(rows: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def normalized_conflict_requirement_texts(item: Dict[str, Any]) -> Dict[str, str]:
-    texts: Dict[str, str] = {}
-    for req in item.get("requirements") or []:
-        if not isinstance(req, dict):
-            continue
-        req_id = str(req.get("id") or "").strip()
-        text = " ".join(str(req.get("text") or "").split())
-        if req_id and text:
-            texts[req_id] = text
-    return texts
-
-
-def conflict_enrichment_matches(row: Dict[str, Any], enrichment: Dict[str, Any]) -> bool:
-    previous_texts = enrichment.get("_requirement_texts")
-    if not isinstance(previous_texts, dict) or not previous_texts:
-        return True
-    current_texts = normalized_conflict_requirement_texts(row)
-    if not current_texts:
-        return False
-    return all(
-        current_texts.get(str(req_id)) == str(text)
-        for req_id, text in previous_texts.items()
-    )
-
-
-def existing_report_enrichment(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    state = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
-    enrichment: Dict[str, Dict[str, Any]] = {}
-    for item in state.get("report", []) or []:
-        if not isinstance(item, dict):
-            continue
-        row: Dict[str, Any] = {}
-        if isinstance(item.get("resolution_options"), list):
-            row["resolution_options"] = item["resolution_options"]
-        recommended_resolution = str(item.get("recommended_resolution") or "").strip()
-        if recommended_resolution:
-            row["recommended_resolution"] = recommended_resolution
-        for key in (
-            "status",
-            "meeting_id",
-            "summary",
-            "decision",
-        ):
-            value = item.get(key)
-            if value not in (None, "", [], {}):
-                row[key] = value
-        if not row:
-            continue
-        requirement_texts = normalized_conflict_requirement_texts(item)
-        if requirement_texts:
-            row["_requirement_texts"] = requirement_texts
-        conflict_id = str(item.get("source_id") or item.get("id") or "").strip()
-        if conflict_id:
-            known = dict(enrichment.get(conflict_id) or {})
-            known.update(row)
-            enrichment[conflict_id] = known
-        req_signature = conflict_requirement_signature(item)
-        if req_signature:
-            known = dict(enrichment.get(req_signature) or {})
-            known.update(row)
-            enrichment[req_signature] = known
-    return enrichment
-
-
+# ========
+# Defines conflict requirement signature function for this module workflow.
+# ========
 def conflict_requirement_signature(item: Dict[str, Any]) -> str:
     req_ids = sorted(conflict_requirement_ids(item))
     if not req_ids:
@@ -549,6 +585,76 @@ def conflict_requirement_signature(item: Dict[str, Any]) -> str:
     return "REQSIG:" + "|".join(req_ids)
 
 
+FINAL_CONFLICT_STATUSES = {"agreed", "human_decision"}
+
+
+# ========
+# Defines conflict report resolved function for this module workflow.
+# ========
+def conflict_report_resolved(item: Dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    return status in FINAL_CONFLICT_STATUSES
+
+
+# ========
+# Defines unresolved conflict report rows function for this module workflow.
+# ========
+def unresolved_conflict_report_rows(rows: Any, resolved_signatures: Optional[set[str]] = None) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    resolved: set[str] = set(resolved_signatures or set())
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        signature = conflict_requirement_signature(row)
+        if conflict_report_resolved(row):
+            if signature:
+                resolved.add(signature)
+            continue
+        if signature and signature in resolved:
+            continue
+        if signature and signature in seen:
+            continue
+        if signature:
+            seen.add(signature)
+        out.append(dict(row))
+    return out
+
+
+# ========
+# Defines merge conflict report history function for this module workflow.
+# ========
+def merge_conflict_report_history(versioned_rows: List[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    unresolved_by_signature: Dict[str, Dict[str, Any]] = {}
+    unresolved_without_signature: List[Dict[str, Any]] = []
+    resolved_signatures: set[str] = set()
+
+    for rows in versioned_rows:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            signature = conflict_requirement_signature(row)
+            if conflict_report_resolved(row):
+                if signature:
+                    resolved_signatures.add(signature)
+                    unresolved_by_signature.pop(signature, None)
+                continue
+            if signature:
+                if signature in resolved_signatures:
+                    continue
+                unresolved_by_signature[signature] = dict(row)
+            else:
+                unresolved_without_signature.append(dict(row))
+
+    return {
+        "report": list(unresolved_by_signature.values()) + unresolved_without_signature,
+        "resolved_signatures": sorted(resolved_signatures),
+    }
+
+
+# ========
+# Defines flatten conflict meeting fields function for this module workflow.
+# ========
 def flatten_conflict_meeting_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     meeting = row.get("meeting")
     if isinstance(meeting, dict):
@@ -581,109 +687,18 @@ def flatten_conflict_meeting_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     return ordered
 
 
+# ========
+# Defines remove final item label function for this module workflow.
+# ========
 def remove_final_item_label(row: Dict[str, Any]) -> Dict[str, Any]:
     row.pop("label", None)
     return row
 
 
-def normalized_pair_id_map(rows: Any) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-    idx = 1
-    for item in rows or []:
-        if not isinstance(item, dict):
-            continue
-        old_id = str(item.get("id") or "").strip()
-        if not old_id or old_id in mapping:
-            continue
-        mapping[old_id] = f"PAIR-{idx}"
-        idx += 1
-    return mapping
-
-
-def mapped_pair_id(value: Any, id_map: Dict[str, str]) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    return id_map.get(raw, raw)
-
-
-def extend_pair_id_map(id_map: Dict[str, str], rows: Any) -> Dict[str, str]:
-    mapping = dict(id_map)
-    next_num = len(mapping) + 1
-    for item in rows or []:
-        if not isinstance(item, dict):
-            continue
-        old_id = str(item.get("id") or "").strip()
-        if not old_id or old_id in mapping:
-            continue
-        mapping[old_id] = f"PAIR-{next_num}"
-        next_num += 1
-    return mapping
-
-
-def conflict_meeting_descriptions(rows: Any, id_map: Dict[str, str]) -> Dict[str, str]:
-    descriptions: Dict[str, str] = {}
-    for item in rows or []:
-        if not isinstance(item, dict):
-            continue
-        pair_id = mapped_pair_id(item.get("id"), id_map)
-        if not pair_id:
-            continue
-        description = str(item.get("description") or "").strip()
-        if description:
-            descriptions[pair_id] = description
-    return descriptions
-
-
-def conflict_meeting_final_labels(rows: Any, id_map: Dict[str, str]) -> Dict[str, str]:
-    labels: Dict[str, str] = {}
-    for item in rows or []:
-        if not isinstance(item, dict):
-            continue
-        pair_id = mapped_pair_id(item.get("id"), id_map)
-        if not pair_id:
-            continue
-        label = str(item.get("final_label") or "").strip()
-        if label in {"Conflict", "Neutral"}:
-            labels[pair_id] = label
-    return labels
-
-
-def conflict_pair_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
-    id_map = normalized_pair_id_map(rows)
-    meeting_descriptions = conflict_meeting_descriptions(meeting_rows, id_map)
-    meeting_final_labels = conflict_meeting_final_labels(meeting_rows, id_map)
-    reviewed_pairs: List[Dict[str, Any]] = []
-    pair_num = 1
-    for item in meeting_rows or []:
-        if not isinstance(item, dict):
-            continue
-        req_ids = conflict_requirement_ids(item)
-        if len(req_ids) != 2:
-            continue
-        pair_id = conflict_output_id("PAIR", pair_num)
-        pair_num += 1
-        source_id = mapped_pair_id(item.get("id"), id_map)
-        if not source_id:
-            continue
-        label = meeting_final_labels.get(source_id)
-        if label not in {"Conflict", "Neutral"}:
-            continue
-        row = {
-            "id": pair_id,
-            "requirements": [
-                {"id": req_ids[0]},
-                {"id": req_ids[1]},
-            ],
-            "label": label,
-        }
-        description = meeting_descriptions.get(source_id)
-        if description:
-            row["description"] = description
-        reviewed_pairs.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
-    if reviewed_pairs:
-        return reviewed_pairs
-
+# ========
+# Defines conflict pair payload function for this module workflow.
+# ========
+def conflict_pair_payload(rows: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     pair_num = 1
     for item in rows or []:
@@ -704,32 +719,23 @@ def conflict_pair_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
             "pair_index",
         ):
             row.pop(key, None)
-        if meeting_final_labels.get(new_id):
-            row["label"] = meeting_final_labels[new_id]
-        if meeting_descriptions.get(new_id):
-            row["description"] = meeting_descriptions[new_id]
         out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
     return out
 
 
-def conflict_multiple_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, Any]]:
-    id_map = normalized_pair_id_map(rows)
-    meeting_descriptions = conflict_meeting_descriptions(meeting_rows, id_map)
-    meeting_final_labels = conflict_meeting_final_labels(meeting_rows, id_map)
+# ========
+# Defines conflict multiple payload function for this module workflow.
+# ========
+def conflict_multiple_payload(rows: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     multiple_num = 1
-    source_rows = list(meeting_rows or []) or list(rows or [])
-    for item in source_rows:
+    for item in rows or []:
         if not isinstance(item, dict):
             continue
         req_ids = conflict_requirement_ids(item)
         if len(req_ids) < 2:
             continue
-        source_id = mapped_pair_id(item.get("id"), id_map)
-        label = (
-            meeting_final_labels.get(source_id)
-            or str(item.get("final_label") or item.get("label") or "").strip()
-        )
+        label = str(item.get("final_label") or item.get("label") or "").strip()
         if label not in {"Conflict", "Neutral"}:
             continue
         new_id = conflict_output_id("MULTIPLE", multiple_num)
@@ -741,31 +747,22 @@ def conflict_multiple_payload(rows: Any, meeting_rows: Any) -> List[Dict[str, An
         row["label"] = label
         if isinstance(item.get("meeting"), dict) and item["meeting"]:
             row["meeting"] = item["meeting"]
-        description = meeting_descriptions.get(source_id) or str(item.get("description") or "").strip()
+        description = str(item.get("description") or "").strip()
         if description:
             row["description"] = description
         out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
     return out
 
 
+# ========
+# Defines conflict payload function for this module workflow.
+# ========
 def conflict_payload(data: Dict[str, Any], *, include_report: bool = False) -> Dict[str, Any]:
     state = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
     pairs = state.get("pairs") or []
     multiple = state.get("multiple") or []
-    report_enrichment = existing_report_enrichment(data)
-    pair_payload = conflict_pair_payload(pairs, [])
-    multiple_payload = conflict_multiple_payload(multiple, [])
-    for row in list(pair_payload) + list(multiple_payload):
-        if not isinstance(row, dict):
-            continue
-        signature = conflict_requirement_signature(row)
-        enrichment = report_enrichment.get(signature) if signature else None
-        if not enrichment or not conflict_enrichment_matches(row, enrichment):
-            continue
-        for key in ("status", "meeting_id", "summary", "decision"):
-            value = enrichment.get(key)
-            if value not in (None, "", [], {}) and row.get(key) in (None, "", [], {}):
-                row[key] = value
+    pair_payload = conflict_pair_payload(pairs)
+    multiple_payload = conflict_multiple_payload(multiple)
     req_refs = requirement_refs_by_id(data)
     pair_payload = [
         conflict_requirements_output(row, req_refs)
@@ -803,23 +800,6 @@ def conflict_payload(data: Dict[str, Any], *, include_report: bool = False) -> D
         source = source_by_id.get(str(item.get("id") or "").strip(), item)
         report_source = {**source, **item}
         conflict_id = str(item.get("id") or "").strip()
-        if conflict_id in report_enrichment:
-            enrichment = report_enrichment[conflict_id]
-            if conflict_enrichment_matches(report_source, enrichment):
-                report_source.update({
-                    key: value
-                    for key, value in enrichment.items()
-                    if not key.startswith("_")
-                })
-        req_signature = conflict_requirement_signature(report_source)
-        if req_signature in report_enrichment:
-            enrichment = report_enrichment[req_signature]
-            if conflict_enrichment_matches(report_source, enrichment):
-                report_source.update({
-                    key: value
-                    for key, value in enrichment.items()
-                    if not key.startswith("_")
-                })
         if conflict_id:
             report_source["source_id"] = conflict_id
         report_source["id"] = f"CR-{report_index}"
@@ -829,6 +809,9 @@ def conflict_payload(data: Dict[str, Any], *, include_report: bool = False) -> D
     return payload if has_payload_content(payload) else {}
 
 
+# ========
+# Defines conflict storage payload function for this module workflow.
+# ========
 def conflict_storage_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     payload = conflict_payload(data, include_report=False)
     if not isinstance(payload, dict):
@@ -840,6 +823,9 @@ def conflict_storage_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ========
+# Defines conflict runtime state function for this module workflow.
+# ========
 def conflict_runtime_state(conflict_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
     if not isinstance(conflict_payload, dict):
         return {"report": [], "pairs": [], "multiple": []}
@@ -865,10 +851,13 @@ def conflict_runtime_state(conflict_payload: Any) -> Dict[str, List[Dict[str, An
     return {"report": report, "pairs": pairs, "multiple": multiple}
 
 
-def latest_conflict_report_payload(artifact_dir: Path) -> List[Dict[str, Any]]:
+# ========
+# Defines latest conflict report payload function for this module workflow.
+# ========
+def conflict_report_history_state(artifact_dir: Path) -> Dict[str, Any]:
     report_dir = artifact_dir / "report"
     if not report_dir.exists():
-        return []
+        return {"report": [], "resolved_signatures": []}
     versioned_paths: List[tuple[int, Path]] = []
     for path in report_dir.glob("conflict_report_v*.json"):
         stem = path.stem
@@ -877,53 +866,28 @@ def latest_conflict_report_payload(artifact_dir: Path) -> List[Dict[str, Any]]:
             continue
         versioned_paths.append((int(raw_version), path))
     if not versioned_paths:
-        return []
+        return {"report": [], "resolved_signatures": []}
     versioned_paths.sort(key=lambda item: item[0])
-    history_by_signature: Dict[str, Dict[str, Any]] = {}
-    latest_rows: List[Dict[str, Any]] = []
-    keep_keys = (
-        "resolution_options",
-        "recommended_resolution",
-        "status",
-        "meeting_id",
-        "summary",
-        "decision",
-    )
+    history: List[List[Dict[str, Any]]] = []
     for _, path in versioned_paths:
         payload = load_json_path(path, [])
         if not isinstance(payload, list):
             continue
-        rows = [dict(item) for item in payload if isinstance(item, dict)]
-        latest_rows = rows
-        for row in rows:
-            signature = conflict_requirement_signature(row)
-            if not signature:
-                continue
-            known = dict(history_by_signature.get(signature) or {})
-            for key in keep_keys:
-                value = row.get(key)
-                if value not in (None, "", [], {}):
-                    known[key] = value
-            requirement_texts = normalized_conflict_requirement_texts(row)
-            if requirement_texts:
-                known["_requirement_texts"] = requirement_texts
-            if known:
-                history_by_signature[signature] = known
-    out: List[Dict[str, Any]] = []
-    for row in latest_rows:
-        item = dict(row)
-        signature = conflict_requirement_signature(item)
-        known = history_by_signature.get(signature) if signature else None
-        if known and conflict_enrichment_matches(item, known):
-            for key, value in known.items():
-                if key.startswith("_"):
-                    continue
-                if item.get(key) in (None, "", [], {}):
-                    item[key] = value
-        out.append(item)
-    return out
+        history.append([dict(item) for item in payload if isinstance(item, dict)])
+    return merge_conflict_report_history(history)
 
 
+# ========
+# Defines latest conflict report payload function for this module workflow.
+# ========
+def latest_conflict_report_payload(artifact_dir: Path) -> List[Dict[str, Any]]:
+    state = conflict_report_history_state(artifact_dir)
+    return [dict(item) for item in (state.get("report") or []) if isinstance(item, dict)]
+
+
+# ========
+# Defines elicitation payload function for this module workflow.
+# ========
 def elicitation_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     elicitation = data.get("elicitation") if isinstance(data.get("elicitation"), dict) else {}
     plan = elicitation.get("plan", {}) or {}
@@ -942,6 +906,9 @@ def elicitation_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ========
+# Defines discussions payload function for this module workflow.
+# ========
 def discussions_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     def clean_discussion_item(item: Any) -> Dict[str, Any]:
         if not isinstance(item, dict):
@@ -1001,6 +968,9 @@ def discussions_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ========
+# Defines formal meeting payloads function for this module workflow.
+# ========
 def formal_meeting_payloads(data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     discussions = discussions_payload(data)
     payloads: Dict[str, List[Dict[str, Any]]] = {}
@@ -1016,6 +986,9 @@ def formal_meeting_payloads(data: Dict[str, Any]) -> Dict[str, List[Dict[str, An
     return payloads
 
 
+# ========
+# Defines models payload function for this module workflow.
+# ========
 def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     models = data.get("system_models", []) or []
     if not isinstance(models, list):
@@ -1040,7 +1013,7 @@ def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         ]
         if related_requirement_ids:
             row["related_requirement_ids"] = related_requirement_ids
-        if model.get("description") and str(model.get("type") or "").strip() != "use_case_diagram":
+        if model.get("description"):
             row["description"] = str(model.get("description") or "").strip()
         if isinstance(model.get("text"), list):
             row["text"] = [
@@ -1052,11 +1025,14 @@ def models_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+# ========
+# Defines issue proposals payload function for this module workflow.
+# ========
 def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     agent_rows: Dict[str, List[Dict[str, Any]]] = {}
     keep_keys = (
-        "id",
+        "issue_id",
         "title",
         "expect_outcome",
         "sources",
@@ -1065,11 +1041,12 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "proposed_by",
         "expected_actions",
     )
-    for idx, item in enumerate(data.get("issue_proposals", []) or [], 1):
+    for item in data.get("issue_proposals", []) or []:
         if not isinstance(item, dict):
             continue
         full_row = dict(item)
-        full_row["id"] = full_row.get("id") or full_row.get("issue_id") or f"ISSUE-PRO-{idx}"
+        if not str(full_row.get("issue_id") or "").strip():
+            raise ValueError("issue proposal 缺少 issue_id")
         row = {}
         for key in keep_keys:
             value = full_row.get(key)
@@ -1083,7 +1060,7 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         agent_rows.setdefault(f"r{round_num}", []).append(row)
     if agent_rows:
         out["agents"] = agent_rows
-    meeting_rows: List[Dict[str, Any]] = []
+    meeting_rows: Dict[str, List[Dict[str, Any]]] = {}
     meeting_keep_keys = (
         "id",
         "title",
@@ -1095,6 +1072,8 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "trace",
         "proposed_by",
         "expected_actions",
+        "meeting_id",
+        "completed",
     )
     for item in data.get("meeting_issues", []) or []:
         if not isinstance(item, dict):
@@ -1111,24 +1090,32 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
             round_num = int(item.get("round") or 1)
         except (TypeError, ValueError):
             round_num = 1
-        row["round"] = round_num
-        meeting_rows.append(row)
+        meeting_rows.setdefault(f"r{round_num}", []).append(row)
     if meeting_rows:
         out["meeting_issues"] = meeting_rows
     return out
 
 
+# ========
+# Defines feedback payload function for this module workflow.
+# ========
 def feedback_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     feedback = data.get("feedback") if isinstance(data.get("feedback"), dict) else {}
     return dict(feedback)
 
 
+# ========
+# Defines feedback dict function for this module workflow.
+# ========
 def feedback_dict(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     return {}
 
 
+# ========
+# Defines load formal meeting discussions function for this module workflow.
+# ========
 def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[str, Any]]]:
     meeting_dir = artifact_dir / "meeting"
     out: Dict[str, List[Dict[str, Any]]] = {}
@@ -1147,6 +1134,9 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
     return out
 
 
+# ========
+# Defines split payload function for this module workflow.
+# ========
 def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     project_file = artifact_dir / "project.json"
     requirements_file = artifact_dir / "requirements.json"
@@ -1157,41 +1147,60 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     scope = load_json_path(artifact_dir / "scope.json", None)
     requirements = load_json_path(requirements_file, {})
     conflict_file_payload = load_json_path(artifact_dir / "conflict.json", None)
-    conflict_report = latest_conflict_report_payload(artifact_dir)
+    conflict_report_state = conflict_report_history_state(artifact_dir)
+    conflict_report = [
+        dict(item) for item in (conflict_report_state.get("report") or [])
+        if isinstance(item, dict)
+    ]
+    resolved_conflict_signatures = [
+        str(value).strip()
+        for value in (conflict_report_state.get("resolved_signatures") or [])
+        if str(value).strip()
+    ]
     feedback = feedback_dict(load_json_path(artifact_dir / "feedback.json", {}))
     elicitation = load_json_path(artifact_dir / "meeting" / "elicitation_meeting.json", {})
     discussions = load_formal_meeting_discussions(artifact_dir)
-    issues = load_json_path(artifact_dir / "meeting" / "issues.json", [])
+    issues_path = artifact_dir / "meeting" / "issues.json"
+    issues = load_json_path(issues_path, {})
     models = load_json_path(artifact_dir / "system_models.json", [])
     issue_rows = []
     meeting_issue_rows = []
-    if isinstance(issues, dict):
-        issue_iter = []
-        agent_sections = issues.get("agents")
-        if isinstance(agent_sections, dict):
-            for key, rows in agent_sections.items():
-                try:
-                    round_num = int(str(key)[1:]) if str(key).startswith("r") else int(key)
-                except (TypeError, ValueError):
-                    round_num = None
-                for item in rows if isinstance(rows, list) else []:
-                    issue_iter.append((round_num, item))
-        for key, rows in issues.items():
-            if key == "agents":
-                continue
-            if key == "meeting_issues":
-                if isinstance(rows, list):
-                    meeting_issue_rows.extend(
-                        dict(item) for item in rows if isinstance(item, dict)
-                    )
-                continue
-    else:
-        issue_iter = [(None, item) for item in (issues if isinstance(issues, list) else [])]
+    if issues_path.exists() and not isinstance(issues, dict):
+        raise ValueError("issues.json 必須是 object")
+    issue_iter = []
+    agent_sections = issues.get("agents")
+    if isinstance(agent_sections, dict):
+        for key, rows in agent_sections.items():
+            try:
+                round_num = int(str(key)[1:]) if str(key).startswith("r") else int(key)
+            except (TypeError, ValueError):
+                round_num = None
+            for item in rows if isinstance(rows, list) else []:
+                issue_iter.append((round_num, item))
+    meeting_issue_section = issues.get("meeting_issues")
+    if isinstance(meeting_issue_section, dict):
+        for key, rows in meeting_issue_section.items():
+            try:
+                round_num = int(str(key)[1:]) if str(key).startswith("r") else int(key)
+            except (TypeError, ValueError):
+                round_num = None
+            for item in rows if isinstance(rows, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                if round_num is not None:
+                    row["round"] = round_num
+                meeting_issue_rows.append(row)
+    elif isinstance(meeting_issue_section, list):
+        meeting_issue_rows.extend(
+            dict(item) for item in meeting_issue_section if isinstance(item, dict)
+        )
     for round_num, item in issue_iter:
         if not isinstance(item, dict):
             continue
         row = dict(item)
-        row["issue_id"] = row.get("issue_id") or row.get("id")
+        if not str(row.get("issue_id") or "").strip():
+            raise ValueError("issue proposal 缺少 issue_id")
         if round_num is not None:
             row["round"] = round_num
         issue_rows.append(row)
@@ -1233,17 +1242,44 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         conflict_state = conflict_runtime_state(conflict_file_payload)
         if conflict_report:
             conflict_state["report"] = conflict_report
+        if resolved_conflict_signatures:
+            conflict_state["resolved_signatures"] = resolved_conflict_signatures
         artifact["conflict"] = conflict_state
     elif conflict_report:
-        artifact["conflict"] = {"report": conflict_report, "pairs": [], "multiple": []}
+        artifact["conflict"] = {
+            "report": conflict_report,
+            "pairs": [],
+            "multiple": [],
+            "resolved_signatures": resolved_conflict_signatures,
+        }
+    elif resolved_conflict_signatures:
+        artifact["conflict"] = {
+            "report": [],
+            "pairs": [],
+            "multiple": [],
+            "resolved_signatures": resolved_conflict_signatures,
+        }
     return artifact
 
 
+# ========
+# Defines load artifact function for this module workflow.
+# ========
 def load_artifact(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     return split_payload(artifact_dir)
 
 
+# ========
+# Defines save artifact function for this module workflow.
+# ========
 def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> None:
+    try:
+        from .requirements import renumber_system_requirement_ids
+
+        renumber_system_requirement_ids(data)
+    except Exception as exc:
+        raise RuntimeError("儲存 artifact 前整理 REQ id 失敗") from exc
+
     artifact_dir.mkdir(parents=True, exist_ok=True)
     meeting_dir = artifact_dir / "meeting"
     project_path = artifact_dir / "project.json"
@@ -1254,10 +1290,9 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_optional_json_path(base_dir, conflict_storage_payload(data), artifact_dir / "conflict.json")
     save_optional_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
     save_optional_json_path(base_dir, elicitation_payload(data), meeting_dir / "elicitation_meeting.json")
-    for pattern in ("formal_meeting_r*.json", "formal_meeting_v*.json", "formal_meeting_default.json"):
+    for pattern in ("formal_meeting_r*.json",):
         for path in meeting_dir.glob(pattern):
             path.unlink(missing_ok=True)
-    save_optional_json_path(base_dir, None, meeting_dir / "formal_meeting.json")
     meeting_payloads = formal_meeting_payloads(data)
     for filename, payload in meeting_payloads.items():
         save_optional_json_path(base_dir, payload, meeting_dir / filename)
@@ -1266,8 +1301,10 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_optional_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
 
 
+# ========
+# Defines save draft function for this module workflow.
+# ========
 def save_draft(artifact_dir: Path, content: str, version: int) -> None:
-    """儲存需求草稿為 draft_v{version}.md（Markdown）到 artifact 目錄"""
     drafts_dir = artifact_dir / "drafts"
     drafts_dir.mkdir(parents=True, exist_ok=True)
     path = drafts_dir / f"draft_v{version}.md"
@@ -1275,8 +1312,10 @@ def save_draft(artifact_dir: Path, content: str, version: int) -> None:
         f.write(content)
 
 
+# ========
+# Defines get draft version function for this module workflow.
+# ========
 def get_draft_version(artifact_dir: Path) -> int:
-    """回傳目前已有的 draft 最大版本號；若無則回傳 -1"""
     max_v = -1
     if not artifact_dir.exists():
         return max_v
@@ -1294,8 +1333,10 @@ def get_draft_version(artifact_dir: Path) -> int:
     return max_v
 
 
+# ========
+# Defines load draft function for this module workflow.
+# ========
 def load_draft(artifact_dir: Path, version: int) -> Optional[str]:
-    """載入指定版本的 draft markdown"""
     path = artifact_dir / "drafts" / f"draft_v{version}.md"
     if not path.exists():
         return None

@@ -1,4 +1,4 @@
-# Gemini model adapter for chat, JSON responses, and tool calls.
+# Handles gemini logic for model provider integration and shared LLM client behavior.
 import json
 import logging
 import os
@@ -12,7 +12,6 @@ from .base import BaseLLM
 def gemini_split_messages(
     messages: List[Dict],
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-    """將 OpenAI 風格 messages 轉成 Gemini contents 格式。"""
     system_parts: List[str] = []
     contents: List[Dict[str, Any]] = []
     for m in messages:
@@ -32,9 +31,14 @@ def gemini_split_messages(
     return system_instruction, contents
 
 
+# ========
+# Defines GeminiModel class for this module workflow.
+# ========
 class GeminiModel(BaseLLM):
-    """Google Gemini（google-genai / google.genai）。需安裝套件與 GEMINI_API_KEY。"""
 
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
         try:
@@ -48,8 +52,10 @@ class GeminiModel(BaseLLM):
             raise ValueError("GEMINI_API_KEY not found in environment")
         self.client = genai.Client(api_key=api_key)
 
+    # ========
+    # Defines gemini response text function for this module workflow.
+    # ========
     def gemini_response_text(self, response: Any) -> str:
-        """取得 Gemini 文字；部分情況下 .text 會拋錯（例如安全阻擋）。"""
         try:
             t = getattr(response, "text", None)
             if t:
@@ -67,6 +73,9 @@ class GeminiModel(BaseLLM):
             return "".join(parts)
         return ""
 
+    # ========
+    # Defines contents dicts to genai function for this module workflow.
+    # ========
     def contents_dicts_to_genai(
         self,
         contents: List[Dict[str, Any]],
@@ -83,6 +92,9 @@ class GeminiModel(BaseLLM):
             out.append(types.Content(role=role, parts=parts))
         return out
 
+    # ========
+    # Defines make generate config function for this module workflow.
+    # ========
     def make_generate_config(
         self,
         system_instruction: Optional[str],
@@ -108,6 +120,9 @@ class GeminiModel(BaseLLM):
             return None
         return types.GenerateContentConfig(**cfg_kw)
 
+    # ========
+    # Defines generate function for this module workflow.
+    # ========
     def generate(
         self,
         system_instruction: Optional[str],
@@ -133,6 +148,9 @@ class GeminiModel(BaseLLM):
             call_kw["config"] = gen_cfg
         return self.client.models.generate_content(**call_kw)
 
+    # ========
+    # Defines add usage from response function for this module workflow.
+    # ========
     def add_usage_from_response(
         self,
         response: Any,
@@ -147,7 +165,7 @@ class GeminiModel(BaseLLM):
         total = getattr(um, "total_token_count", None)
         if total is None:
             total = prompt + cand
-        self.addUsage(
+        self.add_usage(
             {
                 "prompt_tokens": prompt,
                 "completion_tokens": cand,
@@ -157,11 +175,13 @@ class GeminiModel(BaseLLM):
             run_time_s=run_time_s,
         )
 
+    # ========
+    # Defines openai tool schemas to gemini tools function for this module workflow.
+    # ========
     def openai_tool_schemas_to_gemini_tools(
         self,
         openai_style_schemas: List[Dict[str, Any]],
     ) -> List[Any]:
-        """將 BaseAgent.get_tool_schemas() 的 OpenAI function 格式轉成 google.genai Tool。"""
         from google.genai import types
 
         decls: List[Any] = []
@@ -185,6 +205,9 @@ class GeminiModel(BaseLLM):
             return []
         return [types.Tool(function_declarations=decls)]
 
+    # ========
+    # Defines make generate config with tools function for this module workflow.
+    # ========
     def make_generate_config_with_tools(
         self,
         system_instruction: Optional[str],
@@ -216,11 +239,13 @@ class GeminiModel(BaseLLM):
             cfg_kw["max_output_tokens"] = int(mt)
         return types.GenerateContentConfig(**cfg_kw)
 
+    # ========
+    # Defines model content function calls function for this module workflow.
+    # ========
     def model_content_function_calls(
         self,
         response: Any,
     ) -> Tuple[Optional[Any], List[Any], str]:
-        """從 generate_content 回傳解析 model 的 Content、其中的 FunctionCall 列表、純文字。"""
         cands = getattr(response, "candidates", None) or []
         if not cands:
             return None, [], self.gemini_response_text(response)
@@ -238,6 +263,9 @@ class GeminiModel(BaseLLM):
                 texts.append(p.text)
         return content, calls, "".join(texts)
 
+    # ========
+    # Defines gemini chat with tools function for this module workflow.
+    # ========
     def gemini_chat_with_tools(
         self,
         messages: List[Dict],
@@ -250,10 +278,6 @@ class GeminiModel(BaseLLM):
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
     ) -> str:
-        """
-        Gemini 手動 function calling 迴圈（與 OpenAI chat.completions tools 對齊）。
-        openai_style_tool_schemas：與 get_tool_schemas() 相同格式。
-        """
         from google.genai import types
 
         log = logging.getLogger("Plant.GeminiModel")
@@ -397,6 +421,9 @@ class GeminiModel(BaseLLM):
         self.add_usage_from_response(final_resp, action=action, run_time_s=run_s)
         return self.gemini_response_text(final_resp) or ""
 
+    # ========
+    # Defines chat function for this module workflow.
+    # ========
     def chat(
         self,
         messages: List[Dict],
@@ -425,6 +452,9 @@ class GeminiModel(BaseLLM):
             return text
         raise ValueError("Gemini 無回應內容（可能被安全過濾或無候選）")
 
+    # ========
+    # Defines chat json function for this module workflow.
+    # ========
     def chat_json(
         self,
         messages: List[Dict],

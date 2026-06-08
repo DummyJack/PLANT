@@ -1,4 +1,4 @@
-# Claude model adapter for chat and JSON responses.
+# Handles claude logic for model provider integration and shared LLM client behavior.
 import json
 
 from typing import Dict, List, Optional, Tuple
@@ -9,7 +9,6 @@ from .base import BaseLLM
 def claude_split_messages(
     messages: List[Dict],
 ) -> Tuple[Optional[str], List[Dict[str, str]]]:
-    """將 OpenAI 風格 messages 轉成 Claude Messages API 格式。"""
     system_parts: List[str] = []
     out: List[Dict[str, str]] = []
     for m in messages:
@@ -29,9 +28,14 @@ def claude_split_messages(
     return system, out
 
 
+# ========
+# Defines ClaudeModel class for this module workflow.
+# ========
 class ClaudeModel(BaseLLM):
-    """Claude（Messages API）。需安裝 anthropic 套件與 ANTHROPIC_API_KEY。"""
 
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, model_name: str, **kwargs):
         super().__init__(model_name, **kwargs)
         try:
@@ -47,6 +51,9 @@ class ClaudeModel(BaseLLM):
             raise ValueError("ANTHROPIC_API_KEY not found in environment")
         self.client = anthropic.Anthropic(api_key=api_key)
 
+    # ========
+    # Defines effective max tokens function for this module workflow.
+    # ========
     def effective_max_tokens(
         self,
         temperature: Optional[float],
@@ -59,6 +66,9 @@ class ClaudeModel(BaseLLM):
             mt = 4096
         return max(1, int(mt))
 
+    # ========
+    # Defines chat function for this module workflow.
+    # ========
     def chat(
         self,
         messages: List[Dict],
@@ -93,7 +103,7 @@ class ClaudeModel(BaseLLM):
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None
         if usage:
-            self.addUsage(
+            self.add_usage(
                 {
                     "prompt_tokens": getattr(usage, "input_tokens", 0),
                     "completion_tokens": getattr(usage, "output_tokens", 0),
@@ -110,6 +120,9 @@ class ClaudeModel(BaseLLM):
                 parts.append(t)
         return "".join(parts)
 
+    # ========
+    # Defines chat json function for this module workflow.
+    # ========
     def chat_json(
         self,
         messages: List[Dict],

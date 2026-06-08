@@ -1,20 +1,23 @@
-# Cost tracker: runtime, usage records, and estimated model costs.
+# Handles cost logic for shared utility behavior for the Plant runtime.
 import threading
 
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 
+# ========
+# Defines CostTracker class for this module workflow.
+# ========
 class CostTracker:
-    """LLM token、耗時與估算成本。"""
 
-    # 單位：USD / 1M tokens
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
-        # 官方定價（Text tokens, Standard）
         "gpt-5.2": {"input": 1.75, "output": 14.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
     }
 
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(
         self,
         model_name: str,
@@ -35,12 +38,17 @@ class CostTracker:
         self.lock = threading.Lock()
         self.call_records: List[Dict[str, Any]] = []
 
+    # ========
+    # Defines start function for this module workflow.
+    # ========
     def start(self):
         with self.lock:
             self.startedAt = perf_counter()
 
+    # ========
+    # Defines end segment function for this module workflow.
+    # ========
     def end_segment(self) -> float:
-        """結束本段計時並回傳秒數。"""
         with self.lock:
             if self.startedAt is None:
                 return 0.0
@@ -49,13 +57,15 @@ class CostTracker:
             self.startedAt = None
             return seg
 
-    def addUsage(
+    # ========
+    # Defines add usage function for this module workflow.
+    # ========
+    def add_usage(
         self,
         usage: Optional[Dict[str, Any]],
         metadata: Optional[Dict[str, Any]] = None,
         run_time_s: Optional[float] = None,
     ):
-        """累加 token；total_tokens 固定為 input+output（可核對彙總）。"""
         if not usage:
             return
 
@@ -78,8 +88,11 @@ class CostTracker:
             self.input_tokens += input_count
             self.output_tokens += output_count
             self.total_tokens += total_count
-            self.estimated_cost_usd += self.estimateCost(input_count, output_count)
+            self.estimated_cost_usd += self.estimate_cost(input_count, output_count)
 
+    # ========
+    # Defines reset function for this module workflow.
+    # ========
     def reset(self):
         with self.lock:
             self.input_tokens = 0
@@ -90,12 +103,17 @@ class CostTracker:
             self.startedAt = None
             self.call_records.clear()
 
+    # ========
+    # Defines get call records function for this module workflow.
+    # ========
     def get_call_records(self) -> List[Dict[str, Any]]:
         with self.lock:
             return list(self.call_records)
 
+    # ========
+    # Defines resolved total run time seconds function for this module workflow.
+    # ========
     def resolved_total_run_time_seconds(self) -> float:
-        """總耗時：segment 計時與各次 addUsage(..., run_time_s=...) 加總取較大者。"""
         with self.lock:
             from_segments = float(self.elapsed_seconds)
             if self.startedAt is not None:
@@ -105,8 +123,11 @@ class CostTracker:
             )
             return max(from_segments, from_records)
 
+    # ========
+    # Defines summary function for this module workflow.
+    # ========
     def summary(self) -> Optional[Dict[str, Any]]:
-        pricing = self.resolvePricing(self.model_name)
+        pricing = self.resolve_pricing(self.model_name)
         if pricing is None:
             return None
 
@@ -121,8 +142,10 @@ class CostTracker:
                 "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
             }
 
+    # ========
+    # Defines export summary dict function for this module workflow.
+    # ========
     def export_summary_dict(self) -> Dict[str, Any]:
-        """匯出用：必回傳可序列化摘要（無定價表時 estimated_cost 可能為 0）。"""
         total_rt = self.resolved_total_run_time_seconds()
         with self.lock:
             return {
@@ -134,19 +157,24 @@ class CostTracker:
                 "estimated_cost(USD)": round(self.estimated_cost_usd, 8),
             }
 
-    def resolvePricing(self, model_name: str) -> Optional[Dict[str, float]]:
+    # ========
+    # Defines resolve pricing function for this module workflow.
+    # ========
+    def resolve_pricing(self, model_name: str) -> Optional[Dict[str, float]]:
         if model_name in self.pricing_per_1m_tokens:
             return self.pricing_per_1m_tokens[model_name]
 
-        # 支援前綴比對，例如 gpt-4o-2024-xx
         for key, value in self.pricing_per_1m_tokens.items():
             if key != "default" and model_name.startswith(key):
                 return value
 
         return None
 
-    def estimateCost(self, input_tokens: int, output_tokens: int) -> float:
-        pricing = self.resolvePricing(self.model_name)
+    # ========
+    # Defines estimate cost function for this module workflow.
+    # ========
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        pricing = self.resolve_pricing(self.model_name)
         if not pricing:
             return 0.0
 
@@ -162,9 +190,8 @@ def model_has_token_pricing(
     model_name: str,
     pricing_per_1m_tokens: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> bool:
-    """實驗腳本用：模型名稱是否在 CostTracker 定價表（含前綴比對）可解析。"""
     name = str(model_name or "").strip()
     if not name:
         return False
     tracker = CostTracker(name, pricing_per_1m_tokens=pricing_per_1m_tokens)
-    return tracker.resolvePricing(tracker.model_name) is not None
+    return tracker.resolve_pricing(tracker.model_name) is not None

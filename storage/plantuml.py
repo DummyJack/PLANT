@@ -1,15 +1,19 @@
-# PlantUML storage helpers: write generated diagram files safely.
+# Handles plantuml logic for project artifact storage and file export behavior.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Optional
 import socket
 import urllib.error
 import urllib.request
+import zlib
 
 
 PLANTUML_SERVER = "https://www.plantuml.com/plantuml"
 
 
+# ========
+# Defines plantuml safe name function for this module workflow.
+# ========
 def plantuml_safe_name(model: Dict[str, Any]) -> str:
     safe_name = "".join(
         c
@@ -19,10 +23,33 @@ def plantuml_safe_name(model: Dict[str, Any]) -> str:
     return safe_name or "unnamed"
 
 
-def encode_plantuml_hex(code: str) -> str:
-    return "~h" + code.encode("utf-8").hex()
+# ========
+# Defines encode plantuml function for this module workflow.
+# ========
+def encode_plantuml(code: str) -> str:
+    compressed = zlib.compress(code.encode("utf-8"), 9)[2:-4]
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+
+    def encode3(b1: int, b2: int, b3: int) -> str:
+        c1 = b1 >> 2
+        c2 = ((b1 & 0x3) << 4) | (b2 >> 4)
+        c3 = ((b2 & 0xF) << 2) | (b3 >> 6)
+        c4 = b3 & 0x3F
+        return alphabet[c1 & 0x3F] + alphabet[c2 & 0x3F] + alphabet[c3 & 0x3F] + alphabet[c4 & 0x3F]
+
+    out = []
+    for idx in range(0, len(compressed), 3):
+        chunk = compressed[idx:idx + 3]
+        b1 = chunk[0]
+        b2 = chunk[1] if len(chunk) > 1 else 0
+        b3 = chunk[2] if len(chunk) > 2 else 0
+        out.append(encode3(b1, b2, b3))
+    return "".join(out)
 
 
+# ========
+# Defines write plantuml file function for this module workflow.
+# ========
 def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[str]:
     plantuml_code = model.get("plantuml", "")
     if not plantuml_code:
@@ -37,6 +64,9 @@ def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     return filename
 
 
+# ========
+# Defines render plantuml png function for this module workflow.
+# ========
 def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[str]:
     plantuml_code = model.get("plantuml", "")
     if not plantuml_code:
@@ -46,7 +76,7 @@ def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     models_dir = artifact_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     filepath = models_dir / filename
-    url = f"{PLANTUML_SERVER}/png/{encode_plantuml_hex(plantuml_code)}"
+    url = f"{PLANTUML_SERVER}/png/{encode_plantuml(plantuml_code)}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -59,6 +89,9 @@ def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     return None
 
 
+# ========
+# Defines save plantuml files function for this module workflow.
+# ========
 def save_plantuml_files(artifact_dir: Path, model_data: Any) -> None:
     models = [m for m in (model_data or []) if isinstance(m, dict) and m.get("plantuml")]
     if not models:

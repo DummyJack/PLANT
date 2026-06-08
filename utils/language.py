@@ -1,9 +1,12 @@
-# Output language helpers shared by agents and prompts.
+# Handles language logic for shared utility behavior for the Plant runtime.
 import os
 import re
 from typing import Any, Dict, Optional
 
 
+# ========
+# Defines is likely english function for this module workflow.
+# ========
 def is_likely_english(text: str) -> bool:
     text = str(text or "").strip()
     if not text:
@@ -13,6 +16,9 @@ def is_likely_english(text: str) -> bool:
     return len(ascii_words) >= max(3, len(cjk_chars))
 
 
+# ========
+# Defines sync output language function for this module workflow.
+# ========
 def sync_output_language(
     rough_idea: str,
     artifact: Optional[Dict[str, Any]] = None,
@@ -28,6 +34,9 @@ def sync_output_language(
     return lang
 
 
+# ========
+# Defines current output language function for this module workflow.
+# ========
 def current_output_language() -> str:
     val = str(os.environ.get("PLANT_OUTPUT_LANGUAGE", "zh-Hant")).strip().lower()
     if val in {"en", "english"}:

@@ -1,4 +1,4 @@
-# Project storage helpers: list, load, and create project folders.
+# Handles project logic for project artifact storage and file export behavior.
 import json
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# ========
+# Defines load one project function for this module workflow.
+# ========
 def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
     if not project_path.is_dir():
         return None
@@ -28,6 +31,9 @@ def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
     }
 
 
+# ========
+# Defines list projects function for this module workflow.
+# ========
 def list_projects(projects_dir: Path) -> List[Dict[str, Any]]:
     if not projects_dir.exists():
         return []
@@ -53,6 +59,9 @@ def list_projects(projects_dir: Path) -> List[Dict[str, Any]]:
     return projects
 
 
+# ========
+# Defines create project function for this module workflow.
+# ========
 def create_project(projects_dir: Path) -> str:
     project_id = datetime.now().strftime("%H%M%S")
     (projects_dir / project_id).mkdir(parents=True, exist_ok=True)

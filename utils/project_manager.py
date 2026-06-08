@@ -1,4 +1,4 @@
-# Project manager: create or continue project sessions from storage.
+# Handles project manager logic for shared utility behavior for the Plant runtime.
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +8,9 @@ from storage import Store
 from utils.language import sync_output_language
 
 
+# ========
+# Defines ProjectSession class for this module workflow.
+# ========
 @dataclass
 class ProjectSession:
     project_id: str
@@ -16,7 +19,13 @@ class ProjectSession:
     artifact: Optional[Dict[str, Any]] = None
 
 
+# ========
+# Defines ProjectManager class for this module workflow.
+# ========
 class ProjectManager:
+    # ========
+    # Defines select or create project function for this module workflow.
+    # ========
     @staticmethod
     def select_or_create_project(store) -> Tuple[str, bool]:
         temp_store = Store(store.base_dir)
@@ -63,6 +72,9 @@ class ProjectManager:
             except ValueError:
                 print("❌ 請輸入數字")
 
+    # ========
+    # Defines display project info function for this module workflow.
+    # ========
     @staticmethod
     def display_project_info(store, project_id: str):
         artifact = store.load_artifact()
@@ -83,6 +95,9 @@ class ProjectManager:
             print(f"已完成輪數: {len(discussions)}")
         print("=" * 60 + "\n")
 
+    # ========
+    # Defines prepare project session function for this module workflow.
+    # ========
     @staticmethod
     def prepare_project_session(base_dir: Path, base_store) -> ProjectSession:
         project_id, is_continue = ProjectManager.select_or_create_project(base_store)

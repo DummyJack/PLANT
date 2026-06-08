@@ -1,4 +1,4 @@
-# Model package exports LLM factory and provider validation.
+# Initializes the model package.
 from .base import BaseLLM, create_model, validate_provider_api_keys
 from .claude import ClaudeModel, claude_split_messages
 from .gemini import GeminiModel, gemini_split_messages

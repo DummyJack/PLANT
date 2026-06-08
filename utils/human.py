@@ -1,23 +1,29 @@
-# Human input helpers for project choices and topic decisions.
+# Handles human logic for shared utility behavior for the Plant runtime.
 import re
 from typing import Dict, List
 
 
 STAKEHOLDER_CATEGORY_LABELS = {
-    "Primary Users": "核心使用者",
-    "System Owners & Management": "系統所有者與管理者",
-    "External Parties": "外部相關單位",
+    "primary_user": "核心使用者",
+    "system_owner": "系統所有者與管理者",
+    "external_party": "外部相關單位",
 }
 STAKEHOLDER_CATEGORY_VALUES = set(STAKEHOLDER_CATEGORY_LABELS.keys())
 
 
+# ========
+# Defines Collect class for this module workflow.
+# ========
 class Collect:
+    # ========
+    # Defines custom stakeholder type function for this module workflow.
+    # ========
     @staticmethod
     def custom_stakeholder_type(name: str) -> str:
         categories = [
-            ("Primary Users", "核心使用者"),
-            ("System Owners & Management", "系統所有者與管理者"),
-            ("External Parties", "外部相關單位"),
+            ("primary_user", "核心使用者"),
+            ("system_owner", "系統所有者與管理者"),
+            ("external_party", "外部相關單位"),
         ]
         while True:
             print(f"\n請選擇「{name}」的類型：")
@@ -33,6 +39,9 @@ class Collect:
                 return categories[idx][0]
             print("❌ 類型編號無效")
 
+    # ========
+    # Defines user selection function for this module workflow.
+    # ========
     @staticmethod
     def user_selection(
         proposed: List[Dict[str, str]], max_select: int = 5
@@ -117,6 +126,9 @@ class Collect:
                 print(f"\n❌ 錯誤：{e}")
                 continue
 
+    # ========
+    # Defines human decision on issue function for this module workflow.
+    # ========
     @staticmethod
     def human_decision_on_issue(issue: Dict, options) -> Dict:
         def clean_option_title(value) -> str:
@@ -158,7 +170,6 @@ class Collect:
             idx = len(all_options) + 1
             option = dict(compromise)
             option["id"] = idx
-            option.setdefault("source", "compromise")
             title = clean_option_title(compromise.get("title", ""))
             description = str(compromise.get("description") or "").strip()
             print(f"\n  {idx}. {title}")

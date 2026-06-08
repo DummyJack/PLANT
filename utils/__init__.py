@@ -1,4 +1,16 @@
-# Utility package compatibility exports.
+# Initializes the utils package and disables runtime bytecode cache output.
+import os
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+
+_repo_root = Path(__file__).resolve().parent.parent
+_repo_root_str = str(_repo_root)
+if _repo_root_str not in sys.path:
+    sys.path.insert(0, _repo_root_str)
+
 from storage import json_dump_no_scientific, json_dumps_no_scientific
 
 from .config import (
@@ -20,7 +32,7 @@ from .config import (
     stage_enabled,
 )
 from .cost import CostTracker, model_has_token_pricing
-from .human_collect import Collect
+from .human import Collect
 from .language import current_output_language, is_likely_english, sync_output_language
 from .log import Logger
 from .project_manager import ProjectManager, ProjectSession
