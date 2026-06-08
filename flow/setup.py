@@ -1,4 +1,4 @@
-# Flow setup: instantiate agents, tools, store, policy, and runtime services.
+# Handles setup logic for project flow orchestration and stage execution.
 from typing import Dict, Any, Optional
 from agents.base import AgentRegistry
 from agents.tools.policy import AgentSkillToolPolicy
@@ -22,6 +22,8 @@ from .init_flow import (
 )
 from .finalize_flow import (
     finalize as flow_finalize,
+    generate_dr as flow_generate_dr,
+    generate_srs as flow_generate_srs,
 )
 from storage import Store
 from utils import Logger, human_setting
@@ -42,12 +44,19 @@ MEETING_TYPE_ALIASES = {
     ],
     "tradeoff": ["tradeoff"],
     "clarify_requirement": ["clarify_requirement"],
+    "formalize_requirement": ["formalize_requirement"],
     "define_boundary": ["define_boundary"],
     "align_model": ["align_model"],
 }
 
 
+# ========
+# Defines Flow class for this module workflow.
+# ========
 class Flow:
+    # ========
+    # Defines __init__ function for this module workflow.
+    # ========
     def __init__(self, config: Dict[str, Any], store: Store, logger: Logger):
         self.config = config
         self.store = store
@@ -120,7 +129,6 @@ class Flow:
             project_config=self.config,
         )
 
-        # policy 強制：由單一授權來源檢查所有 agent 的 skill/tool 指派。
         self.validate_policy_assignments()
 
         for name, agent in [
@@ -151,6 +159,9 @@ class Flow:
             self.mediator_agent.enabled_issue_type_ids = enabled_types or None
         self.meeting = MeetingCoordinator(self)
 
+    # ========
+    # Defines validate policy assignments function for this module workflow.
+    # ========
     def validate_policy_assignments(self) -> None:
         self.policy.validate_mapping_integrity()
         assignments = [
@@ -173,8 +184,10 @@ class Flow:
                     f"Agent policy validation failed for '{agent_name}': {e}"
                 ) from e
 
+    # ========
+    # Defines ensure artifact contract function for this module workflow.
+    # ========
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
-        """集中初始化 artifact 目前需要的最小欄位。"""
         artifact.setdefault("URL", [])
         elicitation = artifact.setdefault("elicitation", {})
         elicitation.setdefault("plan", {})
@@ -184,6 +197,9 @@ class Flow:
         artifact.setdefault("elicitation_trace", [])
         return artifact
 
+    # ========
+    # Defines touch artifact meta function for this module workflow.
+    # ========
     @staticmethod
     def touch_artifact_meta(
         artifact: Dict[str, Any],
@@ -194,6 +210,9 @@ class Flow:
         if round_num is not None:
             meta["last_round"] = round_num
 
+    # ========
+    # Defines build agent model function for this module workflow.
+    # ========
     def build_agent_model(self, agent_name: str):
         am = self.config.get("agent_models") or {}
         default_cfg = am.get("default") or {}
@@ -247,38 +266,71 @@ class Flow:
                 kwargs[key] = default_cfg[key]
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
+    # ========
+    # Defines run function for this module workflow.
+    # ========
     def run(self, rough_idea: str) -> Dict[str, Any]:
         return run_project(self, rough_idea)
 
+    # ========
+    # Defines run continue function for this module workflow.
+    # ========
     def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
         return run_continue_project(self, existing_artifact)
 
-    # Phase 0: 初始草稿建立
 
+    # ========
+    # Defines run init phase function for this module workflow.
+    # ========
     def run_init_phase(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         return flow_run_init_phase(self, artifact)
 
-    # Round k: 開會
 
+    # ========
+    # Defines run meeting round function for this module workflow.
+    # ========
     def run_meeting_round(
         self, artifact: Dict[str, Any], round_num: int
     ) -> Dict[str, Any]:
         return flow_run_meeting_round(self, artifact, round_num)
 
-    # Finalization
 
+    # ========
+    # Defines finalize function for this module workflow.
+    # ========
     def finalize(
         self,
         artifact: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> None:
         return flow_finalize(self, artifact)
 
+    # ========
+    # Defines generate DR function for this module workflow.
+    # ========
+    def generate_dr(
+        self,
+        artifact: Dict[str, Any],
+    ) -> None:
+        return flow_generate_dr(self, artifact)
+
+    # ========
+    # Defines generate SRS function for this module workflow.
+    # ========
+    def generate_srs(
+        self,
+        artifact: Dict[str, Any],
+    ) -> None:
+        return flow_generate_srs(self, artifact)
+
+    # ========
+    # Defines build cost summary function for this module workflow.
+    # ========
     def build_cost_summary(self) -> Optional[Dict[str, Any]]:
         cost_by_agent = {}
         for agent_name, model in self.agent_models.items():
             summary = None
-            if hasattr(model, "getCostSummary"):
-                summary = model.getCostSummary()
+            if hasattr(model, "get_cost_summary"):
+                summary = model.get_cost_summary()
             if not summary and hasattr(model, "costTracker"):
                 summary = model.costTracker.export_summary_dict()
             if summary:

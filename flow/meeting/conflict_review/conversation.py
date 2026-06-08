@@ -1,7 +1,10 @@
-# Record helpers for pair-level conflict review.
+# Handles conversation logic for project flow orchestration and stage execution.
 from typing import Any, Dict, List
 
 
+# ========
+# Defines build pair review conversation function for this module workflow.
+# ========
 def build_pair_review_conversation(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     decisions: List[Dict[str, Any]],
@@ -82,6 +85,9 @@ def build_pair_review_conversation(
     return conversations
 
 
+# ========
+# Defines attach review conversation to conflicts function for this module workflow.
+# ========
 def attach_review_conversation_to_conflicts(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     conversations: List[Dict[str, Any]],

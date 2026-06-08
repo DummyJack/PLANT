@@ -1,4 +1,4 @@
-# Flow package exports project run entrypoints.
+# Initializes the flow package.
 from .main import run_project, run_continue_project, run_meeting_round
 from .init_flow import run_init_phase
 from .finalize_flow import finalize

@@ -1,9 +1,8 @@
-# Requirement elicitation meeting: ask stakeholder-focused questions and extract requirement candidates.
+# Handles main logic for project flow orchestration and stage execution.
 import json
 from typing import Any, Dict, List, Optional
 
-from agents.profile.analyst.requirements import requirement_discussion_pool
-from agents.profile.scenario import scenario_prompt_value
+from storage.requirements import requirement_discussion_pool
 from utils import meeting_setting
 from utils.language import current_output_language
 
@@ -28,14 +27,15 @@ from .support import (
     without_finish_proposals,
 )
 
-# ---------- 主流程 ----------
 
+# ========
+# Defines meeting rows function for this module workflow.
+# ========
 def meeting_rows(
     elicitation_trace: List[Dict[str, Any]],
     *,
     round_num: int,
 ) -> Dict[str, List[Dict[str, str]]]:
-    """Convert internal elicitation turn logs into compact meeting conversation rows."""
     try:
         round_key = f"r{max(1, int(round_num))}"
     except (TypeError, ValueError):
@@ -79,10 +79,6 @@ def meeting_rows(
             continue
         turn_no = turn_number(turn, index)
         if bool(turn.get("forced_finish")):
-            text = str(turn.get("judged_action") or "").strip()
-            agent = str(turn.get("judged_action_agent") or "mediator").strip() or "mediator"
-            if text:
-                rows.append({"id": row_id(turn_no), agent: text})
             continue
         if str(turn.get("discussion_mode") or "").strip() == "simultaneous":
             turn_row_index = 1
@@ -93,7 +89,7 @@ def meeting_rows(
                 turn_row_index += 1
                 return value
 
-            pending_question: Optional[Dict[str, str]] = None
+            pending_questions: List[Dict[str, str]] = []
             for conversation in turn.get("conversation", []) or []:
                 if not isinstance(conversation, dict):
                     continue
@@ -102,11 +98,12 @@ def meeting_rows(
                 if not agent or not text:
                     continue
                 if agent != "user":
-                    if pending_question:
-                        rows.append({"id": next_turn_row_id(), **pending_question})
                     pending_question = {agent: text}
+                    if pending_question not in pending_questions:
+                        pending_questions.append(pending_question)
                     continue
-                if pending_question:
+                if pending_questions:
+                    pending_question = pending_questions.pop(0)
                     answers = answer_rows(conversation)
                     if answers:
                         for answer in answers:
@@ -117,11 +114,6 @@ def meeting_rows(
                                     **answer,
                                 }
                             )
-                    else:
-                        rows.append({"id": next_turn_row_id(), **pending_question})
-                    pending_question = None
-            if pending_question:
-                rows.append({"id": next_turn_row_id(), **pending_question})
             continue
         question = str(turn.get("judged_action") or "").strip()
         question_agent = str(turn.get("judged_action_agent") or "").strip()
@@ -136,8 +128,6 @@ def meeting_rows(
             answer_row_maps = answer_rows(row)
             break
         if bool(turn.get("judge_finish")) and not answer:
-            agent = question_agent or "mediator"
-            rows.append({"id": row_id(turn_no), agent: question})
             continue
         if not question and not answer:
             continue
@@ -148,13 +138,11 @@ def meeting_rows(
                     row[question_agent] = question
                 row.update(answer_map)
                 rows.append(row)
-        else:
-            row = {"id": row_id(turn_no)}
-            if question_agent and question:
-                row[question_agent] = question
-            rows.append(row)
     return {round_key: rows}
 
+# ========
+# Defines valid stakeholder names function for this module workflow.
+# ========
 def valid_stakeholder_names(artifact: Dict[str, Any]) -> set[str]:
     return {
         str(row.get("name") or "").strip()
@@ -162,6 +150,9 @@ def valid_stakeholder_names(artifact: Dict[str, Any]) -> set[str]:
         if isinstance(row, dict) and str(row.get("name") or "").strip()
     }
 
+# ========
+# Defines valid targets function for this module workflow.
+# ========
 def valid_targets(
     values: Any,
     *,
@@ -181,6 +172,44 @@ def valid_targets(
     return out
 
 
+# ========
+# Defines validated elicitation answer function for this module workflow.
+# ========
+def validated_elicitation_answer(
+    response: Any,
+    *,
+    question_targets: List[str],
+) -> Dict[str, Any]:
+    if not isinstance(response, dict):
+        raise RuntimeError("Requirement elicitation user answer 必須是 JSON object")
+    text = str(response.get("text") or response.get("content") or "").strip()
+    if not text:
+        raise RuntimeError("Requirement elicitation user answer 缺少回答內容")
+    speaking_as = response.get("speaking_as")
+    if isinstance(speaking_as, str):
+        speaking_as = [speaking_as]
+    if not isinstance(speaking_as, list):
+        speaking_as = []
+    valid_speakers = [
+        str(name).strip()
+        for name in speaking_as
+        if str(name).strip() and str(name).strip() in set(question_targets)
+    ]
+    if not valid_speakers:
+        raise RuntimeError(
+            "Requirement elicitation user answer 缺少有效 speaking_as，"
+            f"必須對應 target_stakeholders: {question_targets}"
+        )
+    return {
+        **response,
+        "text": text,
+        "speaking_as": list(dict.fromkeys(valid_speakers)),
+    }
+
+
+# ========
+# Defines log elicitation turn function for this module workflow.
+# ========
 def log_elicitation_turn(
     logger: Any,
     *,
@@ -213,9 +242,9 @@ def log_elicitation_turn(
             if str(name).strip()
         ]
         if not speaking_as and pending_question:
-            speaking_as = list(pending_question.get("targets") or [])
-        if not speaking_as:
             pending_question = None
+            continue
+        if not speaking_as:
             continue
         logger.info("  %s：%s", "、".join(speaking_as), text)
         pending_question = None
@@ -228,6 +257,9 @@ def log_elicitation_turn(
     logger.info("  候選需求：%s", preview)
 
 
+# ========
+# Defines log turn plan function for this module workflow.
+# ========
 def log_turn_plan(
     logger: Any,
     *,
@@ -239,12 +271,12 @@ def log_turn_plan(
         for name in (turn_strategy.get("participants") or [])
         if str(name).strip()
     ]
-    agent_actions = turn_strategy.get("agent_actions") or {}
+    actions = turn_strategy.get("actions") or {}
     logger.info("[輪次 %s]", turn)
     goal = str(turn_strategy.get("goal") or "").strip() or "釐清本輪最重要且尚未充分探索的方向"
     participants_order_parts = []
-    if isinstance(agent_actions, dict) and agent_actions:
-        for agent, action_info in agent_actions.items():
+    if isinstance(actions, dict) and actions:
+        for agent, action_info in actions.items():
             if isinstance(action_info, dict):
                 action = str(action_info.get("action") or "").strip()
             else:
@@ -259,18 +291,24 @@ def log_turn_plan(
     )
 
 
+# ========
+# Defines planned targets for agent function for this module workflow.
+# ========
 def planned_targets_for_agent(
     turn_strategy: Dict[str, Any],
     agent: str,
     *,
     allowed_names: set[str],
 ) -> List[str]:
-    action_info = (turn_strategy.get("agent_actions") or {}).get(agent)
+    action_info = (turn_strategy.get("actions") or {}).get(agent)
     if not isinstance(action_info, dict):
         return []
     return valid_targets(action_info.get("target_stakeholders"), allowed_names=allowed_names)
 
 
+# ========
+# Defines default plan function for this module workflow.
+# ========
 def default_plan(coordinator: Any) -> Dict[str, Any]:
     registry = getattr(coordinator.flow, "registry", None)
     exclude = {"mediator", "documentor", "user"}
@@ -285,12 +323,14 @@ def default_plan(coordinator: Any) -> Dict[str, Any]:
     }
 
 
-def run_elicitation_meeting(
+# ========
+# Defines run elicitation function for this module workflow.
+# ========
+def run_elicitation(
     coordinator: Any,
     artifact: Dict[str, Any],
     round_num: int,
 ) -> Dict[str, Any]:
-    """需求擷取會議：Mediator 規劃 -> 多輪對話 -> Analyst 結構化收尾。"""
     if not meeting_setting(coordinator.flow.config, "elicitation", True):
         return artifact
 
@@ -328,7 +368,7 @@ def run_elicitation_meeting(
     )
 
     def append_finish_turn(final_turn: int, final_agent: str, final_text: str) -> None:
-        final_recent_ask_history = build_recent_ask_history(elicitation_trace, max_items=3)
+        final_recent_ask_history = build_recent_ask_history(elicitation_trace)
         final_turn_log = {
             "round": round_num,
             "turn": final_turn,
@@ -349,7 +389,7 @@ def run_elicitation_meeting(
     for turn in range(1, max_turns):
         meeting_phase = elicitation_phase_for_turn(turn, max_turns)
         phase_guidance = build_phase_guidance(meeting_phase)
-        recent_ask_history = build_recent_ask_history(elicitation_trace, max_items=3)
+        recent_ask_history = build_recent_ask_history(elicitation_trace)
         turn_strategy = coordinator.flow.mediator_agent.plan_elicitation(
             artifact=artifact,
             turn=turn,
@@ -395,12 +435,12 @@ def run_elicitation_meeting(
             "id": f"ELICIT-R{round_num}-T{turn}",
             "title": "待命名需求擷取會議",
             "description": (
-                f"產品情境：{json.dumps(scenario_prompt_value(artifact.get('scenario')), ensure_ascii=False)}\n\n"
+                f"產品情境：{json.dumps(str(artifact.get('scenario') or '').strip(), ensure_ascii=False)}\n\n"
                 f"本輪會議階段：{meeting_phase}\n"
                 f"階段指引：{phase_guidance}\n\n"
                 f"本輪發言模式：{turn_mode}\n"
                 f"本輪訪談目標：{turn_goal or '依目前缺口提出最值得確認的問題'}\n"
-                f"本輪提問安排：{json.dumps(turn_strategy.get('agent_actions') or {}, ensure_ascii=False)}\n"
+                f"本輪提問安排：{json.dumps(turn_strategy.get('actions') or {}, ensure_ascii=False)}\n"
                 f"可選回答身份：{json.dumps(sorted(allowed_stakeholders), ensure_ascii=False)}\n\n"
                 "這是一場實務需求訪談，不是單純訪談或自由閒聊。\n"
                 "請依本輪缺口類型找出最值得確認的一個問題。\n"
@@ -419,12 +459,12 @@ def run_elicitation_meeting(
             "participants": turn_participants,
             "discussion_mode": turn_mode,
             "trace": {"artifact_ids": [], "proposal_ids": []},
-            "scenario": scenario_prompt_value(artifact.get("scenario", "")),
+            "scenario": str(artifact.get("scenario", "") or "").strip(),
             "meeting_phase": meeting_phase,
             "phase_guidance": phase_guidance,
             "meeting_goal": turn_goal,
             "allowed_stakeholders": sorted(allowed_stakeholders),
-            "agent_actions": turn_strategy.get("agent_actions") or {},
+            "actions": turn_strategy.get("actions") or {},
             "recent_ask_history": recent_ask_history,
         }
         issue["title"] = str(turn_goal or "需求擷取會議").strip() or "需求擷取會議"
@@ -436,8 +476,8 @@ def run_elicitation_meeting(
             interviewer_issue = {
                 **issue,
                 "participants": interviewer_participants,
-                "answer_all_interviewer_questions": False,
-                "agent_actions": turn_strategy.get("agent_actions") or {},
+                "answer_all": False,
+                "actions": turn_strategy.get("actions") or {},
             }
             if interviewer_participants:
                 conversation.extend(
@@ -468,12 +508,14 @@ def run_elicitation_meeting(
         )
         effective_conversation = list(interviewer_conversation)
         if finish_text:
+            if not finish_proposer:
+                raise RuntimeError("需求擷取收束缺少提出收束的 agent")
             closure_vote = collect_closure_votes(
                 coordinator,
                 artifact,
                 round_num=round_num,
                 turn=turn,
-                proposer_role=finish_proposer or "analyst",
+                proposer_role=finish_proposer,
                 recent_ask_history=recent_ask_history,
                 candidate_texts=[
                     str(c.get("text") or "").strip()
@@ -490,7 +532,7 @@ def run_elicitation_meeting(
                 interviewer_finish = True
                 effective_conversation = [
                     {
-                        "agent": finish_proposer or "analyst",
+                        "agent": finish_proposer,
                         "response": {
                             "text": stop_phrase,
                             "content": stop_phrase,
@@ -546,7 +588,28 @@ def run_elicitation_meeting(
             judged_action_agent = finish_proposer
             judged_text = stop_phrase
         elif not judged_text:
-            raise RuntimeError("Requirement elicitation agent loop 未產生可詢問利害關係人的問題")
+            conversation_preview = []
+            for row in effective_conversation:
+                if not isinstance(row, dict):
+                    continue
+                response = row.get("response") if isinstance(row.get("response"), dict) else {}
+                conversation_preview.append({
+                    "agent": row.get("agent"),
+                    "actions": response.get("actions") or response.get("action"),
+                    "target_stakeholders": response.get("target_stakeholders"),
+                    "text": str(response.get("text") or "")[:160],
+                })
+            raise RuntimeError(
+                "Requirement elicitation agent loop 未產生可詢問利害關係人的問題: "
+                + json.dumps(
+                    {
+                        "actions": turn_strategy.get("actions") or {},
+                        "question_count": len(question_conversations),
+                        "conversation": conversation_preview,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if judged_text and user_agent and hasattr(user_agent, "judge_interviewer_action_type"):
             try:
                 judge_action_type = str(
@@ -590,7 +653,7 @@ def run_elicitation_meeting(
                         "title": "利害關係人回答",
                         "participants": ["user"],
                                                 "discussion_mode": "sequential",
-                        "answer_all_interviewer_questions": False,
+                        "answer_all": False,
                         "target_stakeholders": question_targets,
                     }
                     user_response = coordinator.flow.mediator_agent.collect_issue_response(
@@ -598,10 +661,14 @@ def run_elicitation_meeting(
                         user_issue,
                         previous_responses=[question_conversation],
                     )
+                    user_response = validated_elicitation_answer(
+                        user_response,
+                        question_targets=question_targets,
+                    )
                     paired_conversation.append(
                         {
                             "agent": "user",
-                            "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
+                            "response": user_response,
                         }
                     )
                 conversation = paired_conversation
@@ -622,7 +689,7 @@ def run_elicitation_meeting(
                     "title": "利害關係人回答",
                     "participants": ["user"],
                                         "discussion_mode": "sequential",
-                    "answer_all_interviewer_questions": False,
+                    "answer_all": False,
                     "target_stakeholders": question_targets,
                 }
                 user_response = coordinator.flow.mediator_agent.collect_issue_response(
@@ -630,10 +697,14 @@ def run_elicitation_meeting(
                     user_issue,
                     previous_responses=question_conversations,
                 )
+                user_response = validated_elicitation_answer(
+                    user_response,
+                    question_targets=question_targets,
+                )
                 conversation.append(
                     {
                         "agent": "user",
-                        "response": user_response if isinstance(user_response, dict) else {"content": str(user_response)},
+                        "response": user_response,
                     }
                 )
         elif finish_text and not interviewer_finish and not judged_text:
@@ -681,8 +752,6 @@ def run_elicitation_meeting(
                     if str(name).strip()
                 ]
             if agent_name == "user":
-                if not row.get("speaking_as") and len(pending_targets_for_row) == 1:
-                    row["speaking_as"] = list(pending_targets_for_row)
                 pending_targets_for_row = []
             conversation_rows.append(row)
 
@@ -697,7 +766,7 @@ def run_elicitation_meeting(
         stop_reason_after_this_turn = (
             "judge_finish"
             if interviewer_finish
-            else "enough_information_no_new_candidates"
+            else "no_new_info"
             if no_new_candidate_convergence
             else "judge_continue"
         )
@@ -712,7 +781,7 @@ def run_elicitation_meeting(
             "discussion_mode": turn_mode,
             "participants": turn_participants,
             "participants_order": conversation_participants_order,
-            "agent_actions": turn_strategy.get("agent_actions") or {},
+            "actions": turn_strategy.get("actions") or {},
             "goal": turn_goal,
             "judged_action_agent": judged_action_agent,
             "judged_action": judged_text,
@@ -740,7 +809,7 @@ def run_elicitation_meeting(
             "meeting_phase": meeting_phase,
             "discussion_mode": turn_mode,
             "participants": list(turn_participants),
-            "agent_actions": dict(turn_strategy.get("agent_actions") or {}),
+            "actions": dict(turn_strategy.get("actions") or {}),
             "judged_action_agent": judged_action_agent,
             "judged_action": judged_text,
             "new_candidates_count": len(new_candidates),
@@ -762,7 +831,7 @@ def run_elicitation_meeting(
             termination_reason = stop_reason_after_this_turn
             if stop_reason_after_this_turn == "max_turn":
                 coordinator.flow.logger.info("  停止：本輪完成後已達最後一輪，以 finish action 收斂")
-            elif stop_reason_after_this_turn == "enough_information_no_new_candidates":
+            elif stop_reason_after_this_turn == "no_new_info":
                 coordinator.flow.logger.info("  停止：連續兩輪未產生新候選需求，判定需求擷取已足夠")
             else:
                 coordinator.flow.logger.info(
@@ -772,7 +841,6 @@ def run_elicitation_meeting(
             break
 
     if termination_reason == "max_turns_reached":
-        # 達上限時，最後一輪直接進入 finish 收尾，不再執行 user 對話。
         final_turn = max_turns
         final_agent = "mediator"
         append_finish_turn(final_turn, final_agent, forced_finish_phrase)

@@ -1,5 +1,4 @@
-# Meeting flow package: coordinator, reviews, and elicitation.
-"""Meeting flow coordination."""
+# Initializes the flow.meeting package.
 
 from .base import MeetingCoordinator
 

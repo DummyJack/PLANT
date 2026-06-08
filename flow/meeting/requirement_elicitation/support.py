@@ -1,14 +1,13 @@
-# Support helpers for requirement elicitation meetings.
+# Handles support logic for project flow orchestration and stage execution.
 import re
 from typing import Any, Dict, List, Optional
 
-from agents.profile.analyst.requirements import (
+from storage.requirements import (
     requirement_candidate,
     requirement_dedupe_key,
     requirement_discussion_pool,
 )
 from agents.profile.analyst.validation import requirement_record as url_requirement_record
-from agents.profile.scenario import scenario_prompt_value
 
 ELICITATION_PHASES = [
     "initial_requirement",
@@ -19,8 +18,10 @@ QUESTION_AGENT_ACTIONS = {"ask_user", "supplement_question"}
 FINISH_AGENT_ACTION = "propose_finish"
 
 
+# ========
+# Defines split text by speaking as function for this module workflow.
+# ========
 def split_text_by_speaking_as(text: str, names: List[str], *, require_labels: bool = False) -> Dict[str, str]:
-    """Split a multi-role answer like 【顧客】...【平台管理者】... by role label."""
     source = str(text or "").strip()
     clean_names = [str(name or "").strip() for name in names or [] if str(name or "").strip()]
     if not source or not clean_names:
@@ -47,6 +48,9 @@ def split_text_by_speaking_as(text: str, names: List[str], *, require_labels: bo
     return {name: parts.get(name, source) for name in clean_names}
 
 
+# ========
+# Defines run closure vote loop function for this module workflow.
+# ========
 def run_closure_vote_loop(
     agent: Any,
     *,
@@ -121,10 +125,16 @@ def run_closure_vote_loop(
     return result
 
 
+# ========
+# Defines compact text function for this module workflow.
+# ========
 def compact_text(text: str) -> str:
     value = " ".join(str(text or "").split())
     return value
 
+# ========
+# Defines build sequential order function for this module workflow.
+# ========
 def build_sequential_order(
     proposed_order: List[str],
     participants: List[str],
@@ -141,6 +151,9 @@ def build_sequential_order(
     order.append("user")
     return order
 
+# ========
+# Defines without finish proposals function for this module workflow.
+# ========
 def without_finish_proposals(
     conversation: List[Dict[str, Any]],
     stop_phrase: str,
@@ -157,16 +170,25 @@ def without_finish_proposals(
         filtered.append(c)
     return filtered
 
+# ========
+# Defines get elicitation mode function for this module workflow.
+# ========
 def get_elicitation_mode(artifact: Dict[str, Any]) -> str:
     meta = artifact.get("meta") if isinstance(artifact, dict) else {}
     mode = str((meta or {}).get("elicitation_mode") or "").strip().lower()
     return mode if mode in {"oracle", "main_flow"} else "main_flow"
 
+# ========
+# Defines elicitation phase for turn function for this module workflow.
+# ========
 def elicitation_phase_for_turn(turn: int, max_turns: int) -> str:
     if turn <= 1:
         return "initial_requirement"
     return "requirement_discussion"
 
+# ========
+# Defines collect user summary function for this module workflow.
+# ========
 def collect_user_summary(conversation: List[Dict[str, Any]]) -> str:
     parts: List[str] = []
     for c in conversation or []:
@@ -177,6 +199,9 @@ def collect_user_summary(conversation: List[Dict[str, Any]]) -> str:
             parts.append(text)
     return "\n".join(parts).strip()
 
+# ========
+# Defines build phase guidance function for this module workflow.
+# ========
 def build_phase_guidance(phase: str) -> str:
     if phase == "initial_requirement":
         return (
@@ -193,10 +218,13 @@ def build_phase_guidance(phase: str) -> str:
         "並向指定利害關係人提出可直接支援 requirement candidate 更新的問題。"
     )
 
+# ========
+# Defines build recent ask history function for this module workflow.
+# ========
 def build_recent_ask_history(
     elicitation_trace: List[Dict[str, Any]],
     *,
-    max_items: int = 3,
+    max_items: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for log in reversed(elicitation_trace or []):
@@ -238,11 +266,14 @@ def build_recent_ask_history(
                 "what_is_still_missing": missing_signal,
             }
         )
-        if len(rows) >= max_items:
+        if max_items is not None and len(rows) >= max_items:
             break
     rows.reverse()
     return rows
 
+# ========
+# Defines find finish proposal function for this module workflow.
+# ========
 def find_finish_proposal(
     conversation: List[Dict[str, Any]],
     stop_phrase: str,
@@ -262,6 +293,9 @@ def find_finish_proposal(
             return agent, stop_phrase
     return "", ""
 
+# ========
+# Defines extract first question function for this module workflow.
+# ========
 def extract_first_question(text: str) -> str:
     parts = [p.strip() for p in str(text or "").replace("\n", " ").split("。") if p.strip()]
     for p in parts:
@@ -269,6 +303,9 @@ def extract_first_question(text: str) -> str:
             return p
     return parts[0] if parts else ""
 
+# ========
+# Defines clean elicited reqts function for this module workflow.
+# ========
 def clean_elicited_reqts(
     candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -286,6 +323,9 @@ def clean_elicited_reqts(
         deduped.append(cand)
     return deduped
 
+# ========
+# Defines turn participants function for this module workflow.
+# ========
 def turn_participants(values: List[str]) -> List[str]:
     participants: List[str] = []
     for value in values or []:
@@ -294,6 +334,9 @@ def turn_participants(values: List[str]) -> List[str]:
             participants.append(name)
     return participants
 
+# ========
+# Defines user questions function for this module workflow.
+# ========
 def user_questions(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     questions: List[Dict[str, Any]] = []
     for c in conversation or []:
@@ -304,20 +347,26 @@ def user_questions(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if isinstance(resp.get("actions"), list):
             action_values.extend(resp.get("actions") or [])
         action_values.append(resp.get("action"))
-        agent_actions = {
+        actions = {
             str(value or "").strip().lower()
             for value in action_values
             if str(value or "").strip()
         }
-        if agent_actions & QUESTION_AGENT_ACTIONS:
+        if actions & QUESTION_AGENT_ACTIONS:
             questions.append(c)
     return questions
 
+# ========
+# Defines append unique function for this module workflow.
+# ========
 def append_unique(target: List[str], value: str) -> None:
     item = str(value or "").strip()
     if item and item not in target:
         target.append(item)
 
+# ========
+# Defines derive turn summary function for this module workflow.
+# ========
 def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[str, List[str]]:
     text = f"{interviewer_question}\n{user_response}".lower()
     user = str(user_response or "").lower()
@@ -434,12 +483,18 @@ def derive_turn_summary(interviewer_question: str, user_response: str) -> Dict[s
         "do_not_repeat": do_not_repeat,
     }
 
+# ========
+# Defines get conversation text function for this module workflow.
+# ========
 def get_conversation_text(conversation: Dict[str, Any]) -> str:
     if not isinstance(conversation, dict):
         return ""
     resp = conversation.get("response", {}) if isinstance(conversation.get("response"), dict) else {}
     return str(resp.get("text") or "").strip()
 
+# ========
+# Defines select question function for this module workflow.
+# ========
 def select_question(conversation: List[Dict[str, Any]]) -> tuple[str, str]:
     for c in conversation or []:
         if not isinstance(c, dict):
@@ -454,6 +509,9 @@ def select_question(conversation: List[Dict[str, Any]]) -> tuple[str, str]:
             return agent, text
     return "", ""
 
+# ========
+# Defines merge turn summary function for this module workflow.
+# ========
 def merge_turn_summary(
     previous: Optional[Dict[str, Any]],
     current: Dict[str, List[str]],
@@ -471,6 +529,9 @@ def merge_turn_summary(
             append_unique(merged[key], str(value))
     return merged
 
+# ========
+# Defines collect closure votes function for this module workflow.
+# ========
 def collect_closure_votes(
     coordinator: Any,
     artifact: Dict[str, Any],
@@ -540,6 +601,9 @@ def collect_closure_votes(
     artifact.setdefault("elicitation_closure_votes", []).append(summary)
     return summary
 
+# ========
+# Defines extract candidates function for this module workflow.
+# ========
 def extract_candidates(
     coordinator: Any,
     conversation: List[Dict[str, Any]],
@@ -641,7 +705,7 @@ def extract_candidates(
         stakeholders=stakeholder_rows,
         existing_requirements=existing_requirements,
         mode=mode,
-        scenario=scenario_prompt_value(artifact.get("scenario", "")),
+        scenario=str(artifact.get("scenario", "") or "").strip(),
         source=f"elicitation_r{max(1, int(round_num))}",
     )
     if not isinstance(raw, list):

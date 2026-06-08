@@ -1,9 +1,16 @@
+# Handles main logic for project flow orchestration and stage execution.
 import json
 from typing import Any, Dict, List
 
-from storage.artifact import conflict_payload, load_json_path, reindex_conflict_report_rows, save_json_path
+from storage.artifact import (
+    conflict_payload,
+    load_json_path,
+    reindex_conflict_report_rows,
+    save_json_path,
+    unresolved_conflict_report_rows,
+)
 
-from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
+from agents.profile.analyst.conflicts import all_conflict_rows, normalize_conflict_state
 
 from .conversation import attach_review_conversation_to_conflicts, build_pair_review_conversation
 from .support import (
@@ -16,15 +23,16 @@ from .support import (
     complete_missing_review_decisions,
     normalize_review_text,
 )
-# ---------- 衝突再審查主流程 ----------
 
+# ========
+# Defines save conflict report function for this module workflow.
+# ========
 def save_conflict_report(
     coordinator: Any,
     artifact: Dict[str, Any],
     *,
     round_num: int,
 ) -> None:
-    """根據衝突再審查結果產生結構化 report JSON 與 Markdown 報告。"""
     coordinator.flow.store.save_artifact(artifact)
     if coordinator.flow.config.get("enable_conflict_report", True) is False:
         return
@@ -33,7 +41,9 @@ def save_conflict_report(
         row for row in (payload.get("report", []) or [])
         if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
     ]
+    conflict_rows = unresolved_conflict_report_rows(conflict_rows)
     if not conflict_rows:
+        (coordinator.flow.store.artifact_dir / "report" / "conflict_report.md").unlink(missing_ok=True)
         return
     previous_report = (
         coordinator.flow.store.load_markdown("conflict_report.md")
@@ -48,12 +58,16 @@ def save_conflict_report(
         },
         "conflict_rows": conflict_rows,
     }
-    report_artifact = coordinator.flow.analyst_agent.generate_conflict_resolutions(report_artifact)
+    report_artifact = coordinator.flow.analyst_agent.resolve_conflicts(report_artifact)
     report_payload = [
         row for row in ((report_artifact.get("conflict", {}) or {}).get("report", []) or [])
         if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
     ]
+    report_payload = unresolved_conflict_report_rows(report_payload)
     report_payload = reindex_conflict_report_rows(report_payload)
+    if not report_payload:
+        (coordinator.flow.store.artifact_dir / "report" / "conflict_report.md").unlink(missing_ok=True)
+        return
     report_path = coordinator.flow.store.artifact_dir / "report" / f"conflict_report_v{round_num}.json"
     save_json_path(
         coordinator.flow.store.base_dir,
@@ -81,6 +95,9 @@ def save_conflict_report(
         "需求衝突報告已產生：artifact/report/conflict_report.md",
     )
 
+# ========
+# Defines run conflict review round function for this module workflow.
+# ========
 def run_conflict_review_round(
     coordinator: Any,
     issue: Dict[str, Any],
@@ -153,10 +170,12 @@ def run_conflict_review_round(
         conversation_rows.append(f"{agent_name}: {normalized_text}")
     return conversation, conversation_rows, conversation_agents
 
+# ========
+# Defines conflict review function for this module workflow.
+# ========
 def conflict_review(
     coordinator: Any, artifact: Dict[str, Any], round_num: int
 ) -> Dict[str, Any]:
-    """針對本輪所有 Conflict/Neutral 項目執行一次衝突再審查與逐筆裁定。"""
     normalize_conflict_state(artifact)
     candidates = [
         c
@@ -424,21 +443,6 @@ def conflict_review(
         round_num=round_num,
     )
     attach_review_conversation_to_conflicts(conflicts_by_id, pair_review_conversation)
-
-    recheck_log = artifact.setdefault("conflict_review_log", [])
-    recheck_log.append(
-        {
-            "round": round_num,
-            "issue_id": issue.get("id"),
-            "discussion_mode": discussion_mode,
-            "participants": participants,
-            "conversation_agents": conversation_agents,
-            "candidates_count": len(decisions),
-            "changed_count": changed,
-            "conversation": conversation_rows,
-            "decisions": decisions,
-        }
-    )
 
     coordinator.flow.logger.info("需求衝突再審查完成：%s 筆，改判 %s 筆", len(conflicts_by_id), changed)
     save_conflict_report(coordinator, artifact, round_num=round_num)

@@ -1,11 +1,14 @@
-# Support helpers for conflict review and requirement-change application.
+# Handles support logic for project flow orchestration and stage execution.
 import json
 import re
 from typing import Any, Dict, List, Optional
 
-from agents.profile.analyst.conflict_store import all_conflict_rows, normalize_conflict_state
-from agents.profile.analyst.requirements import next_requirement_id, requirement_discussion_pool
+from agents.profile.analyst.conflicts import all_conflict_rows, normalize_conflict_state
+from storage.requirements import next_requirement_id, requirement_discussion_pool
 
+# ========
+# Defines mark conflicts resolved by ids function for this module workflow.
+# ========
 def mark_conflicts_resolved_by_ids(
     artifact: Dict[str, Any],
     conflict_ids: List[str],
@@ -22,6 +25,9 @@ def mark_conflicts_resolved_by_ids(
         c["label"] = "Neutral"
     normalize_conflict_state(artifact)
 
+# ========
+# Defines pair review record function for this module workflow.
+# ========
 def pair_review_record(
     review: Dict[str, Any],
     *,
@@ -50,13 +56,15 @@ def pair_review_record(
         "reason": reason,
     }
 
+# ========
+# Defines extract reviews from json function for this module workflow.
+# ========
 def extract_reviews_from_json(
     text: str,
     *,
     known_pair_ids: List[str],
     current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """只從合法 JSON text 的 pair_reviews 欄位提取逐筆 review。"""
     text = str(text or "").strip()
     if not text:
         return []
@@ -91,13 +99,15 @@ def extract_reviews_from_json(
     return deduped
 
 
+# ========
+# Defines normalize review text function for this module workflow.
+# ========
 def normalize_review_text(
     text: str,
     *,
     known_pair_ids: List[str],
     current_labels_by_id: Optional[Dict[str, str]] = None,
 ) -> str:
-    """將 conflict review 發言正規化成 review_summary + pair_reviews JSON 字串。"""
     text = str(text or "").strip()
     if not text:
         return ""
@@ -127,11 +137,10 @@ def normalize_review_text(
         separators=(",", ":"),
     )
 
-def requirement_text_key(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
-
+# ========
+# Defines collect discussion rows function for this module workflow.
+# ========
 def collect_discussion_rows(conversation: List[Dict[str, Any]]) -> list[dict]:
-    """整理會議發言。"""
     discussion_rows: List[Dict[str, Any]] = []
     for c in conversation or []:
         if not isinstance(c, dict):
@@ -147,6 +156,9 @@ def collect_discussion_rows(conversation: List[Dict[str, Any]]) -> list[dict]:
             discussion_rows.append({"agent": agent_name, "text": text})
     return discussion_rows
 
+# ========
+# Defines collect reviews function for this module workflow.
+# ========
 def collect_reviews(
     conversation: List[Dict[str, Any]],
     *,
@@ -185,6 +197,9 @@ def collect_reviews(
             continue
     return discussion_rows, extracted_pair_reviews
 
+# ========
+# Defines get conversation text function for this module workflow.
+# ========
 def get_conversation_text(conversation: Dict[str, Any]) -> str:
     if not isinstance(conversation, dict):
         return ""
@@ -192,6 +207,9 @@ def get_conversation_text(conversation: Dict[str, Any]) -> str:
     return str(resp.get("text") or resp.get("content") or "").strip()
 
 
+# ========
+# Defines merge review decisions function for this module workflow.
+# ========
 def merge_review_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     extracted_pair_reviews: List[Dict[str, Any]],
@@ -288,6 +306,9 @@ def merge_review_decisions(
     return auto_decisions, signoff_targets, info
 
 
+# ========
+# Defines analyst changed label ids function for this module workflow.
+# ========
 def analyst_changed_label_ids(
     extracted_pair_reviews: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
@@ -307,6 +328,9 @@ def analyst_changed_label_ids(
     return changed
 
 
+# ========
+# Defines consensus decisions function for this module workflow.
+# ========
 def consensus_decisions(
     conflicts_by_id: Dict[str, Dict[str, Any]],
     extracted_pair_reviews: List[Dict[str, Any]],
@@ -365,6 +389,9 @@ def consensus_decisions(
     info["unresolved_ids_preview"] = list(unresolved.keys())[:5]
     return decisions, unresolved, info
 
+# ========
+# Defines finalize review reasons function for this module workflow.
+# ========
 def finalize_review_reasons(
     coordinator: Any,
     decisions: List[Dict[str, Any]],
@@ -493,6 +520,9 @@ def finalize_review_reasons(
         "reason_count": len(reason_by_id),
     }
 
+# ========
+# Defines complete missing review decisions function for this module workflow.
+# ========
 def complete_missing_review_decisions(
     coordinator: Any,
     decisions: List[Dict[str, Any]],
@@ -577,12 +607,15 @@ def complete_missing_review_decisions(
     info["completed_missing_decision_count"] = len(completed)
     info["completed_missing_decision_ids"] = sorted(completed_ids)
     if still_missing:
-        info["status"] = "failed_missing_after_agent_loop"
+        info["status"] = "failed_missing_after_loop"
         info["still_missing_decision_ids"] = still_missing
         raise RuntimeError(f"Analyst missing decision 補裁定後仍缺少 pair: {still_missing}")
     info["status"] = "ok"
     return list(decisions or []) + completed, info
 
+# ========
+# Defines collect missing reviews function for this module workflow.
+# ========
 def collect_missing_reviews(
     coordinator: Any,
     issue: Dict[str, Any],
@@ -590,7 +623,6 @@ def collect_missing_reviews(
     conversation: List[Dict[str, Any]],
     participants: List[str],
 ) -> List[Dict[str, Any]]:
-    """若某位審查 agent 沒有有效發言，單獨補收一次。"""
     existing_with_text = {
         str(c.get("agent") or "").strip()
         for c in conversation or []
@@ -634,12 +666,14 @@ def collect_missing_reviews(
             raise RuntimeError(f"Conflict review 補審：{agent_name} 發言失敗") from e
     return out
 
+# ========
+# Defines analyst signoff function for this module workflow.
+# ========
 def analyst_signoff(
     coordinator: Any,
     conversation: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """由 Analyst 根據 pair 原文與各 agent 逐筆裁定做最終判定。"""
     discussion_rows, extracted_pair_reviews = collect_reviews(
         conversation,
         known_pair_ids=list(conflicts_by_id.keys()),
