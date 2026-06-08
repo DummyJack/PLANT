@@ -15,11 +15,13 @@ def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
         return None
     project_file = project_path / "artifact" / "project.json"
     rough_idea = "未知"
+    scenario = ""
     if project_file.exists():
         try:
             with open(project_file, "r", encoding="utf-8") as f:
                 project = json.load(f)
                 rough_idea = project.get("rough_idea", "未知")
+                scenario = project.get("scenario", "")
         except Exception:
             pass
     return {
@@ -28,6 +30,7 @@ def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
             project_path.stat().st_ctime
         ).isoformat(),
         "rough_idea": rough_idea,
+        "scenario": scenario,
     }
 
 

@@ -2,13 +2,17 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Optional
+import os
+import shutil
 import socket
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 import zlib
 
 
-PLANTUML_SERVER = "https://www.plantuml.com/plantuml"
+PLANTUML_SERVER = os.getenv("PLANTUML_SERVER_URL", "https://www.plantuml.com/plantuml").rstrip("/")
 
 
 # ========
@@ -64,6 +68,68 @@ def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     return filename
 
 
+def _render_with_local_command(plantuml_code: str, filepath: Path) -> bool:
+    plantuml_bin = shutil.which("plantuml")
+    if not plantuml_bin:
+        return False
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = Path(tmp_dir) / "diagram.plantuml"
+        output_path = Path(tmp_dir) / "diagram.png"
+        source_path.write_text(plantuml_code, encoding="utf-8")
+        result = subprocess.run(
+            [plantuml_bin, "-tpng", str(source_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode == 0 and output_path.exists():
+            filepath.write_bytes(output_path.read_bytes())
+            return True
+        print(f"PlantUML 本機指令輸出失敗 {filepath.name}: {result.stderr.strip() or result.stdout.strip()}")
+        return False
+
+
+def _render_with_local_jar(plantuml_code: str, filepath: Path) -> bool:
+    jar_path = os.getenv("PLANTUML_JAR", "").strip()
+    if not jar_path:
+        return False
+    jar = Path(jar_path).expanduser()
+    if not jar.exists():
+        print(f"PlantUML JAR 不存在: {jar}")
+        return False
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = Path(tmp_dir) / "diagram.plantuml"
+        output_path = Path(tmp_dir) / "diagram.png"
+        source_path.write_text(plantuml_code, encoding="utf-8")
+        result = subprocess.run(
+            ["java", "-jar", str(jar), "-tpng", str(source_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode == 0 and output_path.exists():
+            filepath.write_bytes(output_path.read_bytes())
+            return True
+        print(f"PlantUML JAR 輸出失敗 {filepath.name}: {result.stderr.strip() or result.stdout.strip()}")
+        return False
+
+
+def _render_with_server(plantuml_code: str, filepath: Path) -> bool:
+    url = f"{PLANTUML_SERVER}/png/{encode_plantuml(plantuml_code)}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+        if data:
+            filepath.write_bytes(data)
+            return True
+    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, OSError) as e:
+        print(f"PlantUML 遠端 PNG 輸出失敗 {filepath.name}: {e}")
+    return False
+
+
 # ========
 # Defines render plantuml png function for this module workflow.
 # ========
@@ -76,16 +142,13 @@ def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     models_dir = artifact_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     filepath = models_dir / filename
-    url = f"{PLANTUML_SERVER}/png/{encode_plantuml(plantuml_code)}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read()
-        if data:
-            filepath.write_bytes(data)
-            return filename
-    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, OSError) as e:
-        print(f"PlantUML PNG 輸出失敗 {filename}: {e}")
+    if _render_with_local_command(plantuml_code, filepath):
+        return filename
+    if _render_with_local_jar(plantuml_code, filepath):
+        return filename
+    if _render_with_server(plantuml_code, filepath):
+        return filename
+    print(f"PlantUML PNG 輸出失敗 {filename}: 已保留 .plantuml 原始檔，可安裝本機 PlantUML 後重新輸出")
     return None
 
 

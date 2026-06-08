@@ -136,7 +136,8 @@ def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = N
         if isinstance(existing, dict)
         else ""
     )
-    rough_idea = existing_rough_idea or str(data.get("rough_idea") or "").strip()
+    incoming_rough_idea = str(data.get("rough_idea") or "").strip()
+    rough_idea = incoming_rough_idea or existing_rough_idea
     scenario = scenario_payload(data.get("scenario", ""))
     if not scenario and isinstance(existing, dict):
         scenario = scenario_payload(existing.get("scenario", ""))
@@ -280,7 +281,9 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         req_id = str(payload.get("id") or row.get("id") or "").strip()
         raise ValueError(f"REQ type 不合法: {req_id or '(missing id)'}")
     priority = str(payload.get("priority") or "").strip().lower()
-    if priority in {"must", "should", "could"}:
+    if payload.get("type") == "constraint":
+        payload.pop("priority", None)
+    elif priority in {"must", "should", "could"}:
         payload["priority"] = priority
     elif "priority" in payload:
         req_id = str(payload.get("id") or row.get("id") or "").strip()

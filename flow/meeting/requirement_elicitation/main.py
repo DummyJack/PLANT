@@ -366,6 +366,7 @@ def run_elicitation(
         if current_output_language() == "en"
         else "本次會議結束。"
     )
+    display_round_num = max(1, int(round_num))
 
     def append_finish_turn(final_turn: int, final_agent: str, final_text: str) -> None:
         final_recent_ask_history = build_recent_ask_history(elicitation_trace)
@@ -373,7 +374,7 @@ def run_elicitation(
             "round": round_num,
             "turn": final_turn,
             "meeting_phase": "conclusion",
-            "issue_id": f"ELICIT-R{round_num}-T{final_turn}",
+            "issue_id": f"ELICIT-R{display_round_num}-T{final_turn}",
             "conversation": [{"agent": final_agent, "text": final_text, "action": FINISH_AGENT_ACTION}],
             "discussion_mode": "sequential",
             "participants": [final_agent],
@@ -432,7 +433,7 @@ def run_elicitation(
             )
 
         issue = {
-            "id": f"ELICIT-R{round_num}-T{turn}",
+            "id": f"ELICIT-R{display_round_num}-T{turn}",
             "title": "待命名需求擷取會議",
             "description": (
                 f"產品情境：{json.dumps(str(artifact.get('scenario') or '').strip(), ensure_ascii=False)}\n\n"
