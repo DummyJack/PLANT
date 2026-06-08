@@ -1,0 +1,91 @@
+import type { FileContent, FileTreeNode } from "@/types/api";
+import { apiFetch } from "./client";
+
+export function fetchProjects() {
+  return apiFetch<{ projects: import("@/types/api").ProjectSummary[] }>(
+    "/api/projects",
+  );
+}
+
+export function createProject(rough_idea: string) {
+  return apiFetch<{ project_id: string; rough_idea: string }>(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({ rough_idea }),
+    },
+  );
+}
+
+export function fetchProject(projectId: string) {
+  return apiFetch<{
+    project_id: string;
+    project: Record<string, unknown>;
+    path: string;
+  }>(`/api/projects/${projectId}`);
+}
+
+export function updateProject(
+  projectId: string,
+  body: { rough_idea?: string; meta?: Record<string, unknown> },
+) {
+  return apiFetch(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteProject(projectId: string) {
+  return apiFetch(`/api/projects/${projectId}`, { method: "DELETE" });
+}
+
+export function fetchReferences(projectId: string) {
+  return apiFetch<{
+    project_id: string;
+    references: Array<{ name: string; size: number }>;
+  }>(`/api/projects/${projectId}/references`);
+}
+
+export function uploadReference(projectId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch(`/api/projects/${projectId}/references`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function deleteReference(projectId: string, name: string) {
+  return apiFetch(`/api/projects/${projectId}/references/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export function fetchArtifacts(projectId: string) {
+  return apiFetch<{ items: FileTreeNode[] }>(
+    `/api/projects/${projectId}/artifacts`,
+  );
+}
+
+export function fetchFile(projectId: string, path: string) {
+  return apiFetch<FileContent>(
+    `/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`,
+  );
+}
+
+export function writeFile(projectId: string, path: string, content: string) {
+  return apiFetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function exportProject(
+  projectId: string,
+  opts: { html?: boolean; cost?: boolean } = {},
+) {
+  return apiFetch(`/api/projects/${projectId}/export`, {
+    method: "POST",
+    body: JSON.stringify({ html: true, cost: true, ...opts }),
+  });
+}
