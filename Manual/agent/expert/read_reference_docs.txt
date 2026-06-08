@@ -1,0 +1,171 @@
+# Skill: domain-research
+
+## Priority Rules
+
+- If the caller provides an output schema, follow the caller schema exactly.
+- Do not create formal requirements unless the caller explicitly asks for requirements.
+- Treat research findings as evidence, constraints, risks, recommendations, or open questions that need stakeholder or analyst validation.
+- Do not write files unless the caller explicitly asks you to save artifacts.
+
+### Step 3: Gather Evidence
+
+Based on focus area:
+
+**Best Practices:**
+
+```yaml
+queries:
+  - source: external research
+    query: "{issue} best practices 2025"
+  - source: external research
+    query: "{issue} common patterns recommendations"
+```
+
+**Regulatory:**
+
+```yaml
+queries:
+  - source: external research
+    query: "{regulation} requirements {industry}"
+  - source: official documentation
+    action: review regulatory documentation
+```
+
+**Competitive:**
+
+```yaml
+queries:
+  - source: public product information
+    action: search competitor features
+  - source: external research
+    query: "{industry} market leaders features"
+```
+
+**Technical:**
+
+```yaml
+queries:
+  - source: official documentation
+    action: review library or framework documentation
+  - source: external research
+    query: "{technology} integration requirements"
+```
+
+### Step 4: Synthesize Findings
+
+Combine research results:
+
+- Extract key findings
+- Identify requirements implications
+- Note confidence levels
+- Flag items needing validation
+- Preserve the exact URL for every external source used.
+- Do not cite external laws, standards, official documents, third-party policies, or best practices unless a URL is available from the gathered evidence.
+
+### Step 5: Return Findings
+
+Return structured findings to the caller using the caller's requested format.
+If no format is provided, summarize findings, constraints, risks, recommendations, sources, confidence, and validation gaps.
+When a `sources` field is requested, put only complete URL strings in `sources`.
+
+### Step 4: Synthesize Findings
+
+Combine research results:
+
+- Extract key findings
+- Identify requirements implications
+- Note confidence levels
+- Flag items needing validation
+- Preserve the exact URL for every external source used.
+- Do not cite external laws, standards, official documents, third-party policies, or best practices unless a URL is available from the gathered evidence.
+
+### Step 5: Return Findings
+
+Return structured findings to the caller using the caller's requested format.
+If no format is provided, summarize findings, constraints, risks, recommendations, sources, confidence, and validation gaps.
+When a `sources` field is requested, put only complete URL strings in `sources`.
+
+### Step 5: Return Findings
+
+Return structured findings to the caller using the caller's requested format.
+If no format is provided, summarize findings, constraints, risks, recommendations, sources, confidence, and validation gaps.
+When a `sources` field is requested, put only complete URL strings in `sources`.
+
+# Context
+{
+  "issue": {
+    "id": "I-R1-001",
+    "title": "訂單狀態規則是否一致",
+    "category": "clarify_requirement",
+    "description": "消費者、餐廳與外送員對訂單取消條件的理解是否一致？",
+    "meeting_id": "R1-M1"
+  },
+  "scenario": "訂餐外送系統",
+  "scope": {
+    "in_scope": [
+      "線上訂餐"
+    ],
+    "out_of_scope": []
+  },
+  "URL": [
+    {
+      "id": "URL-1",
+      "text": "消費者能完成線上訂餐",
+      "stakeholder": "消費者",
+      "source": "initial"
+    }
+  ],
+  "REQ": [],
+  "stakeholders": [
+    {
+      "name": "消費者",
+      "type": "primary_user",
+      "text": []
+    }
+  ],
+  "open_questions": [],
+  "existing_document_evidence": []
+}
+
+# 任務
+針對以下研究問題，先查找 doc/ 內專案參考文件並整理文件證據。
+
+
+# Action Boundary
+- action=expert.read_reference_docs
+- 本 action 只整理專案內部文件證據。
+- 不查外部 web。
+- 不產生 feedback。
+- 不新增或修改 REQ、URL、scope、conflict 或 draft。
+- artifact 寫回由 runtime 負責。
+
+# Input
+研究問題:
+確認訂單取消與退款是否涉及消費者保護或支付相關限制
+
+# Generation Rules
+- 必須使用 read_file 搜尋或讀取相關文件片段。
+- 只整理和研究問題、source requirements 或目前議題直接相關的文件證據。
+- 若文件沒有相關內容，document_evidence 輸出空陣列，並在 gaps 說明缺口。
+- 每筆 document_evidence 必須包含 source；source 要能追蹤到文件名稱、路徑或片段位置。
+- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 id；不能編造 URL-*。
+- 不要根據文件證據產生正式需求；只做 evidence summary。
+
+# Output JSON
+{
+  "document_evidence": [
+    {
+      "source": "doc/...",
+      "section": "章節或片段位置",
+      "summary": "文件證據摘要",
+      "related_requirement_ids": ["URL-1"]
+    }
+  ],
+  "gaps": []
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 feedback 或 research_evidence。
+- 不輸出正式需求、決策或 artifact 全文。
+- 不編造文件來源、URL-* 或 requirement id。

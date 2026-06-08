@@ -1,0 +1,44 @@
+# Issue
+議題 [OQ]: 回答 analyst 的問題
+描述: 取消規則應以出餐前還是出餐後為準？
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "訂餐",
+        "description": "系統應支援線上訂餐"
+      }
+    ]
+  }
+}
+
+# 任務
+以建模角度直接回答提問。
+
+# Response Boundary
+- 本 response 只代表 Modeler 在會議中的發言與提問。
+- 不直接更新 artifact；若需要建立或更新模型，應透過 system_modeling action 執行。
+- 不輸出 model_plan、system_models、requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新模型或需求。
+
+# Rules
+- 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
+- 回答需聚焦流程、狀態、資料、actor/use case、責任邊界或 system model 影響。
+- 不更新專案資料，不輸出 stance。
+- open_questions 預設輸出空陣列；只有問題本身無法回答且答案會影響本議題結論時才提出。
+
+# Output JSON
+{
+    "text": "直接回答問題",
+    "open_questions": []
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 PlantUML 或 system model JSON。
+- 不從模型反推新增需求。
+- 不編造不存在的 SM-*、REQ-*、URL-* 或 CR-*。

@@ -1,0 +1,44 @@
+# Issue
+議題 [OQ]: 回答 analyst 的問題
+描述: 取消規則應以出餐前還是出餐後為準？
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "訂餐",
+        "description": "系統應支援線上訂餐"
+      }
+    ]
+  }
+}
+
+# 回應契約
+- 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
+- 回答需保持 Expert 視角，聚焦領域限制、法規/標準、風險、證據強度或 evidence gap。
+- 不更新專案資料，不輸出 stance。
+- open_questions 預設輸出空陣列；只有問題本身無法回答且答案會影響本議題結論時才提出。
+
+# 任務
+以領域專家角度直接回答提問。
+
+# Response Boundary
+- 本 response 只代表 Expert 在會議中的發言與提問。
+- 不直接更新 artifact；若需要領域研究或 feedback 更新，應透過 research_domain action 執行。
+- 不輸出 research_plan、research_evidence、feedback、requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+- Related Context 只能作為會議發言依據，不可單獨創造外部證據或正式需求。
+
+# Output JSON
+{
+    "text": "直接回答問題",
+    "open_questions": []
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 research_evidence 或 feedback JSON。
+- 不把 feedback 或外部研究結果定案為正式需求。
+- 不編造外部 URL、法規、標準、REQ-*、URL-* 或 CR-*。

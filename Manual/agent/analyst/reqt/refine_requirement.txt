@@ -1,0 +1,332 @@
+# Skill: requirements-analyst
+
+### 1. Requirement Decomposition
+
+Break down requirements into universal categories:
+
+```yaml
+Requirement Categories:
+  Functional:
+    - What the system must do
+    - User interactions
+    - Business logic
+    - Data processing
+
+  Non-Functional:
+    - Performance targets
+    - Security requirements
+    - Usability standards
+    - Reliability metrics
+
+  Constraints:
+    - Technical limitations
+    - Business rules
+    - Regulatory compliance
+    - Resource boundaries
+```
+
+### 2. Requirement Analysis Framework
+
+**Universal User Story Format:**
+```yaml
+User Story:
+  as_a: [user role/persona]
+  i_want: [feature/capability]
+  so_that: [business value/benefit]
+
+Acceptance Criteria:
+  given: [initial context/state]
+  when: [action/trigger]
+  then: [expected outcome/result]
+```
+
+**Requirement Specification Template:**
+```yaml
+Requirement:
+  id: REQ-[number]
+  title: [brief description]
+  type: functional|non-functional|constraint
+  priority: must|should|could
+  description: [detailed description]
+  rationale: [why this is needed]
+  source: [stakeholder/document]
+  acceptance_criteria:
+    - [measurable criterion 1]
+    - [measurable criterion 2]
+  dependencies:
+    - [related requirement ids]
+  risks:
+    - [potential risks]
+  assumptions:
+    - [underlying assumptions]
+```
+
+### 3. Priority Frameworks
+
+**MoSCoW Method:**
+```yaml
+Must Have:
+  - Critical for launch
+  - System fails without it
+  - Legal/regulatory requirement
+
+Should Have:
+  - Important but not vital
+  - Workaround exists
+  - High value for users
+
+Could Have:
+  - Desirable but not necessary
+  - Nice to have
+  - Can be postponed
+
+Won't Have (this time):
+  - Out of scope
+  - Future consideration
+  - Explicitly excluded
+```
+
+### 4. Requirement Quality Criteria
+
+**SMART Requirements:**
+```yaml
+Specific:
+  - Clear and unambiguous
+  - Well-defined scope
+
+Measurable:
+  - Quantifiable success criteria
+  - Testable conditions
+
+Achievable:
+  - Technically feasible
+  - Resource realistic
+
+Relevant:
+  - Aligns with business goals
+  - Provides value
+
+Time-bound:
+  - Has deadline/milestone
+  - Time constraints defined
+```
+
+**Completeness Checklist:**
+```yaml
+Requirement Completeness:
+  - [ ] Clear description
+  - [ ] Defined acceptance criteria
+  - [ ] Identified stakeholder
+  - [ ] Priority assigned
+  - [ ] Dependencies mapped
+  - [ ] Risks assessed
+  - [ ] Assumptions documented
+  - [ ] Traceability established
+```
+
+### 5. Requirement Validation
+
+**Validation Techniques:**
+```yaml
+Review Methods:
+  walkthrough:
+    - Informal review
+    - Author-led
+    - Educational focus
+
+  inspection:
+    - Formal review
+    - Defined roles
+    - Defect detection
+
+  prototype_validation:
+    - Visual representation
+    - User feedback
+    - Early validation
+```
+
+**Validation Criteria:**
+```yaml
+Quality Attributes:
+  correctness:
+    - Accurately represents need
+    - Factually correct
+
+  consistency:
+    - No conflicts
+    - Uniform terminology
+
+  completeness:
+    - All aspects covered
+    - No gaps
+
+  feasibility:
+    - Technically possible
+    - Resource available
+
+  testability:
+    - Verifiable criteria
+    - Measurable outcomes
+```
+
+# 本專案覆寫規則
+- type 分類依已注入的需求分析規則；不要在本 prompt 重新定義 functional / non-functional / constraint。
+- feedback.constraints 是 Expert 的限制候選與證據，不等於正式需求；只有來源可追蹤且可寫成系統必須遵守的限制時，才正式化為 type=constraint。
+- 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional；只有 metric、validation、適用範圍、FR/NFR priority 或品質取捨需要決策時，才留待會議或 open question。
+- priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
+- functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略，不輸出 wont，也不要預設。
+- 每筆 REQ 只保留一個核心意圖；若來源同時包含功能、品質與限制，且可獨立追蹤，請拆成多筆 REQ。
+- non-functional 可輸出 category、metric、validation；category 依 ISO/IEC 25010 且不用 functional suitability。
+- source 只放已存在且可追蹤的 artifact ID。
+- coverage 只作內部檢查，不是正式需求內容；Traceability 維持 Source 與 System Model。
+
+# Context
+{
+  "issue": {
+    "id": "I-R1-001",
+    "meeting_id": "R1-M1",
+    "title": "訂單狀態規則是否一致",
+    "category": "clarify_requirement",
+    "trace": {}
+  },
+  "current_URL": [
+    {
+      "id": "URL-1",
+      "text": "消費者能完成線上訂餐",
+      "stakeholder": "消費者",
+      "source": "initial"
+    }
+  ],
+  "current_REQ": [
+    {
+      "id": "REQ-1",
+      "title": "線上訂餐",
+      "type": "functional",
+      "description": "系統應支援消費者線上訂餐",
+      "source": [
+        "URL-1"
+      ]
+    }
+  ],
+  "scope": {
+    "in_scope": [
+      "線上訂餐"
+    ],
+    "out_of_scope": []
+  },
+  "feedback": {},
+  "system_models": [],
+  "discussion": [],
+  "req_source_index": {},
+  "current_req_count": 1,
+  "mode": "",
+  "coverage_gaps": [],
+  "cleanup_issues": []
+}
+
+# 任務
+依本議題討論結果，修正 requirements.json 中受影響的 REQ-* 條目。
+
+# Action Boundary
+- action=refine_requirement
+- 本 action 只負責 meeting resolution → update REQ，不掃全部 URL，不補全量 coverage，不更新 draft，不跑衝突辨識。
+- 不直接更新 artifact；runtime 會驗證 requirement_update 後才寫入 artifact.REQ / artifact.coverage。
+- 最外層只能輸出 requirement_update。
+- current_REQ 是修正基底；只更新本議題影響到的 REQ。
+- current_URL 只作為本議題 trace 或來源查核，不是全量整理清單。
+- 若 context.mode=refine_granularity_cleanup 或 context.cleanup_issues 有值，本次只處理 cleanup_issues 點名的 REQ 粒度、類型或合併問題，不做其他需求精修。
+- 明確且已由會議或來源收斂的 NFR 直接寫回 type=non-functional、category、metric、validation 與 priority；仍未決的品質取捨放入 risks、assumptions 或 open_questions，不要硬寫成定案。
+- 若本次需要合併多筆既有 REQ，請保留最合適的一筆既有 REQ id，合併 source 與驗收條件，並在 remove_REQ 列出被合併移除的舊 REQ id。
+
+# Input
+- issue、discussion、current_REQ、current_URL、scope、feedback、system_models 與 context 由 runtime context 提供。
+- source_id=R1-M1
+
+# Context Boundary
+- issue 與 discussion 是本次精修的直接來源。
+- current_REQ 是唯一可被修正的正式需求基底。
+- current_URL 只用於 trace 查核與補足來源，不可當成全量 formalization 清單。
+- scope、feedback、system_models 只作為一致性參考；不能單獨創造新需求。
+
+# Context Rules
+- current_URL 是最新 User Requirements，也是正式 REQ 的主要來源。
+- current_REQ 是既有正式需求；仍有效的 REQ 必須保留 id，只更新受來源或本議題決議影響的欄位。
+- scope 只用來判斷需求是否屬於本系統範圍，不直接轉成 REQ。
+- feedback 只作為領域背景、限制候選、風險與建議；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- system_models 只作為流程、actor、資料、狀態與邊界參考；不能單獨創造 stakeholder 未支持的新需求。
+- discussion 只使用明確表態、已回答問題、已收斂或人類裁決的內容。
+- req_source_index 提供 source_id 到既有 REQ-* 的索引；請直接引用，不要逐筆 artifact_query 比對。
+
+# Refinement Rules
+- 修正既有項目時必須保留該項 REQ-* id。
+- 只回傳本議題新增或需要更新的 REQ；未受本議題影響的既有 REQ 不要重複回傳。
+- 除非會議已明確收斂出新的可追蹤需求，否則不要新增 REQ。
+- 新增 REQ 必須有 current_URL 或明確會議決議支持，source 必須包含 URL-* 或 R1-M1。
+- 不要因 current_URL 中還有未覆蓋來源，就在本次一般議題主動補齊全量 REQ。
+- coverage 只回報本議題實際處理的 source；不要為未進入本議題的 URL 建立 coverage。
+- cleanup 模式處理的是正式化後品質：同一能力、限制或品質面向被拆太細時要合併，不是逐條重寫全部 REQ。
+- 合併既有 REQ 時，保留最能代表群組的一筆 id，把被合併 REQ 的 source、驗收條件、風險與假設整合進保留項，並將被合併 id 放入 remove_REQ。
+
+# Requirement Quality Rules
+- source 是可追蹤來源 ID；優先使用 URL-*。若內容來自正式會議決議、feedback 或 system model，可加入 R*-M*、Feedback 或 SM-*。
+- type 分類依本專案需求規則；不要重新定義 functional / non-functional / constraint。
+- 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
+- 若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；不是因 URL 筆數拆分。
+- 若品質或限制只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional，不要只因為它是 NFR 就留待會議。
+- NFR 只有在 metric、validation、適用範圍或 FR/NFR priority 需要決策，或會造成品質/成本/設計/模型取捨時，才放入 open_questions、risks 或正式會議處理。
+- title 是 brief description：用短詞概括需求核心，不寫完整句；title 應命名系統能力、限制、品質屬性或政策本體，不用利害關係人角色作為開頭。
+- 若需求只是在描述某角色提出的目標，角色資訊放在 description、source 或 trace，不放在 title 前綴。
+- priority 只用於 functional 與 non-functional 需求，討論 FR/NFR 的實作、品質或版本優先順序；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
+- functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略。
+- description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
+- acceptance_criteria 必須可驗收，不要只重述 description；若只有待確認條件，放入 risks、assumptions 或 open_questions。
+- non-functional 可輸出 category、metric、validation：category 依 ISO/IEC 25010 且不用 functional suitability；metric 從 acceptance_criteria 或需求內容萃取可觀察條件；validation 寫成可執行方式。
+- rationale 只寫為什麼需要此需求；risks 只寫可能失敗或不確定處；assumptions 只寫目前採用但尚未完全確認的前提。三者不得重複 description。
+- 不確定、有爭議、超出範圍或需要裁決的內容，不要硬寫成 REQ；請放入 assumptions、risks、open_questions 或 coverage。
+- coverage 只作內部檢查，不是正式需求內容；不要把 coverage reason 寫進 description、rationale、risks 或 assumptions。
+- 有依據就填欄位；沒有依據就留空陣列或省略，不要臆測。
+
+# Generation Rules
+- reason 只用一句話說明本次修正結果。
+
+# Output JSON
+{
+  "requirement_update": {
+    "REQ": [
+      {
+        "type": "functional | non-functional | constraint",
+        "id": "既有 REQ-*；新增時省略或留空",
+        "title": "短標題",
+        "description": "系統應...",
+        "priority": "functional / non-functional 才填 must | should | could；constraint 不填",
+        "category": "non-functional 才填 ISO/IEC 25010 品質特性",
+        "metric": "non-functional 才填從 acceptance_criteria 或需求內容萃取出的可觀察或可測量條件",
+        "validation": "non-functional 才填依 Requirement Validation 判斷的可執行驗證方式",
+        "source": ["URL-1", "R1-M1"],
+        "acceptance_criteria": [],
+        "rationale": "為何需要此需求",
+        "dependencies": [],
+        "risks": [],
+        "assumptions": []
+      }
+    ],
+  "remove_REQ": ["update 模式才可填；列出已被合併進其他 REQ 的舊 REQ-*"],
+    "coverage": [
+      {
+        "source_id": "URL-1 或 R1-M1",
+        "status": "covered | needs_clarification | assumption | risk | excluded",
+        "covered_by": ["REQ-1"],
+        "reason": "為何已覆蓋或為何暫不能形成 REQ"
+      }
+    ],
+    "reason": "一句說明"
+  }
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 draft_plan、scope_updates、conflicts 或 system_models。
+- 不輸出 artifact 全文。
+- 不輸出舊格式，例如最外層直接使用 REQ。
+- 不新增沒有 current_URL 或明確會議決議支持的 REQ。

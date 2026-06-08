@@ -1,0 +1,53 @@
+# 任務
+把尚未自然收斂的正式會議議題整理成人類裁決選項。
+不要替人類做最終決策，也不要模擬投票。
+選項必須是可寫回需求的規則，不是「先納入 / 暫緩 / 分階段」這類流程策略。
+
+# 議題
+標題: 訂單狀態規則是否一致
+類型: clarify_requirement
+描述: 消費者、餐廳與外送員對訂單取消條件的理解是否一致？
+預期結果: 
+
+# 討論紀錄
+消費者：取消規則應在出餐前。
+餐廳：出餐後不可取消。
+
+# 規則
+- options 列 2-5 個可執行的需求規則；同一議題可讓人類同時採用多個 option。
+- 每個 option 要裁決一個具體需求內容，且該內容必須能直接影響需求條文、驗收條件、限制、風險或後續行動。
+- 不要產生「現有需求先納入」「暫緩納入」「後續再細化」這類只決定流程、不決定需求內容的 option。
+- 若既有決策資料包含衝突解決選項或 recommended_resolution，優先沿用；只能依討論內容補充影響或調整文字。
+- 優先使用 agent 在 proposal 中提出的方案，也可從發言萃取可行方案。
+- 每個 option 必須包含 pros、cons、impact、risk。
+- compromise 只在有合理折衷時輸出；沒有就回空物件。
+- recommendation 是建議，不是決議；最後由人類裁決。
+- affected_requirement_ids 優先使用議題來源追蹤中的需求 id；沒有就回空陣列。
+- 使用繁體中文。
+
+# 輸出 JSON
+{
+  "summary": "此議題需要決策的原因",
+  "options": [
+    {
+      "id": "A",
+      "summary": "可直接寫回需求的決策規則",
+      "pros": ["優點"],
+      "cons": ["限制或代價"],
+      "impact": ["對需求、範圍、驗收或設計的影響"],
+      "risk": "low | medium | high"
+    }
+  ],
+  "recommendation": {
+    "option_id": "A",
+    "rationale": "為何建議此方案",
+    "needs_human": true
+  },
+  "compromise": {
+    "title": "折衷方案標題",
+    "description": "折衷方案內容",
+    "rationale": "為何此方案能平衡各方需求"
+  },
+  "affected_requirement_ids": ["REQ-1"],
+  "unresolved_points": ["需要人類裁決的事項"]
+}

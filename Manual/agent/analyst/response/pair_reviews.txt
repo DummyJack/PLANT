@@ -1,0 +1,70 @@
+# Issue
+議題 [I-R1-003]: 衝突再審查
+描述: 逐筆再審查 Conflict/Neutral 項目。
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "訂餐",
+        "description": "系統應支援線上訂餐"
+      }
+    ]
+  }
+}
+
+# 任務
+請逐筆再審查目前這批 Conflict/Neutral 項目，先根據 User Requirements（URL-*）原文獨立重判，並將重判結果填入 proposed_label。
+
+# Response Boundary
+- 本 response 只代表 Analyst 在會議中的發言與提問。
+- 不直接更新 artifact；若需要更新需求、scope 或 draft，應透過對應 action 執行。
+- 不輸出 requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
+
+# Rules
+# Conflict Response Boundary
+- 本 response 只提供 Analyst 對指定 pair/multiple conflict 的會議審查意見。
+- 不直接更新 artifact；後續 signoff action 才會裁定 label。
+- 不產生 resolution options、不改寫 URL 或 REQ。
+
+- 外層必須只有 text 欄位。
+- text 的值必須是 JSON object 字串，不是巢狀 object。
+- text JSON 結構必須為：{"pair_reviews":[...]}。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx] 或 [MULTIPLE-xxx]；每筆都要有：id、proposed_label、reason。
+- 不可用類 JSON 條列或文字摘要取代合法 JSON。
+- 先只根據 User Requirements（URL-*）原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
+- reason 必須寫成完整審查意見：說明獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
+- 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
+- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也應支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
+- 重複、近似重複、細化、範圍重疊、同一需求槽位的不同措辭、限制、觸發條件、數量或頻率，不可直接支持 Neutral；需判斷是否需要合併、改寫、刪除或人工裁定。
+- proposed_label 可以和其他 agent 相同，但 reason 必須提供獨立判斷依據；不要只重複一般語意判斷。
+- reason 必須根據需求原文或會議中可追溯的證據，不可臆測不存在的需求、設計方案或外部情境。
+- 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
+- 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 不要跳到實作方案或最終決策。
+- 外層輸出只包含 text 欄位的 JSON object。
+- text 必須是 JSON object 字串，不是巢狀 object。
+- text JSON 結構必須為 {"pair_reviews":[...]}。
+- pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。
+- 每筆 pair_reviews 都必須有 id、proposed_label、reason。
+- proposed_label 只能是 Conflict 或 Neutral。
+- 本輪必須涵蓋的 pair id：["PAIR-1"]
+
+# Output JSON
+{
+    "text": "{\"pair_reviews\":[{\"id\":\"PAIR-1 或 MULTIPLE-1\",\"proposed_label\":\"Conflict | Neutral\",\"reason\":\"完整審查理由\"}]}"
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
+- 不新增未被來源支持的新需求。
+- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。

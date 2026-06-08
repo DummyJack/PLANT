@@ -1,0 +1,77 @@
+# 任務
+根據目前專案狀態與上一步結果，決定本輪 domain research 要做什麼。
+
+- research_domain 是流程 action，不是單一產物 action。
+- 本流程只規劃一次，之後依 action_plan 逐一執行 read_reference_docs、research_issue、update_feedback。
+- read_reference_docs 與 research_issue 只取得證據；只有 update_feedback 會寫回正式 feedback artifact。
+- 不得把 feedback 直接定案成需求；需求正式化由 Analyst action 處理。
+
+# 目前專案狀態
+{
+  "scenario": "訂餐外送系統",
+  "scope": {
+    "in_scope": [
+      "線上訂餐"
+    ],
+    "out_of_scope": []
+  },
+  "URL": [
+    {
+      "id": "URL-1",
+      "text": "消費者能完成線上訂餐"
+    }
+  ],
+  "REQ": [],
+  "open_questions": []
+}
+
+# 上一步結果
+{
+  "has_existing_research": false,
+  "research_results_count": 0
+}
+
+- read_reference_docs：讀專案內部文件，取得文件證據。
+- research_issue：查外部領域知識、法規、標準、官方文件、第三方限制或最佳實務。
+- update_feedback：把已取得的研究結果寫回 feedback。
+- done：沒有需要研究，或已完成寫回。
+
+- 研究問題必須來自目前 issue、scenario、scope、stakeholders、open_questions、URL 或 REQ。
+- 只規劃 high-value research_issue，不為了湊數研究。
+- high-value 指會影響需求是否成立、系統邊界、法規/合規/安全、責任歸屬、驗收標準、多個 URL/REQ，或目前 artifact 沒有清楚答案。
+- 不研究低價值內容：一般功能偏好、已清楚的 UI 操作、不影響需求條文的背景知識、與 scope 無關的產業介紹。
+- 若既有 artifact / feedback 已足夠涵蓋目前高價值問題，選 done，不重複研究。
+- 如果 has_existing_research=false 且 research_results_count=0，且內容涉及支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償或申訴，必須至少規劃 1 個 research_issue。
+- 如果沒有上述外部研究觸發條件、沒有高價值且可取得可靠來源的研究問題，可以選 done，但 reasoning 必須明確說明未觸發外部研究條件。
+- 只有存在 high-value research_issue 時，才規劃 research_issue，最後執行 update_feedback。
+- 需要專案文件證據時先用 read_reference_docs。
+- 需要外部證據時用 research_issue；每個 research_issue 只處理一個明確高價值問題。
+- 若多個高價值問題分屬不同面向，可以拆成多個 research_issue；最多 4 個。
+- 不要把法規、安全、責任歸屬、營運限制與驗收標準全部塞進同一個過大的 query。
+- 每個 research_issue.params 必須包含 query 與 value_reason。
+- 只要有 research_issue 或已有 research_results，最後必須 update_feedback。
+- update_feedback 只允許放在 action_plan 最後一次。
+- feedback.sources 每筆使用 {"title": "可讀來源名稱", "url": "完整 URL"}；title 使用法規、標準、官方文件、組織文章或案例名稱。
+
+# Output JSON
+{
+  "research_plan": {
+    "action": "done",
+    "params": {},
+    "reasoning": "一句繁體中文說明",
+    "action_plan": {
+      "goal": "本輪 domain research 目標",
+      "steps": [
+        {"action": "read_reference_docs", "params": {"query": "具體文件查詢問題"}},
+        {
+          "action": "research_issue",
+          "params": {
+            "query": "具體高價值研究問題",
+            "value_reason": "為什麼此問題會影響需求品質"
+          }
+        },
+        {"action": "update_feedback", "params": {}}
+      ]
+    }
+  }
+}

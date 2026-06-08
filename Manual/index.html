@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual</title>
+  <link rel="icon" type="image/png" href="img/logo.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>PLANT 系統如何一步一步產生 SRS</h1>
+    </div>
+  </header>
+
+  <main>
+    <section id="stages" class="section">
+      <div class="stage-filter" aria-label="Agent 分類篩選">
+        <button type="button" class="filter-step active" data-stage-filter="all">全部顯示</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-user">User</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-analyst">Analyst</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-expert">Expert</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-modeler">Modeler</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-mediator">Mediator</button>
+        <button type="button" class="filter-step agent-step" data-stage-filter="agent-documentor">Documentor</button>
+        <div class="browser-actions">
+          <button type="button" class="file-browser-button" data-open-file-browser="artifact">Artifact</button>
+          <button type="button" class="file-browser-button" data-open-file-browser="output">輸出結果</button>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <article id="stage-project" class="stage-card" data-agent="agent-user">
+          <span class="number">1</span>
+          <h3>專案建立</h3>
+          <p>使用者粗略想法與利害關係人的發言。</p>
+          <dl>
+            <dt>Flow</dt><dd>Rough idea → User(suggest_stakeholders) → 使用者選擇 → User(write_stakeholder_text) → project(stakeholders text)</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/user/system_prompt.txt">User</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-description="產生利害關係人候選。" href="agent/user/suggest_stakeholders.txt">suggest_stakeholders</a>、<a data-agent-file data-agent-description="模擬利害關係人發言。" href="agent/user/write_stakeholder_text.txt">write_stakeholder_text</a></dd>
+            <dt>Input</dt><dd>Rough idea</dd>
+            <dt>Output</dt><dd><a data-file="project-json" href="projects/artifact/project.json">project.json</a></dd>
+          </dl>
+        </article>
+
+        <article id="stage-elicitation" class="stage-card" data-agent="agent-user">
+          <span class="number">2</span>
+          <h3>需求訪談</h3>
+          <p>規劃需求擷取會議，讓各 agent 追問 User 以補足需求。</p>
+          <dl>
+            <dt>Flow</dt><dd>Mediator(plan_elicitation) → Agent(ask_user) → User(response) → elicitation_meeting</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/user/system_prompt.txt">User</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-description="安排需求擷取會議。" href="agent/mediator/plan_elicitation.txt">plan_elicitation</a>、<a data-agent-file data-agent-flow-style="group" data-agent-flow="analyst|agent/analyst/response/ask_user.txt|分析師發問。;expert|agent/expert/response/ask_user.txt|領域專家發問。;modeler|agent/modeler/response/ask_user.txt|系統模型師發問。" href="agent/analyst/response/ask_user.txt">ask_user</a>、<a data-agent-file data-agent-description="利害關係人回覆訪談問題。" href="agent/user/response/response.txt">response</a></dd>
+            <dt>Input</dt><dd><a data-file="project-json" href="projects/artifact/project.json">project.json</a></dd>
+            <dt>Output</dt><dd><a data-file="elicitation-json" href="projects/artifact/meeting/elicitation_meeting.json">elicitation_meeting.json</a></dd>
+          </dl>
+        </article>
+
+        <article id="stage-analysis" class="stage-card" data-agent="agent-analyst">
+          <span class="number">3</span>
+          <h3>需求分析</h3>
+          <p>Analyst 分析出使用者的需求，並界定出需求範圍</p>
+          <dl>
+            <dt>Flow</dt><dd>project(stakeholders text) + elicitation_meeting → Analyst(analyze_scenario) → Analyst(analyze_requirements) → Analyst(generate_scope) → requirements / scope</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/analyst/system_prompt.txt">Analyst</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-description="產生系統情境名稱。" href="agent/analyst/analyze_scenario.txt">analyze_scenario</a>、<a data-agent-file data-agent-description="從利害關係人回答抽取 User Requirements。" href="agent/analyst/reqt/analyze_requirements.txt">analyze_requirements</a>、<a data-agent-file data-agent-description="產生需求範圍。" href="agent/analyst/scope/generate_scope.txt">generate_scope</a></dd>
+            <dt>Input</dt><dd><a data-file="project-json" href="projects/artifact/project.json">project.json</a>、<a data-file="elicitation-json" href="projects/artifact/meeting/elicitation_meeting.json">elicitation_meeting.json</a></dd>
+            <dt>Output</dt><dd><a data-file="requirements-json" href="projects/artifact/requirements.json">requirements.json</a>、<a data-file="scope-json" href="projects/artifact/scope.json">scope.json</a></dd>
+          </dl>
+        </article>
+
+        <article id="stage-conflict" class="stage-card" data-agent="agent-analyst">
+          <span class="number">4</span>
+          <h3>需求衝突辨識</h3>
+          <p>Analyst 辨識使用者需求是否有衝突，並產生衝突報告。</p>
+          <dl>
+            <dt>Flow</dt><dd>requirements → Analyst(analyze_conflicts) → conflict / conflict_report</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/analyst/system_prompt.txt">Analyst</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-description="辨識衝突並產生報告與處理方案。" data-agent-flow-style="agent-group" data-agent-flow-agent="Analyst" data-agent-flow-group="analyze_conflicts" href="agent/analyst/conflict/detect_pair_conflicts.txt">analyze_conflicts</a></dd>
+            <dt>Input</dt><dd><a data-file="requirements-json" href="projects/artifact/requirements.json">requirements.json</a></dd>
+            <dt>Output</dt><dd><a data-file="conflict-json" href="projects/artifact/conflict.json">conflict.json</a>、<details class="file-list" data-file-list="conflict_reports"><summary>conflict_report_vN.json</summary><a data-file="conflict-report-json" href="projects/artifact/report/conflict_report_v1.json">conflict_report_v1.json</a><a data-file="conflict-report-json" href="projects/artifact/report/conflict_report_v2.json">conflict_report_v2.json</a><a data-file="conflict-report-html" href="projects/results/report/conflict_report.html">conflict_report.html</a></details></dd>
+          </dl>
+        </article>
+
+        <article id="stage-draft" class="stage-card" data-agent="agent-analyst">
+          <span class="number">5</span>
+          <h3>草稿建立</h3>
+          <p>Analyst 將已知需求整理成初版草稿，作為後續討論基準。</p>
+          <dl>
+            <dt>Flow</dt><dd>project + requirements + scope → Analyst(create_draft) → draft_vN</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/analyst/system_prompt.txt">Analyst</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-description="建立初版需求草稿。" href="agent/analyst/draft/create_draft.txt">create_draft</a></dd>
+            <dt>Input</dt><dd><a data-file="project-json" href="projects/artifact/project.json">project.json</a>、<a data-file="requirements-json" href="projects/artifact/requirements.json">requirements.json</a>、<a data-file="scope-json" href="projects/artifact/scope.json">scope.json</a></dd>
+            <dt>Output</dt><dd><details class="file-list" data-file-list="drafts"><summary>draft_vN.html</summary><a data-file="draft-html" href="projects/results/drafts/draft_v0.html">draft_v0.html</a></details></dd>
+          </dl>
+        </article>
+
+        <article id="stage-feedback" class="stage-card" data-agent="agent-expert">
+          <span class="number">6</span>
+          <h3>提供回饋</h3>
+          <p>Expert 檢查領域限制、風險與參考依據，整理成回饋。</p>
+          <dl>
+            <dt>Flow</dt><dd>latest draft → Expert(research_domain) → feedback</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/expert/system_prompt.txt">Expert</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-flow-style="agent-group" data-agent-flow-agent="Expert" data-agent-flow-group="research_domain" href="agent/expert/read_reference_docs.txt">research_domain</a></dd>
+            <dt>Input</dt><dd><a data-file="draft-html" href="projects/results/drafts/draft_v0.html">latest draft</a></dd>
+            <dt>Output</dt><dd><a data-file="feedback-json" href="projects/artifact/feedback.json">feedback.json</a></dd>
+          </dl>
+        </article>
+
+        <article id="stage-model" class="stage-card" data-agent="agent-modeler">
+          <span class="number">7</span>
+          <h3>系統模型建立</h3>
+          <p>Modeler 建立系統模型，輔助理解流程、角色與邊界。</p>
+          <dl>
+            <dt>Flow</dt><dd>latest draft → Modeler(system_modeling) → system_models / models</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/modeler/system_prompt.txt">Modeler</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-flow-style="agent-group" data-agent-flow-agent="Modeler" data-agent-flow-group="system_modeling" href="agent/modeler/plan_models.txt">system_modeling</a></dd>
+            <dt>Input</dt><dd><a data-file="draft-html" href="projects/results/drafts/draft_v0.html">latest draft</a></dd>
+            <dt>Output</dt><dd><a data-file="system-models-json" href="projects/artifact/system_models.json">system_models.json</a>、<details class="file-list" data-file-list="models"><summary>models(png)</summary><a data-file="model-image" href="projects/artifact/models/訂餐外送系統-系統架構圖.png">訂餐外送系統-系統架構圖</a></details>、<details class="file-list" data-file-list="model_sources"><summary>models(plantuml)</summary><a data-file="model-source" href="projects/artifact/models/訂餐外送系統-系統架構圖.plantuml">訂餐外送系統-系統架構圖</a></details></dd>
+          </dl>
+        </article>
+
+        <article id="stage-meeting" class="stage-card" data-agent="agent-mediator">
+          <span class="number">8</span>
+          <h3>正式會議</h3>
+          <p>Mediator 規劃正式會議，讓各 agent 討論議題並收束決議。</p>
+          <dl>
+            <dt>Flow</dt><dd>latest draft → Agent(propose_issues) → Mediator(plan_issues) → Agent(agent_action) → Agent(respond_issue) → Mediator(resolve_issue) → formal_meeting_rN / RN-MN</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/analyst/system_prompt.txt">Analyst</a>、<a data-agent-file href="agent/expert/system_prompt.txt">Expert</a>、<a data-agent-file href="agent/modeler/system_prompt.txt">Modeler</a>、<a data-agent-file href="agent/mediator/system_prompt.txt">Mediator</a></dd>
+            <dt>Action</dt><dd><a data-agent-file data-agent-flow-style="group" data-agent-flow="Analyst|agent/analyst/propose_issues.txt|分析師提出議題候選。;Expert|agent/expert/propose_issues.txt|領域專家提出議題候選。;Modeler|agent/modeler/propose_issues.txt|系統模型師提出議題候選。" href="agent/analyst/propose_issues.txt">propose_issues</a>、<a data-agent-file data-agent-flow="select_issues|agent/mediator/select_issues.txt|分流議題提案。;meeting_plan|agent/mediator/meeting_plan.txt|安排單一議題會議。" href="agent/mediator/select_issues.txt">plan_issues</a>、<a data-agent-file data-agent-flow-style="agent-actions" href="agent/analyst/reqt/analyze_requirements.txt">agent_action</a>、<a data-agent-file data-agent-description="Analyst 在 resolve_conflict 類議題中討論既有 conflict report 的解法。" href="agent/analyst/response/resolve_conflict.txt">discuss_conflict</a>、<a data-agent-file data-agent-flow-style="group" data-agent-flow="Analyst|agent/analyst/response/respond_issue.txt|分析師發言。;Expert|agent/expert/response/respond_issue.txt|領域專家發言。;Modeler|agent/modeler/response/respond_issue.txt|系統模型師發言。;User|agent/user/response/respond_issue.txt|利害關係人發言。" href="agent/analyst/response/respond_issue.txt">respond_issue</a>、<a data-agent-file data-agent-flow="resolve_issue|agent/mediator/resolve_issue.txt|整理議題結論。;judge_issue|agent/mediator/judge_issue.txt|條件：整理裁決選項(人類)。" href="agent/mediator/resolve_issue.txt">resolve_issue</a></dd>
+            <dt>Input</dt><dd><a data-file="conflict-report-json" href="projects/artifact/report/conflict_report_v2.json">latest conflict_report.json</a>、<a data-file="draft-html" href="projects/results/drafts/draft_v1.html">latest draft</a></dd>
+            <dt>Output</dt><dd><a data-file="issues-json" data-agent-description='issues.json 以 round 分組：{"agents":{"r1":[]},"meeting_issues":{"r1":[]}}。' href="projects/artifact/meeting/issues.json">issues.json</a>、<a data-file="requirements-json" href="projects/artifact/requirements.json">requirements.json</a>、<details class="file-list" data-file-list="formal_meetings"><summary>formal_meeting_rN.json</summary><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r1.json">formal_meeting_r1.json</a><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r2.json">formal_meeting_r2.json</a></details>、<details class="file-list" data-file-list="mom"><summary>RN-MN.html</summary><a data-file="mom-html" href="projects/results/MoM/R1-M1.html">R1-M1.html</a><a data-file="mom-html" href="projects/results/MoM/R1-M2.html">R1-M2.html</a><a data-file="mom-html" href="projects/results/MoM/R2-M1.html">R2-M1.html</a><a data-file="mom-html" href="projects/results/MoM/R2-M2.html">R2-M2.html</a><a data-file="mom-html" href="projects/results/MoM/R2-M3.html">R2-M3.html</a></details></dd>
+          </dl>
+        </article>
+
+        <article id="stage-update-draft" class="stage-card" data-agent="agent-analyst">
+          <span class="number">9</span>
+          <h3>草稿更新</h3>
+          <p>Analyst 依正式會議結果更新需求草稿。</p>
+          <dl>
+            <dt>Flow</dt><dd>formal_meeting_rN + latest draft → Analyst(update_draft) → draft_vN</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/analyst/system_prompt.txt">Analyst</a></dd>
+            <dt>Action</dt><dd><a data-agent-file href="agent/analyst/draft/update_draft.txt">update_draft</a></dd>
+            <dt>Input</dt><dd><details class="file-list" data-file-list="formal_meetings"><summary>formal_meeting_rN.json</summary><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r1.json">formal_meeting_r1.json</a><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r2.json">formal_meeting_r2.json</a></details>、<a data-file="draft-html" href="projects/results/drafts/draft_v1.html">latest draft</a></dd>
+            <dt>Output</dt><dd><details class="file-list" data-file-list="drafts"><summary>draft_vN.html</summary><a data-file="draft-html" href="projects/results/drafts/draft_v1.html">draft_v1.html</a><a data-file="draft-html" href="projects/results/drafts/draft_v2.html">draft_v2.html</a></details></dd>
+          </dl>
+        </article>
+
+        <article id="stage-dr" class="stage-card" data-agent="agent-documentor">
+          <span class="number">10</span>
+          <h3>Design Rationale</h3>
+          <p>Documentor 整理每條正式需求的形成脈絡，產生設計緣由。</p>
+          <dl>
+            <dt>Flow</dt><dd>formal_meeting_rN + latest draft → Documentor(generate_dr) → design_rationale</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/documentor/system_prompt.txt">Documentor</a></dd>
+            <dt>Action</dt><dd><a data-agent-file href="agent/documentor/generate_dr.txt">generate_dr</a></dd>
+            <dt>Input</dt><dd><details class="file-list" data-file-list="formal_meetings"><summary>formal_meeting_rN.json</summary><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r1.json">formal_meeting_r1.json</a><a data-file="formal-meeting-json" href="projects/artifact/meeting/formal_meeting_r2.json">formal_meeting_r2.json</a></details>、<a data-file="draft-html" href="projects/results/drafts/draft_v2.html">latest draft</a></dd>
+            <dt>Output</dt><dd><a data-file="dr-html" href="projects/results/design_rationale.html" target="_blank" rel="noopener">design_rationale.html</a></dd>
+          </dl>
+        </article>
+
+        <article id="stage-srs" class="stage-card" data-agent="agent-documentor">
+          <span class="number">11</span>
+          <h3>SRS 產生</h3>
+          <p>Documentor 將 latest draft 整理成正式 SRS。</p>
+          <dl>
+            <dt>Flow</dt><dd>latest draft → Documentor(generate_srs) → srs</dd>
+            <dt>Agent</dt><dd><a data-agent-file href="agent/documentor/system_prompt.txt">Documentor</a></dd>
+            <dt>Action</dt><dd><a data-agent-file href="agent/documentor/generate_srs.txt">generate_srs</a></dd>
+            <dt>Input</dt><dd><a data-file="draft-html" href="projects/results/drafts/draft_v2.html">latest draft</a></dd>
+            <dt>Output</dt><dd><a data-file="srs-html" href="projects/results/srs.html" target="_blank" rel="noopener">srs.html</a></dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <dialog class="json-modal" id="jsonModal">
+    <div class="json-modal-header">
+      <div class="modal-title-block">
+        <h2 id="jsonModalTitle">JSON</h2>
+        <p id="jsonModalDescription"></p>
+        <div class="modal-flow" id="jsonModalFlow" hidden></div>
+        <div class="modal-action-flow" id="jsonModalActionFlow" hidden></div>
+      </div>
+      <button type="button" class="modal-close" data-close-modal>關閉</button>
+    </div>
+    <div id="jsonModalContent"></div>
+    <iframe id="jsonModalFrame" title="File preview"></iframe>
+  </dialog>
+
+  <dialog class="media-modal" id="mediaModal">
+    <div class="json-modal-header">
+      <h2 id="mediaModalTitle">Image</h2>
+      <button type="button" class="modal-close" data-close-media>關閉</button>
+    </div>
+    <div class="media-modal-body">
+      <img id="mediaModalImage" alt="" />
+    </div>
+  </dialog>
+
+  <dialog class="file-modal" id="fileModal">
+    <div class="json-modal-header">
+      <h2 id="fileModalTitle">Artifact</h2>
+      <button type="button" class="modal-close" data-close-file>關閉</button>
+    </div>
+    <div class="file-modal-body">
+      <aside class="file-list-pane" id="fileListPane"></aside>
+      <section class="file-preview-pane">
+        <div class="file-preview-content" id="filePreviewContent"></div>
+      </section>
+    </div>
+  </dialog>
+
+  <script src="main.js"></script>
+</body>
+</html>

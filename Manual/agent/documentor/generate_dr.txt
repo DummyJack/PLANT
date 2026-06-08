@@ -1,0 +1,78 @@
+# 任務
+根據 design rationale requirement context array 產生 Design Rationale 主體 Markdown。
+
+# Documentor Action Boundary
+- action=documentor.generate_dr
+- 本 action 只輸出 Design Rationale 主體 Markdown，不輸出 JSON。
+- 不更新 artifact、不新增 REQ、不新增 trace evidence。
+- Appendix 由 runtime 產生；本 action 只撰寫每個 requirement 的 rationale body。
+
+# Source Boundary
+- Requirement Context 是唯一直接來源。
+- 只引用 context 中存在的 REQ、URL、ST、CR、FB、SM 或 meeting。
+- 不得使用外部資料或推測不存在的決策。
+
+# Input
+Requirement Context:
+[
+  {
+    "id": "REQ-1",
+    "title": "線上訂餐",
+    "type": "functional",
+    "description": "系統應支援消費者線上訂餐"
+  }
+]
+
+# Generation Rules
+- 說明每個 REQ-* 是如何從原始發言、User Requirement、衝突、回饋、模型與會議討論逐步形成。
+- 主體以 REQ-* 為單位，不以會議為單位。
+- Trace 是連貫形成鏈，不是 evidence 清單；每一步都要說明它如何承接前一步。
+- 詳細 evidence 只用 Appendix ID 連結引用。
+- 不貼完整 evidence；完整內容由程式放在 Appendix。
+- 會議決定放在 Meeting Discussion 中自然說明，不另開 Decision 章節。
+
+# Output Format
+- 請只輸出多個 REQ block。
+- 不輸出 H1。
+- 不輸出 Appendix。
+- 不輸出 JSON。
+- 不要包在程式碼區塊中。
+- 不要解釋。
+
+### FR-N | NFR-N | CON-N: title
+**Description**: description
+
+
+1. **Stakeholder**
+   - 說明哪些原始利害關係人發言讓這條需求開始成形，並連到 ST-*。
+
+2. **User Requirement**
+   - 說明 URL-* 如何把原始發言整理成 User Requirement，並連到 URL-*。
+
+3. **Conflict**
+   - 只有有相關 CR-* 時輸出。說明衝突如何影響這條 REQ，並連到 CR-*。
+
+4. **Feedback**
+   - 只有有相關 FB-* 時輸出。說明領域回饋如何影響這條 REQ，並連到 FB-*。
+
+5. **System Model**
+   - 只有有相關 SM-* 時輸出。說明模型如何支撐或揭露這條 REQ，並連到 SM-*。
+
+6. **Meeting Discussion**
+   - 只有有相關 meeting 時輸出。說明會議如何討論並收斂這條 REQ，並連到 R*-M*。
+
+7. **Requirement Formation**
+   - 用一段話串起前面 evidence，說明為什麼最後形成這條 REQ。
+
+# Trace Section Rules
+- 每個 block 第一行必須使用 context 中的 srs_id，格式為 `### FR-N: title`、`### NFR-N: title` 或 `### CON-N: title`，不得用 REQ-* 當標題。
+- `Description` 必須獨立成行。
+- 不要輸出 `SRS ID` 欄位，因為標題已經使用 SRS ID。
+- 有資料才輸出該 Trace 步驟；省略步驟後仍保留語意編號。
+- Stakeholder 與 User Requirement 通常必須存在；若 context 沒有，才可省略。
+
+# Forbidden Output
+- 不得新增 context 沒有的 REQ、URL、ST、CR、FB、SM 或 meeting。
+- 不得輸出 Type、Source、Context、Decision、Rationale、Impact 這些舊章節或欄位。
+- 不要輸出「待補」、空章節、JSON、程式碼區塊或 prompt 說明。
+- 不要只列 ID；每個 Trace 步驟都必須用自然語言說明該 evidence 對 REQ 形成的影響。

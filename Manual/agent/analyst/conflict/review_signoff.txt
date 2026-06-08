@@ -1,0 +1,52 @@
+# 任務
+根據 User Requirements（URL-*）原文與各 agent 的逐筆 pair_reviews，對每筆 Conflict/Neutral 項目做最終裁定。
+
+# Action Boundary
+- action=review_conflict_signoff
+- 本 action 只裁定 new_label 與一句 reason。
+- 不整理 final description、不判定 final_type、不產生 resolution options。
+- 不新增、刪除或改寫 proposal_list 項目。
+- 最外層只能輸出 conflict_signoff。
+
+# Input
+Proposal List:
+[]
+
+Agent Pair Reviews:
+[]
+
+Discussion Rows:
+[]
+
+# Generation Rules
+- 先看 User Requirements（URL-*）原文，再看各 agent 的 pair_reviews。
+- discussion_rows 只在 pair_reviews 證據不足時作補充參考。
+- 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。
+- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 User Requirements（URL-*）原文本身已足以明確推翻現標籤。
+- 若證據不足、理由不一致或沒有明確共識，維持 current_label。
+- 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
+- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也應支持 Conflict。
+- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
+- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
+- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
+- 重複、近似重複、細化、範圍重疊、同一需求槽位的不同措辭、限制、觸發條件、數量或頻率，不可直接支持 Neutral；需判斷是否需要合併、改寫、刪除或人工裁定。
+- proposal_list 中每一個項目都必須輸出一筆 decision；即使決定維持 current_label，也不可省略。
+- 輸出只包含 conflict_signoff JSON。
+- 請直接做最終裁定，不要重述整場會議。
+
+# Output JSON
+{
+  "conflict_signoff": {
+    "decisions": [
+      {"id": "衝突ID", "new_label": "Conflict 或 Neutral", "reason": "一句繁中裁定理由"}
+    ]
+  }
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 conflict_finalization 或 conflict_resolution。
+- 不輸出 resolution options。
+- 不新增、刪除或改寫 proposal_list 項目。
+- 不新增、改寫、刪除 URL 或 REQ。
+- 不輸出 conflict_signoff 以外的 wrapper。

@@ -1,0 +1,63 @@
+# 任務
+為每個已定案項目整理 description；若 final_label 是 Conflict，也要根據討論後的主要衝突原因判定 final_type。
+
+# Action Boundary
+- action=finalize_conflict_review
+- 本 action 只整理 conflict_finalization.reasons。
+- 不改變 final_label、不重新做 signoff、不產生 resolution options。
+- 不新增、刪除或改寫 decision_list 項目。
+- 最外層只能輸出 conflict_finalization。
+
+# Input
+Decision List:
+[
+  {
+    "id": "PAIR-1",
+    "final_label": "Conflict",
+    "initial_type": "scope"
+  }
+]
+
+Agent Pair Reviews:
+[]
+
+Type Guidance:
+- logical: Requirements that directly contradict each other or specify mutually exclusive behaviors.
+- technical: Requirements with incompatible technical constraints, platforms, or technologies.
+- resource: Requirements competing for limited resources (time, budget, personnel, infrastructure).
+- temporal: Requirements with incompatible timelines, sequences, or deadlines.
+- data: Requirements specifying incompatible data structures, formats, or validation rules.
+- state: Requirements defining incompatible state machines or state transitions.
+- priority: Requirements from different stakeholders with competing priorities.
+- scope: Requirements that expand beyond defined project boundaries or contradict scope constraints.
+- other: Confirmed Conflict that does not fit the eight skill-defined types.
+
+description 用來寫入 artifact/conflict.json，作為該項 final_label 的最終說明。
+請根據 final_label 與各 agent 逐筆理由，整理出一段清楚、精簡、可追溯的裁定描述。
+
+# Generation Rules
+- 若 final_label 是 Conflict：說明需求之間的主要衝突點，或為什麼需要合併、改寫、刪除或裁定。
+- 若 final_label 是 Conflict：必須輸出 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- final_type 根據討論後的主要衝突原因決定，不必沿用 initial_type；若無法歸入前八類但仍是 Conflict，使用 other。
+- 若 final_label 是 Neutral：說明為什麼需求之間不構成衝突。
+- 若 final_label 是 Neutral：只輸出 id 與 description。
+- 使用各 agent 已提出的理由，不加入新的需求解釋或新的判準。
+- description 只整理裁定理由，不列 agent 名稱、投票過程或完整需求原文。
+
+# Output JSON
+{
+  "conflict_finalization": {
+    "reasons": [
+      {"id": "PAIR-1", "description": "Conflict 的最終裁定描述", "final_type": "scope"},
+      {"id": "PAIR-2", "description": "Neutral 的最終裁定描述"}
+    ]
+  }
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 conflict_signoff 或 conflict_resolution。
+- 不輸出 resolution options。
+- 不新增、刪除或改寫 decision_list 項目。
+- 不新增、改寫、刪除 URL 或 REQ。
+- 不輸出 conflict_finalization 以外的 wrapper。

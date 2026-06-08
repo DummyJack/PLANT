@@ -1,0 +1,86 @@
+# 任務
+把已選入正式會議的單一議題提案，轉成一筆可執行的正式會議議題。
+
+# 議題提案
+{
+  "title": "訂單狀態規則是否一致",
+  "category": "clarify_requirement",
+  "description": "消費者、餐廳與外送員對訂單取消條件的理解是否一致？",
+  "expect_outcome": "釐清取消規則",
+  "trace": {
+    "proposal_ids": [
+      "P-1"
+    ]
+  }
+}
+
+# 相關專案資料
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "訂餐",
+        "description": "系統應支援線上訂餐"
+      }
+    ]
+  }
+}
+
+- clarify_requirement：聚焦需求語意、觸發條件、成功結果、例外情境與驗收方式。用於讓模糊需求變得明確、可測試、可追溯；不處理單純補欄位、格式或命名。
+- define_boundary：聚焦系統、外部服務、人工流程與角色責任的邊界。用於釐清能力是否屬於本系統、第三方、人工處理或特定利害關係人責任。
+- tradeoff：聚焦多個可行方案的比較、取捨與推薦。用於體驗、成本、風險、營運、合規或實作複雜度之間必須選擇折衷的情況。
+- align_model：聚焦模型揭露的流程、狀態、actor、use case、資料物件或權限不一致。用於讓模型與需求互相校正，並把缺口回寫成需求或 open question。
+
+# 可用利害關係人
+[
+  "消費者"
+]
+
+- category 只能使用可用類型。
+- participants 只能使用 agents=["user", "analyst", "expert", "modeler"]。
+- 每位 participant 都必須有 participant_reasoning；沒有明確貢獻就不要加入。
+- proposed_by 若是 analyst/expert/modeler/user 且不是 mediator，participants 必須包含該提案人。
+- participants 包含 user 時，必須填 target_stakeholders，且只能從可用利害關係人選擇真正需要表態的人。
+- title 必須描述群組化共同問題，不要只用單一來源 id、單一欄位缺口或單一 open question 命名。
+- description 只寫會前要討論的共同問題，保持短句。
+- discussion_mode 只能是 sequential 或 simultaneous。
+- sequential 用於需要依序比對證據、修正結論、釐清依賴、處理取捨或模型對齊。
+- simultaneous 用於快速蒐集獨立觀點、風險或影響範圍。
+- discussion_rounds 是最低討論深度，必須輸出 1~3；系統可依 needs_more_discussion 額外延長。
+- 討論深度規則：
+  - Level 1 確認型：需求已清楚，只需確認或小修，discussion_rounds=1。
+  - Level 2 釐清型：需求語意、驗收、責任邊界還需要互相回應，discussion_rounds=2。
+  - Level 3 取捨/衝突型：多方利益衝突、方案選擇、模型/需求不一致，discussion_rounds=3。
+
+- clarify_requirement：通常需要 analyst；只有需要利害關係人確認時才加入 user。
+- define_boundary：需要 analyst；涉及流程、資料、actor、狀態、系統邊界或責任分工時加入 modeler。
+- tradeoff：需要 analyst 與受影響的 user；涉及外部限制、合規或領域風險時加入 expert。
+- align_model：需要 modeler；會改 REQ 時加入 analyst；需要利害關係人確認流程時加入 user。
+
+- trace.artifact_ids 優先使用 proposal.sources[*].ids。
+- 若 evidence 內有 URL-*、REQ-*、CR-*、SM-*，也要納入 trace.artifact_ids。
+- trace.proposal_ids 必須保留 proposal id。
+- 不要編造來源 id。
+- expected_actions 只保留討論中真正需要立即執行的 action hint。
+- category=align_model 時，expected_actions 必須包含 system_modeling，且 participants 必須包含 modeler。
+
+# 輸出 JSON
+{
+  "issues": [
+    {
+      "title": "正式會議議題標題",
+      "description": "可選，簡短說明會前要討論的共同問題",
+      "category": "clarify_requirement|define_boundary|tradeoff|align_model",
+      "participants": ["analyst", "modeler"],
+      "discussion_mode": "sequential",
+      "discussion_rounds": 2,
+      "target_stakeholders": [],
+      "trace": {"artifact_ids": ["..."], "proposal_ids": ["I-R1-..."]},
+      "proposed_by": "analyst",
+      "issue_level": "blocking | improvement",
+      "expected_actions": {},
+      "participant_reasoning": {"analyst": "需要修正受影響 REQ 欄位", "user": "需要確認利害關係人可接受條件"}
+    }
+  ]
+}

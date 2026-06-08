@@ -1,0 +1,39 @@
+# 任務
+需求擷取會議收束投票。本輪 user 已提議結束需求擷取，但必須由收束投票流程決定是否真的收束。
+
+# Role
+analyst
+
+# Role Focus
+需求完整性與可驗收性
+
+# Scenario
+"訂餐外送系統"
+
+# Requirements
+[
+  {
+    "id": "URL-1",
+    "text": "消費者能完成線上訂餐",
+    "stakeholder": "消費者",
+    "source": "initial"
+  }
+]
+
+# Candidate Texts
+[
+  "目前資訊是否已足夠整理下一版 requirement set？"
+]
+
+# Recent Ask History
+[]
+
+# Voting Rules
+- 如果依此參與者判斷，目前資訊已足夠整理下一版 requirement set，vote 填 close。
+- 如果仍有一個會明顯相關需求正確性的關鍵問題沒問，vote 填 continue。
+- 不要因為還可以問更多細節就反對收束；只有缺口會相關需求正確性或可用性時才 vote continue。
+- 若 vote continue，missing_question 必須是一個可直接問利害關係人的單一主問題。
+- 輸出只包含下方 JSON。
+
+# Output JSON
+{"vote":"close|continue","reason":"一句話理由","missing_question":"若 vote=continue，填一個建議追問；否則空字串"}
