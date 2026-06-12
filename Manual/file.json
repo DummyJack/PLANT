@@ -1,80 +1,34 @@
 {
   "conflict_reports": [
     {
-      "label": "conflict_report_v1",
-      "href": "projects/artifact/report/conflict_report_v1.json"
-    },
+      "label": "conflict_report_v0",
+      "href": "projects/artifact/report/conflict_report_v0.json"
+    }
+  ],
+  "conflict_report_htmls": [
     {
-      "label": "conflict_report_v2",
-      "href": "projects/artifact/report/conflict_report_v2.json"
-    },
-    {
-      "label": "conflict_report_v3",
-      "href": "projects/artifact/report/conflict_report_v3.json"
-    },
-    {
-      "label": "conflict_report_v4",
-      "href": "projects/artifact/report/conflict_report_v4.json"
-    },
-    {
-      "label": "conflict_report_v5",
-      "href": "projects/artifact/report/conflict_report_v5.json"
-    },
-    {
-      "label": "conflict_report",
-      "href": "projects/results/report/conflict_report.html"
+      "label": "conflict_report_v0",
+      "href": "projects/results/report/conflict_report_v0.html"
     }
   ],
   "models": [
     {
-      "label": "ExceptionHandlingAndCompensationRecordDomainModel",
-      "href": "projects/artifact/models/ExceptionHandlingAndCompensationRecordDomainModel.png"
-    },
-    {
-      "label": "外送平台主要用例圖",
-      "href": "projects/artifact/models/外送平台主要用例圖.png"
+      "label": "外送平台主要角色用例圖",
+      "href": "projects/artifact/models/外送平台主要角色用例圖.png"
     },
     {
       "label": "外送平台系統情境圖",
       "href": "projects/artifact/models/外送平台系統情境圖.png"
-    },
-    {
-      "label": "訂單異常多通道通知與人工升級互動序列",
-      "href": "projects/artifact/models/訂單異常多通道通知與人工升級互動序列.png"
-    },
-    {
-      "label": "訂單異常處理狀態生命週期",
-      "href": "projects/artifact/models/訂單異常處理狀態生命週期.png"
-    },
-    {
-      "label": "訂單異常通知與申訴補償流程",
-      "href": "projects/artifact/models/訂單異常通知與申訴補償流程.png"
     }
   ],
   "model_sources": [
     {
-      "label": "ExceptionHandlingAndCompensationRecordDomainModel",
-      "href": "projects/artifact/models/ExceptionHandlingAndCompensationRecordDomainModel.plantuml"
-    },
-    {
-      "label": "外送平台主要用例圖",
-      "href": "projects/artifact/models/外送平台主要用例圖.plantuml"
+      "label": "外送平台主要角色用例圖",
+      "href": "projects/artifact/models/外送平台主要角色用例圖.plantuml"
     },
     {
       "label": "外送平台系統情境圖",
       "href": "projects/artifact/models/外送平台系統情境圖.plantuml"
-    },
-    {
-      "label": "訂單異常多通道通知與人工升級互動序列",
-      "href": "projects/artifact/models/訂單異常多通道通知與人工升級互動序列.plantuml"
-    },
-    {
-      "label": "訂單異常處理狀態生命週期",
-      "href": "projects/artifact/models/訂單異常處理狀態生命週期.plantuml"
-    },
-    {
-      "label": "訂單異常通知與申訴補償流程",
-      "href": "projects/artifact/models/訂單異常通知與申訴補償流程.plantuml"
     }
   ],
   "formal_meetings": [
@@ -85,6 +39,10 @@
     {
       "label": "formal_meeting_r2",
       "href": "projects/artifact/meeting/formal_meeting_r2.json"
+    },
+    {
+      "label": "formal_meeting_r3",
+      "href": "projects/artifact/meeting/formal_meeting_r3.json"
     }
   ],
   "mom": [
@@ -95,22 +53,6 @@
     {
       "label": "R1-M2",
       "href": "projects/results/MoM/R1-M2.html"
-    },
-    {
-      "label": "R1-M3",
-      "href": "projects/results/MoM/R1-M3.html"
-    },
-    {
-      "label": "R1-M4",
-      "href": "projects/results/MoM/R1-M4.html"
-    },
-    {
-      "label": "R1-M5",
-      "href": "projects/results/MoM/R1-M5.html"
-    },
-    {
-      "label": "R1-M6",
-      "href": "projects/results/MoM/R1-M6.html"
     },
     {
       "label": "R2-M1",
@@ -141,36 +83,12 @@
   ],
   "all_files": [
     {
-      "label": "models/ExceptionHandlingAndCompensationRecordDomainModel.plantuml",
-      "href": "projects/artifact/models/ExceptionHandlingAndCompensationRecordDomainModel.plantuml"
-    },
-    {
-      "label": "models/ExceptionHandlingAndCompensationRecordDomainModel.png",
-      "href": "projects/results/models/ExceptionHandlingAndCompensationRecordDomainModel.png"
-    },
-    {
       "label": "MoM/R1-M1.html",
       "href": "projects/results/MoM/R1-M1.html"
     },
     {
       "label": "MoM/R1-M2.html",
       "href": "projects/results/MoM/R1-M2.html"
-    },
-    {
-      "label": "MoM/R1-M3.html",
-      "href": "projects/results/MoM/R1-M3.html"
-    },
-    {
-      "label": "MoM/R1-M4.html",
-      "href": "projects/results/MoM/R1-M4.html"
-    },
-    {
-      "label": "MoM/R1-M5.html",
-      "href": "projects/results/MoM/R1-M5.html"
-    },
-    {
-      "label": "MoM/R1-M6.html",
-      "href": "projects/results/MoM/R1-M6.html"
     },
     {
       "label": "MoM/R2-M1.html",
@@ -185,32 +103,16 @@
       "href": "projects/results/MoM/R2-M3.html"
     },
     {
-      "label": "conflict.json",
-      "href": "projects/artifact/conflict.json"
+      "label": "report/conflict_report_v0.html",
+      "href": "projects/results/report/conflict_report_v0.html"
     },
     {
-      "label": "report/conflict_report.html",
-      "href": "projects/results/report/conflict_report.html"
+      "label": "report/conflict_report_v0.json",
+      "href": "projects/artifact/report/conflict_report_v0.json"
     },
     {
-      "label": "report/conflict_report_v1.json",
-      "href": "projects/artifact/report/conflict_report_v1.json"
-    },
-    {
-      "label": "report/conflict_report_v2.json",
-      "href": "projects/artifact/report/conflict_report_v2.json"
-    },
-    {
-      "label": "report/conflict_report_v3.json",
-      "href": "projects/artifact/report/conflict_report_v3.json"
-    },
-    {
-      "label": "report/conflict_report_v4.json",
-      "href": "projects/artifact/report/conflict_report_v4.json"
-    },
-    {
-      "label": "report/conflict_report_v5.json",
-      "href": "projects/artifact/report/conflict_report_v5.json"
+      "label": "report/conflict_report_v0.md",
+      "href": "projects/artifact/report/conflict_report_v0.md"
     },
     {
       "label": "design_rationale.html",
@@ -245,6 +147,10 @@
       "href": "projects/artifact/meeting/formal_meeting_r2.json"
     },
     {
+      "label": "meeting/formal_meeting_r3.json",
+      "href": "projects/artifact/meeting/formal_meeting_r3.json"
+    },
+    {
       "label": "meeting/issues.json",
       "href": "projects/artifact/meeting/issues.json"
     },
@@ -255,6 +161,10 @@
     {
       "label": "requirements.json",
       "href": "projects/artifact/requirements.json"
+    },
+    {
+      "label": "result.json",
+      "href": "projects/artifact/result.json"
     },
     {
       "label": "scope.json",
@@ -269,12 +179,16 @@
       "href": "projects/artifact/system_models.json"
     },
     {
-      "label": "models/外送平台主要用例圖.plantuml",
-      "href": "projects/artifact/models/外送平台主要用例圖.plantuml"
+      "label": "trace_req.json",
+      "href": "projects/trace_req.json"
     },
     {
-      "label": "models/外送平台主要用例圖.png",
-      "href": "projects/results/models/外送平台主要用例圖.png"
+      "label": "models/外送平台主要角色用例圖.plantuml",
+      "href": "projects/artifact/models/外送平台主要角色用例圖.plantuml"
+    },
+    {
+      "label": "models/外送平台主要角色用例圖.png",
+      "href": "projects/results/models/外送平台主要角色用例圖.png"
     },
     {
       "label": "models/外送平台系統情境圖.plantuml",
@@ -283,60 +197,16 @@
     {
       "label": "models/外送平台系統情境圖.png",
       "href": "projects/results/models/外送平台系統情境圖.png"
-    },
-    {
-      "label": "models/訂單異常多通道通知與人工升級互動序列.plantuml",
-      "href": "projects/artifact/models/訂單異常多通道通知與人工升級互動序列.plantuml"
-    },
-    {
-      "label": "models/訂單異常多通道通知與人工升級互動序列.png",
-      "href": "projects/results/models/訂單異常多通道通知與人工升級互動序列.png"
-    },
-    {
-      "label": "models/訂單異常處理狀態生命週期.plantuml",
-      "href": "projects/artifact/models/訂單異常處理狀態生命週期.plantuml"
-    },
-    {
-      "label": "models/訂單異常處理狀態生命週期.png",
-      "href": "projects/results/models/訂單異常處理狀態生命週期.png"
-    },
-    {
-      "label": "models/訂單異常通知與申訴補償流程.plantuml",
-      "href": "projects/artifact/models/訂單異常通知與申訴補償流程.plantuml"
-    },
-    {
-      "label": "models/訂單異常通知與申訴補償流程.png",
-      "href": "projects/results/models/訂單異常通知與申訴補償流程.png"
     }
   ],
   "artifact_files": [
     {
-      "label": "models/ExceptionHandlingAndCompensationRecordDomainModel.plantuml",
-      "href": "projects/artifact/models/ExceptionHandlingAndCompensationRecordDomainModel.plantuml"
-    },
-    {
       "label": "MoM/R1-M1.html",
       "href": "projects/results/MoM/R1-M1.html"
     },
     {
       "label": "MoM/R1-M2.html",
       "href": "projects/results/MoM/R1-M2.html"
-    },
-    {
-      "label": "MoM/R1-M3.html",
-      "href": "projects/results/MoM/R1-M3.html"
-    },
-    {
-      "label": "MoM/R1-M4.html",
-      "href": "projects/results/MoM/R1-M4.html"
-    },
-    {
-      "label": "MoM/R1-M5.html",
-      "href": "projects/results/MoM/R1-M5.html"
-    },
-    {
-      "label": "MoM/R1-M6.html",
-      "href": "projects/results/MoM/R1-M6.html"
     },
     {
       "label": "MoM/R2-M1.html",
@@ -351,32 +221,16 @@
       "href": "projects/results/MoM/R2-M3.html"
     },
     {
-      "label": "conflict.json",
-      "href": "projects/artifact/conflict.json"
+      "label": "report/conflict_report_v0.html",
+      "href": "projects/results/report/conflict_report_v0.html"
     },
     {
-      "label": "report/conflict_report.html",
-      "href": "projects/results/report/conflict_report.html"
+      "label": "report/conflict_report_v0.json",
+      "href": "projects/artifact/report/conflict_report_v0.json"
     },
     {
-      "label": "report/conflict_report_v1.json",
-      "href": "projects/artifact/report/conflict_report_v1.json"
-    },
-    {
-      "label": "report/conflict_report_v2.json",
-      "href": "projects/artifact/report/conflict_report_v2.json"
-    },
-    {
-      "label": "report/conflict_report_v3.json",
-      "href": "projects/artifact/report/conflict_report_v3.json"
-    },
-    {
-      "label": "report/conflict_report_v4.json",
-      "href": "projects/artifact/report/conflict_report_v4.json"
-    },
-    {
-      "label": "report/conflict_report_v5.json",
-      "href": "projects/artifact/report/conflict_report_v5.json"
+      "label": "report/conflict_report_v0.md",
+      "href": "projects/artifact/report/conflict_report_v0.md"
     },
     {
       "label": "drafts/draft_v0.html",
@@ -407,6 +261,10 @@
       "href": "projects/artifact/meeting/formal_meeting_r2.json"
     },
     {
+      "label": "meeting/formal_meeting_r3.json",
+      "href": "projects/artifact/meeting/formal_meeting_r3.json"
+    },
+    {
       "label": "meeting/issues.json",
       "href": "projects/artifact/meeting/issues.json"
     },
@@ -419,6 +277,10 @@
       "href": "projects/artifact/requirements.json"
     },
     {
+      "label": "result.json",
+      "href": "projects/artifact/result.json"
+    },
+    {
       "label": "scope.json",
       "href": "projects/artifact/scope.json"
     },
@@ -427,31 +289,19 @@
       "href": "projects/artifact/system_models.json"
     },
     {
-      "label": "models/外送平台主要用例圖.plantuml",
-      "href": "projects/artifact/models/外送平台主要用例圖.plantuml"
+      "label": "trace_req.json",
+      "href": "projects/trace_req.json"
+    },
+    {
+      "label": "models/外送平台主要角色用例圖.plantuml",
+      "href": "projects/artifact/models/外送平台主要角色用例圖.plantuml"
     },
     {
       "label": "models/外送平台系統情境圖.plantuml",
       "href": "projects/artifact/models/外送平台系統情境圖.plantuml"
-    },
-    {
-      "label": "models/訂單異常多通道通知與人工升級互動序列.plantuml",
-      "href": "projects/artifact/models/訂單異常多通道通知與人工升級互動序列.plantuml"
-    },
-    {
-      "label": "models/訂單異常處理狀態生命週期.plantuml",
-      "href": "projects/artifact/models/訂單異常處理狀態生命週期.plantuml"
-    },
-    {
-      "label": "models/訂單異常通知與申訴補償流程.plantuml",
-      "href": "projects/artifact/models/訂單異常通知與申訴補償流程.plantuml"
     }
   ],
   "output_files": [
-    {
-      "label": "models/ExceptionHandlingAndCompensationRecordDomainModel.png",
-      "href": "projects/results/models/ExceptionHandlingAndCompensationRecordDomainModel.png"
-    },
     {
       "label": "design_rationale.html",
       "href": "projects/results/design_rationale.html"
@@ -461,24 +311,12 @@
       "href": "projects/results/srs.html"
     },
     {
-      "label": "models/外送平台主要用例圖.png",
-      "href": "projects/results/models/外送平台主要用例圖.png"
+      "label": "models/外送平台主要角色用例圖.png",
+      "href": "projects/results/models/外送平台主要角色用例圖.png"
     },
     {
       "label": "models/外送平台系統情境圖.png",
       "href": "projects/results/models/外送平台系統情境圖.png"
-    },
-    {
-      "label": "models/訂單異常多通道通知與人工升級互動序列.png",
-      "href": "projects/results/models/訂單異常多通道通知與人工升級互動序列.png"
-    },
-    {
-      "label": "models/訂單異常處理狀態生命週期.png",
-      "href": "projects/results/models/訂單異常處理狀態生命週期.png"
-    },
-    {
-      "label": "models/訂單異常通知與申訴補償流程.png",
-      "href": "projects/results/models/訂單異常通知與申訴補償流程.png"
     }
   ]
 }

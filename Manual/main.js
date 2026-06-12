@@ -18,7 +18,6 @@ const fileLists = Array.from(document.querySelectorAll("[data-file-list]"));
 let fileManifest = {};
 let fileBrowserItems = [];
 let agentActionsMap = null;
-let manualExamplesMap = null;
 
 const AGENT_PROMPT_SKILL_PATTERN =
   /^# Skill:\s*(.+?)\n\n([\s\S]*?)\n\n((?:# Context\n[\s\S]*?\n\n)?)# 任務\n\n?([\s\S]*)$/;
@@ -52,14 +51,6 @@ function splitAgentPromptSections(text) {
         body: skillMatch[2].trim(),
         collapsed: true,
       },
-      ...(contextBody
-        ? [{
-            type: "context",
-            title: "Example Context",
-            body: contextBody,
-            collapsed: true,
-          }]
-        : []),
       ...splitPromptBodySections(`# 任務\n${skillMatch[4].trim()}`),
     ].filter((section) => section.body);
   }
@@ -102,6 +93,7 @@ function splitPromptBodySections(text) {
     const end = index + 1 < matches.length ? matches[index + 1].index : source.length;
     const rawTitle = match[1].trim();
     const type = promptHeadingType(rawTitle);
+    if (type === "context") return;
     const title = type === "context" ? `Example ${rawTitle}` : `# ${rawTitle}`;
     sections.push({
       type,
@@ -126,37 +118,6 @@ function createPromptCollapsible(className, bodyClassName, summaryText, bodyText
   details.appendChild(summary);
   details.appendChild(body);
   return details;
-}
-
-function appendManualExampleSections(container, example) {
-  if (!container || !example) return;
-
-  const context = String(example.context || "").trim();
-  const output = String(example.output || "").trim();
-
-  if (context) {
-    container.appendChild(
-      createPromptCollapsible(
-        "agent-prompt-example agent-prompt-example-context",
-        "agent-prompt-example-body",
-        "Example Context",
-        context,
-        false
-      )
-    );
-  }
-
-  if (output) {
-    container.appendChild(
-      createPromptCollapsible(
-        "agent-prompt-example agent-prompt-example-output",
-        "agent-prompt-example-body",
-        "Example Output",
-        output,
-        false
-      )
-    );
-  }
 }
 
 function createPromptOpenSection(className, bodyClassName, headingText, bodyText) {
@@ -203,18 +164,6 @@ function renderAgentPromptText(text, container) {
       );
       return;
     }
-    if (section.type === "context") {
-      container.appendChild(
-        createPromptCollapsible(
-          "agent-prompt-context",
-          "agent-prompt-context-body",
-          section.title,
-          section.body,
-          !section.collapsed
-        )
-      );
-      return;
-    }
     if (section.type === "output") {
       container.appendChild(
         createPromptOpenSection(
@@ -235,23 +184,6 @@ function renderAgentPromptText(text, container) {
       )
     );
   });
-}
-
-async function fetchManualExamplesMap() {
-  if (manualExamplesMap) {
-    return manualExamplesMap;
-  }
-  try {
-    const response = await fetch("examples.json");
-    if (!response.ok) {
-      manualExamplesMap = {};
-      return manualExamplesMap;
-    }
-    manualExamplesMap = await response.json();
-  } catch {
-    manualExamplesMap = {};
-  }
-  return manualExamplesMap;
 }
 
 loadFileManifest();
@@ -391,14 +323,117 @@ async function loadFileManifest() {
     fileManifest = manifest;
     fileLists.forEach((list) => {
       const key = list.getAttribute("data-file-list");
-      const files = Array.isArray(manifest[key]) ? manifest[key] : [];
-      if (files.length) {
-        renderFileList(list, files);
-      }
+      const files = manifestFileList(manifest, key);
+      syncFileList(list, files);
     });
   } catch {
     // Keep the static fallback links when the manifest is unavailable.
   }
+}
+
+function manifestFileList(manifest, key) {
+  if (key === "draft_updates") {
+    const drafts = Array.isArray(manifest.drafts) ? manifest.drafts : [];
+    return drafts
+      .filter((file) => !/draft_v0(?:\.html)?$/i.test(String(file.label || file.href || "")))
+      .map((file) => {
+        const version = String(file.label || file.href || "").match(/draft_v(\d+)/i)?.[1];
+        return {
+          ...file,
+          displayLabel: version ? `v${version}` : file.label,
+        };
+      });
+  }
+  if (key === "latest_drafts") {
+    const drafts = Array.isArray(manifest.drafts) ? manifest.drafts : [];
+    return drafts.map((file) => {
+      const version = String(file.label || file.href || "").match(/draft_v(\d+)/i)?.[1];
+      return {
+        ...file,
+        displayLabel: version ? `v${version}` : file.label,
+      };
+    });
+  }
+  if (key === "draft_inputs") {
+    const drafts = Array.isArray(manifest.drafts) ? manifest.drafts : [];
+    const versioned = drafts
+      .map((file) => {
+        const version = Number(String(file.label || file.href || "").match(/draft_v(\d+)/i)?.[1] ?? -1);
+        return { file, version };
+      })
+      .filter((item) => item.version >= 0)
+      .sort((left, right) => left.version - right.version);
+    const maxVersion = versioned.length ? Math.max(...versioned.map((item) => item.version)) : -1;
+    return versioned
+      .filter((item) => item.version < maxVersion)
+      .map(({ file, version }) => ({
+        ...file,
+        displayLabel: `v${version}`,
+      }));
+  }
+  if (key === "formal_meetings") {
+    const meetings = Array.isArray(manifest.formal_meetings) ? manifest.formal_meetings : [];
+    return meetings.map((file) => {
+      const round = String(file.label || file.href || "").match(/formal_meeting_r(\d+)/i)?.[1];
+      return {
+        ...file,
+        displayLabel: round ? `r${round}` : file.label,
+      };
+    });
+  }
+  if (key === "conflict_reports_initial" || key === "conflict_reports_updates") {
+    const reports = Array.isArray(manifest.conflict_reports) ? manifest.conflict_reports : [];
+    const versioned = reports
+      .map((file) => {
+        const version = Number(String(file.label || file.href || "").match(/conflict_report_v(\d+)/i)?.[1] ?? -1);
+        return { file, version };
+      })
+      .filter((item) => item.version >= 0)
+      .sort((left, right) => left.version - right.version);
+    const maxVersion = versioned.length ? Math.max(...versioned.map((item) => item.version)) : -1;
+    return versioned
+      .filter((item) => (key === "conflict_reports_initial" ? item.version < maxVersion : item.version > 0))
+      .map(({ file, version }) => {
+        return {
+          ...file,
+          displayLabel: `v${version}`,
+        };
+      });
+  }
+  if (key === "conflict_report_html_initial" || key === "conflict_report_html_updates") {
+    const reports = Array.isArray(manifest.conflict_report_htmls) ? manifest.conflict_report_htmls : [];
+    return reports
+      .map((file) => {
+        const version = Number(String(file.label || file.href || "").match(/conflict_report_v(\d+)/i)?.[1] ?? -1);
+        return { file, version };
+      })
+      .filter((item) => (key === "conflict_report_html_initial" ? item.version === 0 : item.version > 0))
+      .sort((left, right) => left.version - right.version)
+      .map(({ file, version }) => ({
+        ...file,
+        displayLabel: `v${version}`,
+      }));
+  }
+  return Array.isArray(manifest[key]) ? manifest[key] : [];
+}
+
+function createFileLink(file) {
+  const link = document.createElement("a");
+  link.href = file.href;
+  link.textContent = file.displayLabel || file.label || file.href.split("/").pop() || file.href;
+  return link;
+}
+
+function syncFileList(list, files) {
+  if (!files.length) {
+    list.remove();
+    return;
+  }
+  if (files.length === 1 && list.dataset.keepList !== "true") {
+    list.replaceWith(createFileLink(files[0]));
+    return;
+  }
+  renderFileList(list, files);
 }
 
 function renderFileList(list, files) {
@@ -409,10 +444,7 @@ function renderFileList(list, files) {
   }
 
   files.forEach((file) => {
-    const link = document.createElement("a");
-    link.href = file.href;
-    link.textContent = file.label || file.href.split("/").pop() || file.href;
-    list.appendChild(link);
+    list.appendChild(createFileLink(file));
   });
 }
 
@@ -805,8 +837,6 @@ async function loadAgentPromptContent(href, description = "") {
       throw new Error(`HTTP ${response.status}`);
     }
     renderAgentPromptText(await response.text(), jsonModalContent);
-    const examples = await fetchManualExamplesMap();
-    appendManualExampleSections(jsonModalContent, examples[href]);
   } catch (error) {
     jsonModalContent.classList.remove("agent-prompt-view");
     jsonModalContent.classList.add("plain-text");

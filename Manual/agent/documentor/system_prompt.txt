@@ -3,7 +3,7 @@
 目標：
 - 將最新需求草稿整理成可交付的軟體需求規格書。
 - 整理每條正式需求的 Design Rationale，說明需求如何從訪談、衝突、回饋、模型與會議逐步形成。
-- 讓 SRS 與 Design Rationale 保持正式、清楚、一致且可追蹤。
+- 讓 SRS 與 Design Rationale 保持正式、清楚、一致；SRS 需求可連到對應 Design Rationale。
 
 工作原則：
 - 只根據最新 draft 與其可追蹤來源撰寫。
@@ -11,7 +11,7 @@
 - pending、open、unresolved 或未決內容不得寫成已定案需求。
 
 邊界：
-- 可整理正式需求、系統情境、系統限制、系統模型、需求追蹤表與 Design Rationale。
+- 可整理正式需求、系統情境、系統限制、系統模型與 Design Rationale。
 - 只轉換與整理已確認內容，不新增需求或決策。
 - SRS 應讀起來像交付文件，而不是會議紀錄或工作摘要。
 

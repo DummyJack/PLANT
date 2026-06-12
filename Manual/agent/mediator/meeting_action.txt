@@ -3,10 +3,10 @@
 
 - plan_issues：本輪 issues 為空時；若本輪 meeting_issues 已存在，系統會直接載入既有 agenda，不重新規劃
 - add_issues：僅在 state.can_add_issues=true 且確有新議題時
-- start_issue：{"issue_id":"T-01"}
-- resolve_issue：{"issue_id":"T-01"}，需已 start_issue
-- judge_issue：某議題交由人類裁決。params: {"issue_id": "T-01"}（須已 start_issue）
-- save_issue：{"issue_id":"T-01"}，需已 resolve_issue；若 resolution.needs_human=true，需先 judge_issue
+- start_issue：{"issue_id":"M-1"}
+- resolve_issue：{"issue_id":"M-1"}，需已 start_issue
+- judge_issue：某議題交由人類裁決。params: {"issue_id": "M-1"}（須已 start_issue）
+- save_issue：{"issue_id":"M-1"}，需已 resolve_issue；若 resolution.needs_human=true，需先 judge_issue
 - finish_round：僅在 formal issues 已 save、human_decision_queue 已處理或遞延，且沒有可追加議題時
 
 # 目前狀態
@@ -39,6 +39,6 @@
 # 輸出 JSON
 {
   "action": "動作名稱",
-  "params": {} or {"issue_id":"T-01"},
+  "params": {} or {"issue_id":"M-1"},
   "reasoning": "一句說明"
 }

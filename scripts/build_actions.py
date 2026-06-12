@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync Manual/agent/*.txt prompt files from agents/profile runtime modules."""
+"""Sync manual/agent/*.txt prompt files from agents/profile runtime modules."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from agents.profile.analyst.skill import (
 )
 from agents.profile.base import action_plan_prompt, proposal_prompt
 from agents.profile.documentor.agent import documentor_system
-from agents.profile.documentor.prompt import generate_srs
+from agents.profile.documentor.actions.srs import generate_srs
 from agents.profile.expert.actions.feedback import update_feedback
 from agents.profile.expert.actions.read_reference import read_docs
 from agents.profile.expert.actions.research import research_issue
@@ -58,7 +58,7 @@ from agents.profile.expert.actions.response import issue as expert_issue
 from agents.profile.expert.agent import expert_system
 from agents.profile.expert.plan import research_prompt
 from agents.profile.expert.skill import domain_skill_guidance, domain_skill_subset
-from agents.profile.documentor.dr import design_rationale
+from agents.profile.documentor.actions.dr import design_rationale
 from agents.profile.mediator.actions.judge import judge_options
 from agents.profile.mediator.actions.resolve import close_issue
 from agents.profile.mediator.agent import mediator_system
@@ -93,7 +93,7 @@ from agents.profile.user.rules import (
 from agents.profile.analyst.agent import analyst_system
 from agents.skills.base import get_skill
 
-MANUAL_AGENT = ROOT / "Manual" / "agent"
+MANUAL_AGENT = ROOT / "manual" / "agent"
 SKILLS_SRC = ROOT / "agents" / "skills"
 
 SAMPLE_ISSUE = {

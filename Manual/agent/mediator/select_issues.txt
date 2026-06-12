@@ -34,6 +34,8 @@
 - 正式議題優先代表一組相關需求背後的共同問題。
 - 單一 REQ、單一 open question、單一 acceptance criteria、單一 source 或單一模型項目，只要 source/evidence 具體且可能影響驗收、追蹤、責任邊界、風險、模型一致性或 SRS 可用性，也可以進 issues/backlog；不要只因為範圍小就丟棄。
 - 若多筆提案指向同一共同問題，合併成一個議題，保留 trace.proposal_ids 與來源追蹤。
+- 在不犧牲 blocking 優先級與具體 source 的前提下，issues 應盡量涵蓋不同 category / issue_focus；避免本輪全部選成同一類型，除非其他類型沒有足夠證據或都已討論過。
+- 若同一類型有多筆相近候選，先選該類型中最值得討論、最能阻礙或改善 SRS 品質的一筆代表；其餘合併或放 backlog。
 - 避免重複討論 already_discussed_artifact_ids 已涵蓋的提案。
 - 不要新增輸入資料沒有支持的新需求。
 

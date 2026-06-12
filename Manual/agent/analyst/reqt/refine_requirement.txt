@@ -280,6 +280,11 @@ Quality Attributes:
 - priority 只用於 functional 與 non-functional 需求，討論 FR/NFR 的實作、品質或版本優先順序；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
 - functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略。
 - description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
+- description 必須寫成可直接放入 SRS 的完整需求敘述；不得只寫功能名稱、短摘要、會議結論或「系統應提供...功能」這類空泛句。
+- description 應在一段文字中交代：適用情境或觸發條件、主要使用者或受影響角色、系統責任、必要資訊或處理內容，以及可驗證的完成邊界。若某項沒有來源支持，省略該項，不得臆測。
+- functional description 應清楚描述系統在什麼情境下為誰完成什麼業務結果；例外處理、通知內容、資料揭露、狀態更新或權限邊界若有來源支持，應寫入同一段 description 或 acceptance_criteria。
+- non-functional description 應清楚描述品質屬性、適用範圍與限制對象；可量測條件放入 metric，可執行驗證方式放入 validation，不要混在 description 中重複。
+- constraint description 應清楚描述不可違反的政策、法規、資料邊界或系統限制；不寫 priority，也不要改寫成功能需求。
 - acceptance_criteria 必須可驗收，不要只重述 description；若只有待確認條件，放入 risks、assumptions 或 open_questions。
 - non-functional 可輸出 category、metric、validation：category 依 ISO/IEC 25010 且不用 functional suitability；metric 從 acceptance_criteria 或需求內容萃取可觀察條件；validation 寫成可執行方式。
 - rationale 只寫為什麼需要此需求；risks 只寫可能失敗或不確定處；assumptions 只寫目前採用但尚未完全確認的前提。三者不得重複 description。

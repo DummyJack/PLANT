@@ -76,7 +76,7 @@
       "discussion_mode": "sequential",
       "discussion_rounds": 2,
       "target_stakeholders": [],
-      "trace": {"artifact_ids": ["..."], "proposal_ids": ["I-R1-..."]},
+      "trace": {"artifact_ids": ["..."], "proposal_ids": ["R1-I1"]},
       "proposed_by": "analyst",
       "issue_level": "blocking | improvement",
       "expected_actions": {},
