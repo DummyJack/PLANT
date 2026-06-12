@@ -1,25 +1,27 @@
 {
   "rounds": 1,
-  "max_issues": 5,
-  "max_stakeholders": 7,
+  "max_issues": 3,
+  "max_stakeholders": 5,
   "elicitation_max_turns": 5,
   "stage": {
     "init": true,
     "elicitation": true,
     "conflict_detection": true,
-    "domain_research": true,
+    "research_domain": true,
     "system_model": true,
     "draft": true,
     "default_formal_meeting": true,
-    "general_formal_meeting": true,
     "default_update_draft": true,
+    "general_formal_meeting": true,
     "general_update_draft": true,
+    "DR": true,
     "SRS": true
   },
   "export": {
+    "log": true,
     "html": true,
     "cost": true,
-    "log": true
+    "manual": true
   },
   "enable_tools": {
     "web_search": true,
@@ -39,9 +41,9 @@
     "user": true,
     "analyst": true,
     "expert": true,
-    "mediator": true,
     "modeler": true,
-    "documentor": true
+    "documentor": true,
+    "mediator": true
   },
   "agent_models": {
     "user": {
@@ -59,12 +61,12 @@
       "model": "gpt-4.1",
       "temperature": 0
     },
-    "mediator": {
+    "modeler": {
       "provider": "openai",
       "model": "gpt-4.1",
       "temperature": 0
     },
-    "modeler": {
+    "mediator": {
       "provider": "openai",
       "model": "gpt-4.1",
       "temperature": 0
