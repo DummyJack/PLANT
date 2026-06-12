@@ -1,5 +1,6 @@
 # Handles main logic for project flow orchestration and stage execution.
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from storage.requirements import requirement_discussion_pool
@@ -248,13 +249,74 @@ def log_elicitation_turn(
             continue
         logger.info("  %s：%s", "、".join(speaking_as), text)
         pending_question = None
-    logger.info("  候選需求：本輪 %s 筆，累計 %s 筆", len(new_candidates), cumulative_candidates)
+    logger.step_completed(
+        "elicitation",
+        "elicitation.extract_requirements",
+        "候選需求",
+        agent="analyst",
+        message=f"本輪 {len(new_candidates)} 筆，累計 {cumulative_candidates} 筆",
+        output_path="artifact/requirements.json",
+    )
     preview = [
         str(c.get("text") or "").strip()
         for c in new_candidates
         if isinstance(c, dict) and str(c.get("text") or "").strip()
     ]
-    logger.info("  候選需求：%s", preview)
+    if preview:
+        logger.info("  候選需求：%s", preview)
+
+
+def emit_elicitation_speech(
+    logger: Any,
+    row: Dict[str, Any],
+) -> None:
+    if not isinstance(row, dict):
+        return
+    agent = str(row.get("agent") or "").strip()
+    response = row.get("response") if isinstance(row.get("response"), dict) else {}
+    text = str(response.get("text") or "").strip()
+    if not agent or not text:
+        return
+    if agent == "user":
+        speaking_as = response.get("speaking_as")
+        if isinstance(speaking_as, str):
+            speaking_as = [speaking_as]
+        title = "、".join(
+            str(name).strip()
+            for name in (speaking_as or [])
+            if str(name).strip()
+        ) or "User"
+        logger.step_delta(
+            "elicitation",
+            "elicitation.run_meeting",
+            {
+                "title": title,
+                "text": text,
+            },
+            delta_type="speech",
+            agent="user",
+        )
+        return
+    targets = response.get("target_stakeholders")
+    if isinstance(targets, str):
+        targets = [targets]
+    target_label = "、".join(
+        str(name).strip()
+        for name in (targets or [])
+        if str(name).strip()
+    ) or "stakeholder"
+    if target_label and target_label != "stakeholder":
+        text = re.sub(rf"^\s*{re.escape(target_label)}\s*[：:]\s*", "", text).strip()
+    logger.step_delta(
+        "elicitation",
+        "elicitation.run_meeting",
+        {
+            "title": target_label,
+            "text": text,
+        },
+        delta_type="speech",
+        agent=agent,
+    )
 
 
 # ========
@@ -283,11 +345,16 @@ def log_turn_plan(
                 action = str(action_info or "").strip()
             if action in {"ask_user", "supplement_question"}:
                 participants_order_parts.append(f"{agent} → user")
-    logger.info(
-        "  elicit plan：participants: %s | participants_order: %s | goal: %s",
-        ", ".join(participants) if participants else "無",
-        "; ".join(participants_order_parts) if participants_order_parts else "無",
-        goal,
+    logger.step_completed(
+        "elicitation",
+        "elicitation.prepare_meeting",
+        "Plan",
+        agent="mediator",
+        message=(
+            f"elicit plan：participants: {', '.join(participants) if participants else '無'} | "
+            f"participants_order: {'; '.join(participants_order_parts) if participants_order_parts else '無'} | "
+            f"goal: {goal}"
+        ),
     )
 
 
@@ -623,6 +690,9 @@ def run_elicitation(
             judge_action_type = "finish"
 
         conversation = list(effective_conversation)
+        if interviewer_finish:
+            for row in conversation:
+                emit_elicitation_speech(coordinator.flow.logger, row)
         if user_agent and not interviewer_finish and judged_text and question_conversations:
             if user_answer_all_questions:
                 paired_conversation: List[Dict[str, Any]] = []
@@ -648,6 +718,7 @@ def run_elicitation(
                             "response": question_response,
                         }
                     paired_conversation.append(question_conversation)
+                    emit_elicitation_speech(coordinator.flow.logger, question_conversation)
                     user_issue = {
                         **issue,
                         "id": f"{issue['id']}-USER-{q_index}",
@@ -672,8 +743,17 @@ def run_elicitation(
                             "response": user_response,
                         }
                     )
+                    emit_elicitation_speech(
+                        coordinator.flow.logger,
+                        {
+                            "agent": "user",
+                            "response": user_response,
+                        },
+                    )
                 conversation = paired_conversation
             else:
+                for question_conversation in question_conversations:
+                    emit_elicitation_speech(coordinator.flow.logger, question_conversation)
                 question_response = (
                     question_conversations[-1].get("response")
                     if question_conversations
@@ -707,6 +787,13 @@ def run_elicitation(
                         "agent": "user",
                         "response": user_response,
                     }
+                )
+                emit_elicitation_speech(
+                    coordinator.flow.logger,
+                    {
+                        "agent": "user",
+                        "response": user_response,
+                    },
                 )
         elif finish_text and not interviewer_finish and not judged_text:
             judge_action_type = "finish_rejected_by_vote"
@@ -846,7 +933,14 @@ def run_elicitation(
         final_agent = "mediator"
         append_finish_turn(final_turn, final_agent, forced_finish_phrase)
         coordinator.flow.logger.info("[輪次 %s]", final_turn)
-        coordinator.flow.logger.info("  Mediator：%s", forced_finish_phrase)
+        coordinator.flow.logger.step_completed(
+            "elicitation",
+            "elicitation.run_meeting",
+            "需求擷取會議結束",
+            agent="mediator",
+            message=forced_finish_phrase,
+            output_path="artifact/meeting/elicitation_meeting.json",
+        )
         termination_reason = "max_turn"
 
     all_candidates = clean_elicited_reqts(all_candidates)

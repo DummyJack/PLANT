@@ -9,6 +9,8 @@ from pathlib import Path
 from utils import stage_enabled, export_enabled
 from utils.cancel import raise_if_cancelled
 from storage import markdown as markdown_storage
+from storage.export import export_project_manual, should_export_html, should_export_manual
+from flow.init_flow import emit_markdown_section_deltas
 
 
 MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
@@ -51,10 +53,26 @@ def run_one_round(
     artifact: Dict[str, Any],
     round_num: int,
 ) -> Dict[str, Any]:
+    flow.logger.stage_started("formal_meeting", "正式會議", message=f"第 {round_num} 輪正式會議開始")
     flow.logger.info(f"=== Round {round_num}: 開會 ===")
+    flow.logger.step_started(
+        "formal_meeting",
+        f"formal_meeting.round_{round_num}.run_meeting",
+        f"第 {round_num} 輪會議",
+        agent="mediator",
+        message="規劃中 ...",
+    )
     artifact = flow.run_meeting_round(artifact, round_num)
     flow.store.save_artifact(artifact)
+    flow.logger.step_completed(
+        "formal_meeting",
+        f"formal_meeting.round_{round_num}.run_meeting",
+        f"第 {round_num} 輪會議",
+        agent="mediator",
+        message=f"第 {round_num} 輪會議完成",
+    )
     flow.logger.info(f"Round {round_num} 完成")
+    flow.logger.stage_completed("formal_meeting", "正式會議", message=f"第 {round_num} 輪正式會議完成")
     return artifact
 
 
@@ -136,6 +154,8 @@ def formal_meeting_end_round(config: Dict[str, Any], *, start_round: int = 1) ->
     general_rounds = int(config.get("rounds", 1) or 1)
     default_enabled = stage_enabled(config, "default_formal_meeting", True)
     general_enabled = stage_enabled(config, "general_formal_meeting", True)
+    if int(start_round) > 1 and general_enabled:
+        return int(start_round) + general_rounds - 1
     if default_enabled and general_enabled:
         return 1 + general_rounds
     if general_enabled and not default_enabled:
@@ -276,6 +296,7 @@ def has_existing_dr(flow) -> bool:
 # Defines run specification stage function for this module workflow.
 # ========
 def run_specification_stage(flow, artifact: Dict[str, Any]) -> None:
+    flow.logger.stage_started("document_generation", "規格化")
     flow.logger.info("=== 規格化 ===")
     if not stage_enabled(flow.config, "DR", stage_enabled(flow.config, "SRS")):
         flow.logger.info("跳過 DR")
@@ -296,6 +317,7 @@ def run_specification_stage(flow, artifact: Dict[str, Any]) -> None:
         require_srs_draft_inputs(flow)
         flow.generate_srs(artifact)
         flow.store.save_artifact(artifact)
+    flow.logger.stage_completed("document_generation", "規格化")
 
 
 # ========
@@ -315,10 +337,18 @@ def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[st
         return artifact
 
     meta = artifact.setdefault("meta", {})
+    flow.logger.stage_started("draft", "草稿更新")
     for action, meta_key, label in update_actions:
         latest_version = flow.store.get_draft_version()
         previous_draft = flow.store.load_draft(latest_version) if latest_version >= 0 else ""
         next_version = max(0, latest_version + 1)
+        flow.logger.step_started(
+            "draft",
+            f"draft.{action}",
+            "更新需求草稿",
+            agent="analyst",
+            message=f"{label}：正在更新需求草稿",
+        )
         draft_md = flow.analyst_agent.run_requirements_analyst(
             "update_draft",
             artifact=artifact,
@@ -328,18 +358,39 @@ def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[st
             artifact_dir=getattr(flow.store, "artifact_dir", None),
         )
         flow.store.save_draft(draft_md, version=next_version)
+        emit_markdown_section_deltas(
+            flow,
+            "draft",
+            f"draft.{action}",
+            draft_md,
+            agent="analyst",
+        )
         meta[meta_key] = next_version
         meta[f"{action}_without_meeting"] = True
         flow.store.save_artifact(artifact)
-        flow.logger.info("%s：正式會議關閉，已生成 draft_v%s", label, next_version)
+        flow.logger.step_completed(
+            "draft",
+            f"draft.{action}",
+            f"Draft v{next_version}",
+            agent="analyst",
+            message=f"{label}：正式會議關閉，已更新需求草稿",
+            output_path=f"results/drafts/draft_v{next_version}.html",
+        )
+        flow.logger.artifact_created(
+            "draft",
+            f"draft.{action}",
+            f"Draft v{next_version}",
+            f"results/drafts/draft_v{next_version}.html",
+        )
+    flow.logger.stage_completed("draft", "草稿更新")
     return artifact
 
 
 # ========
 # Defines run export html stage function for this module workflow.
 # ========
-def run_export_html_stage(flow) -> None:
-    if not export_enabled(flow.config, "html", True):
+def run_export_html_stage(flow, *, force: bool = False) -> None:
+    if not force and not should_export_html(flow.config):
         flow.logger.info("跳過 HTML 匯出")
         return
 
@@ -376,6 +427,17 @@ def run_export_html_stage(flow) -> None:
             html_count += 1
 
     flow.logger.info("已轉成 html: results/*")
+
+
+def run_export_manual_stage(flow) -> None:
+    if not should_export_manual(flow.config):
+        flow.logger.info("跳過 Manual 匯出")
+        return
+    if not should_export_html(flow.config):
+        flow.logger.info("Manual 匯出需要 HTML，已自動執行 HTML 匯出")
+        run_export_html_stage(flow, force=True)
+    manual_dir = export_project_manual(flow.store.project_dir)
+    flow.logger.info("已輸出 Manual：%s", manual_dir.relative_to(flow.store.project_dir))
 
 
 
@@ -418,9 +480,11 @@ def save_cost_summary(flow) -> None:
 # Defines run output stage function for this module workflow.
 # ========
 def run_output_stage(flow) -> None:
+    flow.logger.stage_started("export", "輸出")
     flow.logger.info("=== 輸出 ===")
-    html_enabled = export_enabled(flow.config, "html", True)
+    html_enabled = should_export_html(flow.config)
     cost_enabled = export_enabled(flow.config, "cost", True)
+    manual_enabled = should_export_manual(flow.config)
 
     if html_enabled:
         run_export_html_stage(flow)
@@ -431,6 +495,12 @@ def run_output_stage(flow) -> None:
         save_cost_summary(flow)
     else:
         flow.logger.info("跳過成本統計")
+
+    if manual_enabled:
+        run_export_manual_stage(flow)
+    else:
+        flow.logger.info("跳過 Manual 匯出")
+    flow.logger.stage_completed("export", "輸出")
 
 
 # ========
@@ -457,19 +527,25 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         artifact.setdefault("meta", {})["meeting_end_round"] = int(end_round)
     flow.store.save_artifact(artifact)
 
+    flow.logger.stage_started("init", "初始階段")
     flow.logger.info("=== 初始階段 ===")
     _check_flow_cancelled(flow)
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
+    flow.logger.stage_completed("init", "初始階段")
 
     if not run_formal:
+        flow.logger.stage_started("formal_meeting", "正式會議")
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議")
         _check_flow_cancelled(flow)
         artifact = run_update_drafts_without_meeting(flow, artifact)
+        flow.logger.stage_completed("formal_meeting", "正式會議", message="正式會議已跳過")
     elif has_completed_formal_meeting(flow, artifact, end_round):
+        flow.logger.stage_started("formal_meeting", "正式會議")
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
+        flow.logger.stage_completed("formal_meeting", "正式會議", message="正式會議輸出已存在")
     else:
         require_formal_meeting_stage_inputs(flow, artifact)
         for round_num in range(1, end_round + 1):
@@ -500,10 +576,12 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
 
     flow.user_agent.stakeholders = artifact.get("stakeholders", [])
 
+    flow.logger.stage_started("init", "初始階段")
     flow.logger.info("=== 初始階段 ===")
     _check_flow_cancelled(flow)
     artifact = flow.run_init_phase(artifact)
     flow.store.save_artifact(artifact)
+    flow.logger.stage_completed("init", "初始階段")
 
     run_formal = formal_meeting_stage_enabled(flow.config)
     start_round = next_meeting_round_from_mom(flow)
@@ -516,16 +594,22 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
             flow.logger.info(f"繼續專案 Round {start_round}，目標至 Round {end_round}")
 
     if not run_formal:
+        flow.logger.stage_started("formal_meeting", "正式會議")
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("跳過正式會議")
         _check_flow_cancelled(flow)
         artifact = run_update_drafts_without_meeting(flow, artifact)
+        flow.logger.stage_completed("formal_meeting", "正式會議", message="正式會議已跳過")
     elif has_completed_formal_meeting(flow, artifact, end_round):
+        flow.logger.stage_started("formal_meeting", "正式會議")
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 正式會議輸出已存在，跳過重新開會")
+        flow.logger.stage_completed("formal_meeting", "正式會議", message="正式會議輸出已存在")
     elif start_round > end_round:
+        flow.logger.stage_started("formal_meeting", "正式會議")
         flow.logger.info("=== 正式會議 ===")
         flow.logger.info("✓ 已完成目標正式會議輪數，跳過重新開會")
+        flow.logger.stage_completed("formal_meeting", "正式會議", message="已完成目標正式會議輪數")
     else:
         require_formal_meeting_stage_inputs(flow, artifact)
         for round_num in range(start_round, end_round + 1):

@@ -32,10 +32,10 @@ def save_conflict_report(
     artifact: Dict[str, Any],
     *,
     round_num: int,
-) -> None:
+) -> bool:
     coordinator.flow.store.save_artifact(artifact)
     if coordinator.flow.config.get("enable_conflict_report", True) is False:
-        return
+        return False
     payload = conflict_payload(artifact, include_report=True)
     conflict_rows = [
         row for row in (payload.get("report", []) or [])
@@ -43,13 +43,17 @@ def save_conflict_report(
     ]
     conflict_rows = unresolved_conflict_report_rows(conflict_rows)
     if not conflict_rows:
-        (coordinator.flow.store.artifact_dir / "report" / "conflict_report.md").unlink(missing_ok=True)
-        return
-    previous_report = (
-        coordinator.flow.store.load_markdown("conflict_report.md")
-        if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown")
-        else ""
-    )
+        return False
+    previous_report = ""
+    if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown"):
+        report_dir = coordinator.flow.store.artifact_dir / "report"
+        latest_version = -1
+        for path in report_dir.glob("conflict_report_v*.md"):
+            raw_version = path.stem.removeprefix("conflict_report_v")
+            if raw_version.isdigit():
+                latest_version = max(latest_version, int(raw_version))
+        if latest_version >= 0:
+            previous_report = coordinator.flow.store.load_markdown(f"conflict_report_v{latest_version}.md")
     report_artifact = {
         **artifact,
         "conflict": {
@@ -66,8 +70,15 @@ def save_conflict_report(
     report_payload = unresolved_conflict_report_rows(report_payload)
     report_payload = reindex_conflict_report_rows(report_payload)
     if not report_payload:
-        (coordinator.flow.store.artifact_dir / "report" / "conflict_report.md").unlink(missing_ok=True)
-        return
+        return False
+    coordinator.flow.logger.step_started(
+        "conflict_detection",
+        "conflict_detection.write_report",
+        "產生衝突報告",
+        agent="analyst",
+        message="衝突報告產生中 ...",
+    )
+    artifact["conflict_report"] = report_payload
     report_path = coordinator.flow.store.artifact_dir / "report" / f"conflict_report_v{round_num}.json"
     save_json_path(
         coordinator.flow.store.base_dir,
@@ -90,10 +101,15 @@ def save_conflict_report(
         round_num=round_num,
         previous_report=previous_report,
     )
-    coordinator.flow.store.save_markdown(conflict_md, "conflict_report.md")
-    coordinator.flow.logger.info(
-        "需求衝突報告已產生：artifact/report/conflict_report.md",
+    coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
+    coordinator.flow.logger.step_completed(
+        "conflict_detection",
+        "conflict_detection.write_report",
+        "產生衝突報告",
+        agent="analyst",
+        output_path=f"results/report/conflict_report_v{round_num}.html",
     )
+    return True
 
 # ========
 # Defines run conflict review round function for this module workflow.
@@ -269,11 +285,16 @@ def conflict_review(
             },
         },
     }
-    coordinator.flow.logger.info(
-        "需求衝突再審查：mode=%s | participants=%s | participants_order: %s",
-        discussion_mode,
-        ", ".join(participants),
-        " → ".join(participants),
+    coordinator.flow.logger.step_completed(
+        "conflict_review",
+        "conflict_review.plan",
+        "Plan",
+        agent="mediator",
+        message=(
+            f"需求衝突再審查：mode={discussion_mode} | "
+            f"participants={', '.join(participants)} | "
+            f"participants_order: {' → '.join(participants)}"
+        ),
     )
 
     conversation, conversation_rows, conversation_agents = run_conflict_review_round(
@@ -430,7 +451,15 @@ def conflict_review(
         conflict["status"] = review_status
         conflict["description"] = str(dec.get("reason") or "")
         conflict.pop("conflict_review", None)
-        final_type = str(dec.get("final_type") or "").strip()
+        final_type = str(
+            dec.get("final_type")
+            or conflict.get("final_type")
+            or conflict.get("initial_type")
+            or conflict.get("type")
+            or ""
+        ).strip()
+        if new_label == "Conflict" and not final_type:
+            final_type = "other"
         if new_label == "Conflict" and final_type:
             conflict["final_type"] = final_type
         elif new_label == "Neutral":
@@ -444,6 +473,13 @@ def conflict_review(
     )
     attach_review_conversation_to_conflicts(conflicts_by_id, pair_review_conversation)
 
-    coordinator.flow.logger.info("需求衝突再審查完成：%s 筆，改判 %s 筆", len(conflicts_by_id), changed)
+    coordinator.flow.logger.step_completed(
+        "conflict_review",
+        "conflict_review.resolve_conflicts",
+        "初步辨識",
+        agent="analyst",
+        message=f"檢查 {len(conflicts_by_id)} 筆，改判 {changed} 筆",
+        output_path="artifact/result.json",
+    )
     save_conflict_report(coordinator, artifact, round_num=round_num)
     return artifact

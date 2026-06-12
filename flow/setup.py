@@ -139,6 +139,7 @@ class Flow:
             ("modeler", self.modeler_agent),
             ("documentor", self.documentor_agent),
         ]:
+            agent.logger = self.logger
             agent.policy = self.policy
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)

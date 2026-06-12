@@ -515,6 +515,15 @@ def finalize_review_reasons(
             decision["reason_by"] = "analyst"
         if cid in final_type_by_id:
             decision["final_type"] = final_type_by_id[cid]
+        elif str(decision.get("new_label") or decision.get("final_label") or "").strip() == "Conflict":
+            conflict = conflicts_by_id.get(cid) if isinstance(conflicts_by_id, dict) else {}
+            fallback_type = str(
+                (conflict or {}).get("final_type")
+                or (conflict or {}).get("initial_type")
+                or (conflict or {}).get("type")
+                or "other"
+            ).strip().lower()
+            decision["final_type"] = fallback_type or "other"
     return {
         "final_reason_status": "ok",
         "reason_count": len(reason_by_id),

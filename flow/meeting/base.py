@@ -1,4 +1,5 @@
 # Handles base logic for project flow orchestration and stage execution.
+import re
 from typing import Any, Dict, List, Optional
 
 from storage.requirements import requirement_discussion_pool
@@ -24,7 +25,7 @@ from .conflict_review import conflict_review
 from .requirement_elicitation import run_elicitation
 
 
-DEFAULT_CONFLICT_RESOLUTION_LIMIT = 1
+POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT = 2
 
 
 # ========
@@ -171,72 +172,197 @@ class MeetingCoordinator:
         human_decision_status = state_summary.get("human_decision_status") or {}
         runner = observation.get("runner")
         if runner is not None:
-            has_general_issues = any(
-                isinstance(issue, dict) and not runner.is_default_issue(issue)
-                for issue in runner.current_meeting_issues()
-            )
-            draft_updated = (
-                self.default_update_draft(runner)
-                if stage_enabled(self.flow.config, "default_update_draft", True)
-                and not has_general_issues
-                else None
-            )
+            default_draft_decision = self.default_draft_decision(runner)
+            if default_draft_decision:
+                return default_draft_decision
+
             pending_decision = self.pending_issue_decision(runner)
             if pending_decision:
                 return pending_decision
-            current_issues_saved = bool(state_summary.get("all_current_issues_saved"))
-            current_issues_count = int(state_summary.get("issues_count") or 0)
-            can_expand_issues = current_issues_count == 0 or current_issues_saved
-            can_add_issues = bool(state_summary.get("can_add_issues"))
-            if self.general_meeting_round_enabled(runner.round_num):
-                if runner.issue_pool and can_expand_issues and can_add_issues:
-                    return {
-                        "action": "add_issues",
-                        "params": {},
-                        "reasoning": "預設會議已完成並更新 draft，接著加入一般正式會議議題。",
-                    }
-            elif draft_updated:
-                if stage_enabled(self.flow.config, "general_formal_meeting", True):
-                    self.flow.logger.info("Default Formal Meeting：已更新 draft，一般正式會議將從 Round 2 開始")
-                else:
-                    self.flow.logger.info("Default Formal Meeting：已更新 draft，general_formal_meeting disabled，略過一般議題提出")
+
+            general_decision = self.maybe_plan_general_expansion(
+                runner,
+                state_summary,
+                human_decision_status,
+            )
+            if general_decision:
+                return general_decision
+
         if runner is not None:
             if (
                 stage_enabled(self.flow.config, "general_update_draft", True)
                 and self.general_meeting_round_enabled(runner.round_num)
             ):
-                self.general_update_draft(runner, state_summary, human_decision_status)
-        if (
-            int(state_summary.get("issues_count") or 0) == 0
-            and int(state_summary.get("backlog_count") or 0) == 0
-            and not human_decision_status.get("has_pending_human_decisions")
-        ):
+                general_draft_decision = self.general_draft_decision(
+                    runner,
+                    state_summary,
+                    human_decision_status,
+                )
+                if general_draft_decision:
+                    return general_draft_decision
+
+        finish_decision = self.finish_round_decision(state_summary, human_decision_status)
+        if finish_decision:
+            return finish_decision
+
+        lifecycle_decision = self.issue_lifecycle_decision(state_summary)
+        if lifecycle_decision:
+            return lifecycle_decision
+
+        last_observation = observation.get("last_action_result") or {}
+        decision = self.plan_meeting_action(
+            state_summary=state_summary,
+            last_observation=last_observation,
+        )
+        return {
+            "action": decision.get("action", "finish_round"),
+            "params": decision.get("params") or {},
+            "reasoning": decision.get("reasoning", ""),
+        }
+
+    # ========
+    # Defines default draft decision function for this module workflow.
+    # ========
+    def default_draft_decision(self, runner: Any) -> Optional[Dict[str, Any]]:
+        has_general_issues = any(
+            isinstance(issue, dict) and not runner.is_default_issue(issue)
+            for issue in runner.current_meeting_issues()
+        )
+        if has_general_issues:
+            return None
+        if not stage_enabled(self.flow.config, "default_update_draft", True):
+            return None
+        if not self.default_draft_ready(runner):
+            return None
+        return {
+            "action": "update_default_draft",
+            "params": {},
+            "reasoning": "預設會議議題已保存，更新需求草稿。",
+        }
+
+    # ========
+    # Defines log default draft transition function for this module workflow.
+    # ========
+    def log_default_draft_transition(self) -> None:
+        if stage_enabled(self.flow.config, "general_formal_meeting", True):
+            self.flow.logger.info("Default Formal Meeting：已更新 draft，一般正式會議將從 Round 2 開始")
+        else:
+            self.flow.logger.info("Default Formal Meeting：已更新 draft，general_formal_meeting disabled，略過一般議題提出")
+
+    # ========
+    # Defines can expand round issues function for this module workflow.
+    # ========
+    @staticmethod
+    def can_expand_round_issues(state_summary: Dict[str, Any]) -> bool:
+        current_issues_saved = bool(state_summary.get("all_current_issues_saved"))
+        current_issues_count = int(state_summary.get("issues_count") or 0)
+        return current_issues_count == 0 or current_issues_saved
+
+    # ========
+    # Defines maybe plan general expansion function for this module workflow.
+    # ========
+    def maybe_plan_general_expansion(
+        self,
+        runner: Any,
+        state_summary: Dict[str, Any],
+        human_decision_status: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not self.general_meeting_round_enabled(runner.round_num):
+            return None
+        if not self.can_expand_round_issues(state_summary):
+            return None
+        if human_decision_status.get("has_pending_human_decisions"):
+            return None
+
+        if self.should_run_general_conflict_gate(runner):
+            return {
+                "action": "run_general_conflict_gate",
+                "params": {},
+                "reasoning": "一般正式會議開始前執行衝突 gate。",
+            }
+
+        if runner.issue_pool and state_summary.get("can_add_issues"):
+            return {
+                "action": "add_issues",
+                "params": {},
+                "reasoning": "預設會議已完成並更新 draft，接著加入一般正式會議議題。",
+            }
+        return None
+
+    # ========
+    # Defines should run general conflict gate function for this module workflow.
+    # ========
+    def should_run_general_conflict_gate(self, runner: Any) -> bool:
+        if not stage_enabled(self.flow.config, "general_formal_meeting", True):
+            return False
+        artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
+        meta = artifact.setdefault("meta", {})
+        flag = f"general_conflict_gate_round_{runner.round_num}"
+        if meta.get(flag):
+            return False
+        if self.has_pending_conflict_issue(runner):
+            return True
+        if self.unresolved_conflict_rows(artifact):
+            return True
+        return True
+
+    # ========
+    # Defines general draft decision function for this module workflow.
+    # ========
+    def general_draft_decision(
+        self,
+        runner: Any,
+        state_summary: Dict[str, Any],
+        human_decision_status: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not self.general_draft_ready(runner, state_summary, human_decision_status):
+            return None
+        return {
+            "action": "update_general_draft",
+            "params": {},
+            "reasoning": "一般正式會議議題已保存，更新需求草稿。",
+        }
+
+    # ========
+    # Defines finish round decision function for this module workflow.
+    # ========
+    @staticmethod
+    def finish_round_decision(
+        state_summary: Dict[str, Any],
+        human_decision_status: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if human_decision_status.get("has_pending_human_decisions"):
+            return None
+        issues_count = int(state_summary.get("issues_count") or 0)
+        backlog_count = int(state_summary.get("backlog_count") or 0)
+        all_saved = bool(state_summary.get("all_current_issues_saved"))
+        can_add_issues = bool(state_summary.get("can_add_issues"))
+
+        if issues_count == 0 and backlog_count == 0:
             return {
                 "action": "finish_round",
                 "params": {},
                 "reasoning": "本輪沒有可產生正式會議議題的 proposal，且沒有待處理 human_decision_queue，直接結束本輪。",
             }
-        if (
-            state_summary.get("all_current_issues_saved")
-            and int(state_summary.get("backlog_count") or 0) == 0
-            and not human_decision_status.get("has_pending_human_decisions")
-        ):
+        if all_saved and backlog_count == 0:
             return {
                 "action": "finish_round",
                 "params": {},
                 "reasoning": "所有議題已保存，且沒有剩餘 proposal 或待處理 human_decision_queue，直接結束本輪。",
             }
-        if (
-            state_summary.get("all_current_issues_saved")
-            and int(state_summary.get("backlog_count") or 0) > 0
-            and not state_summary.get("can_add_issues")
-            and not human_decision_status.get("has_pending_human_decisions")
-        ):
+        if all_saved and backlog_count > 0 and not can_add_issues:
             return {
                 "action": "finish_round",
                 "params": {},
                 "reasoning": "所有本輪議題已保存，剩餘 proposal 保留 backlog，且本輪已達 issue 上限，直接結束本輪。",
             }
+        return None
+
+    # ========
+    # Defines issue lifecycle decision function for this module workflow.
+    # ========
+    @staticmethod
+    def issue_lifecycle_decision(state_summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for issue_state in state_summary.get("issue_states") or []:
             issue_id = issue_state.get("issue_id")
             if not issue_id:
@@ -265,16 +391,102 @@ class MeetingCoordinator:
                     "params": {"issue_id": issue_id},
                     "reasoning": "議題已收斂，先保存會議紀錄。",
                 }
-        last_observation = observation.get("last_action_result") or {}
-        decision = self.plan_meeting_action(
-            state_summary=state_summary,
-            last_observation=last_observation,
+        return None
+
+    # ========
+    # Defines default draft ready function for this module workflow.
+    # ========
+    def default_draft_ready(self, runner: Any) -> bool:
+        artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
+        meta = artifact.setdefault("meta", {})
+        flag = f"default_update_draft_round_{runner.round_num}"
+        if meta.get(flag):
+            return False
+        issues = runner.current_meeting_issues()
+        default_issues = [
+            issue for issue in issues
+            if isinstance(issue, dict) and runner.is_default_issue(issue)
+        ]
+        if not default_issues:
+            return False
+        all_saved = all(
+            runner.issue_states.get(issue.get("id"), {}).get("saved", False)
+            for issue in default_issues
+            if isinstance(issue, dict)
         )
-        return {
-            "action": decision.get("action", "finish_round"),
-            "params": decision.get("params") or {},
-            "reasoning": decision.get("reasoning", ""),
-        }
+        if not all_saved:
+            return False
+        if runner.issue_pool:
+            return False
+        return True
+
+    # ========
+    # Defines general draft ready function for this module workflow.
+    # ========
+    def general_draft_ready(
+        self,
+        runner: Any,
+        state_summary: Dict[str, Any],
+        human_decision_status: Dict[str, Any],
+    ) -> bool:
+        artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
+        meta = artifact.setdefault("meta", {})
+        final_flag = f"general_update_draft_round_{runner.round_num}"
+        if meta.get(final_flag):
+            return False
+        if not state_summary.get("all_current_issues_saved"):
+            return False
+        if int(state_summary.get("backlog_count") or 0) != 0 and state_summary.get("can_add_issues"):
+            return False
+        if human_decision_status.get("has_pending_human_decisions"):
+            return False
+        return any(
+            isinstance(issue, dict) and not runner.is_default_issue(issue)
+            for issue in runner.current_meeting_issues()
+        )
+
+    # ========
+    # Defines general conflict gate function for this module workflow.
+    # ========
+    def general_conflict_gate(self, runner: Any) -> bool:
+        if not stage_enabled(self.flow.config, "general_formal_meeting", True):
+            return False
+        artifact = runner.output_artifact if isinstance(runner.output_artifact, dict) else runner.artifact
+        meta = artifact.setdefault("meta", {})
+        flag = f"general_conflict_gate_round_{runner.round_num}"
+        if meta.get(flag):
+            return False
+        if self.has_pending_conflict_issue(runner):
+            meta[flag] = True
+            self.flow.store.save_artifact(artifact)
+            return True
+
+        unresolved = self.unresolved_conflict_rows(artifact)
+        if unresolved:
+            meta[flag] = True
+            self.flow.logger.info(
+                "General Conflict Gate：一般會議前發現 %s 筆既有未解衝突，優先加入 resolve_conflict",
+                len(unresolved),
+            )
+            appended = self.append_conflict_issue(runner, artifact)
+            self.flow.store.save_artifact(artifact)
+            return appended
+
+        meta["requirements_changed"] = True
+        meta["requirements_changed_by"] = "general_conflict_gate"
+        meta["requirements_changed_reason"] = "pre_general_meeting_conflict_refresh"
+        appended = self.ensure_conflicts_resolved(
+            runner,
+            artifact,
+            log_prefix="General Conflict Gate",
+        )
+        meta[flag] = True
+        if runner.artifact is not artifact:
+            runner.artifact.setdefault("meta", {}).update(meta)
+        if runner.output_artifact is not None and runner.output_artifact is not artifact:
+            runner.output_artifact.setdefault("meta", {}).update(meta)
+        self.flow.store.save_artifact(artifact)
+        return appended
 
     # ========
     # Defines pending issue decision function for this module workflow.
@@ -372,9 +584,12 @@ class MeetingCoordinator:
                 }
             )
         self.flow.store.save_artifact(artifact)
-        self.flow.logger.info(
-            "Default Update Draft：已生成 draft_v%s",
-            next_version,
+        self.flow.logger.step_completed(
+            "draft",
+            "draft.update_draft",
+            f"Draft v{next_version}",
+            agent="analyst",
+            output_path=f"results/drafts/draft_v{next_version}.html",
         )
         return next_version
 
@@ -435,16 +650,22 @@ class MeetingCoordinator:
                 "description": "需求正式化後仍有未解需求衝突，需在預設會議中收斂或裁決。",
                 "participants": ["user", "analyst"],
                 "discussion_mode": "sequential",
-                "discussion_rounds": 2,
+                "discussion_rounds": 1,
                 "target_stakeholders": [],
                 "trace": {
                     "artifact_ids": unresolved_ids,
-                    "proposal_ids": [f"I-R{runner.round_num}-mediator-conflict-loop"],
+                    "proposal_ids": [f"R{runner.round_num}-I{next_index}"],
                 },
                 "proposed_by": "mediator",
                 "expected_actions": {"analyst": ["discuss_conflict"]},
             }
-        issue["id"] = f"T-{next_index}"
+        nums = []
+        for row in current_issues:
+            issue_id = str((row or {}).get("id") or "").strip()
+            m = re.fullmatch(r"M-(\d+)", issue_id)
+            if m:
+                nums.append(int(m.group(1)))
+        issue["id"] = f"M-{(max(nums) if nums else 0) + 1}"
         issue["round"] = runner.round_num
         issue["auto_conflict_loop"] = True
         if force_human_decision:
@@ -454,13 +675,24 @@ class MeetingCoordinator:
                 + "\n\n已達自動衝突解決上限，本議題直接進入人類裁決。"
             ).strip()
 
-        other_rounds = [
+        rows = [
             row for row in (artifact.get("meeting_issues", []) or [])
             if isinstance(row, dict)
-            and int(row.get("round") or -1) != int(runner.round_num)
         ]
-        round_issues = current_issues + [issue]
-        artifact["meeting_issues"] = other_rounds + round_issues
+        issue_id = str(issue.get("id") or "").strip()
+        existing_idx = next(
+            (
+                idx
+                for idx, row in enumerate(rows)
+                if str(row.get("id") or "").strip() == issue_id
+            ),
+            None,
+        )
+        if existing_idx is None:
+            rows.append(issue)
+        else:
+            rows[existing_idx] = {**rows[existing_idx], **issue}
+        artifact["meeting_issues"] = rows
         runner.artifact["meeting_issues"] = list(artifact["meeting_issues"])
         if runner.output_artifact is not None:
             runner.output_artifact["meeting_issues"] = list(artifact["meeting_issues"])
@@ -478,10 +710,26 @@ class MeetingCoordinator:
     # Defines ensure default conflicts resolved function for this module workflow.
     # ========
     def ensure_default_conflicts_resolved(self, runner: Any, artifact: Dict[str, Any]) -> bool:
-        self.refresh_conflicts(
+        return self.ensure_conflicts_resolved(
             runner,
             artifact,
             log_prefix="Default Conflict Gate",
+        )
+
+    # ========
+    # Defines ensure conflicts resolved function for this module workflow.
+    # ========
+    def ensure_conflicts_resolved(
+        self,
+        runner: Any,
+        artifact: Dict[str, Any],
+        *,
+        log_prefix: str,
+    ) -> bool:
+        self.refresh_conflicts(
+            runner,
+            artifact,
+            log_prefix=log_prefix,
             block_on_unresolved=False,
         )
         unresolved = self.unresolved_conflict_rows(artifact)
@@ -491,32 +739,31 @@ class MeetingCoordinator:
             return True
 
         meta = artifact.setdefault("meta", {})
-        loop_key = f"default_conflict_loop_round_{runner.round_num}"
         try:
-            attempts = int(meta.get(loop_key) or 0)
+            post_requirement_streak = int(meta.get("post_requirement_conflict_streak") or 0)
         except (TypeError, ValueError):
-            attempts = 0
-        if attempts < DEFAULT_CONFLICT_RESOLUTION_LIMIT:
-            meta[loop_key] = attempts + 1
+            post_requirement_streak = 0
+        if post_requirement_streak >= POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT:
+            meta[f"default_conflict_human_round_{runner.round_num}"] = True
             self.flow.logger.info(
-                "Default Conflict Gate：仍有 %s 筆未解決衝突，追加 resolve_conflict（%s/%s）",
+                "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突，交由人類裁決",
+                log_prefix,
+                post_requirement_streak,
                 len(unresolved),
-                attempts + 1,
-                DEFAULT_CONFLICT_RESOLUTION_LIMIT,
             )
-            return self.append_conflict_issue(runner, artifact)
-
-        meta[f"default_conflict_human_round_{runner.round_num}"] = True
+            return self.append_conflict_issue(
+                runner,
+                artifact,
+                force_human_decision=True,
+            )
         self.flow.logger.info(
-            "Default Conflict Gate：仍有 %s 筆未解決衝突，已達上限 %s，交由人類裁決",
+            "%s：仍有 %s 筆未解決衝突，追加 resolve_conflict（需求更新後連續 %s/%s）",
+            log_prefix,
             len(unresolved),
-            DEFAULT_CONFLICT_RESOLUTION_LIMIT,
+            post_requirement_streak,
+            POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT,
         )
-        return self.append_conflict_issue(
-            runner,
-            artifact,
-            force_human_decision=True,
-        )
+        return self.append_conflict_issue(runner, artifact)
 
     # ========
     # Defines proposal artifact slices function for this module workflow.
@@ -726,6 +973,8 @@ class MeetingCoordinator:
         if not general_issues:
             return False
 
+        self.review_stale_models(runner, artifact, round_num=round_num)
+
         latest_version = self.flow.store.get_draft_version()
         previous_draft = self.flow.store.load_draft(latest_version) if latest_version >= 0 else ""
         next_version = max(0, latest_version + 1)
@@ -743,9 +992,78 @@ class MeetingCoordinator:
         if runner.artifact is not artifact:
             runner.artifact.setdefault("meta", {}).update(meta)
         self.flow.store.save_artifact(artifact)
-        self.flow.logger.info(
-            "General Update Draft：已生成 draft_v%s",
-            next_version,
+        self.flow.logger.step_completed(
+            "draft",
+            "draft.update_draft",
+            f"Draft v{next_version}",
+            agent="analyst",
+            output_path=f"results/drafts/draft_v{next_version}.html",
+        )
+        return True
+
+    # ========
+    # Defines review stale models function for this module workflow.
+    # ========
+    def review_stale_models(
+        self,
+        runner: Any,
+        artifact: Dict[str, Any],
+        *,
+        round_num: int,
+    ) -> bool:
+        if not stage_enabled(self.flow.config, "system_model"):
+            return False
+        meta = artifact.setdefault("meta", {})
+        if not bool(meta.get("models_maybe_stale")):
+            return False
+        models = [
+            row for row in (artifact.get("system_models") or [])
+            if isinstance(row, dict)
+        ]
+        if not models:
+            meta["models_maybe_stale"] = False
+            meta["models_reviewed_after_requirement_change"] = True
+            meta["models_review_note"] = "no_existing_models"
+            self.flow.store.save_artifact(artifact)
+            return False
+
+        review_issue = {
+            "id": f"MODEL-REVIEW-R{round_num}",
+            "title": "系統模型同步檢查",
+            "category": "align_model",
+            "description": "正式會議後需求已更新，請判斷既有系統模型是否需要更新；若不需要更新，直接結束模型流程。",
+            "trace": {
+                "artifact_ids": [
+                    str(row.get("id") or "").strip()
+                    for row in models
+                    if str(row.get("id") or "").strip()
+                ],
+                "proposal_ids": [],
+            },
+        }
+        self.flow.modeler_agent.run_model_loop(
+            artifact,
+            recent_discussions=runner.recent_discussions(limit=5) if hasattr(runner, "recent_discussions") else [],
+            issue=review_issue,
+            modeling_phase="post_requirement_formalization",
+        )
+        self.flow.store.save_plantuml_files(artifact.get("system_models", []))
+        meta["models_maybe_stale"] = False
+        meta["models_reviewed_after_requirement_change"] = True
+        meta["models_reviewed_round"] = round_num
+        meta.pop("models_stale_reason", None)
+        if runner.artifact is not artifact:
+            runner.artifact.setdefault("meta", {}).update(meta)
+            runner.artifact["system_models"] = artifact.get("system_models", [])
+        if runner.output_artifact is not None:
+            runner.output_artifact["system_models"] = artifact.get("system_models", [])
+        self.flow.store.save_artifact(artifact)
+        self.flow.logger.step_completed(
+            "system_model",
+            "system_model.review_models",
+            "系統模型同步檢查",
+            agent="modeler",
+            output_path="artifact/system_models.json",
         )
         return True
 
@@ -778,42 +1096,64 @@ class MeetingCoordinator:
                 },
             }
         ]
-        runner.save_formal_conflict_report(fake_record)
+        runner.update_conflict_report(fake_record)
         meta["requirements_changed"] = False
         meta["conflict_refresh_round"] = runner.round_num
         meta["conflict_refresh_by"] = "default_conflict_gate"
         meta.pop("requirements_changed_by", None)
         meta.pop("requirements_changed_reason", None)
+        latest_conflict_report = (
+            runner.artifact.get("conflict_report")
+            if isinstance(runner.artifact.get("conflict_report"), list)
+            else None
+        )
+        if latest_conflict_report is not None:
+            artifact["conflict_report"] = [dict(row) for row in latest_conflict_report if isinstance(row, dict)]
+        latest_conflict_state = (
+            runner.artifact.get("conflict")
+            if isinstance(runner.artifact.get("conflict"), dict)
+            else None
+        )
+        if latest_conflict_state is not None:
+            artifact["conflict"] = dict(latest_conflict_state)
         if runner.artifact is not artifact:
             runner.artifact.setdefault("meta", {}).update(meta)
+            if "conflict_report" in artifact:
+                runner.artifact["conflict_report"] = [dict(row) for row in artifact["conflict_report"]]
             if "conflict" in artifact:
-                runner.artifact["conflict"] = artifact["conflict"]
+                runner.artifact["conflict"] = dict(artifact["conflict"])
+        if runner.output_artifact is not None:
+            runner.output_artifact.setdefault("meta", {}).update(meta)
+            if "conflict_report" in artifact:
+                runner.output_artifact["conflict_report"] = [dict(row) for row in artifact["conflict_report"]]
+            if "conflict" in artifact:
+                runner.output_artifact["conflict"] = dict(artifact["conflict"])
 
-        conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
-        report_rows = conflict_state.get("report") if isinstance(conflict_state.get("report"), list) else []
-        unresolved_count = 0
-        for report_row in report_rows:
-            if not isinstance(report_row, dict):
-                continue
-            status = str(report_row.get("status") or "").strip().lower()
-            if status not in {"agreed", "human_decision"}:
-                unresolved_count += 1
+        unresolved_count = len(self.unresolved_conflict_rows(artifact))
 
         if unresolved_count:
+            try:
+                streak = int(meta.get("post_requirement_conflict_streak") or 0)
+            except (TypeError, ValueError):
+                streak = 0
+            meta["post_requirement_conflict_streak"] = streak + 1
             self.flow.store.save_artifact(artifact)
             if block_on_unresolved:
                 self.flow.logger.info(
-                    "%s：需求更新後仍有 %s 筆未解決衝突；暫停更新 draft，需先完成需求衝突解決",
+                    "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突；暫停更新 draft，需先完成需求衝突解決",
                     log_prefix,
+                    streak + 1,
                     unresolved_count,
                 )
                 return True
             self.flow.logger.info(
-                "%s：需求更新後仍有 %s 筆未解決衝突",
+                "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突",
                 log_prefix,
+                streak + 1,
                 unresolved_count,
             )
             return False
+        meta["post_requirement_conflict_streak"] = 0
         self.flow.store.save_artifact(artifact)
         self.flow.logger.info(
             "%s：需求更新後已重新整理 conflict report，接著更新 draft",
@@ -831,7 +1171,43 @@ class MeetingCoordinator:
         decision: Dict[str, Any],
         observation: Dict[str, Any],
     ) -> Dict[str, Any]:
-        result = runner.run(decision.get("action", "finish_round"), decision.get("params") or {})
+        action = decision.get("action", "finish_round")
+        if action == "update_default_draft":
+            draft_version = self.default_update_draft(runner)
+            result = {
+                "action": action,
+                "result": {"draft_version": draft_version},
+                "error": None,
+                "status": "draft_updated" if draft_version is not None else "skipped",
+            }
+            if draft_version is not None:
+                self.log_default_draft_transition()
+        elif action == "run_general_conflict_gate":
+            appended = self.general_conflict_gate(runner)
+            pending_conflict = self.pending_issue_decision(runner)
+            result = {
+                "action": action,
+                "result": {
+                    "appended": appended,
+                    "next_action": pending_conflict,
+                },
+                "error": None,
+                "status": "conflict_gate_done",
+            }
+        elif action == "update_general_draft":
+            updated = self.general_update_draft(
+                runner,
+                observation.get("state_summary") or {},
+                (observation.get("state_summary") or {}).get("human_decision_status") or {},
+            )
+            result = {
+                "action": action,
+                "result": {"updated": updated},
+                "error": None,
+                "status": "draft_updated" if updated else "skipped",
+            }
+        else:
+            result = runner.run(action, decision.get("params") or {})
         self.flow.ensure_artifact_contract(runner.artifact)
         return result
 

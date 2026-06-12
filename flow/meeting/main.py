@@ -124,10 +124,6 @@ FINAL_CONFLICT_STATUSES = {"agreed", "human_decision"}
 # Defines conflict report rows function for this module workflow.
 # ========
 def conflict_report_rows(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
-    conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
-    report = conflict_state.get("report")
-    if isinstance(report, list):
-        return [row for row in report if isinstance(row, dict)]
     report = artifact.get("conflict_report")
     if isinstance(report, list):
         return [row for row in report if isinstance(row, dict)]
@@ -205,8 +201,7 @@ def target_stakeholders(
     artifact_ids: List[str],
 ) -> List[str]:
     artifact_id_set = set(artifact_ids)
-    conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
-    for row in conflict_state.get("report", []) or []:
+    for row in artifact.get("conflict_report", []) or []:
         if not isinstance(row, dict):
             continue
         if str(row.get("id") or "").strip() not in artifact_id_set:
@@ -292,7 +287,7 @@ def default_issues(
         ):
             rows.append(
                 {
-                    "issue_id": f"I-R{round_num}-mediator-conflict-review",
+                    "issue_id": f"R{round_num}-I1",
                     "title": "解決需求衝突",
                     "category": "resolve_conflict",
                     "evidence": [
@@ -335,7 +330,7 @@ def default_issues(
     if isinstance(requirements, list) and requirements and not requirement_review_done:
         rows.append(
             {
-                "issue_id": f"I-R{round_num}-mediator-requirement-review",
+                "issue_id": f"R{round_num}-I2",
                 "title": "需求正式化",
                 "category": "formalize_requirement",
                 "evidence": [
@@ -373,6 +368,7 @@ def default_meeting_issues(
     stakeholders = stakeholder_names(artifact)
     issues: List[Dict[str, Any]] = []
     for idx, spec in enumerate(default_issues(artifact, round_num=round_num), 1):
+        proposal_id = f"R{round_num}-I{idx}"
         artifact_ids = artifact_ids_from_sources(spec.get("sources"))
         targets = target_stakeholders(artifact, artifact_ids)
         if "user" in (spec.get("participants") or []) and not targets:
@@ -380,13 +376,13 @@ def default_meeting_issues(
         normalized = meeting_issue_schema(
             {
                 **spec,
-                "id": f"T-{idx}",
+                "id": f"M-{idx}",
                 "description": str(spec.get("expect_outcome") or spec.get("reason") or "").strip(),
-                "discussion_rounds": 2,
+                "discussion_rounds": 1,
                 "target_stakeholders": targets,
                 "trace": {
                     "artifact_ids": artifact_ids,
-                    "proposal_ids": [str(spec.get("issue_id") or "").strip()],
+                    "proposal_ids": [proposal_id],
                 },
                 "proposed_by": "mediator",
             },
@@ -417,6 +413,92 @@ def is_conflict_report_only_proposal(row: Dict[str, Any]) -> bool:
 
 def clean_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def renumber_issue_proposals(
+    proposals: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
+    counters: Dict[int, int] = {}
+    id_map: Dict[str, str] = {}
+    rows: List[Dict[str, Any]] = []
+    for row in proposals or []:
+        if not isinstance(row, dict):
+            continue
+        new_row = dict(row)
+        try:
+            round_num = int(new_row.get("round") or 1)
+        except (TypeError, ValueError):
+            round_num = 1
+        counters[round_num] = counters.get(round_num, 0) + 1
+        new_id = f"R{round_num}-I{counters[round_num]}"
+        old_id = clean_text(new_row.get("issue_id") or new_row.get("id"))
+        if old_id:
+            id_map[old_id] = new_id
+        new_row["issue_id"] = new_id
+        rows.append(new_row)
+    return rows, id_map
+
+
+def update_trace_proposal_ids(trace: Any, id_map: Dict[str, str]) -> Any:
+    if not isinstance(trace, dict):
+        return trace
+    updated = dict(trace)
+    proposal_ids = [
+        clean_text(id_map.get(clean_text(value), clean_text(value)))
+        for value in (trace.get("proposal_ids") or [])
+        if clean_text(value)
+    ]
+    if proposal_ids:
+        updated["proposal_ids"] = list(dict.fromkeys(proposal_ids))
+    return updated
+
+
+def renumber_meeting_issues(
+    issues: List[Dict[str, Any]],
+    *,
+    proposal_id_map: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    used_nums: set[int] = set()
+    for row in issues or []:
+        if not isinstance(row, dict):
+            continue
+        issue_id = clean_text(row.get("id"))
+        match = re.fullmatch(r"M-(\d+)", issue_id)
+        if match:
+            used_nums.add(int(match.group(1)))
+
+    next_num = 1
+    for row in [r for r in issues or [] if isinstance(r, dict)]:
+        new_row = dict(row)
+        issue_id = clean_text(new_row.get("id"))
+        if not issue_id:
+            while next_num in used_nums:
+                next_num += 1
+            issue_id = f"M-{next_num}"
+            used_nums.add(next_num)
+            next_num += 1
+        new_row["id"] = issue_id
+        if proposal_id_map:
+            new_row["trace"] = update_trace_proposal_ids(new_row.get("trace"), proposal_id_map)
+        rows.append(new_row)
+    return rows
+
+
+def normalize_issue_ids_for_storage(artifact: Dict[str, Any]) -> Dict[str, str]:
+    proposals = artifact.get("issue_proposals")
+    proposal_id_map: Dict[str, str] = {}
+    if isinstance(proposals, list):
+        normalized_proposals, proposal_id_map = renumber_issue_proposals(proposals)
+        artifact["issue_proposals"] = normalized_proposals
+
+    meeting_issues = artifact.get("meeting_issues")
+    if isinstance(meeting_issues, list):
+        artifact["meeting_issues"] = renumber_meeting_issues(
+            meeting_issues,
+            proposal_id_map=proposal_id_map,
+        )
+    return proposal_id_map
 
 
 def list_values(value: Any) -> List[Any]:
@@ -503,7 +585,7 @@ def requirement_field_gap_proposals(
     ids = [row["id"] for row in gap_rows]
     evidence = "；".join(f"{row['id']}：{', '.join(row['gaps'])}" for row in gap_rows[:12])
     row = {
-        "issue_id": f"I-R{round_num}-detector-req-fields",
+        "issue_id": f"R{round_num}-I1",
         "title": "補齊既有需求的可驗收欄位",
         "category": "clarify_requirement",
         "issue_focus": "requirement_completeness",
@@ -566,7 +648,7 @@ def model_alignment_gap_proposals(
         evidence_parts.append("模型缺 related_requirement_ids：" + ", ".join(model_without_req[:12]))
 
     row = {
-        "issue_id": f"I-R{round_num}-detector-model-alignment",
+        "issue_id": f"R{round_num}-I2",
         "title": "對齊需求與系統模型關聯",
         "category": "align_model",
         "issue_focus": "model_alignment",
@@ -611,7 +693,7 @@ def feedback_gap_proposals(
 
     evidence = "；".join(f"{row['id']}({row['section']})：{row['text']}" for row in rows[:8])
     row = {
-        "issue_id": f"I-R{round_num}-detector-feedback-trace",
+        "issue_id": f"R{round_num}-I3",
         "title": "確認 feedback 風險與限制是否回寫需求",
         "category": "clarify_requirement",
         "issue_focus": "requirement_completeness",
@@ -669,7 +751,7 @@ def final_verification_proposals(
         return []
 
     row = {
-        "issue_id": f"I-R{round_num}-mediator-final-verification",
+        "issue_id": f"R{round_num}-I99",
         "title": "最終檢查未收斂的需求與模型缺口",
         "category": "clarify_requirement",
         "issue_focus": "requirement_completeness",
@@ -997,7 +1079,12 @@ def collect_issue_proposals(
             return True
         issue_id = row.get("issue_id")
         if issue_id and issue_id in seen_issue_ids:
-            return True
+            row = dict(row)
+            next_num = len(proposals) + 1
+            while f"R{round_num}-I{next_num}" in seen_issue_ids:
+                next_num += 1
+            issue_id = f"R{round_num}-I{next_num}"
+            row["issue_id"] = issue_id
         proposals.append(row)
         if issue_id:
             seen_issue_ids.add(issue_id)
@@ -1182,31 +1269,53 @@ def run_meeting_round_block(
             **compact_markdown_context(latest_draft),
         }
     default_issues: List[Dict[str, Any]] = []
-    if stage_enabled(coordinator.flow.config, "default_formal_meeting", True):
-        if int(round_num or 0) == 1:
+    if int(round_num or 0) == 1:
+        if stage_enabled(coordinator.flow.config, "default_formal_meeting", True):
             default_issues = default_meeting_issues(
                 coordinator,
                 meeting_artifact,
                 round_num=round_num,
             )
         else:
-            coordinator.flow.logger.info(
-                "Default Formal Meeting：預設會議只在 Round 1 執行，Round %s 略過",
-                round_num,
-            )
-    else:
-        coordinator.flow.logger.info("Default Formal Meeting：stage disabled，略過預設正式會議議題")
+            coordinator.flow.logger.info("Default Formal Meeting：stage disabled，略過預設正式會議議題")
 
     if default_issues:
-        existing_other_rounds = [
+        existing = [
             row for row in (artifact.get("meeting_issues", []) or [])
             if isinstance(row, dict)
-            and int(row.get("round") or -1) != int(round_num)
         ]
-        round_issues = [{**issue, "round": round_num} for issue in default_issues]
+        round_issues = [
+            row for row in existing
+            if int(row.get("round") or -1) == int(round_num)
+        ]
+        seen_current_ids = {
+            clean_text(row.get("id"))
+            for row in round_issues
+            if clean_text(row.get("id"))
+        }
+        for issue in default_issues:
+            if not isinstance(issue, dict):
+                continue
+            issue_id = clean_text(issue.get("id"))
+            if issue_id and issue_id in seen_current_ids:
+                continue
+            row = {**issue, "round": round_num}
+            round_issues.append(row)
+            if clean_text(row.get("id")):
+                seen_current_ids.add(clean_text(row.get("id")))
         review = pre_round_review([], round_num=round_num, default_issue_count=len(round_issues))
         save_pre_round_review(artifact, review)
-        artifact["meeting_issues"] = existing_other_rounds + round_issues
+        preserved_other_rounds = [
+            row for row in existing
+            if int(row.get("round") or -1) != int(round_num)
+        ]
+        artifact["meeting_issues"] = [*preserved_other_rounds, *round_issues]
+        normalize_issue_ids_for_storage(artifact)
+        round_issues = [
+            row for row in (artifact.get("meeting_issues", []) or [])
+            if isinstance(row, dict)
+            and int(row.get("round") or -1) == int(round_num)
+        ]
         meeting_artifact["meeting_issues"] = list(round_issues)
         meeting_artifact["pre_round_reviews"] = list(artifact.get("pre_round_reviews", []) or [])
         coordinator.flow.store.save_artifact(artifact)
@@ -1215,6 +1324,7 @@ def run_meeting_round_block(
         current_round_proposals = collect_issue_proposals(
             coordinator, meeting_artifact, round_num=round_num,
         )
+        current_round_proposals, _ = renumber_issue_proposals(current_round_proposals)
         review = pre_round_review(current_round_proposals, round_num=round_num)
         save_pre_round_review(artifact, review)
     existing_issue_proposals = artifact.get("issue_proposals", []) or []
@@ -1233,9 +1343,20 @@ def run_meeting_round_block(
         if issue_id:
             seen_issue_ids.add(issue_id)
     artifact["issue_proposals"] = existing_issue_proposals
+    normalize_issue_ids_for_storage(artifact)
     coordinator.flow.store.save_artifact(artifact)
 
+    current_round_proposals = [
+        row for row in (artifact.get("issue_proposals", []) or [])
+        if isinstance(row, dict)
+        and int(row.get("round") or -1) == int(round_num)
+    ]
     meeting_artifact["issue_proposals"] = current_round_proposals
+    meeting_artifact["meeting_issues"] = [
+        row for row in (artifact.get("meeting_issues", []) or [])
+        if isinstance(row, dict)
+        and int(row.get("round") or -1) == int(round_num)
+    ]
     meeting_artifact["pre_round_reviews"] = list(artifact.get("pre_round_reviews", []) or [])
     runner = MeetingRunner(
         coordinator.flow.mediator_agent,
