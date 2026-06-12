@@ -34,36 +34,52 @@ function statusLabel(run: RunState | null): string {
 }
 
 function parseAgentAction(message?: string): { agent: string; action: string } | null {
-  const match = /^(\w+)\s*\[\d+\/\d+\]:\s*(.+)$/i.exec(String(message || "").trim());
-  if (!match) return null;
-  return {
-    agent: agentLabel(match[1].replace(/agent$/i, "").toLowerCase()),
-    action: match[2].trim(),
-  };
+  const text = String(message || "").trim();
+  const match = /^(\w+)\s*\[\d+\/\d+\]:\s*(.+)$/i.exec(text);
+  if (match) {
+    return {
+      agent: agentLabel(match[1].replace(/agent$/i, "").toLowerCase()),
+      action: match[2].trim(),
+    };
+  }
+
+  const direct = /^(Analyst|Expert|Modeler|Mediator|Documentor)\s*[：:]\s*(.+)$/i.exec(text);
+  if (direct) {
+    return {
+      agent: agentLabel(direct[1].toLowerCase()),
+      action: direct[2].trim(),
+    };
+  }
+
+  const mapped = mapLogToAgentAction(text);
+  if (mapped) return mapped;
+
+  return null;
 }
 
-function waitingActivity(
-  message?: string,
-  currentStage?: string,
-):
-  | "planning"
-  | "meeting"
-  | "analyzing"
-  | "researching"
-  | "modeling"
-  | "drafting"
-  | "documenting"
-  | null {
-  const text = `${currentStage || ""} ${message || ""}`.trim();
+function mapLogToAgentAction(message: string): { agent: string; action: string } | null {
+  const text = message.trim();
   if (!text) return null;
-  if (/plan|planning|規劃|決定.*action|下一步|策略/i.test(text)) return "planning";
-  if (/meeting|會議|討論|issue|議題|conflict|衝突|裁決/i.test(text)) return "meeting";
-  if (/analyst|analyz|analysis|requirement|需求分析|分析需求|refine|update_requirement|formalize|clarify/i.test(text)) return "analyzing";
-  if (/expert|research|reference|feedback|domain|web_search|read_file|研究|參考|資料|回饋/i.test(text)) return "researching";
-  if (/modeler|model|plantuml|diagram|uml|系統模型|建模|模型|圖/i.test(text)) return "modeling";
-  if (/draft|草稿|use case|usecase|使用案例/i.test(text)) return "drafting";
-  if (/documentor|document|srs|design rationale|\bdr\b|mom|html|文件|規格書|設計緣由|會議紀錄/i.test(text)) return "documenting";
-  return null;
+  if (/^=+|^Round\s+\d+|^第[一二三四五六七八九十]+輪/.test(text)) return null;
+  if (/正式會議議程|本次會議結束|流程完成|初步情境分析/.test(text)) return null;
+
+  const rules: Array<{ pattern: RegExp; agent: string; action: string }> = [
+    { pattern: /需求衝突再審查|需求衝突辨識|Conflict Gate/i, agent: "analyst", action: "衝突辨識" },
+    { pattern: /MoM|會議紀錄|已保存：R\d+-M\d+\.md/i, agent: "mediator", action: "MoM" },
+    { pattern: /formalize_requirement|需求正式化/i, agent: "mediator", action: "需求正式化" },
+    { pattern: /領域研究|domain|research/i, agent: "expert", action: "領域研究" },
+    { pattern: /系統模型|PlantUML|use case|用例圖|情境圖|model/i, agent: "modeler", action: "系統模型產生" },
+    { pattern: /draft|草稿/i, agent: "analyst", action: "更新草稿" },
+    { pattern: /SRS|軟體需求規格/i, agent: "documentor", action: "SRS" },
+    { pattern: /Design Rationale|design_rationale|設計緣由/i, agent: "documentor", action: "Design Rationale" },
+  ];
+
+  const hit = rules.find(({ pattern }) => pattern.test(text));
+  if (!hit) return null;
+  return {
+    agent: agentLabel(hit.agent),
+    action: hit.action,
+  };
 }
 
 export function StatusBar({
@@ -96,7 +112,7 @@ export function StatusBar({
     if (run) {
       if (run.status === "cancelling") {
         return {
-          text: "cancelling ...",
+          text: "停止中",
           pulse: true,
         };
       }
@@ -107,13 +123,6 @@ export function StatusBar({
           pulse: false,
         };
       }
-      const activity = waitingActivity(lastLogMessage, run.current_stage);
-      if (activity) {
-        return {
-          text: `${activity} ...`,
-          pulse: true,
-        };
-      }
       if (latestActionText) {
         return {
           text: latestActionText,
@@ -121,8 +130,14 @@ export function StatusBar({
         };
       }
       if (waiting) return "等待你的決策";
+      if (run.current_agent) {
+        return {
+          text: `${agentLabel(run.current_agent)}: 執行中`,
+          pulse: true,
+        };
+      }
       return {
-        text: "planning ...",
+        text: "執行中",
         pulse: true,
       };
     }
@@ -134,10 +149,10 @@ export function StatusBar({
     typeof statusMessage === "string" ? false : statusMessage.pulse;
 
   return (
-    <div className="flex h-11 shrink-0 items-center gap-3 border-b border-gray-100 bg-slate-50/90 px-4 text-sm text-slate-600">
+    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-gray-100 bg-slate-50/90 px-3 text-xs text-slate-600">
       <span
         className={cn(
-          "inline-flex h-7 shrink-0 items-center gap-2 rounded-full border px-3 font-semibold",
+          "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full border px-2 font-semibold",
           waiting
             ? "border-amber-200 bg-amber-50 text-amber-900"
             : runActive
@@ -147,7 +162,7 @@ export function StatusBar({
       >
         <span
           className={cn(
-            "h-2 w-2 shrink-0 rounded-full",
+            "h-1.5 w-1.5 shrink-0 rounded-full",
             waiting
               ? "bg-amber-500"
               : runActive

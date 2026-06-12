@@ -37,7 +37,7 @@ export function NoticeStack() {
 
   useEffect(() => {
     for (const notice of notices) {
-      const ttl = notice.tone === "error" ? 7000 : 3500;
+      const ttl = notice.tone === "error" ? 3000 : 1000;
       if (now - notice.createdAt > ttl) dismissNotice(notice.id);
     }
   }, [dismissNotice, notices, now]);
@@ -48,7 +48,7 @@ export function NoticeStack() {
     <div className="pointer-events-none fixed right-4 top-16 z-50 flex w-80 flex-col gap-2">
       {notices.map((notice) => {
         const styles = TONE_STYLES[notice.tone];
-        const ttl = notice.tone === "error" ? 7000 : 3500;
+        const ttl = notice.tone === "error" ? 3000 : 1000;
         const fadeStart = ttl - 900;
         const age = now - notice.createdAt;
         const fadeProgress = Math.max(0, Math.min(1, (age - fadeStart) / 900));

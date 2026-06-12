@@ -1,18 +1,27 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { DiscussionMode } from "@/types/api";
 
 interface UiState {
   activeProjectId: string | null;
   selectedOutputPath: string | null;
   scrollTargetMessageId: string | null;
+  activeFlowMessageId: string | null;
   attachedDocIds: string[];
   stagedReferenceFiles: File[];
   meetingRounds: number;
   discussionMode: DiscussionMode;
   enabledAgents: Record<string, boolean>;
+  visiblePanels: {
+    references: boolean;
+    workspace: boolean;
+    output: boolean;
+  };
+  canWrite: boolean;
   setActiveProjectId: (id: string | null) => void;
   setSelectedOutputPath: (path: string | null) => void;
   setScrollTargetMessageId: (id: string | null) => void;
+  setActiveFlowMessageId: (id: string | null) => void;
   addStagedReferenceFile: (file: File) => void;
   removeStagedReferenceFile: (name: string) => void;
   clearStagedReferenceFiles: () => void;
@@ -22,6 +31,8 @@ interface UiState {
   setDiscussionMode: (m: DiscussionMode) => void;
   setEnabledAgents: (agents: Record<string, boolean>) => void;
   toggleAgent: (agent: string) => void;
+  togglePanelVisibility: (panel: "references" | "workspace" | "output") => void;
+  setCanWrite: (canWrite: boolean) => void;
 }
 
 const defaultAgents: Record<string, boolean> = {
@@ -33,48 +44,74 @@ const defaultAgents: Record<string, boolean> = {
   mediator: true,
 };
 
-export const useUiStore = create<UiState>((set) => ({
-  activeProjectId: null,
-  selectedOutputPath: null,
-  scrollTargetMessageId: null,
-  attachedDocIds: [],
-  stagedReferenceFiles: [],
-  meetingRounds: 1,
-  discussionMode: "sequential",
-  enabledAgents: { ...defaultAgents },
-  setActiveProjectId: (id) => set({ activeProjectId: id, selectedOutputPath: null }),
-  setSelectedOutputPath: (path) => set({ selectedOutputPath: path }),
-  setScrollTargetMessageId: (id) => set({ scrollTargetMessageId: id }),
-  addStagedReferenceFile: (file) =>
-    set((s) => ({
-      stagedReferenceFiles: [
-        ...s.stagedReferenceFiles.filter((item) => item.name !== file.name),
-        file,
-      ],
-    })),
-  removeStagedReferenceFile: (name) =>
-    set((s) => ({
-      stagedReferenceFiles: s.stagedReferenceFiles.filter((file) => file.name !== name),
-    })),
-  clearStagedReferenceFiles: () => set({ stagedReferenceFiles: [] }),
-  toggleAttachedDoc: (id) =>
-    set((s) => ({
-      attachedDocIds: s.attachedDocIds.includes(id)
-        ? s.attachedDocIds.filter((x) => x !== id)
-        : [...s.attachedDocIds, id],
-    })),
-  clearAttachedDocs: () => set({ attachedDocIds: [] }),
-  setMeetingRounds: (n) => set({ meetingRounds: n }),
-  setDiscussionMode: (m) => set({ discussionMode: m }),
-  setEnabledAgents: (agents) => set({ enabledAgents: agents }),
-  toggleAgent: (agent) =>
-    set((s) => {
-      if (agent === "mediator") return s;
-      return {
-        enabledAgents: {
-          ...s.enabledAgents,
-          [agent]: !s.enabledAgents[agent],
-        },
-      };
+export const useUiStore = create<UiState>()(
+  persist(
+    (set) => ({
+      activeProjectId: null,
+      selectedOutputPath: null,
+      scrollTargetMessageId: null,
+      activeFlowMessageId: null,
+      attachedDocIds: [],
+      stagedReferenceFiles: [],
+      meetingRounds: 1,
+      discussionMode: "sequential",
+      enabledAgents: { ...defaultAgents },
+      visiblePanels: {
+        references: true,
+        workspace: true,
+        output: true,
+      },
+      canWrite: false,
+      setActiveProjectId: (id) => set({ activeProjectId: id, selectedOutputPath: null }),
+      setSelectedOutputPath: (path) => set({ selectedOutputPath: path }),
+      setScrollTargetMessageId: (id) => set({ scrollTargetMessageId: id }),
+      setActiveFlowMessageId: (id) => set({ activeFlowMessageId: id }),
+      addStagedReferenceFile: (file) =>
+        set((s) => ({
+          stagedReferenceFiles: [
+            ...s.stagedReferenceFiles.filter((item) => item.name !== file.name),
+            file,
+          ],
+        })),
+      removeStagedReferenceFile: (name) =>
+        set((s) => ({
+          stagedReferenceFiles: s.stagedReferenceFiles.filter((file) => file.name !== name),
+        })),
+      clearStagedReferenceFiles: () => set({ stagedReferenceFiles: [] }),
+      toggleAttachedDoc: (id) =>
+        set((s) => ({
+          attachedDocIds: s.attachedDocIds.includes(id)
+            ? s.attachedDocIds.filter((x) => x !== id)
+            : [...s.attachedDocIds, id],
+        })),
+      clearAttachedDocs: () => set({ attachedDocIds: [] }),
+      setMeetingRounds: (n) => set({ meetingRounds: n }),
+      setDiscussionMode: (m) => set({ discussionMode: m }),
+      setEnabledAgents: (agents) => set({ enabledAgents: agents }),
+      toggleAgent: (agent) =>
+        set((s) => {
+          if (agent === "mediator") return s;
+          return {
+            enabledAgents: {
+              ...s.enabledAgents,
+              [agent]: !s.enabledAgents[agent],
+            },
+          };
+        }),
+      togglePanelVisibility: (panel) =>
+        set((s) => ({
+          visiblePanels: {
+            ...s.visiblePanels,
+            [panel]: !s.visiblePanels[panel],
+          },
+        })),
+      setCanWrite: (canWrite) => set({ canWrite }),
     }),
-}));
+    {
+      name: "plant-ui-state",
+      partialize: (state) => ({
+        activeProjectId: state.activeProjectId,
+      }),
+    },
+  ),
+);

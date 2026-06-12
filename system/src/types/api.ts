@@ -54,7 +54,7 @@ export interface RunState {
 
 export interface PendingDecision {
   id: string;
-  kind: "stakeholder_selection" | "human_decision";
+  kind: "stakeholder_selection" | "human_decision" | "stakeholder_statement_review" | "requirements_review";
   title: string;
   description: string;
   proposed?: Array<{ name: string; type: string; reason: string }>;
@@ -69,6 +69,16 @@ export interface RunEvent {
   message?: string;
   level?: string;
   timestamp?: string;
+  stage_id?: string;
+  step_id?: string;
+  agent?: string;
+  action?: string;
+  title?: string;
+  status?: "running" | "done" | "waiting" | "failed";
+  output_path?: string;
+  delta_type?: string;
+  content?: unknown;
+  summary?: Record<string, unknown>;
   decision_id?: string;
   decision?: PendingDecision;
   payload?: Record<string, unknown>;
@@ -141,6 +151,7 @@ export interface AgentModelConfig {
 export interface PlantConfig {
   rounds?: number;
   stage?: Record<string, boolean>;
+  export?: Record<string, boolean>;
   agent_models?: Record<string, AgentModelConfig>;
   enable_agents?: Record<string, boolean>;
   [key: string]: unknown;

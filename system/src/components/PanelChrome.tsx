@@ -10,6 +10,9 @@ interface PanelChromeProps {
   className?: string;
   bodyClassName?: string;
   centerTitle?: boolean;
+  headerClassName?: string;
+  titleGroupClassName?: string;
+  titleClassName?: string;
 }
 
 export function PanelChrome({
@@ -21,25 +24,32 @@ export function PanelChrome({
   className,
   bodyClassName,
   centerTitle = false,
+  headerClassName,
+  titleGroupClassName,
+  titleClassName,
 }: PanelChromeProps) {
   return (
     <div className={cn("card relative flex h-full flex-col overflow-hidden", className)}>
-      <div className="relative flex shrink-0 items-center gap-3 border-b border-gray-100 px-4 py-2.5">
+      <div className={cn("relative flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2.5", headerClassName)}>
         {centerTitle ? (
           <>
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">{actions}</div>
-            <span className="section-title pointer-events-none absolute left-1/2 -translate-x-1/2">
+            <div className="flex min-w-0 flex-1 basis-24 items-center gap-2.5">
+              {actions}
+            </div>
+            <span className={cn("section-title pointer-events-none absolute left-1/2 top-1/2 min-w-fit -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-center", titleClassName)}>
               {title}
             </span>
           </>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <span className="section-title shrink-0">{title}</span>
+          <div className={cn("flex min-w-0 flex-1 basis-24 flex-wrap items-center gap-2.5", titleGroupClassName)}>
+            <span className={cn("section-title shrink-0", titleClassName)}>{title}</span>
             {actions}
           </div>
         )}
         {trailing && (
-          <div className="flex shrink-0 items-center gap-1.5">{trailing}</div>
+          <div className="flex min-w-0 shrink-0 items-center justify-end gap-1.5">
+            {trailing}
+          </div>
         )}
       </div>
       {subheader}

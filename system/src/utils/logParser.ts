@@ -1,122 +1,6 @@
 import { agentLabel } from "@/constants/agents";
 import type { ChatMessage, RunEvent } from "@/types/api";
 
-const HARD_SKIP =
-  /^(\[debug\]|health_probe|\.pyc|\/Users\/|HTTP Request:)/i;
-
-const AGENT_NAME_ALIASES: Record<string, string> = {
-  user: "user",
-  useragent: "user",
-  analyst: "analyst",
-  analystagent: "analyst",
-  expert: "expert",
-  expertagent: "expert",
-  modeler: "modeler",
-  modeleragent: "modeler",
-  documentor: "documentor",
-  documentoragent: "documentor",
-  mediator: "mediator",
-  mediatoragent: "mediator",
-};
-
-const AGENT_PATTERNS: Array<{ pattern: RegExp; agent: string }> = [
-  { pattern: /analyst|分析/i, agent: "analyst" },
-  { pattern: /expert|專家|領域/i, agent: "expert" },
-  { pattern: /modeler|建模/i, agent: "modeler" },
-  { pattern: /documentor|文件/i, agent: "documentor" },
-  { pattern: /mediator|主持/i, agent: "mediator" },
-  { pattern: /\buser\b|使用者|利害關係人/i, agent: "user" },
-];
-
-function inferAgent(message: string): string {
-  for (const { pattern, agent } of AGENT_PATTERNS) {
-    if (pattern.test(message)) return agent;
-  }
-  return "mediator";
-}
-
-function normalizeAgentName(raw: string): string {
-  const key = raw.replace(/agent$/i, "").toLowerCase();
-  return AGENT_NAME_ALIASES[key] ?? inferAgent(raw);
-}
-
-function shouldSkip(message: string): boolean {
-  const t = message.trim();
-  if (!t) return true;
-  if (HARD_SKIP.test(t)) return true;
-  return false;
-}
-
-function isSystemProgress(message: string): boolean {
-  const t = message.trim();
-  return /^={3,}/.test(t) || /^✓/.test(t) || /^跳過/.test(t);
-}
-
-function cleanStageText(message: string): string {
-  return message
-    .trim()
-    .replace(/^=+\s*/, "")
-    .replace(/\s*=+$/, "")
-    .trim();
-}
-
-function parseAgentLog(message: string): { agent: string; action: string; text: string } | null {
-  const bracket = /^(\w+)\s*\[\d+\/\d+\]:\s*(.+)$/i.exec(message.trim());
-  if (!bracket) return null;
-  const action = bracket[2].trim();
-  return {
-    agent: normalizeAgentName(bracket[1]),
-    action,
-    text: action || message.trim(),
-  };
-}
-
-function completionMessage(message: string): ChatMessage | null {
-  const text = message.trim();
-  if (!text.startsWith("✓")) return null;
-  return {
-    id: "",
-    role: "system",
-    kind: "stage",
-    status: "done",
-    text,
-  };
-}
-
-function outputMessage(event: RunEvent, message: string): ChatMessage | null {
-  const text = message.trim();
-  if (
-    !/(已生成|已產生|已儲存|已保存|已更新|已輸出|已轉成 html|產生完成|生成完成)/.test(
-      text,
-    )
-  ) {
-    return null;
-  }
-  return {
-    id: `out-${event.id}`,
-    role: "system",
-    kind: "output",
-    status: "done",
-    text,
-    outputPath: outputPathForText(text),
-    timestamp: event.timestamp,
-  };
-}
-
-function outputPathForText(text: string): string | undefined {
-  if (/srs|軟體需求規格書/i.test(text)) return "results/srs.html";
-  if (/design rationale|design_rationale|dr|設計緣由/i.test(text))
-    return "results/design_rationale.html";
-  if (/conflict_report|需求衝突報告|衝突報告/i.test(text))
-    return "results/report/conflict_report.html";
-  const draft = /draft_v(\d+)|Draft v(\d+)|草稿.*?(\d+)/i.exec(text);
-  if (draft) {
-    const version = draft[1] ?? draft[2] ?? draft[3];
-    return `results/drafts/draft_v${version}.html`;
-  }
-  return undefined;
-}
-
 function decisionPayloadText(event: RunEvent): string {
   const payload = event.payload ?? {};
   const stakeholders = Array.isArray(payload.stakeholders)
@@ -145,30 +29,293 @@ function decisionPayloadText(event: RunEvent): string {
     return `已選擇利害關係人：${selections.join("、")}`;
   }
 
-  const chosenOptions = Array.isArray(payload.chosen_options)
-    ? payload.chosen_options
-        .map((row) => {
-          if (!row || typeof row !== "object") return "";
-          const item = row as Record<string, unknown>;
-          return String(item.title ?? item.id ?? "").trim();
-        })
-        .filter(Boolean)
-    : [];
-  if (chosenOptions.length) {
-    return `已採納方案：${chosenOptions.join("、")}`;
-  }
-
-  const choices = Array.isArray(payload.choices)
-    ? payload.choices.map((v) => String(v)).filter(Boolean)
-    : [];
-  const custom = String(payload.custom_decision ?? payload.decision ?? "").trim();
-  if (custom) return `已提交裁決：${custom}`;
-  if (choices.length) return `已採納方案：${choices.join("、")}`;
   if (payload.skipped === true) return "已略過本次裁決";
   return "已提交決策";
 }
 
+function humanDecisionRequestText(decision?: RunEvent["decision"]): string {
+  if (!decision) return "等待人類裁決";
+  const options = decision.options && typeof decision.options === "object"
+    ? (decision.options as Record<string, unknown>)
+    : {};
+  const bestOptions = Array.isArray(options.best_options)
+    ? options.best_options
+    : [];
+  const rows = bestOptions
+    .map((row, index) => {
+      if (!row || typeof row !== "object") return "";
+      const item = row as Record<string, unknown>;
+      const title = String(item.title ?? item.summary ?? `方案 ${index + 1}`).trim();
+      const description = String(item.description ?? "").trim();
+      const letter = String.fromCharCode(65 + index);
+      return description
+        ? `${letter}. ${title}\n${description}`
+        : `${letter}. ${title}`;
+    })
+    .filter(Boolean);
+  return [
+    decision.title,
+    decision.description,
+    rows.length ? `候選方案\n${rows.join("\n")}` : "",
+  ]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function workspaceEventText(event: RunEvent, fallback: string) {
+  return event.message?.trim() || event.title?.trim() || fallback;
+}
+
+function logMessageToAgent(text: string): { speaker: string; text: string } | null {
+  const value = text.trim();
+  if (!value || /^=+$/.test(value) || /^={2,}/.test(value)) return null;
+  if (/^(stage|step)\s+(started|completed):/i.test(value)) return null;
+  if (/^artifact created:/i.test(value)) return null;
+  if (/^\s{2,}\S+(?:\s*→\s*[^：:]+)?[：:]/.test(text)) return null;
+
+  const direct =
+    /^\s*(user|analyst|expert|modeler|mediator|documentor|documenter)\s*[:：]\s*([\s\S]+)$/i.exec(value);
+  if (direct) {
+    const rawSpeaker = direct[1].toLowerCase();
+    return {
+      speaker: rawSpeaker === "documenter" ? "documentor" : rawSpeaker,
+      text: direct[2].trim(),
+    };
+  }
+
+  const arrow =
+    /^\s*(user|analyst|expert|modeler|mediator|documentor|documenter)\s*(?:→|->)\s*([^：:]+)?[：:]\s*([\s\S]+)$/i.exec(value);
+  if (arrow) {
+    const rawSpeaker = arrow[1].toLowerCase();
+    const target = String(arrow[2] ?? "").trim();
+    const body = arrow[3].trim();
+    return {
+      speaker: rawSpeaker === "documenter" ? "documentor" : rawSpeaker,
+      text: target ? `${target}：${body}` : body,
+    };
+  }
+
+  const humanDecision = /^\s*人類裁決[：:]\s*([\s\S]+)$/i.exec(value);
+  if (humanDecision) {
+    return { speaker: "user", text: humanDecision[1].trim() };
+  }
+
+  return null;
+}
+
+function deltaContentText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (content == null) return "";
+  if (typeof content === "number" || typeof content === "boolean") {
+    return String(content);
+  }
+  if (typeof content === "object") {
+    const item = content as Record<string, unknown>;
+    const title = String(item.title ?? item.heading ?? item.id ?? "").trim();
+    const body = String(item.body ?? item.text ?? item.markdown ?? item.content ?? "").trim();
+    if (title && body) return `${title}\n${body}`;
+    if (title) return title;
+    if (body) return body;
+    try {
+      return JSON.stringify(content, null, 2);
+    } catch {
+      return String(content);
+    }
+  }
+  return String(content).trim();
+}
+
 export function logEventToChat(event: RunEvent): ChatMessage | null {
+  if (event.type === "stage_completed") return null;
+
+  if (event.type === "stage_started") {
+    if (event.stage_id === "export") return null;
+    return {
+      id: `stage-${event.id}`,
+      role: "system",
+      kind: "stage",
+      status: "running",
+      stage: event.stage_id,
+      text: workspaceEventText(
+        event,
+        "階段開始",
+      ),
+      timestamp: event.timestamp,
+    };
+  }
+
+  if (event.type === "step_started") {
+    if (event.step_id === "conflict_detection.write_report") {
+      const speaker = event.agent || "analyst";
+      return {
+        id: `workspace-step-start-${event.id}`,
+        role: "agent",
+        kind: "action",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "running",
+        text: "衝突報告產生中 ...",
+        timestamp: event.timestamp,
+      };
+    }
+    if (
+      event.step_id === "init.generate_scope" ||
+      event.step_id === "elicitation.merge_requirements"
+    ) {
+      return null;
+    }
+    if (
+      event.step_id === "init.analyze_scenario" ||
+      event.step_id === "init.analyze_requirements"
+    ) {
+      const speaker = event.agent || "analyst";
+      return {
+        id: `workspace-init-analysis-${event.stage_id}`,
+        role: "agent",
+        kind: "action",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "running",
+        text: "分析中 ...",
+        timestamp: event.timestamp,
+      };
+    }
+    const speaker = event.agent || "mediator";
+    const rawText = workspaceEventText(event, "步驟開始");
+    const text =
+      event.step_id?.startsWith("draft.") ||
+      (speaker.toLowerCase() === "documentor" && /^產生\s*/.test(rawText))
+        ? "生成中 ..."
+        : rawText;
+    return {
+      id: `workspace-step-start-${event.id}`,
+      role: "agent",
+      kind: "action",
+      speaker,
+      label: agentLabel(speaker),
+      action: event.step_id ?? event.action,
+      stage: event.stage_id,
+      status: "running",
+      text,
+      timestamp: event.timestamp,
+    };
+  }
+
+  if (event.type === "step_completed") {
+    if (
+      event.step_id?.startsWith("document_generation.") &&
+      !/^(results\/(?:srs|design_rationale)\.html|output\/(?:srs|design_rationale)\.md)$/i.test(event.output_path ?? "")
+    ) {
+      return null;
+    }
+    if (
+      event.step_id === "conflict_detection.write_report" &&
+      /^results\/report\/conflict_report_v\d+\.html$/i.test(event.output_path ?? "")
+    ) {
+      const speaker = event.agent || "analyst";
+      return {
+        id: `workspace-step-${event.id}`,
+        role: "agent",
+        kind: "output",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "done",
+        text: "產生衝突報告",
+        outputPath: event.output_path,
+        timestamp: event.timestamp,
+      };
+    }
+    if (
+      event.step_id === "init.write_stakeholder_text" ||
+      event.step_id === "init.analyze_scenario" ||
+      event.step_id === "elicitation.extract_requirements" ||
+      (event.step_id?.startsWith("document_generation.") && !event.output_path) ||
+      event.step_id === "conflict_review.run_review" ||
+      /^formal_meeting\.round_\d+\.run_meeting$/i.test(event.step_id ?? "") ||
+      event.step_id === "conflict_detection.write_report"
+    ) {
+      return null;
+    }
+    const speaker = event.agent || "mediator";
+    return {
+      id: `workspace-step-${event.id}`,
+      role: "agent",
+      kind: "action",
+      speaker,
+      label: agentLabel(speaker),
+      action: event.step_id ?? event.action,
+      stage: event.stage_id,
+      status: "done",
+      text: workspaceEventText(
+        event,
+        "步驟完成",
+      ),
+      outputPath: event.output_path,
+      timestamp: event.timestamp,
+    };
+  }
+
+  if (event.type === "artifact_created" || event.type === "artifact_updated") {
+    return null;
+  }
+
+  if (event.type === "step_delta") {
+    if (event.delta_type === "scope") return null;
+    if (event.delta_type === "requirement") return null;
+    if (event.delta_type === "model") return null;
+    if (event.delta_type === "markdown_section" && event.stage_id === "draft") return null;
+    if (event.delta_type === "markdown_section" && event.stage_id === "document_generation") return null;
+    const text = deltaContentText(event.content);
+    if (!text) return null;
+    const speaker = event.agent || "mediator";
+    return {
+      id: `delta-${event.id}`,
+      role: "agent",
+      kind: event.delta_type === "speech" ? "speech" : "action",
+      speaker,
+      label: agentLabel(speaker),
+      action: event.delta_type === "speech" ? undefined : event.step_id ?? event.action,
+      stage: event.stage_id,
+      status: "running",
+      text,
+      timestamp: event.timestamp,
+    };
+  }
+
+  if (event.type === "heartbeat") {
+    return {
+      id: `heartbeat-${event.id}`,
+      role: "system",
+      kind: "stage",
+      status: "running",
+      stage: event.stage_id,
+      text: workspaceEventText(event, "仍在處理中"),
+      timestamp: event.timestamp,
+    };
+  }
+
+  if (event.type === "log") {
+    const parsed = logMessageToAgent(workspaceEventText(event, ""));
+    if (!parsed) return null;
+    return {
+      id: `log-${event.id}`,
+      role: parsed.speaker === "user" ? "user" : "agent",
+      kind: "speech",
+      status: event.level === "error" ? "failed" : "done",
+      speaker: parsed.speaker,
+      label: agentLabel(parsed.speaker),
+      text: parsed.text,
+      timestamp: event.timestamp,
+    };
+  }
+
   if (event.type === "references_attached") {
     const paths = Array.isArray(event.attached_reference_paths)
       ? event.attached_reference_paths.map((path) => String(path).split("/").pop() ?? String(path))
@@ -185,16 +332,25 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
     };
   }
   if (event.type === "waiting_for_human") {
+    const stakeholderSelection = event.decision?.kind === "stakeholder_selection";
+    const speaker = stakeholderSelection ? "user" : "mediator";
     return {
-      id: `sys-${event.id}`,
-      role: "system",
+      id: `human-decision-request-${event.id}`,
+      role: "agent",
       kind: "decision",
       status: "waiting",
-      text: event.decision?.title ?? event.message ?? "等待你的決策",
+      speaker,
+      label: agentLabel(speaker),
+      action: stakeholderSelection ? "stakeholder_selection_request" : "human_decision_request",
+      text: humanDecisionRequestText(event.decision),
       timestamp: event.timestamp,
     };
   }
   if (event.type === "human_decision_submitted") {
+    const payload = event.payload ?? {};
+    if (Array.isArray(payload.stakeholders) || Array.isArray(payload.selections)) {
+      return null;
+    }
     return {
       id: `user-dec-${event.id}`,
       role: "user",
@@ -216,14 +372,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
     };
   }
   if (event.type === "run_started") {
-    return {
-      id: `sys-${event.id}`,
-      role: "system",
-      kind: "stage",
-      status: "running",
-      text: "工作坊已啟動",
-      timestamp: event.timestamp,
-    };
+    return null;
   }
   if (
     event.type === "run_completed" ||
@@ -245,45 +394,34 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       timestamp: event.timestamp,
     };
   }
-  if (event.type !== "log") return null;
+  return null;
+}
 
-  const message = event.message ?? "";
-  if (shouldSkip(message)) return null;
-
-  const output = outputMessage(event, message);
-  if (output) return output;
-
-  if (isSystemProgress(message)) {
-    const completed = completionMessage(message);
-    return {
-      id: `log-${event.id}`,
-      role: "system",
-      kind: "stage",
-      status: completed?.status ?? (message.trim().startsWith("跳過") ? "done" : "running"),
-      text: completed?.text ?? cleanStageText(message),
-      timestamp: event.timestamp,
-    };
-  }
-
-  const parsed = parseAgentLog(message);
-  const agent = parsed?.agent ?? inferAgent(message);
-  return {
-    id: `log-${event.id}`,
-    role: "agent",
-    kind: parsed ? "action" : "speech",
-    speaker: agent,
-    label: agentLabel(agent),
-    action: parsed?.action,
-    status: parsed ? "running" : undefined,
-    text: parsed?.text ?? message.trim(),
-    timestamp: event.timestamp,
-  };
+export function logEventToChats(event: RunEvent): ChatMessage[] {
+  const message = logEventToChat(event);
+  return message ? [message] : [];
 }
 
 export function mergeChatMessages(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  const seenSpeech = new Set<string>();
   for (const msg of messages) {
+    if (msg.role === "agent" && msg.kind === "speech") {
+      const key = `${msg.speaker ?? ""}|${msg.text.trim()}`;
+      if (seenSpeech.has(key)) continue;
+      seenSpeech.add(key);
+    }
     const prev = out[out.length - 1];
+    if (
+      prev &&
+      msg.role === "agent" &&
+      prev.role === "agent" &&
+      prev.speaker === msg.speaker &&
+      prev.text.trim() === msg.text.trim() &&
+      msg.kind === prev.kind
+    ) {
+      continue;
+    }
     if (
       prev &&
       msg.role === "agent" &&
@@ -291,6 +429,8 @@ export function mergeChatMessages(messages: ChatMessage[]): ChatMessage[] {
       prev.speaker === msg.speaker &&
       msg.kind === "speech" &&
       prev.kind === "speech" &&
+      !msg.outputPath &&
+      !prev.outputPath &&
       prev.text.length < 200
     ) {
       prev.text = `${prev.text}\n${msg.text}`;
@@ -306,7 +446,7 @@ export function buildInitialUserMessage(roughIdea: string): ChatMessage {
     id: "rough-idea",
     role: "user",
     kind: "speech",
-    label: agentLabel("user"),
+    label: "您",
     text: roughIdea,
   };
 }

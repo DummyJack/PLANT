@@ -4,7 +4,7 @@ import { runEventsUrl, type RunEvent } from "@/api/runs";
 import { useChatStore } from "@/stores/chatStore";
 import {
   buildInitialUserMessage,
-  logEventToChat,
+  logEventToChats,
   mergeChatMessages,
 } from "@/utils/logParser";
 import type { RunState } from "@/types/api";
@@ -32,8 +32,15 @@ export function useRunEvents(
         if (prev.some((e) => e.id === event.id)) return prev;
         return [...prev, event];
       });
-      const chat = logEventToChat(event);
-      if (chat) appendMessage(chat);
+      const chats = logEventToChats(event);
+      for (const chat of chats) {
+        appendMessage(chat);
+        if (chat.outputPath) {
+          queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+          queryClient.invalidateQueries({ queryKey: ["chat-preview"] });
+          queryClient.invalidateQueries({ queryKey: ["file"] });
+        }
+      }
 
       if (
         event.type === "run_completed" ||
@@ -78,9 +85,15 @@ export function useRunEvents(
     }
 
     const idea = roughIdeaRef.current?.trim();
-    if (seededRunRef.current !== run.run_id && idea) {
-      setMessages(mergeChatMessages([buildInitialUserMessage(idea)]));
-      seededRunRef.current = run.run_id;
+    if (idea) {
+      const currentMessages = useChatStore.getState().messages;
+      if (currentMessages.length === 0) {
+        setMessages(mergeChatMessages([buildInitialUserMessage(idea)]));
+        seededRunRef.current = run.run_id;
+      } else if (!currentMessages.some((msg) => msg.id === "rough-idea")) {
+        setMessages(mergeChatMessages([buildInitialUserMessage(idea), ...currentMessages]));
+        seededRunRef.current = run.run_id;
+      }
     }
 
     const url = runEventsUrl(run.run_id, sinceRef.current);
@@ -116,7 +129,37 @@ export function useRunEvents(
       esRef.current = null;
       setConnected(false);
     };
-  }, [run?.run_id, run?.status, processEvent, setMessages, queryClient, onComplete]);
+  }, [run?.run_id, run?.status, roughIdea, processEvent, setMessages, appendMessage, queryClient, onComplete]);
+
+  useEffect(() => {
+    if (!run?.run_id) return;
+    if (!["queued", "running", "waiting_for_human", "cancelling"].includes(run.status)) {
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      if (connected || cancelled) return;
+      try {
+        const res = await fetch(runEventsUrl(run.run_id, sinceRef.current), {
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { events?: RunEvent[] };
+        for (const event of body.events ?? []) {
+          sinceRef.current = Math.max(sinceRef.current, Number(event.id) + 1);
+          processEvent(event);
+        }
+      } catch {
+        /* keep polling while the active run exists */
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [run?.run_id, run?.status, connected, processEvent]);
 
   return { events, connected };
 }

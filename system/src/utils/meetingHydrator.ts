@@ -37,6 +37,64 @@ function turnSpeaker(turn: MeetingTurn): string {
   return speaker;
 }
 
+function normalizeDialogueSpeech(speaker: string, text: string): { speaker: string; label: string; text: string } {
+  const rawSpeaker = speaker.trim();
+  const stakeholderPrefix = /^(消費者|利害關係人|使用者)\s*[:：]\s*([\s\S]+)$/.exec(text.trim());
+  const agentLikeSpeaker = /^(analyst|expert|modeler|mediator|documentor|documenter|分析師|專家|建模師|主持人)$/i.test(rawSpeaker);
+
+  if (stakeholderPrefix && agentLikeSpeaker) {
+    return {
+      speaker,
+      label: agentLabel(speaker),
+      text: stakeholderPrefix[2].trim(),
+    };
+  }
+
+  if (/^(消費者|利害關係人|使用者)$/.test(rawSpeaker)) {
+    return {
+      speaker: "stakeholder",
+      label: rawSpeaker,
+      text: text.replace(/^(消費者|利害關係人|使用者)\s*[:：]\s*/, "").trim(),
+    };
+  }
+
+  const directed = /^(Analyst|Expert|Modeler|Mediator|User|分析師|專家|建模師|主持人|使用者)\s*(?:→|->)\s*([^:：]+)\s*[:：]\s*([\s\S]+)$/.exec(text.trim());
+  if (directed) {
+    const aliases: Record<string, string> = {
+      analyst: "analyst",
+      expert: "expert",
+      modeler: "modeler",
+      mediator: "mediator",
+      user: "user",
+      分析師: "analyst",
+      專家: "expert",
+      建模師: "modeler",
+      主持人: "mediator",
+      使用者: "user",
+    };
+    const normalized = aliases[directed[1].toLowerCase()] ?? aliases[directed[1]] ?? speaker;
+    return {
+      speaker: normalized,
+      label: agentLabel(normalized),
+      text: directed[3].trim(),
+    };
+  }
+
+  if (stakeholderPrefix) {
+    return {
+      speaker: "stakeholder",
+      label: stakeholderPrefix[1].trim(),
+      text: stakeholderPrefix[2].trim(),
+    };
+  }
+
+  return {
+    speaker,
+    label: agentLabel(speaker),
+    text,
+  };
+}
+
 function issueHeader(issue: MeetingIssue): string | null {
   const title = issue.title?.trim();
   if (title) {
@@ -55,7 +113,7 @@ function hydrateIssues(
   issues: unknown[],
   prefix: string,
 ): ChatMessage[] {
-  const messages: ChatMessage[] = [];
+const messages: ChatMessage[] = [];
   issues.forEach((issue, issueIndex) => {
     if (!issue || typeof issue !== "object") return;
     const row = issue as MeetingIssue;
@@ -74,13 +132,14 @@ function hydrateIssues(
       const text = turnText(turn);
       if (!text) return;
       const speaker = turnSpeaker(turn);
+      const normalized = normalizeDialogueSpeech(speaker, text);
       messages.push({
         id: `${prefix}-${issueIndex}-${turnIndex}`,
         role: "agent",
         kind: "speech",
-        speaker,
-        label: agentLabel(speaker),
-        text,
+        speaker: normalized.speaker,
+        label: normalized.label,
+        text: normalized.text,
         issue: header ?? undefined,
       });
     });
@@ -115,17 +174,33 @@ function hydrateElicitation(
     rows.forEach((row, rowIndex) => {
       if (!row || typeof row !== "object") return;
       const record = row as Record<string, unknown>;
-      for (const [speaker, value] of Object.entries(record)) {
+      const orderedEntries = [
+        ["analyst", record.analyst],
+        ["消費者", record["消費者"]],
+        ["expert", record.expert],
+        ["消費者", record["消費者"]],
+        ["modeler", record.modeler],
+        ["消費者", record["消費者"]],
+        ...Object.entries(record).filter(
+          ([speaker]) => !["id", "analyst", "expert", "modeler", "消費者"].includes(speaker),
+        ),
+      ] as Array<[string, unknown]>;
+      const seen = new Set<string>();
+      for (const [speaker, value] of orderedEntries) {
         if (speaker === "id" || typeof value !== "string") continue;
+        const key = `${speaker}:${value}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         const text = value.trim();
         if (!text) continue;
+        const normalized = normalizeDialogueSpeech(speaker, text);
         messages.push({
           id: `${prefix}-${roundKey}-${rowIndex}-${speaker}`,
           role: "agent",
           kind: "speech",
-          speaker,
-          label: agentLabel(speaker),
-          text,
+          speaker: normalized.speaker,
+          label: normalized.label,
+          text: normalized.text,
           round: roundKey.toUpperCase(),
         });
       }

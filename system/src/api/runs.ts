@@ -13,6 +13,7 @@ export function createRun(body: {
   rough_idea?: string | null;
   attached_reference_paths?: string[] | null;
   enable_agents?: Record<string, boolean>;
+  stage_overrides?: Record<string, boolean>;
 }) {
   return apiFetch<RunState>("/api/runs", {
     method: "POST",

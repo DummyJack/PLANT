@@ -61,6 +61,18 @@ export function deleteReference(projectId: string, name: string) {
   });
 }
 
+export function referenceDownloadUrl(projectId: string, name: string) {
+  return `/api/projects/${projectId}/references/${encodeURIComponent(name)}`;
+}
+
+export function referencePreviewUrl(projectId: string, name: string) {
+  return `/api/projects/${projectId}/references/${encodeURIComponent(name)}?inline=true`;
+}
+
+export function manualIndexUrl(projectId: string) {
+  return `/api/projects/${projectId}/manual/index.html`;
+}
+
 export function fetchArtifacts(projectId: string) {
   return apiFetch<{ items: FileTreeNode[] }>(
     `/api/projects/${projectId}/artifacts`,
@@ -82,10 +94,10 @@ export function writeFile(projectId: string, path: string, content: string) {
 
 export function exportProject(
   projectId: string,
-  opts: { html?: boolean; cost?: boolean } = {},
+  opts: { html?: boolean; cost?: boolean; manual?: boolean } = {},
 ) {
   return apiFetch(`/api/projects/${projectId}/export`, {
     method: "POST",
-    body: JSON.stringify({ html: true, cost: true, ...opts }),
+    body: JSON.stringify({ html: true, cost: true, manual: true, ...opts }),
   });
 }

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchRuns } from "@/api/runs";
 import { useChatStore } from "@/stores/chatStore";
-import type { ChatMessage, FileTreeNode, RunState } from "@/types/api";
+import type { ChatMessage, RunState } from "@/types/api";
 import {
   buildInitialUserMessage,
   logEventToChat,
+  logEventToChats,
   mergeChatMessages,
 } from "@/utils/logParser";
 
@@ -15,11 +16,48 @@ const ACTIVE = new Set([
   "cancelling",
 ]);
 
+function attachMomLinks(messages: ChatMessage[]): ChatMessage[] {
+  let currentRound = 0;
+  return messages.map((message) => {
+    const round =
+      /^Round\s+(\d+)\s*:\s*開會/i.exec(message.text) ??
+      /^第\s*(\d+)\s*輪/.exec(message.text);
+    if (round) {
+      currentRound = Number(round[1]);
+      return message;
+    }
+
+    const task =
+      /^\s*(?:Mediator\s*[:：]\s*)?(?:M|T)-(\d+)\s*[｜|]/.exec(message.text) ??
+      /^\s*\[(?:M|T)-(\d+)\]\s*開始/.exec(message.text);
+    if (task && currentRound > 0) {
+      return {
+        ...message,
+        outputPath: `artifact/meeting/formal_meeting_r${currentRound}.json`,
+      };
+    }
+    return {
+      ...message,
+    };
+  });
+}
+
+function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+}
+
 async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
   try {
     const { runs } = await fetchRuns(projectId);
     const last = runs
-      .filter((r) => r.status === "completed" || r.status === "failed")
+      .filter((r) =>
+        ["completed", "failed", "cancelled", "interrupted"].includes(r.status),
+      )
       .sort(
         (a, b) =>
           new Date(b.finished_at ?? b.started_at).getTime() -
@@ -41,9 +79,9 @@ async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
         : Array.isArray(body.events)
           ? body.events
           : [];
-      return rows
-        .map((e) => logEventToChat(e as Parameters<typeof logEventToChat>[0]))
-        .filter((m): m is NonNullable<typeof m> => !!m);
+      return attachMomLinks(rows.flatMap((e) =>
+        logEventToChats(e as Parameters<typeof logEventToChat>[0]),
+      ));
     }
 
     const text = await res.text();
@@ -53,141 +91,26 @@ async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
       if (!trimmed.startsWith("data:")) continue;
       try {
         const event = JSON.parse(trimmed.slice(5).trim());
-        const chat = logEventToChat(event);
-        if (chat) messages.push(chat);
+        messages.push(...logEventToChats(event));
       } catch {
         /* skip malformed SSE chunks */
       }
     }
-    return messages;
+    return attachMomLinks(messages);
   } catch {
     return [];
   }
 }
 
-function buildArtifactExecutionMessages(items: FileTreeNode[]): ChatMessage[] {
-  const paths = new Set(
-    items.filter((item) => item.kind === "file").map((item) => item.path),
-  );
-  const messages: ChatMessage[] = [];
-  const add = (
-    id: string,
-    speaker: string,
-    action: string,
-    text: string,
-    outputPath?: string,
-  ) => {
-    messages.push({
-      id,
-      role: "agent",
-      kind: "action",
-      speaker,
-      label:
-        speaker === "analyst"
-          ? "Analyst"
-          : speaker === "expert"
-            ? "Expert"
-            : speaker === "modeler"
-              ? "Modeler"
-              : speaker === "documentor"
-                ? "Documentor"
-                : speaker,
-      action,
-      status: "done",
-      text,
-      outputPath,
-    });
-  };
-  const output = (id: string, text: string, outputPath?: string) => {
-    messages.push({
-      id,
-      role: "system",
-      kind: "output",
-      status: "done",
-      text,
-      outputPath,
-    });
-  };
-
-  const draftVersions = items
-    .filter((item) => /^results\/drafts\/draft_v\d+\.html$/i.test(item.path))
-    .map((item) => Number(/draft_v(\d+)/i.exec(item.path)?.[1] ?? -1))
-    .filter((version) => version >= 0)
-    .sort((a, b) => a - b);
-  const modelCount = items.filter(
-    (item) => item.kind === "file" && /^results\/models\/.+\.(png|svg)$/i.test(item.path),
-  ).length;
-  const momCount = items.filter(
-    (item) => item.kind === "file" && /^results\/MoM\/.+\.html$/i.test(item.path),
-  ).length;
-
-  if (draftVersions.length) {
-    const version = draftVersions[draftVersions.length - 1];
-    add(
-      "artifact-summary-draft",
-      "analyst",
-      "generate_draft",
-      `已整理 Draft v${version}`,
-      `results/drafts/draft_v${version}.html`,
-    );
-  }
-  if (paths.has("results/report/conflict_report.html")) {
-    add(
-      "artifact-summary-conflict",
-      "analyst",
-      "detect_conflicts",
-      "已產生需求衝突報告",
-      "results/report/conflict_report.html",
-    );
-  }
-  if (paths.has("artifact/feedback.json")) {
-    add("artifact-summary-feedback", "expert", "update_feedback", "已整理領域回饋");
-  }
-  if (modelCount) {
-    const firstModel = items.find(
-      (item) => item.kind === "file" && /^results\/models\/.+\.(png|svg)$/i.test(item.path),
-    );
-    add(
-      "artifact-summary-models",
-      "modeler",
-      "generate_system_models",
-      `已產生 ${modelCount} 個系統模型`,
-      firstModel?.path,
-    );
-  }
-  if (momCount) {
-    const latestMom = items
-      .filter((item) => item.kind === "file" && /^results\/MoM\/.+\.html$/i.test(item.path))
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .at(-1);
-    output("artifact-summary-mom", `已產生 ${momCount} 份 MoM`, latestMom?.path);
-  }
-  if (paths.has("results/design_rationale.html")) {
-    add(
-      "artifact-summary-dr",
-      "documentor",
-      "generate_design_rationale",
-      "已產生 Design Rationale",
-      "results/design_rationale.html",
-    );
-  }
-  if (paths.has("results/srs.html")) {
-    add("artifact-summary-srs", "documentor", "generate_srs", "已產生 SRS", "results/srs.html");
-  }
-  if (messages.length) {
-    output("artifact-summary-html", "已完成 HTML Artifact 匯出");
-  }
-  return messages;
-}
-
 export function useProjectChatHydration(
   projectId: string | null,
-  artifactItems: FileTreeNode[] | undefined,
+  _artifactItems: unknown,
   roughIdea: string,
   activeRun: RunState | null,
   artifactsReady: boolean,
 ) {
   const setMessages = useChatStore((s) => s.setMessages);
+  const hydratedKeyRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasHistory, setHasHistory] = useState(false);
 
@@ -198,7 +121,9 @@ export function useProjectChatHydration(
       return;
     }
 
-    if (activeRun && ACTIVE.has(activeRun.status)) {
+    const active = !!activeRun && ACTIVE.has(activeRun.status);
+    const hydrationKey = `${projectId}:${active ? activeRun?.run_id : "history"}`;
+    if (active && hydratedKeyRef.current === hydrationKey) {
       setLoading(false);
       setHasHistory(true);
       return;
@@ -214,23 +139,49 @@ export function useProjectChatHydration(
 
     const hydrate = async () => {
       const logMsgs = await loadRunLogMessages(projectId);
-      const fallbackMsgs = logMsgs.length
-        ? []
-        : buildArtifactExecutionMessages(artifactItems ?? []);
 
       if (cancelled) return;
-
-      if (!logMsgs.length && !fallbackMsgs.length) {
-        setHasHistory(false);
-        setLoading(false);
-        return;
-      }
 
       const seed = roughIdea.trim()
         ? [buildInitialUserMessage(roughIdea.trim())]
         : [];
-      setMessages(mergeChatMessages([...seed, ...(logMsgs.length ? logMsgs : fallbackMsgs)]));
+
+      const currentMessages = useChatStore.getState().messages;
+
+      if (!logMsgs.length) {
+        if (seed.length) {
+          setMessages(
+            mergeChatMessages(
+              uniqueChatMessages(
+                active && currentMessages.length
+                  ? [...seed, ...currentMessages]
+                  : seed,
+              ),
+            ),
+          );
+          setHasHistory(true);
+          hydratedKeyRef.current = hydrationKey;
+          setLoading(false);
+          return;
+        }
+        setHasHistory(false);
+        hydratedKeyRef.current = hydrationKey;
+        setLoading(false);
+        return;
+      }
+
+      const historyMessages = mergeChatMessages([...seed, ...logMsgs]);
+      setMessages(
+        mergeChatMessages(
+          uniqueChatMessages(
+            active && currentMessages.length
+              ? [...historyMessages, ...currentMessages]
+              : historyMessages,
+          ),
+        ),
+      );
       setHasHistory(true);
+      hydratedKeyRef.current = hydrationKey;
       setLoading(false);
     };
 
@@ -240,7 +191,6 @@ export function useProjectChatHydration(
     };
   }, [
     projectId,
-    artifactItems,
     roughIdea,
     activeRun?.run_id,
     activeRun?.status,

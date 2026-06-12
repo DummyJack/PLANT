@@ -21,3 +21,32 @@ export function updateModelApiKey(provider: string, api_key: string) {
     body: JSON.stringify({ provider, api_key }),
   });
 }
+
+export function deleteModelApiKey(provider: string) {
+  return apiFetch<{
+    deleted: boolean;
+    provider: string;
+    env_key: string;
+    configured: boolean;
+    removed: boolean;
+  }>(`/api/secrets/model-api-keys/${provider}`, {
+    method: "DELETE",
+  });
+}
+
+export function activateCode(code: string) {
+  return apiFetch<{ activated: boolean }>("/api/secrets/activation-code", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function fetchActivationStatus() {
+  return apiFetch<{ activated: boolean }>("/api/secrets/activation-code");
+}
+
+export function deactivateCode() {
+  return apiFetch<{ activated: boolean }>("/api/secrets/activation-code", {
+    method: "DELETE",
+  });
+}

@@ -11,6 +11,7 @@ export type AgentId = (typeof AGENT_ORDER)[number];
 
 /** Short labels for header status pills */
 export const HEADER_AGENT_ORDER = [
+  "user",
   "analyst",
   "expert",
   "modeler",
@@ -19,6 +20,7 @@ export const HEADER_AGENT_ORDER = [
 ] as const;
 
 export const HEADER_AGENT_LABELS: Record<string, string> = {
+  user: "User",
   analyst: "Analyst",
   expert: "Expert",
   modeler: "Modeler",
@@ -28,7 +30,7 @@ export const HEADER_AGENT_LABELS: Record<string, string> = {
 
 /** Full labels for chat bubbles */
 export const AGENT_LABELS: Record<string, string> = {
-  user: "使用者",
+  user: "User",
   analyst: "Analyst",
   expert: "Expert",
   modeler: "Modeler",
