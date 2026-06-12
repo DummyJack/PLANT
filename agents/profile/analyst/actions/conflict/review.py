@@ -90,7 +90,7 @@ Agent Pair Reviews:
 Type Guidance:
 {type_guidance}
 
-description 用來寫入 artifact/conflict.json，作為該項 final_label 的最終說明。
+description 用來寫入 artifact/result.json，作為該項 final_label 的最終說明。
 請根據 final_label 與各 agent 逐筆理由，整理出一段清楚、精簡、可追溯的裁定描述。
 
 # Generation Rules

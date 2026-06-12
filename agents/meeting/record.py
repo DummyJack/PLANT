@@ -1,6 +1,7 @@
 # Handles meeting execution, response collection, records, and issue state.
 import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Defines MediatorRecords class for this module workflow.
@@ -322,23 +323,25 @@ class MediatorRecords:
                     action_summaries.append(line)
 
         prompt = """# 任務
-你只負責潤飾 MoM header 的可讀文字，不生成整份 MoM。
+你負責整理單一正式會議議題的 MoM header，輸出更清楚的「本議題摘要」與「本議題決議」。
 
 # 邊界
 - 只能輸出 JSON object。
 - 只能改寫 display_title、summary、decision。
 - 不得新增 artifact id、需求內容、決議、風險、open question 或 action 產物。
 - 不得改寫討論紀錄、產出明細或待確認事項。
-- 若資訊不足，沿用 fallback。
+- 若資訊不足，沿用原始 resolution 欄位。
 - display_title 最多 80 字，必須保留原本已出現的 REQ/URL/SM/OQ id。
-- summary 最多 2 句，需忠實反映本次會議。
-- decision 只整理既有 decision；若 fallback decision 為空，輸出空字串。
+- summary 必須是 2 到 4 句，說清楚：本議題討論的核心問題、主要參與者關注點、討論後確認的範圍或差異。
+- decision 必須整理既有 resolution、agreed_points、human decision 或 action_summaries；說清楚最後採納的處理方式、影響的需求/模型/衝突 ID、後續要落實的內容。
+- 若沒有決議，只能輸出空字串，不可編造。
+- 不要只輸出 agreed、resolved、completed 或單一句狀態。
 
 # 輸出 JSON
 {
   "display_title": "給人看的短標題",
-  "summary": "短摘要",
-  "decision": "決議文字"
+  "summary": "本議題摘要，2 到 4 句",
+  "decision": "本議題決議，包含採納內容與影響對象"
 }"""
         context = {
             "fallback": {
@@ -349,8 +352,10 @@ class MediatorRecords:
             },
             "issue": {
                 "title": issue.get("title", ""),
+                "description": issue.get("description", ""),
                 "category": issue.get("category", ""),
                 "trace": issue.get("trace", {}),
+                "participants": issue.get("participants", []),
             },
             "resolution": {
                 "summary": summary,
@@ -358,6 +363,7 @@ class MediatorRecords:
                 "status": resolution.get("status", ""),
                 "agreed_points": resolution.get("agreed_points", []),
                 "unresolved_points": resolution.get("unresolved_points", []),
+                "recommendation": resolution.get("recommendation", {}),
             },
             "action_summaries": list(dict.fromkeys(action_summaries))[:8],
             "discussion_snippets": discussion_snippets[:6],
@@ -424,13 +430,162 @@ class MediatorRecords:
         else:
             md += "- **Proposed by**: mediator\n"
         md += f"- **Participants**: {', '.join(participants) if participants else '（無參與者）'}\n"
-        md += f"- **Outcome**: {outcome}\n"
         status = resolution.get("status", "")
         if status:
             md += f"- **Status**: {status}\n"
 
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
+
+        # Conflict-resolution MoMs should still show decision options when the
+        # resolution itself only records the final decision.
+        def conflict_report_markdown_options() -> List[Dict[str, Any]]:
+            if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
+                return []
+            store = getattr(self, "store", None)
+            artifact_dir = getattr(store, "artifact_dir", None)
+            if not artifact_dir:
+                return []
+            report_dir = Path(artifact_dir) / "report"
+            if not report_dir.exists():
+                return []
+            versioned_paths: List[tuple[int, Path]] = []
+            for path in report_dir.glob("conflict_report_v*.md"):
+                raw_version = path.stem.removeprefix("conflict_report_v")
+                if raw_version.isdigit():
+                    versioned_paths.append((int(raw_version), path))
+            if not versioned_paths:
+                return []
+            versioned_paths.sort(key=lambda item: item[0], reverse=True)
+            try:
+                text = versioned_paths[0][1].read_text(encoding="utf-8")
+            except Exception:
+                return []
+            affected_ids = [
+                str(value).strip()
+                for value in (resolution.get("affected_conflict_ids") or [])
+                if str(value).strip()
+            ]
+            if not affected_ids:
+                affected_ids = [
+                    str(value).strip()
+                    for value in (issue.get("trace") or {}).get("artifact_ids", [])
+                    if str(value).strip().startswith("CR-")
+                ]
+            affected_set = set(affected_ids)
+            matches = list(re.finditer(r"(?m)^##\s+(CR-\d+)(?:[：:]\s*(.*))?$", text))
+            blocks: List[Dict[str, Any]] = []
+            for index, match in enumerate(matches):
+                conflict_id = match.group(1).strip()
+                if affected_set and conflict_id not in affected_set:
+                    continue
+                title = str(match.group(2) or "").strip()
+                start = match.end()
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+                body = text[start:end].strip()
+
+                # Defines section extract function for this module workflow.
+                def section(name: str) -> str:
+                    section_match = re.search(
+                        rf"(?ms)^###\s+{re.escape(name)}\s*\n(.*?)(?=^###\s+|\Z)",
+                        body,
+                    )
+                    if not section_match:
+                        return ""
+                    return section_match.group(1).strip()
+
+                options_md = section("解決選項")
+                recommendation_md = section("建議解法")
+                if not options_md and not recommendation_md:
+                    continue
+                lines = [f"#### {conflict_id}{f'：{title}' if title else ''}", ""]
+                if options_md:
+                    lines.extend([options_md, ""])
+                if recommendation_md:
+                    if recommendation_md.startswith("建議"):
+                        lines.extend([recommendation_md, ""])
+                    else:
+                        lines.extend([f"建議採用{recommendation_md}", ""])
+                blocks.append({"kind": "conflict_markdown", "markdown": "\n".join(lines).strip()})
+            return blocks
+
+        def conflict_report_decision_options() -> List[Dict[str, Any]]:
+            if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
+                return []
+            store = getattr(self, "store", None)
+            artifact_dir = getattr(store, "artifact_dir", None)
+            if not artifact_dir:
+                return []
+            try:
+                from storage.artifact import latest_conflict_report_payload
+
+                rows = latest_conflict_report_payload(Path(artifact_dir))
+            except Exception:
+                return []
+            if not rows:
+                return []
+
+            affected_ids = [
+                str(value).strip()
+                for value in (resolution.get("affected_conflict_ids") or [])
+                if str(value).strip()
+            ]
+            if not affected_ids:
+                affected_ids = [
+                    str(value).strip()
+                    for value in (issue.get("trace") or {}).get("artifact_ids", [])
+                    if str(value).strip().startswith("CR-")
+                ]
+            affected_set = set(affected_ids)
+            scoped_rows = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and (not affected_set or str(row.get("id") or "").strip() in affected_set)
+            ]
+            if not scoped_rows:
+                scoped_rows = [row for row in rows if isinstance(row, dict)]
+
+            conflict_blocks: List[Dict[str, Any]] = []
+            for row in scoped_rows:
+                conflict_id = str(row.get("id") or "").strip()
+                row_description = str(row.get("description") or "").strip()
+                recommended = str(row.get("recommended_resolution") or "").strip()
+                row_options: List[Dict[str, Any]] = []
+                for option in row.get("resolution_options") or []:
+                    if not isinstance(option, dict):
+                        continue
+                    option_id = str(option.get("option") or option.get("id") or "").strip()
+                    strategy = str(option.get("strategy") or option.get("title") or "").strip()
+                    description = str(option.get("description") or option.get("summary") or "").strip()
+                    if not any((option_id, strategy, description)):
+                        continue
+                    row_options.append(
+                        {
+                            "id": option_id,
+                            "title": strategy,
+                            "summary": description,
+                            "recommended": bool(option.get("recommendation")),
+                        }
+                    )
+                if row_options or recommended:
+                    conflict_blocks.append(
+                        {
+                            "kind": "conflict_decision",
+                            "conflict_id": conflict_id,
+                            "title": row_description,
+                            "options": row_options,
+                            "recommended_resolution": recommended,
+                        }
+                    )
+
+            return conflict_blocks
+
+        if not options:
+            options = conflict_report_markdown_options() or conflict_report_decision_options()
+        if str((issue or {}).get("category") or "").strip() == "resolve_conflict":
+            recommendation = {}
+
         agreed_points = [
             self.clean_repeated_text(value)
             for value in (resolution.get("agreed_points", []) or [])
@@ -459,11 +614,75 @@ class MediatorRecords:
 
         if options:
             md += "### Decision Options\n\n"
-            for option in options:
+            for index, option in enumerate(options):
                 if not isinstance(option, dict):
                     continue
-                md += f"#### Option {option.get('id', '')}\n\n"
-                md += f"{option.get('summary', '')}\n\n"
+                if option.get("kind") == "conflict_markdown":
+                    block_markdown = str(option.get("markdown") or "").strip()
+                    if block_markdown:
+                        md += block_markdown + "\n\n"
+                    continue
+                if option.get("kind") == "conflict_decision":
+                    conflict_id = str(option.get("conflict_id") or "").strip()
+                    title = str(option.get("title") or "").strip()
+                    heading = conflict_id or f"CR-{index + 1}"
+                    if title:
+                        heading += f"：{title}"
+                    md += f"#### {heading}\n\n"
+                    option_rows = [row for row in (option.get("options") or []) if isinstance(row, dict)]
+                    for option_index, row in enumerate(option_rows, start=1):
+                        option_id = str(row.get("id") or "").strip()
+                        label = f"選項{option_id}" if option_id else f"選項{option_index}"
+                        title = str(row.get("title") or "").strip()
+                        summary_text = str(row.get("summary") or "").strip()
+                        line = f"{option_index}. "
+                        if title:
+                            line += f"{title}"
+                            if summary_text:
+                                line += f"：{summary_text}"
+                        else:
+                            line += summary_text or label
+                        md += line.rstrip() + "\n"
+                    recommended_resolution = str(option.get("recommended_resolution") or "").strip()
+                    if recommended_resolution:
+                        if recommended_resolution.startswith("建議"):
+                            md += f"\n{recommended_resolution}\n"
+                        else:
+                            md += f"\n建議採用{recommended_resolution}\n"
+                    md += "\n"
+                    continue
+                option_id = str(option.get("id") or option.get("option_id") or option.get("option") or "").strip()
+                if not option_id:
+                    option_id = chr(ord("A") + index)
+                title = str(option.get("title") or option.get("strategy") or "").strip()
+                heading = f"Option {option_id}"
+                if title:
+                    heading += f"：{title}"
+                md += f"#### {heading}\n\n"
+                summary_text = str(option.get("summary") or option.get("description") or "").strip()
+                if summary_text:
+                    md += f"{summary_text}\n\n"
+                conflict_ids = [
+                    str(value).strip()
+                    for value in (option.get("conflict_ids") or [])
+                    if str(value).strip()
+                ]
+                if conflict_ids:
+                    md += f"- **適用衝突**: {'、'.join(conflict_ids)}\n"
+                recommended_conflict_ids = [
+                    str(value).strip()
+                    for value in (option.get("recommended_conflict_ids") or [])
+                    if str(value).strip()
+                ]
+                if recommended_conflict_ids:
+                    md += f"- **推薦**: {'、'.join(recommended_conflict_ids)}\n"
+                recommendation_notes = [
+                    str(value).strip()
+                    for value in (option.get("recommendation_notes") or [])
+                    if str(value).strip()
+                ]
+                if recommendation_notes:
+                    md += f"- **推薦理由**: {'; '.join(recommendation_notes)}\n"
                 for label, key in (("Pros", "pros"), ("Cons", "cons"), ("Impact", "impact")):
                     values = [str(x).strip() for x in (option.get(key) or []) if str(x).strip()]
                     if values:
@@ -473,7 +692,16 @@ class MediatorRecords:
                 md += "\n"
         if recommendation:
             md += "### Recommendation\n\n"
-            md += f"- **Option**: {recommendation.get('option_id', '')}\n"
+            option_id = str(recommendation.get("option_id") or recommendation.get("option") or "").strip()
+            if option_id:
+                md += f"- **Option**: {option_id}\n"
+            conflict_ids = [
+                str(value).strip()
+                for value in (recommendation.get("conflict_ids") or [])
+                if str(value).strip()
+            ]
+            if conflict_ids:
+                md += f"- **適用衝突**: {'、'.join(conflict_ids)}\n"
             if recommendation.get("rationale"):
                 md += f"- **Rationale**: {recommendation.get('rationale')}\n"
             md += "\n"
@@ -1045,7 +1273,7 @@ class MediatorRecords:
             matched["answer_agent"] = answer_agent
             matched["answer"] = answer
         if question_pairs:
-            md += "## 待確認事項\n\n"
+            md += "## 開放問題\n\n"
             for i, pair in enumerate(question_pairs):
                 if i > 0:
                     md += "\n---\n\n"

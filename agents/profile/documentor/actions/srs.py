@@ -9,14 +9,14 @@ def generate_srs(*, draft_md: str) -> str:
 - action=documentor.generate_srs
 - 本 action 只輸出 Markdown SRS，不輸出 JSON。
 - 不更新 artifact、不產生 draft_plan、不新增或修改 REQ。
-- runtime 只會做 Markdown 清理、連結修正、圖片路徑修正與 traceability table rebuild。
+- runtime 只會做 Markdown 清理、連結修正、圖片路徑修正與 Design Rationale link insertion。
 
 # Source Boundary
 - 唯一輸入來源是最新需求草稿。
 - 只做呈現轉換與章節整理；不得改變需求語意、重新判斷、合併、拆分或補充需求。
 - 不得使用外部資料，也不得補入草稿沒有的需求、限制、模型、驗收條件、決策或追蹤關係。
 - 草稿中 open、pending、unresolved、待確認或待決議的內容，不得寫成已確認需求。
-- Feedback 不作為 SRS 章節；只有已整理進 Scope、System Requirement、系統模型 或 需求追蹤表 的內容才可使用。
+- Feedback 不作為 SRS 章節；只有已整理進 Scope、System Requirement 或系統模型的內容才可使用。
 
 # Output Format
 - 請輸出 Markdown。
@@ -31,7 +31,7 @@ def generate_srs(*, draft_md: str) -> str:
 - `## 需求` 下只放 `### 功能性需求` 與 `### 非功能性需求`。
 - 功能性需求格式：`#### FR-1: title`，下一行直接輸出 `**Description**: 完整需求敘述`、`**Priority**:`、`**Acceptance Criteria**:`；Description 冒號後直接接文字，不要換行。
 - 非功能性需求格式：`#### NFR-1: title`，下一行直接輸出 `**Description**: 完整需求敘述`、`**Category**:`、`**Metric**:`、`**Validation**:`；Description 冒號後直接接文字，不要換行。
-- `## 附錄` 下只放 `### A. 系統模型` 與 `### B. 需求追蹤表`。
+- `## 附錄` 下只放 `### A. 系統模型`。
 - 章節標題不要加數字編號，不要輸出 placeholder。
 
 # Section Content Rules
@@ -45,8 +45,9 @@ def generate_srs(*, draft_md: str) -> str:
 - 需求：只放草稿 System Requirement 中 type=functional 與 type=non-functional 的 REQ，分成「### 功能性需求」與「### 非功能性需求」。
 - 附錄 A：只放草稿 System Models 中 type 不是 context_diagram 的其餘模型，保持草稿順序；每個模型標題必須包含原始 SM-*，格式為 `#### SM-2: 模型名稱`；模型標題後先輸出 Markdown 圖片，圖片必須用 Markdown 圖片語法 `![模型名稱](./models/檔名.png)`，不要寫成「圖片：路徑」文字。
 - 附錄 A 中若模型是 use_case_diagram，圖片下方不要輸出模型說明文字；必須改輸出草稿中該模型的文字用例，依 Actor 分組呈現。Actor 小標題格式為 `#### 1. 外送員`、`#### 2. 平台營運管理者`，不要寫 `Actor:`；每個 Actor 底下使用 Markdown 表格，欄位為 `UC ID | Use Case | Purpose | Interface | Related Requirement`，不得再輸出 Actor 欄。
-- 附錄 A 中若模型不是 use_case_diagram，圖片下方輸出模型說明文字；模型說明必須只有兩段：`**用途**：` 說明這張圖用來釐清什麼，`**反映需求**：` 說明它支撐哪些需求面向或 REQ/FR；兩段之間必須空一行；不要輸出 `**讀圖重點**`、`**支撐需求**` 或 `**限制**`。
-- 附錄 B：根據草稿 Traceability 表產生需求追蹤表，排在系統模型後面。
+- Use Case 表格中的 Interface 若草稿出現 `['A', 'B']` 或其他陣列字面格式，必須整理成 `A、B`；不得輸出方括號、引號或 Python/JSON list 字面格式。
+- 附錄 A 中若模型不是 use_case_diagram，圖片下方輸出兩段模型說明文字：第一段說明這張圖用來釐清什麼，第二段說明它支撐哪些需求面向或 REQ/FR；兩段之間必須空一行；不要輸出 `**用途**`、`**反映需求**`、`**讀圖重點**`、`**支撐需求**` 或 `**限制**` 等小標題。
+- 不輸出需求追蹤表；SRS 的 FR/NFR 標題與系統限制條目會由 runtime 加上 Design Rationale 連結。
 
 # Requirement Conversion Rules
 - 每一筆草稿 REQ-* 必須對應到一筆 SRS 需求或一條系統限制；不得任意合併或拆分。
@@ -66,16 +67,16 @@ def generate_srs(*, draft_md: str) -> str:
 - 每筆需求使用清楚欄位格式：需求標題後接 `**Description**: 完整需求敘述`，Description 不得換行到下一段；`Priority`、`Category`、`Metric`、`Validation`、`Acceptance Criteria` 各自獨立成段；`**Acceptance Criteria**:` 後接 1. 2. 編號清單。
 - 需求正文不得輸出 REQ-*、URL-*、Source、Status、Risks、Assumptions 或 Rationale。
 
-# Appendix And Traceability Rules
-- 需求追蹤表欄位固定為 `REQ ID | Requirement | Source`。
-- 需求追蹤表的 REQ ID 必須使用 SRS 轉換後的 ID：functional 對應 FR-*，non-functional 對應 NFR-*，constraint 對應 CON-*。
-- 需求追蹤表的 REQ ID 必須連到 Design Rationale 對應 REQ anchor。
-- 需求追蹤表的 Requirement 欄放該 SRS 需求的完整 Description。
-- 需求追蹤表的 Source 欄只列來源 ID，例如 URL-*、R*-M* 或 feedback.*；不要放完整 User Requirement 文字。
+# Design Rationale Link Rules
+- 不要自行產生 Design Rationale 連結；runtime 會讓每筆 FR-* / NFR-* 標題可點，並讓系統限制條目依序連到 CON-*。
+- Design Rationale 連結由 runtime 保持原文字顏色，不使用預設藍色超連結樣式。
+- 不要輸出需求追蹤表。
 
 # Forbidden Output
 - 不輸出「使用者需求」章節、Feedback 章節、Open Questions 章節、Open Issues 章節、空章節、測試資料或占位文字。
-- 不輸出 UR-*；CON-* 只可出現在附錄需求追蹤表的 REQ ID 欄，不可出現在正文系統限制內容；URL-* 只可出現在附錄需求追蹤表的 Source 欄，不可出現在正文需求內容。
+- 舊格式不相容：不得用 REQ-* 作為 SRS 需求標題，不得輸出非粗體 `Description:` 欄位，不得連到 `design_rationale.md`。
+- 不輸出 UR-*；CON-* 不可出現在正文系統限制內容；URL-* 不可出現在正文需求內容。
+- 不輸出需求追蹤表；不得輸出 `### B. 需求追蹤表`、`Traceability` 或 `REQ ID | Requirement | Source` 表格。
 - `## 系統情境` 與 `## 附錄` 不得重複放同一個模型；context_diagram 只放系統情境，其餘模型只放附錄。
 - 附錄中的模型保持草稿順序，不要重新分類成多層模板。
 - pending、open、unresolved、待確認、待決議不得寫成已承諾功能、限制或驗收條件。
@@ -83,7 +84,7 @@ def generate_srs(*, draft_md: str) -> str:
 - 若沒有 constraint，不輸出「## 系統限制」。
 - 若沒有 functional 與 non-functional 需求，不輸出「## 需求」。
 - 若只有 functional 或只有 non-functional，只輸出有資料的需求子章節。
-- 若沒有非 context_diagram 模型，也沒有 Traceability，不輸出「## 附錄」。
+- 若沒有非 context_diagram 模型，不輸出「## 附錄」。
 
 # Input
 {draft_md}

@@ -12,6 +12,9 @@ category_labels = {t["id"]: t["label"] for t in issue_types}
 meeting_actions = [
     "plan_issues",
     "add_issues",
+    "update_default_draft",
+    "run_general_conflict_gate",
+    "update_general_draft",
     "start_issue",
     "resolve_issue",
     "judge_issue",
@@ -137,7 +140,7 @@ def issue_proposal(
 
     issue_id = (item.get("issue_id") or "").strip()
     if not issue_id:
-        issue_id = f"I-R{round_num}-{proposed_by}-{index}"
+        issue_id = f"R{round_num}-I{index}"
     sources = normalize_sources(item.get("sources"))
     expected_actions = normalize_expected_actions(item.get("expected_actions"))
     suggested_participants = [
@@ -265,7 +268,7 @@ def meeting_issue(
         target_stakeholders = []
 
     trace = normalize_trace(item.get("trace"))
-    issue_id = (item.get("id") or "").strip() or f"T-{index}"
+    issue_id = (item.get("id") or "").strip() or f"M-{index}"
     issue_level = str(item.get("issue_level") or "").strip().lower()
     if issue_level not in {"blocking", "improvement"}:
         issue_level = "blocking"

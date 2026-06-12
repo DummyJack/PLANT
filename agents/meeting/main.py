@@ -47,8 +47,7 @@ def conflict_report_resolution_ids(
         return list(dict.fromkeys(ids))
     if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
         return []
-    conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
-    rows = conflict.get("report") if isinstance(conflict.get("report"), list) else []
+    rows = artifact.get("conflict_report") if isinstance(artifact.get("conflict_report"), list) else []
     out: List[str] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -477,15 +476,22 @@ class MeetingRunner:
         backlog_text = "" if backlog_count is None else f"，backlog {backlog_count} 筆"
         self.logger.info("正式會議議程：%s %s 筆%s", label, len(issues), backlog_text)
         for issue in issues:
-            participants = "、".join(issue.get("participants", []) or []) or "未指定"
-            self.logger.info(
-                "  %s｜%s｜%s｜%s，%s 輪｜%s",
-                issue.get("id", ""),
-                issue.get("title", ""),
-                issue.get("category", ""),
-                issue.get("discussion_mode", ""),
-                issue.get("discussion_rounds", 1),
-                participants,
+            participants = [
+                str(agent).strip()
+                for agent in (issue.get("participants", []) or [])
+                if str(agent).strip()
+            ]
+            self.logger.step_completed(
+                "formal_meeting",
+                "formal_meeting.select_issues",
+                "Plan",
+                agent="mediator",
+                message=(
+                    f"{issue.get('id', '')}｜{issue.get('title', '')}｜"
+                    f"{issue.get('category', '')}｜{issue.get('discussion_mode', '')}，"
+                    f"{issue.get('discussion_rounds', 1)} 輪｜"
+                    f"{'、'.join(participants) if participants else '未指定'}"
+                ),
             )
 
     # Defines log discussion start function for this module workflow.
@@ -549,7 +555,19 @@ class MeetingRunner:
 
     # Defines log issue saved function for this module workflow.
     def log_issue_saved(self, issue_id: str, save_result: Dict[str, Any]) -> None:
-        self.logger.info("  已保存：%s", save_result.get("filename") or issue_id)
+        filename = str(save_result.get("filename") or "").strip()
+        if filename:
+            mom_id = filename.removesuffix(".md")
+            self.logger.step_completed(
+                "formal_meeting",
+                "formal_meeting.write_minutes",
+                "會議記錄",
+                agent="mediator",
+                message="MoM",
+                output_path=f"results/MoM/{mom_id.upper()}.html",
+            )
+            return
+        self.logger.info("  已保存：%s", issue_id)
 
     # Defines issue open questions function for this module workflow.
     def issue_open_questions(self, issue_id: str) -> List[Dict]:
@@ -707,7 +725,8 @@ class MeetingRunner:
             }
 
         conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
-        conflict_ids = ids_from(conflict_state.get("report"))
+        conflict_ids = ids_from(self.artifact.get("conflict_report"))
+        conflict_ids.update(ids_from(conflict_state.get("report")))
         conflict_ids.update(ids_from(conflict_state.get("pairs")))
         conflict_ids.update(ids_from(conflict_state.get("multiple")))
         known_by_prefix = {
@@ -822,15 +841,23 @@ class MeetingRunner:
         self.issue_states[issue_id]["discussed"] = True
         self.issue_states[issue_id]["conversation"] = conversation
         self.save_progress(issue, conversation=conversation)
-        self.save_formal_conflict_report(conversation)
+        self.update_conflict_report(conversation)
         self.artifact.pop("_issue_research_results", None)
         self.artifact.pop("current_issue", None)
+        requirement_updated = self.conversation_updated_requirements(conversation)
+        model_updated = self.conversation_updated_system_models(conversation)
+        if requirement_updated and not model_updated:
+            meta = self.artifact.setdefault("meta", {})
+            meta["models_maybe_stale"] = True
+            meta["models_stale_reason"] = "requirements_changed"
+            meta["models_stale_by"] = str(issue.get("meeting_id") or issue.get("id") or issue_id).strip()
         if self.output_artifact is not None:
             for key in ("URL", "REQ", "scope", "system_models", "feedback", "conflict", "open_questions"):
                 if key in self.artifact:
                     self.output_artifact[key] = self.artifact[key]
+            if "meta" in self.artifact:
+                self.output_artifact["meta"] = self.artifact["meta"]
             self.store.save_artifact(self.output_artifact)
-            model_updated = self.conversation_updated_system_models(conversation)
             if model_updated and "system_models" in self.artifact:
                 self.store.save_plantuml_files(self.artifact.get("system_models", []))
                 self.output_artifact["system_models"] = self.artifact.get("system_models", [])
@@ -848,6 +875,35 @@ class MeetingRunner:
                 "本議題無參與者可發言，請直接執行 save_issue 儲存後繼續。"
             )
         return result
+
+    @staticmethod
+    # Defines conversation updated requirements function for this module workflow.
+    def conversation_updated_requirements(conversation: List[Dict[str, Any]]) -> bool:
+        requirement_actions = {"analyze_requirements", "update_requirement", "refine_requirement"}
+        for entry in conversation or []:
+            if not isinstance(entry, dict):
+                continue
+            actions = {
+                str(action or "").strip()
+                for action in (entry.get("actions") or [])
+                if str(action or "").strip()
+            }
+            if actions & requirement_actions:
+                return True
+            response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+            for result in response.get("issue_action_results") or []:
+                if not isinstance(result, dict):
+                    continue
+                action = str(result.get("action") or "").strip()
+                if action in requirement_actions:
+                    return True
+                if result.get("URL") not in (None, "", [], {}):
+                    return True
+                if result.get("REQ") not in (None, "", [], {}):
+                    return True
+                if result.get("requirements") not in (None, "", [], {}):
+                    return True
+        return False
 
     @staticmethod
     # Defines conversation updated system models function for this module workflow.
@@ -1017,10 +1073,7 @@ class MeetingRunner:
                 out.append(item)
             return out
 
-        conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
-        conflict_report = conflict_state.get("report")
-        if not isinstance(conflict_report, list):
-            conflict_report = self.artifact.get("conflict_report", [])
+        conflict_report = self.artifact.get("conflict_report", [])
         selected_conflicts = selected_rows(conflict_report, ("CR-", "PAIR-", "MULTIPLE-", "C-"))
         if str(issue.get("category") or "").strip() == "resolve_conflict":
             source_conflicts = [
@@ -1076,10 +1129,7 @@ class MeetingRunner:
         ]
         context: Dict[str, Any] = {}
         if category == "resolve_conflict":
-            conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
-            report = conflict_state.get("report")
-            if not isinstance(report, list):
-                report = self.artifact.get("conflict_report")
+            report = self.artifact.get("conflict_report")
             if isinstance(report, list):
                 rows = report
                 if source_ids:
@@ -1094,8 +1144,8 @@ class MeetingRunner:
                     context["conflict_report"] = summary
         return context
 
-    # Defines save formal conflict report function for this module workflow.
-    def save_formal_conflict_report(self, conversation: List[Dict[str, Any]]) -> None:
+    # Defines update conflict report function for this module workflow.
+    def update_conflict_report(self, conversation: List[Dict[str, Any]]) -> None:
         report_rows: List[Dict[str, Any]] = []
         report_md = ""
         generated = False
@@ -1135,14 +1185,22 @@ class MeetingRunner:
             )
 
             report_dir = self.store.artifact_dir / "report"
-            latest_version = 0
+            latest_path = None
+            latest_version = -1
             if report_dir.exists():
                 for path in report_dir.glob("conflict_report_v*.json"):
                     raw_version = path.stem[len("conflict_report_v"):]
-                    if raw_version.isdigit():
-                        latest_version = max(latest_version, int(raw_version))
-            next_version = max(latest_version + 1, int(self.round_num or 1))
-            report_path = report_dir / f"conflict_report_v{next_version}.json"
+                    if raw_version.isdigit() and int(raw_version) > latest_version:
+                        latest_version = int(raw_version)
+                        latest_path = path
+            if latest_path is None:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                latest_version = max(0, int(self.round_num or 0))
+                latest_path = report_dir / f"conflict_report_v{latest_version}.json"
+                report_path = latest_path
+            else:
+                latest_version += 1
+                report_path = report_dir / f"conflict_report_v{latest_version}.json"
             report_rows = reindex_conflict_report_rows(report_rows)
             save_json_path(self.store.base_dir, report_rows, report_path)
             conflict_state = self.artifact.setdefault("conflict", {})
@@ -1152,12 +1210,19 @@ class MeetingRunner:
             if report_md and hasattr(self.store, "save_markdown"):
                 self.store.save_markdown(
                     clean_conflict_report_markdown(report_md),
-                    "conflict_report.md",
+                    f"conflict_report_v{latest_version}.md",
                 )
             self.store.save_artifact(self.artifact)
-            self.logger.info("  已更新衝突報告：artifact/report/%s", report_path.name)
+            version = report_path.stem.removeprefix("conflict_report_v")
+            self.logger.step_completed(
+                "conflict_detection",
+                "conflict_detection.write_report",
+                "產生衝突報告",
+                agent="analyst",
+                output_path=f"results/report/conflict_report_v{version}.html",
+            )
         except Exception as e:
-            raise RuntimeError("正式會議 conflict report 寫檔失敗") from e
+            raise RuntimeError("更新 conflict report 失敗") from e
 
     # Defines discussion round block function for this module workflow.
     def discussion_round_block(self, *, create: bool = True) -> Optional[Dict[str, Any]]:
@@ -1257,8 +1322,7 @@ class MeetingRunner:
         status = str(resolution.get("status") or "").strip()
         if status not in {"agreed", "human_decision"}:
             return
-        conflict = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
-        rows = conflict.get("report") if isinstance(conflict.get("report"), list) else []
+        rows = self.artifact.get("conflict_report") if isinstance(self.artifact.get("conflict_report"), list) else []
         if not rows:
             return
         ordered_target_ids = conflict_report_resolution_ids(self.artifact, issue, resolution)
@@ -1381,6 +1445,8 @@ class MeetingRunner:
                 meta["requirements_changed"] = True
                 meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
                 meta["requirements_changed_reason"] = "resolve_conflict"
+                meta["models_maybe_stale"] = True
+                meta["models_stale_reason"] = "requirements_changed"
             return
 
         for conflict_row in conflict_rows:
@@ -1444,6 +1510,8 @@ class MeetingRunner:
         meta["requirements_changed"] = True
         meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
         meta["requirements_changed_reason"] = "resolve_conflict"
+        meta["models_maybe_stale"] = True
+        meta["models_stale_reason"] = "requirements_changed"
 
     @staticmethod
     # Defines normalize url update plan function for this module workflow.
@@ -1955,10 +2023,7 @@ class MeetingRunner:
 
     # Defines conflict rows for issue function for this module workflow.
     def conflict_rows_for_issue(self, issue: Dict[str, Any]) -> List[Dict[str, Any]]:
-        conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
-        report = conflict_state.get("report")
-        if not isinstance(report, list):
-            report = self.artifact.get("conflict_report", [])
+        report = self.artifact.get("conflict_report", [])
         if not isinstance(report, list):
             return []
         source_ids = [
@@ -3070,13 +3135,43 @@ class MeetingRunner:
             existing = [
                 row for row in (self.artifact.get("meeting_issues", []) or [])
                 if isinstance(row, dict)
-                and int(row.get("round") or -1) != int(self.round_num)
             ]
-            self.artifact["meeting_issues"] = existing + [
-                {**issue, "round": self.round_num}
-                for issue in issues
-                if isinstance(issue, dict)
-            ]
+            nums = []
+            for row in existing:
+                issue_id = str((row or {}).get("id") or "").strip()
+                m = re.fullmatch(r"M-(\d+)", issue_id)
+                if m:
+                    nums.append(int(m.group(1)))
+            next_num = (max(nums) if nums else 0) + 1
+            rows = list(existing)
+            row_index = {
+                str(row.get("id") or "").strip(): idx
+                for idx, row in enumerate(rows)
+                if str(row.get("id") or "").strip()
+            }
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    continue
+                issue_id = str(issue.get("id") or "").strip()
+                if not issue_id:
+                    issue_id = f"M-{next_num}"
+                    next_num += 1
+                row = {**issue, "id": issue_id, "round": self.round_num}
+                existing_idx = row_index.get(issue_id)
+                if (
+                    existing_idx is not None
+                    and int(rows[existing_idx].get("round") or -1) != int(self.round_num)
+                ):
+                    issue_id = f"M-{next_num}"
+                    next_num += 1
+                    row = {**issue, "id": issue_id, "round": self.round_num}
+                    existing_idx = None
+                if existing_idx is None:
+                    row_index[issue_id] = len(rows)
+                    rows.append(row)
+                else:
+                    rows[existing_idx] = {**rows[existing_idx], **row}
+            self.artifact["meeting_issues"] = rows
             if self.output_artifact is not None:
                 self.output_artifact["meeting_issues"] = list(self.artifact["meeting_issues"])
                 self.store.save_artifact(self.output_artifact)
@@ -3087,10 +3182,10 @@ class MeetingRunner:
             nums = []
             for row in issues:
                 issue_id = str((row or {}).get("id") or "").strip()
-                m = re.fullmatch(r"T-(\d+)", issue_id)
+                m = re.fullmatch(r"M-(\d+)", issue_id)
                 if m:
                     nums.append(int(m.group(1)))
-            return f"T-{(max(nums) if nums else 0) + 1}"
+            return f"M-{(max(nums) if nums else 0) + 1}"
 
         # Defines replan invalid issue function for this module workflow.
         def replan_invalid_issue(issue: Dict[str, Any], missing_ids: List[str]) -> Dict[str, Any]:
@@ -3293,7 +3388,7 @@ class MeetingRunner:
             start_idx = len(issues) + 1
             added_issues = []
             for i, item in enumerate(new_items):
-                tid = f"T-{start_idx + i}"
+                tid = f"M-{start_idx + i}"
                 new_issue = {
                     "id": tid,
                     "title": item.get("title", "待討論議題").strip(),

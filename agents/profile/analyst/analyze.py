@@ -198,11 +198,29 @@ class AnalystRequirements:
                 raise ValueError(f"stakeholder 缺少 name，無法進行需求分析: index={idx}")
             sh_texts = one_sh.get("text") or []
             if isinstance(sh_texts, list):
-                source_texts = [str(text).strip() for text in sh_texts if str(text).strip()]
+                source_rows = []
+                for item in sh_texts:
+                    if isinstance(item, dict):
+                        statement_text = str(
+                            item.get("text")
+                            or item.get("statement")
+                            or item.get("content")
+                            or item.get("description")
+                            or ""
+                        ).strip()
+                        statement_id = str(item.get("id") or item.get("statement_id") or "").strip()
+                    else:
+                        statement_text = str(item or "").strip()
+                        statement_id = ""
+                    if statement_text:
+                        source_rows.append({"id": statement_id, "text": statement_text})
             else:
                 source_text = str(sh_texts or "").strip()
-                source_texts = [source_text] if source_text else []
-            for source_idx, source_text in enumerate(source_texts, 1):
+                source_rows = [{"id": "", "text": source_text}] if source_text else []
+            source_texts = [row["text"] for row in source_rows]
+            for source_idx, source_row in enumerate(source_rows, 1):
+                source_text = source_row["text"]
+                source_id = source_row["id"]
                 context = {
                     "stakeholder": {
                         "name": sh_label,
@@ -258,6 +276,7 @@ class AnalystRequirements:
                                 "type": one_sh.get("type"),
                             },
                             "source": "initial",
+                            "source_id": source_id,
                         }
                         for row in raw_rows
                         if isinstance(row, dict)

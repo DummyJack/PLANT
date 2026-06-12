@@ -381,6 +381,9 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
             }
             if source:
                 row["source"] = source
+            trace_reason = clean_text(value.get("trace_reason"))
+            if trace_reason:
+                row["trace_reason"] = trace_reason
         else:
             text = clean_text(value)
             if not text:

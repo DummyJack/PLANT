@@ -27,8 +27,9 @@ def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> st
 - 外部 URL 只接受可信來源：政府/主管機關、法規資料庫、標準組織、學術/研究機構、消費者保護組織，或官方公司條款/隱私/安全/合規文件。
 - 不引用部落格、社群媒體、論壇、新聞稿、行銷文章、一般心得文或內容農場；即使搜尋結果出現也不要寫入 sources。
 - 若 context 內有 web_search_evidence / web_search_urls，必須只從這些搜尋證據中引用外部 URL。
-- findings、constraints、risks、recommendations 的每個 item 只包含 text、related_requirement_ids 與 source；不要在 item 內放 sources。
-- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 URL-*；無法對應單一需求時用空陣列。
+- findings、constraints、risks、recommendations 的每個 item 只包含 text、related_requirement_ids、source 與 trace_reason；不要在 item 內放 sources。
+- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在且與本次研究 context 相關的 URL-*；無法對應單一需求時用空陣列。
+- trace_reason 用一句話說明為什麼此研究證據對應這些 URL-*；若 related_requirement_ids 為空，也要說明無法明確對應的原因。
 - sources 集中放在最外層，每筆使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}；沒有 URL 時輸出空陣列。
 - title 使用人可讀的法規、標準、官方文件、組織文章或案例名稱。
 - 若輸出任何外部法規、標準、官方文件、第三方條款或最佳實務，sources 必須至少包含對應完整 URL；找不到 URL 或 context 沒有可用 URL 時不要輸出該外部結論。
@@ -38,11 +39,11 @@ def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> st
 # Output JSON
 {{
   "research_evidence": {{
-    "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
+    "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
     "sources": [{{"title": "電子支付機構管理條例", "url": "https://..."}}],
-    "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
-    "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
-    "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}]
+    "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
+    "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
+    "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}]
   }}
 }}
 

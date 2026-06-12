@@ -1,4 +1,5 @@
 # Handles module workflow behavior.
+from datetime import datetime, timezone
 import json
 import re
 
@@ -151,22 +152,74 @@ def infer_feedback_requirement_refs(text: str, artifact: dict) -> list[str]:
 def normalize_feedback_links(feedback: dict, artifact: dict) -> dict:
     if not isinstance(feedback, dict):
         return feedback
+    valid_url_ids = {
+        str(row.get("id") or "").strip()
+        for row in (artifact.get("URL") or [])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    issue = artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {}
+    trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
+    issue_url_ids = {
+        str(value).strip()
+        for value in (trace.get("artifact_ids") or [])
+        if str(value).strip().startswith("URL-")
+    }
+    allowed_url_ids = issue_url_ids or valid_url_ids
+    trace_gaps = [
+        dict(row) for row in (feedback.get("trace_gaps") or [])
+        if isinstance(row, dict)
+    ]
     for section in ("findings", "constraints", "risks", "recommendations"):
         rows = feedback.get(section)
         if not isinstance(rows, list):
             continue
-        for row in rows:
+        for index, row in enumerate(rows, 1):
             if not isinstance(row, dict):
                 continue
             row.pop("sources", None)
-            refs = [
+            supplied_refs = [
                 str(value).strip()
                 for value in (row.get("related_requirement_ids") or [])
                 if str(value).strip()
             ]
-            if not refs:
-                refs = infer_feedback_requirement_refs(str(row.get("text") or ""), artifact)
+            refs = [
+                ref for ref in supplied_refs
+                if ref in valid_url_ids and ref in allowed_url_ids
+            ]
+            rejected_refs = [
+                ref for ref in supplied_refs
+                if ref not in refs
+            ]
             row["related_requirement_ids"] = list(dict.fromkeys(refs))
+            row["trace_confidence"] = "explicit" if refs else "missing"
+            if not str(row.get("trace_reason") or "").strip():
+                if refs:
+                    row["trace_reason"] = "Expert supplied related URL ids and runtime validated them against the current artifact context."
+                else:
+                    row["trace_reason"] = "Expert did not provide a runtime-valid related URL id."
+            if not refs:
+                trace_gaps.append({
+                    "artifact": "feedback",
+                    "section": section,
+                    "item_index": index,
+                    "reason": "missing_related_requirement_ids" if not supplied_refs else "invalid_related_requirement_ids",
+                    "candidate_ids": list(dict.fromkeys(supplied_refs or infer_feedback_requirement_refs(str(row.get("text") or ""), artifact))),
+                    "source": row.get("source", ""),
+                    "status": "needs_review",
+                })
+            elif rejected_refs:
+                trace_gaps.append({
+                    "artifact": "feedback",
+                    "section": section,
+                    "item_index": index,
+                    "reason": "rejected_related_requirement_ids",
+                    "candidate_ids": list(dict.fromkeys(rejected_refs)),
+                    "accepted_ids": list(dict.fromkeys(refs)),
+                    "source": row.get("source", ""),
+                    "status": "recorded",
+                })
+    if trace_gaps:
+        feedback["trace_gaps"] = trace_gaps
     return feedback
 
 
@@ -182,6 +235,86 @@ def research_source(artifact):
     if issue_id:
         return issue_id
     return "initial"
+
+
+def next_trace_req_id(artifact: dict) -> str:
+    max_num = 0
+    for row in artifact.get("trace_req") or []:
+        if not isinstance(row, dict):
+            continue
+        match = re.fullmatch(r"TE-(\d+)", str(row.get("event_id") or "").strip())
+        if match:
+            max_num = max(max_num, int(match.group(1)))
+    return f"TE-{max_num + 1}"
+
+
+def feedback_item_count(artifact: dict) -> int:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    count = 0
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        count += len([item for item in (feedback.get(section) or []) if isinstance(item, dict)])
+    return count
+
+
+def feedback_delta_item_count(feedback_delta: dict) -> int:
+    count = 0
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        count += len([item for item in (feedback_delta.get(section) or []) if isinstance(item, dict)])
+    return count
+
+
+def append_feedback_trace_req(artifact: dict, feedback_delta: dict, *, source_ref: str) -> None:
+    if not isinstance(feedback_delta, dict):
+        return
+    events = artifact.setdefault("trace_req", [])
+    if not isinstance(events, list):
+        artifact["trace_req"] = events = []
+    req_to_srs = {
+        str(req.get("id") or "").strip(): str(req.get("srs_id") or "").strip()
+        for req in (artifact.get("REQ") or [])
+        if isinstance(req, dict)
+        and str(req.get("id") or "").strip()
+        and str(req.get("srs_id") or "").strip()
+    }
+    delta_count = feedback_delta_item_count(feedback_delta)
+    next_feedback_index = max(1, feedback_item_count(artifact) - delta_count + 1)
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        for index, item in enumerate(feedback_delta.get(section) or [], 1):
+            if not isinstance(item, dict):
+                continue
+            related_ids = [
+                str(value).strip()
+                for value in (item.get("related_requirement_ids") or [])
+                if str(value).strip()
+            ]
+            confidence = str(item.get("trace_confidence") or ("explicit" if related_ids else "missing")).strip()
+            reason = str(item.get("trace_reason") or "").strip()
+            target_requirement_id = next(
+                (
+                    req_to_srs[req_id]
+                    for req_id in related_ids
+                    if req_id in req_to_srs
+                ),
+                "",
+            )
+            feedback_id = f"FB-{next_feedback_index}"
+            events.append({
+                "event_id": next_trace_req_id(artifact),
+                "stage": "domain_research",
+                "agent": "expert",
+                "confidence": confidence,
+                "reason": reason,
+                "trace_reason": reason,
+                "target_requirement_id": target_requirement_id,
+                "trace_id": f"TR-{target_requirement_id}" if target_requirement_id else "",
+                "from": related_ids[0] if related_ids else "",
+                "to": feedback_id,
+                "role": "supporting",
+                "edge_label": "依據",
+                "style": "dashed",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            next_feedback_index += 1
 
 # ========
 # Defines ExpertDomainResearch class for this module workflow.
@@ -419,6 +552,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     dr = normalize_feedback_links(dr, artifact)
                     merged = self.merge_feedback(existing, dr)
                     artifact["feedback"] = merged
+                    append_feedback_trace_req(artifact, dr, source_ref=source_ref)
                     obs["result"] = {"feedback": dr, "merged_feedback": merged}
                     obs["summary"] = "已更新領域研究資料"
                 else:

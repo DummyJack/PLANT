@@ -16,6 +16,15 @@ from ..validation import (
 )
 
 
+CATEGORY_ALIASES = {
+    "requirement_completeness": "clarify_requirement",
+    "open_question_answer": "clarify_requirement",
+    "new_requirement": "clarify_requirement",
+    "boundary_responsibility": "define_boundary",
+    "model_alignment": "align_model",
+}
+
+
 # ========
 # Defines normalized discussion rounds function for this module workflow.
 # ========
@@ -57,6 +66,8 @@ def select_issues(
 - 正式議題優先代表一組相關需求背後的共同問題。
 - 單一 REQ、單一 open question、單一 acceptance criteria、單一 source 或單一模型項目，只要 source/evidence 具體且可能影響驗收、追蹤、責任邊界、風險、模型一致性或 SRS 可用性，也可以進 issues/backlog；不要只因為範圍小就丟棄。
 - 若多筆提案指向同一共同問題，合併成一個議題，保留 trace.proposal_ids 與來源追蹤。
+- 在不犧牲 blocking 優先級與具體 source 的前提下，issues 應盡量涵蓋不同 category / issue_focus；避免本輪全部選成同一類型，除非其他類型沒有足夠證據或都已討論過。
+- 若同一類型有多筆相近候選，先選該類型中最值得討論、最能阻礙或改善 SRS 品質的一筆代表；其餘合併或放 backlog。
 - 避免重複討論 already_discussed_artifact_ids 已涵蓋的提案。
 - 不要新增輸入資料沒有支持的新需求。
 
@@ -148,7 +159,7 @@ def meeting_plan(
       "discussion_mode": "sequential",
       "discussion_rounds": 2,
       "target_stakeholders": [],
-      "trace": {{"artifact_ids": ["..."], "proposal_ids": ["I-R1-..."]}},
+      "trace": {{"artifact_ids": ["..."], "proposal_ids": ["R1-I1"]}},
       "proposed_by": "analyst",
       "issue_level": "blocking | improvement",
       "expected_actions": {{}},
@@ -174,7 +185,7 @@ def meeting_action(
     if enable_human_judgment:
         judgment_action = (
             "- judge_issue：某議題交由人類裁決。"
-            "params: {\"issue_id\": \"T-01\"}（須已 start_issue）\n"
+            "params: {\"issue_id\": \"M-1\"}（須已 start_issue）\n"
         )
         judgment_hint = "；若 resolution.needs_human=true，先 judge_issue 再 save_issue"
 
@@ -183,9 +194,9 @@ def meeting_action(
 
 - plan_issues：本輪 issues 為空時；若本輪 meeting_issues 已存在，系統會直接載入既有 agenda，不重新規劃
 - add_issues：僅在 state.can_add_issues=true 且確有新議題時
-- start_issue：{{"issue_id":"T-01"}}
-- resolve_issue：{{"issue_id":"T-01"}}，需已 start_issue
-{judgment_action}- save_issue：{{"issue_id":"T-01"}}，需已 resolve_issue；若 resolution.needs_human=true，需先 judge_issue
+- start_issue：{{"issue_id":"M-1"}}
+- resolve_issue：{{"issue_id":"M-1"}}，需已 start_issue
+{judgment_action}- save_issue：{{"issue_id":"M-1"}}，需已 resolve_issue；若 resolution.needs_human=true，需先 judge_issue
 - finish_round：僅在 formal issues 已 save、human_decision_queue 已處理或遞延，且沒有可追加議題時
 
 # 目前狀態
@@ -210,7 +221,7 @@ def meeting_action(
 # 輸出 JSON
 {{
   "action": "動作名稱",
-  "params": {{}} or {{"issue_id":"T-01"}},
+  "params": {{}} or {{"issue_id":"M-1"}},
   "reasoning": "一句說明"
 }}"""
 
@@ -234,9 +245,19 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
     # Defines active category function for this module workflow.
     def active_category(category: str, active_type_ids: List[str]) -> Optional[str]:
         category = str(category or "").strip()
+        category = CATEGORY_ALIASES.get(category, category)
         if category in active_type_ids:
             return category
         return None
+
+    @classmethod
+    # Defines proposal category function for this module workflow.
+    def proposal_category(cls, row: Dict[str, Any], active_type_ids: List[str]) -> Optional[str]:
+        category = cls.active_category(str((row or {}).get("category") or ""), active_type_ids)
+        if category:
+            return category
+        focus = str((row or {}).get("issue_focus") or "").strip()
+        return cls.active_category(focus, active_type_ids)
 
     @staticmethod
     # Defines normalize issue participants function for this module workflow.
@@ -656,8 +677,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 continue
 
             if artifact_name == "conflict_report":
-                conflict = source.get("conflict") if isinstance(source.get("conflict"), dict) else {}
-                rows = conflict.get("report") if isinstance(conflict.get("report"), list) else meeting_source.get("conflict_report", [])
+                rows = source.get("conflict_report") if isinstance(source.get("conflict_report"), list) else meeting_source.get("conflict_report", [])
                 add_section("conflict_report", self.related_items(rows, source_ids))
                 continue
 
@@ -799,6 +819,38 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 return level_rank + 5
             return level_rank + 5
 
+        # Defines proposal type key function for this module workflow.
+        def proposal_type_key(row: Dict[str, Any]) -> str:
+            focus = str((row or {}).get("issue_focus") or "").strip()
+            category = self.proposal_category(row, active_type_ids) or "unspecified"
+            return f"{category}:{focus or category}"
+
+        # Defines diversify selected proposals function for this module workflow.
+        def diversify_selected_proposals(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+            ordered = sorted(
+                [row for row in rows if isinstance(row, dict)],
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
+            if limit <= 0 or len(ordered) <= limit:
+                return ordered[:limit]
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for row in ordered:
+                grouped.setdefault(proposal_type_key(row), []).append(row)
+            representatives = sorted(
+                [group[0] for group in grouped.values() if group],
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
+            selected = representatives[:limit]
+            if len(selected) >= limit:
+                return selected
+            for row in ordered:
+                if any(self.same_issue_proposal(row, selected_row) for selected_row in selected):
+                    continue
+                selected.append(row)
+                if len(selected) >= limit:
+                    break
+            return selected[:limit]
+
         triage = {"issues": [], "backlog": [], "discarded": []}
         if proposals:
             proposals = sorted(
@@ -822,7 +874,8 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
         selected_proposals = sorted(
             [p for p in (triage.get("issues") or []) if isinstance(p, dict)],
             key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
-        )[:max_items]
+        )
+        selected_proposals = diversify_selected_proposals(selected_proposals, max_items)
         if not selected_proposals and triage.get("backlog"):
             backlog_candidates = [
                 row for row in (triage.get("backlog") or [])
@@ -830,10 +883,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 and str(row.get("importance") or "").strip().lower() != "low"
                 and self.has_concrete_issue_source(row)
             ]
-            selected_proposals = sorted(
-                backlog_candidates,
-                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
-            )[:max_items]
+            selected_proposals = diversify_selected_proposals(backlog_candidates, max_items)
             if selected_proposals:
                 triage["backlog"] = [
                     row for row in (triage.get("backlog") or [])
@@ -850,10 +900,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 and str(row.get("importance") or "").strip().lower() != "low"
                 and self.has_concrete_issue_source(row)
             ]
-            selected_proposals = sorted(
-                fallback_candidates,
-                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
-            )[:max_items]
+            selected_proposals = diversify_selected_proposals(fallback_candidates, max_items)
             if selected_proposals:
                 triage["discarded"] = [
                     row for row in (triage.get("discarded") or [])
@@ -995,7 +1042,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
         stakeholder_names: List[str],
         index: int,
     ) -> Optional[Dict[str, Any]]:
-        category = self.active_category(str(proposal.get("category") or ""), active_type_ids)
+        category = self.proposal_category(proposal, active_type_ids)
         focus = str(proposal.get("issue_focus") or "").strip()
         if not category:
             if focus == "model_alignment":
@@ -1004,8 +1051,8 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 category = "define_boundary"
             elif focus == "tradeoff":
                 category = "tradeoff"
-            else:
-                category = "clarify_requirement"
+        if not category:
+            return None
         if category not in set(active_type_ids or issue_type_ids):
             return None
 
@@ -1052,7 +1099,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 clean_reasoning[agent] = "依據候選議題內容參與釐清並形成可保存的會議結論。"
 
         item = {
-            "id": proposal.get("id") or f"T-{index}",
+            "id": proposal.get("id") or f"M-{index}",
             "title": str(proposal.get("title") or f"一般議題 {index}").strip(),
             "description": str(
                 proposal.get("description")
@@ -1166,14 +1213,14 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
 
         issue_items = []
         for idx, item in enumerate(ordered_items, 1):
-            category = self.active_category(item.get("category", ""), active_ids)
+            category = self.proposal_category(item, active_ids)
             allowed_categories = active_ids or issue_type_ids
             if not category:
                 continue
             normalized = meeting_issue(
                 {
                     **item,
-                    "id": item.get("id") or f"T-{idx}",
+                    "id": item.get("id") or f"M-{idx}",
                     "category": category,
                 },
                 allowed_categories=allowed_categories,

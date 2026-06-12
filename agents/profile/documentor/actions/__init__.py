@@ -1,0 +1,1 @@
+"""Documentor action prompt templates."""

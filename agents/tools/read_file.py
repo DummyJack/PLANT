@@ -11,7 +11,17 @@ from .base import BaseTool
 
 logger = logging.getLogger("Plant.ReadFileTool")
 
-SUPPORTED_SUFFIXES = (".txt", ".md", ".json", ".csv", ".pdf", ".docx", ".doc")
+SUPPORTED_SUFFIXES = (
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".xlsx",
+    ".pptx",
+)
 CHUNK_SEP = "##"  # chunk_id = "{relative_posix_path}##{index}"
 
 
@@ -480,6 +490,73 @@ def iter_docx_paragraph_chunks(
 
 
 # ========
+# Defines xlsx sheet blocks function for this module workflow.
+# ========
+def xlsx_sheet_blocks(path: Path) -> List[str]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    blocks: List[str] = []
+    try:
+        for sheet in workbook.worksheets:
+            lines = [f"# Sheet: {sheet.title}"]
+            for row in sheet.iter_rows(values_only=True):
+                values = ["" if cell is None else str(cell).strip() for cell in row]
+                while values and not values[-1]:
+                    values.pop()
+                if not values or not any(values):
+                    continue
+                lines.append(" | ".join(values))
+            if len(lines) > 1:
+                blocks.append("\n".join(lines))
+    finally:
+        workbook.close()
+    return blocks
+
+
+# ========
+# Defines pptx slide blocks function for this module workflow.
+# ========
+def pptx_slide_blocks(path: Path) -> List[str]:
+    from pptx import Presentation
+
+    presentation = Presentation(path)
+    blocks: List[str] = []
+    for idx, slide in enumerate(presentation.slides, start=1):
+        texts: List[str] = []
+        for shape in slide.shapes:
+            text = getattr(shape, "text", "")
+            if text and text.strip():
+                texts.append(text.strip())
+        if texts:
+            blocks.append(f"# Slide {idx}\n" + "\n".join(texts))
+    return blocks
+
+
+# ========
+# Defines iter office block chunks function for this module workflow.
+# ========
+def iter_office_block_chunks(
+    blocks: List[str], max_size: int, overlap: int
+) -> Iterator[Tuple[int, int, str]]:
+    if not blocks:
+        yield 0, 0, ""
+        return
+    sep = "\n\n"
+    spans: List[Tuple[int, int]] = []
+    pos = 0
+    for i, block in enumerate(blocks):
+        if i:
+            pos += len(sep)
+        start = pos
+        pos += len(block)
+        spans.append((start, pos))
+    full = sep.join(blocks)
+    for start, end in spans:
+        yield from emit_sized_block(start, full[start:end], max_size, overlap)
+
+
+# ========
 # Defines iter index chunks function for this module workflow.
 # ========
 def iter_index_chunks(
@@ -508,6 +585,24 @@ def iter_index_chunks(
             logger.warning("DOCX 結構切塊失敗，改為全文窗口：%s", path, exc_info=True)
             yield from iter_chunks(read_text(path, suffix), max_size, overlap)
         return
+    if suffix == ".xlsx":
+        try:
+            yield from iter_office_block_chunks(
+                xlsx_sheet_blocks(path), max_size, overlap
+            )
+        except Exception:
+            logger.warning("XLSX 結構切塊失敗，改為全文窗口：%s", path, exc_info=True)
+            yield from iter_chunks(read_text(path, suffix), max_size, overlap)
+        return
+    if suffix == ".pptx":
+        try:
+            yield from iter_office_block_chunks(
+                pptx_slide_blocks(path), max_size, overlap
+            )
+        except Exception:
+            logger.warning("PPTX 結構切塊失敗，改為全文窗口：%s", path, exc_info=True)
+            yield from iter_chunks(read_text(path, suffix), max_size, overlap)
+        return
     yield from iter_chunks_by_sections_then_window(text, suffix, max_size, overlap)
 
 
@@ -529,9 +624,10 @@ def score_chunk(query_tokens: List[str], chunk_lower: str) -> float:
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
-        "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .csv, .pdf, .docx）。"
+        "讀取專案 doc/ 目錄參考檔（.txt, .md, .json, .csv, .pdf, .docx, .xlsx, .pptx）。"
         "索引：.md 依 markdown-it-py 標題斷點（失敗則啟發式）、.txt 依啟發式標題／段落；"
-        ".json 依頂層結構；.csv 依內容片段；.pdf 依頁；.docx 依段落；過長再細切。"
+        ".json 依頂層結構；.csv 依內容片段；.pdf 依頁；.docx 依段落；"
+        ".xlsx 依工作表；.pptx 依投影片；過長再細切。"
         "必須明確填 action。建議流程：action=search_chunks 用 query 與 top_k 檢索相關片段 → "
         "再用 action=read_chunks 帶 chunk_ids 讀全文片段 → 最後由你綜合（Synthesize）。"
         "只有已知檔名且檔案不大時，才用 action=read_full 一次讀整檔。"
@@ -622,8 +718,12 @@ class ReadFileTool(BaseTool):
 
             doc = Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
+        if suffix == ".xlsx":
+            return "\n\n".join(xlsx_sheet_blocks(path))
+        if suffix == ".pptx":
+            return "\n\n".join(pptx_slide_blocks(path))
         raise ValueError(
-            f"不支援的副檔名 {suffix}，僅支援 .txt, .md, .json, .csv, .pdf, .docx。"
+            f"不支援的副檔名 {suffix}，僅支援 .txt, .md, .json, .csv, .pdf, .docx, .xlsx, .pptx。"
         )
 
     # Defines current file signature function for this module workflow.

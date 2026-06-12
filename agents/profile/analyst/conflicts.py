@@ -205,10 +205,19 @@ def conflict_type_guidance_from_skill() -> str:
 # ========
 # Defines normalize conflict type function for this module workflow.
 # ========
-def normalize_conflict_type(value: Any, *, final_label: str) -> str:
+def normalize_conflict_type(
+    value: Any,
+    *,
+    final_label: str,
+    fallback: Any = None,
+) -> str:
     if final_label != "Conflict":
         return ""
     conflict_type = str(value or "").strip().lower()
+    if not conflict_type:
+        conflict_type = str(fallback or "").strip().lower()
+    if not conflict_type:
+        return "other"
     if conflict_type not in conflict_types:
         raise ValueError(f"conflict type 不合法: {conflict_type or '<empty>'}")
     return conflict_type
@@ -767,7 +776,22 @@ class AnalystConflicts:
                 )
                 final_label = str(decision.get("new_label") or decision.get("final_label") or "").strip()
                 item = {"id": pair_id, "reason": description}
-                final_type = normalize_conflict_type(row.get("final_type") or row.get("type"), final_label=final_label)
+                initial_type = ""
+                if isinstance(extracted_pair_reviews, list):
+                    initial_type = next(
+                        (
+                            str(review.get("initial_type") or review.get("type") or "").strip()
+                            for review in extracted_pair_reviews
+                            if isinstance(review, dict)
+                            and str(review.get("id") or "").strip() == pair_id
+                        ),
+                        "",
+                    )
+                final_type = normalize_conflict_type(
+                    row.get("final_type") or row.get("type"),
+                    final_label=final_label,
+                    fallback=initial_type,
+                )
                 if final_type:
                     item["final_type"] = final_type
                 out.append(item)

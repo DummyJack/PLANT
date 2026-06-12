@@ -200,7 +200,7 @@ class ArtifactQueryTool(BaseTool):
         if section in {"conflict_report", "conflict_pairs", "conflict_multiple"}:
             conflict = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
             if section == "conflict_report":
-                raw = conflict.get("report", [])
+                raw = artifact.get("conflict_report", [])
             elif section == "conflict_pairs":
                 raw = conflict.get("pairs", [])
             else:

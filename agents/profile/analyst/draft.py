@@ -20,7 +20,6 @@ draft_section_order = [
     "feedback",
     "open_questions",
     "system_models",
-    "traceability",
 ]
 
 create_draft_sections = {
@@ -227,47 +226,6 @@ def compact_draft_action_result(result: Dict[str, Any]) -> Dict[str, Any]:
 # ========
 def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-    req_rows = [row for row in (artifact.get("REQ") or []) if isinstance(row, dict)]
-    formalized_sources = set()
-    formalized_text = ""
-    for req in req_rows:
-        raw_values = req.get("source") or []
-        values = raw_values if isinstance(raw_values, list) else [raw_values]
-        for value in values:
-            value_text = str(value).strip()
-            if value_text:
-                formalized_sources.add(value_text)
-        text_parts = []
-        for key in ("title", "description", "rationale", "constraint_type", "impact"):
-            value = str(req.get(key) or "").strip()
-            if value:
-                text_parts.append(value)
-        for key in ("risks", "assumptions", "acceptance_criteria"):
-            for value in req.get(key) or []:
-                value_text = str(value).strip()
-                if value_text:
-                    text_parts.append(value_text)
-        formalized_text += "\n" + "\n".join(text_parts)
-
-    # Defines is formalized feedback function for this module workflow.
-    def is_formalized_feedback(item: Dict[str, Any], text: str) -> bool:
-        item_id = str(item.get("id") or "").strip()
-        source = str(item.get("source") or "").strip()
-        related = {
-            str(value).strip()
-            for value in (item.get("related_requirement_ids") or [])
-            if str(value).strip()
-        }
-        if item_id and item_id in formalized_sources:
-            return True
-        if source and source in formalized_sources:
-            return True
-        if related and related.issubset(formalized_sources):
-            return True
-        compact_text = re.sub(r"\s+", "", text)
-        compact_formalized = re.sub(r"\s+", "", formalized_text)
-        return bool(compact_text and compact_text in compact_formalized)
-
     out: Dict[str, Any] = {}
     for section in ("findings", "constraints", "risks", "recommendations"):
         rows: List[Dict[str, Any]] = []
@@ -276,8 +234,6 @@ def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             text = str(item.get("text") or "").strip()
             if not text:
-                continue
-            if is_formalized_feedback(item, text):
                 continue
             row: Dict[str, Any] = {"text": text}
             related = item.get("related_requirement_ids")
@@ -443,7 +399,7 @@ def draft_contract_issues(
     md: str,
     req_rows: List[Dict[str, Any]],
     *,
-    require_traceability: bool = False,
+    require_system_requirement: bool = False,
 ) -> List[str]:
     issues: List[str] = []
     source = md or ""
@@ -464,15 +420,12 @@ def draft_contract_issues(
         if re.search(pattern, source, flags=re.IGNORECASE):
             issues.append(name)
 
-    traceability_match = re.search(
-        r"(?ms)^##\s+Traceability\s*\n(?P<body>.*?)(?=^##\s+|\Z)",
-        source,
-    )
+    traceability_match = re.search(r"(?ms)^##\s+Traceability\s*\n.*?(?=^##\s+|\Z)", source)
     has_requirements_section = bool(re.search(r"(?m)^##\s+Requirements\s*$", source))
     has_system_requirement_section = bool(re.search(r"(?m)^##\s+System Requirement\s*$", source))
     if has_requirements_section:
         issues.append("unexpected_requirements")
-    if not require_traceability and has_system_requirement_section:
+    if not require_system_requirement and has_system_requirement_section:
         issues.append("unexpected_system_requirement")
 
     req_ids = [
@@ -480,31 +433,14 @@ def draft_contract_issues(
         for row in (req_rows or [])
         if isinstance(row, dict) and str(row.get("id") or "").strip()
     ]
-    if req_ids and require_traceability:
+    if req_ids and require_system_requirement:
         if not has_system_requirement_section:
             issues.append("missing_system_requirement")
         detail_heading_ids = set(re.findall(r"(?m)^###\s+(REQ-\d+)\b", source))
         missing_detail_ids = [req_id for req_id in req_ids if req_id not in detail_heading_ids]
         if missing_detail_ids:
             issues.append("missing_system_requirement_rows:" + ",".join(missing_detail_ids))
-        if require_traceability:
-            if not traceability_match:
-                issues.append("missing_traceability")
-            else:
-                traceability_body = traceability_match.group("body")
-                if "| REQ ID | Source | System Model |" not in traceability_body:
-                    issues.append("invalid_traceability_header")
-                after_traceability = source[traceability_match.end():]
-                if re.search(r"(?m)^##\s+", after_traceability):
-                    issues.append("traceability_not_last")
-                missing_trace_ids = [
-                    req_id
-                    for req_id in req_ids
-                    if not re.search(rf"(?m)^\|\s*{re.escape(req_id)}\s*\|", traceability_body)
-                ]
-                if missing_trace_ids:
-                    issues.append("missing_traceability_rows:" + ",".join(missing_trace_ids))
-    elif traceability_match:
+    if traceability_match:
         issues.append("unexpected_traceability")
 
     scalar_empty_patterns = [
@@ -564,7 +500,23 @@ def req_source_text(value: Any) -> str:
 # Defines markdown table cell function for this module workflow.
 # ========
 def markdown_table_cell(value: Any) -> str:
-    text = str(value or "").strip()
+    if isinstance(value, list):
+        text = "、".join(str(item).strip() for item in value if str(item).strip())
+    elif isinstance(value, dict):
+        text = "、".join(
+            f"{str(key).strip()}：{str(item).strip()}"
+            for key, item in value.items()
+            if str(key).strip() and str(item).strip()
+        )
+    else:
+        text = str(value or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+                if isinstance(parsed, list):
+                    text = "、".join(str(item).strip() for item in parsed if str(item).strip())
+            except (ValueError, SyntaxError):
+                pass
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
@@ -609,93 +561,6 @@ def stakeholder_label(row: Dict[str, Any]) -> str:
             return name
     name = str(row.get("stakeholder_name") or row.get("stakeholder") or "").strip()
     return name
-
-
-# ========
-# Defines url requirement text by id function for this module workflow.
-# ========
-def url_requirement_text_by_id(url_rows: Any) -> Dict[str, str]:
-    out: Dict[str, str] = {}
-    if not isinstance(url_rows, list):
-        return out
-    for row in url_rows:
-        if not isinstance(row, dict):
-            continue
-        source_id = str(row.get("id") or "").strip()
-        text = str(row.get("text") or "").strip()
-        if source_id and text:
-            out[source_id] = text
-    return out
-
-
-# ========
-# Defines trace source text function for this module workflow.
-# ========
-def trace_source_text(value: Any, url_text_by_id: Dict[str, str]) -> str:
-    source_ids = value if isinstance(value, list) else [value]
-    rows: List[str] = []
-    for source_id in source_ids:
-        sid = str(source_id or "").strip()
-        if not sid:
-            continue
-        if sid.startswith("URL-") and sid in url_text_by_id:
-            rows.append(f"{sid}：{url_text_by_id[sid]}")
-        else:
-            rows.append(sid)
-    return "<br>".join(dict.fromkeys(rows))
-
-
-# ========
-# Defines trace model links function for this module workflow.
-# ========
-def trace_model_links(model_ids: List[str]) -> str:
-    rows = []
-    for model_id in model_ids or []:
-        mid = str(model_id or "").strip()
-        if mid:
-            rows.append(f"[{mid}](#{mid.lower()})")
-    return ", ".join(dict.fromkeys(rows))
-
-
-# ========
-# Defines system model refs by req function for this module workflow.
-# ========
-def system_model_refs_by_req(req_rows: List[Dict[str, Any]], system_models: Any) -> Dict[str, List[str]]:
-    refs: Dict[str, List[str]] = {}
-    source_to_req: Dict[str, List[str]] = {}
-    for row in req_rows or []:
-        if not isinstance(row, dict):
-            continue
-        req_id = str(row.get("id") or "").strip()
-        if not req_id:
-            continue
-        raw_sources = row.get("source") or []
-        sources = raw_sources if isinstance(raw_sources, list) else [raw_sources]
-        for source in sources:
-            source_id = str(source or "").strip()
-            if source_id:
-                source_to_req.setdefault(source_id, []).append(req_id)
-    if not isinstance(system_models, list):
-        return refs
-    for model in system_models:
-        if not isinstance(model, dict):
-            continue
-        model_id = str(model.get("id") or "").strip()
-        if not model_id:
-            continue
-        for req_id in model.get("related_requirement_ids") or []:
-            rid = str(req_id or "").strip()
-            if not rid:
-                continue
-            if rid.startswith("REQ-"):
-                refs.setdefault(rid, []).append(model_id)
-                continue
-            for mapped_req_id in source_to_req.get(rid, []):
-                refs.setdefault(mapped_req_id, []).append(model_id)
-    return {
-        req_id: list(dict.fromkeys(model_ids))
-        for req_id, model_ids in refs.items()
-    }
 
 
 # ========
@@ -965,37 +830,12 @@ def render_system_requirement_section(req_rows: List[Dict[str, Any]]) -> str:
 
 
 # ========
-# Defines render traceability section function for this module workflow.
-# ========
-def render_traceability_section(req_rows: List[Dict[str, Any]], system_models: Any, url_rows: Any) -> str:
-    refs = system_model_refs_by_req(req_rows, system_models)
-    url_text_by_id = url_requirement_text_by_id(url_rows)
-    lines = [
-        "## Traceability",
-        "| REQ ID | Source | System Model |",
-        "|---|---|---|",
-    ]
-    for row in req_rows or []:
-        if not isinstance(row, dict):
-            continue
-        req_id = str(row.get("id") or "").strip()
-        if not req_id:
-            continue
-        source = trace_source_text(row.get("source"), url_text_by_id)
-        model_ref = trace_model_links(refs.get(req_id, []))
-        lines.append(
-            f"| {markdown_table_cell(req_id)} | {markdown_table_cell(source)} | {markdown_table_cell(model_ref)} |"
-        )
-    return "\n".join(lines).rstrip() + "\n"
-
-
-# ========
 # Defines render complete draft function for this module workflow.
 # ========
 def render_complete_draft(
     context: Dict[str, Any],
     *,
-    require_traceability: bool,
+    require_system_requirement: bool,
     draft_plan: Optional[Dict[str, Any]] = None,
 ) -> str:
     sections: List[str] = [render_draft_title(context)]
@@ -1007,7 +847,7 @@ def render_complete_draft(
     }
     plan = draft_plan if isinstance(draft_plan, dict) else default_draft_plan(
         context,
-        mode="update" if require_traceability else "create",
+        mode="update" if require_system_requirement else "create",
     )
     include_by_id = {
         str(item.get("id") or "").strip(): bool(item.get("include"))
@@ -1030,7 +870,7 @@ def render_complete_draft(
         elif section_id == "user_requirements":
             section = render_user_requirements_section(context.get("user_requirements") or [])
         elif section_id == "system_requirement":
-            section = render_system_requirement_section(req_rows) if require_traceability and req_rows else ""
+            section = render_system_requirement_section(req_rows) if require_system_requirement and req_rows else ""
         elif section_id == "feedback":
             section = render_feedback_section(context.get("feedback") or {})
         elif section_id == "open_questions":
@@ -1039,16 +879,6 @@ def render_complete_draft(
             section = render_system_models_section(
                 context.get("system_models") or [],
                 valid_req_ids or None,
-            )
-        elif section_id == "traceability":
-            section = (
-                render_traceability_section(
-                    req_rows,
-                    context.get("system_models"),
-                    context.get("user_requirements"),
-                )
-                if require_traceability and req_rows
-                else ""
             )
         else:
             section = ""
@@ -1096,8 +926,6 @@ def context_has_draft_section(context: Dict[str, Any], section_id: str) -> bool:
         return any(isinstance(row, dict) for row in (context.get("open_questions") or []))
     if section_id == "system_models":
         return any(isinstance(row, dict) for row in (context.get("system_models") or []))
-    if section_id == "traceability":
-        return any(isinstance(row, dict) for row in (context.get("REQ") or []))
     return False
 
 
@@ -1107,7 +935,7 @@ def default_draft_plan(context: Dict[str, Any], *, mode: str) -> Dict[str, Any]:
     sections = []
     for section_id in order:
         include = context_has_draft_section(context, section_id)
-        if mode == "create" and section_id in {"system_requirement", "traceability"}:
+        if mode == "create" and section_id == "system_requirement":
             include = False
         sections.append({
             "id": section_id,
@@ -1159,9 +987,9 @@ def normalize_draft_plan(raw: Any, context: Dict[str, Any], *, mode: str) -> Dic
         include = bool(include and has_data)
         if section_id == "user_requirements" and has_data:
             include = True
-        if mode == "create" and section_id in {"system_requirement", "traceability"}:
+        if mode == "create" and section_id == "system_requirement":
             include = False
-        if mode == "update" and req_present and section_id in {"system_requirement", "traceability"}:
+        if mode == "update" and req_present and section_id == "system_requirement":
             include = True
         sections.append({
             "id": section_id,
@@ -1241,7 +1069,7 @@ class AnalystDraft:
         context["draft_plan"] = draft_plan
         md = render_complete_draft(
             context,
-            require_traceability=False,
+            require_system_requirement=False,
             draft_plan=draft_plan,
         )
         expected_ids = {
@@ -1259,11 +1087,10 @@ class AnalystDraft:
                 f"draft 不符合 User Requirements 覆蓋契約；unknown={unknown_ids}; missing={missing_ids}"
             )
 
-        require_traceability = False
         contract_issues = draft_contract_issues(
             md,
             context.get("REQ", []) or [],
-            require_traceability=require_traceability,
+            require_system_requirement=False,
         )
         if contract_issues:
             raise RuntimeError(f"draft 不符合草稿輸出契約: {contract_issues}")
@@ -1319,7 +1146,7 @@ class AnalystDraft:
         context["draft_plan"] = draft_plan
         md = render_complete_draft(
             context,
-            require_traceability=bool(context.get("REQ")),
+            require_system_requirement=bool(context.get("REQ")),
             draft_plan=draft_plan,
         )
 
@@ -1341,7 +1168,7 @@ class AnalystDraft:
         contract_issues = draft_contract_issues(
             md,
             context.get("REQ", []) or [],
-            require_traceability=True,
+            require_system_requirement=True,
         )
         if contract_issues:
             raise RuntimeError(f"draft 不符合草稿輸出契約: {contract_issues}")

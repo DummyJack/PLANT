@@ -50,6 +50,14 @@ interface_entry_re = re.compile(r"^[^－-]+[－-].+入口(?:（.*）)?$")
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
+    if isinstance(value, list):
+        return "、".join(clean_text(item) for item in value if clean_text(item))
+    if isinstance(value, dict):
+        return "、".join(
+            f"{clean_text(key)}：{clean_text(item)}"
+            for key, item in value.items()
+            if clean_text(key) and clean_text(item)
+        )
     return str(value).strip()
 
 

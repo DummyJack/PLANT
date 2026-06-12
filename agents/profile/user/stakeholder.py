@@ -28,6 +28,46 @@ def parse_selection(selected: List[Any]) -> List[Dict[str, Any]]:
     return records
 
 
+def stakeholder_text_items(row: Dict[str, Any]) -> List[Dict[str, str]]:
+    text = row.get("text")
+    if isinstance(text, str):
+        return [{"id": "", "text": line.strip()} for line in text.splitlines() if line.strip()]
+    if isinstance(text, list):
+        rows: List[Dict[str, str]] = []
+        for item in text:
+            if isinstance(item, dict):
+                value = str(item.get("text") or "").strip()
+                if value:
+                    rows.append({"id": str(item.get("id") or "").strip(), "text": value})
+                continue
+            value = str(item).strip()
+            if value:
+                rows.append({"id": "", "text": value})
+        return rows
+    value = str(text or "").strip()
+    return [{"id": "", "text": value}] if value else []
+
+
+def normalize_stakeholder_text(stakeholders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for stakeholder_index, item in enumerate(stakeholders or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row["id"] = str(row.get("id") or "").strip() or f"stakeholder-{stakeholder_index}"
+        text_items = stakeholder_text_items(row)
+        normalized_text = []
+        for text_index, item in enumerate(text_items, start=1):
+            normalized_text.append({
+                "id": str(item.get("id") or "").strip() or f"ST-{stakeholder_index}-{text_index}",
+                "text": str(item.get("text") or "").strip(),
+            })
+        row["text"] = normalized_text
+        row.pop("statements", None)
+        normalized.append(row)
+    return normalized
+
+
 # ========
 # Defines merge stakeholder text function for this module workflow.
 # ========
@@ -45,16 +85,9 @@ def merge_stakeholder_text(
         row = dict(base)
         row["id"] = str(row.get("id") or "").strip() or f"stakeholder-{index}"
         generated = generated_by_name.get(row["name"], {})
-        text = generated.get("text") if isinstance(generated, dict) else []
-        if isinstance(text, str):
-            text = [line.strip() for line in text.splitlines() if line.strip()]
-        elif isinstance(text, list):
-            text = [str(line).strip() for line in text if str(line).strip()]
-        else:
-            text = []
-        row["text"] = text
+        row["text"] = stakeholder_text_items(generated) if isinstance(generated, dict) else []
         merged.append(row)
-    return merged
+    return normalize_stakeholder_text(merged)
 
 
 # ========

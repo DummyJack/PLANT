@@ -1,11 +1,11 @@
 # Handles module workflow behavior.
-import html
+import ast
 from pathlib import Path
 import re
 import shutil
 from typing import Optional
 
-from .prompt import generate_srs
+from .actions.srs import generate_srs
 from storage.markdown import clean_llm_output, normalize_model_image_markdown
 
 
@@ -35,24 +35,135 @@ class DocumentorSrs:
         return re.sub(r"\(\.\./models/", "(./models/", srs_md or "")
 
     @staticmethod
-    # Defines fix design rationale links function for this module workflow.
-    def fix_design_rationale_links(srs_md: str) -> str:
-        return re.sub(r"\(\./design_rationale\.html(#.*?)?\)", r"(./design_rationale.md\1)", srs_md or "")
+    def validate_srs_new_format(srs_md: str) -> None:
+        text = str(srs_md or "")
+        if re.search(r"(?m)^#{2,6}\s+REQ-\d+\s*[:：]", text):
+            raise ValueError("SRS output uses old REQ-* requirement headings")
+        if re.search(r"(?m)^Description\s*[:：]", text):
+            raise ValueError("SRS output uses old unbolded Description field")
+        if re.search(r"\(\./design_rationale\.md(?:#[^)]+)?\)", text):
+            raise ValueError("SRS output links to old design_rationale.md artifact")
 
     @staticmethod
-    # Defines fix traceability requirement links function for this module workflow.
-    def fix_traceability_requirement_links(srs_md: str) -> str:
-        text = str(srs_md or "")
-        pattern = re.compile(
-            r"(?m)^(\|\s*)\[((?:FR|NFR|CON)-\d+)\]\([^)]*\)(\s*\|)"
+    def retry_srs_prompt(prompt: str, error: Exception) -> str:
+        return (
+            f"{prompt.rstrip()}\n\n"
+            "# Format Validation Error\n"
+            f"{error}\n\n"
+            "# Retry Instruction\n"
+            "- 你剛剛輸出了舊格式或不合法格式。\n"
+            "- 請只重新輸出完整 Markdown SRS。\n"
+            "- 必須使用新格式：SRS 需求標題只能是 `#### FR-*`、`#### NFR-*`；constraint 只放在系統限制。\n"
+            "- 不得使用 `REQ-*` 作為 SRS 需求標題。\n"
+            "- 需求欄位必須使用粗體欄位名，例如 `**Description**:`。\n"
+            "- 不得連到 `design_rationale.md`；追蹤連結使用 `design_rationale.html`。\n"
+            "- 不要解釋錯誤，不要包程式碼區塊。\n"
         )
 
-        def repl(match: re.Match) -> str:
-            prefix, requirement_id, suffix = match.groups()
-            anchor = requirement_id.lower()
-            return f"{prefix}[{requirement_id}](./design_rationale.md#{anchor}){suffix}"
+    @staticmethod
+    def remove_traceability_sections(srs_md: str) -> str:
+        text = str(srs_md or "")
+        text = re.sub(
+            r"(?ms)^###\s+B\.\s+需求追蹤表\s*\n.*?(?=^###\s+|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?ms)^###\s+需求追蹤表\s*\n.*?(?=^###\s+|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?ms)^##\s+Traceability\s*\n.*?(?=^##\s+|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?ms)^##\s+附錄\s*\n\s*$",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?ms)^##\s+附錄\s*\n+(?=^##\s+|\Z)",
+            "",
+            text,
+        )
+        return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
 
-        return pattern.sub(repl, text)
+    @staticmethod
+    def restore_appendix_heading(srs_md: str) -> str:
+        text = str(srs_md or "")
+        if re.search(r"(?m)^##\s+附錄\s*$", text):
+            return text.rstrip() + "\n"
+        text = re.sub(
+            r"(?m)^###\s+A\.\s+系統模型\s*$",
+            "## 附錄\n\n### A. 系統模型",
+            text,
+            count=1,
+        )
+        return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
+
+    @staticmethod
+    def insert_design_rationale_links(srs_md: str) -> str:
+        text = str(srs_md or "")
+        text = re.sub(
+            r"(?m)^\*\*Design Rationale\*\*[:：]\s*\[[^\]]+\]\([^)]*\)\s*\n?",
+            "",
+            text,
+        )
+        text = re.sub(
+            r'(?m)^####\s+<a\s+[^>]*href="\./design_rationale\.html#((?:fr|nfr)-\d+)"[^>]*>(.*?)</a>\s*$',
+            lambda match: "#### " + match.group(2).strip(),
+            text,
+        )
+        text = re.sub(
+            r"(?m)^(####\s+(?:FR|NFR)-\d+\s*[:：].*?)\s+\[\[DR\]\]\(\./design_rationale\.html#(?:fr|nfr)-\d+\)\s*$",
+            r"\1",
+            text,
+        )
+        text = re.sub(
+            r"(?m)^(\d+\.\s+.*?)(?:\s+\[\[DR\]\]\(\./design_rationale\.html#con-\d+\)|\s*<a\s+[^>]*href=\"\./design_rationale\.html#con-\d+\"[^>]*>\s*\[?DR\]?\s*</a>)\s*$",
+            r"\1",
+            text,
+        )
+
+        heading_pattern = re.compile(r"(?m)^####\s+((?:FR|NFR)-\d+\s*[:：].*?)\s*$")
+
+        def repl(match: re.Match) -> str:
+            title = match.group(1).rstrip()
+            srs_id = title.split(":", 1)[0].split("：", 1)[0].strip()
+            anchor = srs_id.lower()
+            return f"#### {title} [[DR]](./design_rationale.html#{anchor})"
+
+        text = heading_pattern.sub(repl, text)
+
+        def link_constraint_section(match: re.Match) -> str:
+            heading = match.group("heading").rstrip()
+            body = match.group("body")
+            counter = 0
+
+            def link_item(item_match: re.Match) -> str:
+                nonlocal counter
+                counter += 1
+                marker = item_match.group("marker")
+                content = item_match.group("content").rstrip()
+                if "<a " in content and "design_rationale.html#con-" in content:
+                    return item_match.group(0)
+                return f'{marker}{content} [[DR]](./design_rationale.html#con-{counter})'
+
+            linked_body = re.sub(
+                r"(?m)^(?P<marker>\d+\.\s+)(?P<content>.+)$",
+                link_item,
+                body,
+            )
+            return f"{heading}\n\n{linked_body.rstrip()}\n\n"
+
+        text = re.sub(
+            r"(?ms)^(?P<heading>##\s+系統限制)\s*\n+(?P<body>.*?)(?=^##\s+|\Z)",
+            link_constraint_section,
+            text,
+        )
+        return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
 
     @staticmethod
     def srs_id_map(req_rows: list[dict]) -> dict[str, str]:
@@ -65,6 +176,15 @@ class DocumentorSrs:
         out: dict[str, str] = {}
         for row in req_rows:
             req_id = str(row.get("id") or "").strip()
+            existing_srs_id = str(row.get("srs_id") or "").strip()
+            existing_match = re.fullmatch(r"(FR|NFR|CON)-(\d+)", existing_srs_id)
+            if req_id and existing_match:
+                reverse_prefixes = {"FR": "functional", "NFR": "non-functional", "CON": "constraint"}
+                counter_key = reverse_prefixes.get(existing_match.group(1))
+                if counter_key in counters:
+                    counters[counter_key] = max(counters[counter_key], int(existing_match.group(2)))
+                out[req_id] = existing_srs_id
+                continue
             req_type = str(row.get("type") or "").strip().lower()
             if not req_id or req_type not in counters:
                 continue
@@ -97,84 +217,6 @@ class DocumentorSrs:
         return anchors
 
     @staticmethod
-    def trace_html_cell(value: str) -> str:
-        return html.escape(str(value or "").strip(), quote=False).replace("\n", "<br>")
-
-    @classmethod
-    def trace_link(cls, label: str, href: str) -> str:
-        clean_label = cls.trace_html_cell(label)
-        clean_href = html.escape(str(href or "").strip(), quote=True)
-        return f'<a href="{clean_href}">{clean_label}</a>' if clean_label and clean_href else clean_label
-
-    @classmethod
-    def trace_source_cell(cls, source: str, model_anchors: Optional[dict[str, str]] = None) -> str:
-        label = str(source or "").strip()
-        if not label:
-            return ""
-        if label.lower() in {"feedback", "discussion", "meeting", "system_model", "system_models"}:
-            return ""
-        if re.fullmatch(r"SM-\d+", label):
-            return cls.trace_link(label, (model_anchors or {}).get(label, f"#{label.lower()}"))
-        if re.fullmatch(r"(?:ST|URL|CR|FB|SM|REQ|FR|NFR|CON)-\d+|R\d+-M\d+", label):
-            return cls.trace_link(label, f"./design_rationale.md#{label.lower()}")
-        return cls.trace_html_cell(label)
-
-    @classmethod
-    def render_traceability_table(cls, srs_md: str, artifact: dict) -> str:
-        req_rows = [row for row in (artifact.get("REQ") or []) if isinstance(row, dict)]
-        if not req_rows:
-            return ""
-        srs_ids = cls.srs_id_map(req_rows)
-        model_anchors = cls.model_anchor_map_from_srs(srs_md)
-
-        rows: list[str] = []
-        rows.append('<table class="srs-traceability">')
-        rows.append('<colgroup><col style="width: 10%"><col style="width: 64%"><col style="width: 26%"></colgroup>')
-        rows.append("<thead><tr><th>REQ ID</th><th>Requirement</th><th>Source</th></tr></thead>")
-        rows.append("<tbody>")
-        sorted_req_rows = sorted(
-            req_rows,
-            key=lambda req: cls.srs_id_sort_key(srs_ids.get(str(req.get("id") or "").strip(), "")),
-        )
-        for req in sorted_req_rows:
-            req_id = str(req.get("id") or "").strip()
-            srs_id = srs_ids.get(req_id)
-            if not srs_id:
-                continue
-            req_link = cls.trace_link(srs_id, f"./design_rationale.md#{srs_id.lower()}")
-            requirement = cls.trace_html_cell(req.get("description") or req.get("title") or "")
-            raw_sources = req.get("source") if isinstance(req.get("source"), list) else [req.get("source")]
-            source_links = [
-                cell
-                for source in raw_sources
-                for cell in [cls.trace_source_cell(str(source).strip(), model_anchors=model_anchors)]
-                if str(source or "").strip()
-                if cell
-            ]
-            rows.append(
-                "<tr>"
-                f"<td>{req_link}</td>"
-                f"<td>{requirement}</td>"
-                f"<td>{', '.join(source_links)}</td>"
-                "</tr>"
-            )
-        rows.append("</tbody></table>")
-        return "\n".join(rows)
-
-    def rebuild_traceability_table(self, srs_md: str) -> str:
-        try:
-            artifact = self.store.load_artifact() or {}
-        except Exception:
-            return srs_md
-        table = self.render_traceability_table(srs_md, artifact)
-        if not table:
-            return srs_md
-        pattern = re.compile(r"(?ms)^###\s+B\.\s+需求追蹤表\s*\n.*?(?=^###\s+|\Z)")
-        replacement = "### B. 需求追蹤表\n\n" + table + "\n"
-        text, count = pattern.subn(replacement, srs_md or "")
-        return text if count else (srs_md.rstrip() + "\n\n" + replacement)
-
-    @staticmethod
     def normalize_requirement_field_spacing(srs_md: str) -> str:
         text = re.sub(
             r"(?m)^(\*\*Description\*\*[:：])\s*\n+([^\n].*)$",
@@ -204,13 +246,60 @@ class DocumentorSrs:
         return "\n".join(normalized).rstrip() + "\n"
 
     @staticmethod
-    def normalize_model_description_spacing(srs_md: str) -> str:
-        text = re.sub(
-            r"(?m)^(\*\*用途\*\*[：:].+)\n(\*\*反映需求\*\*[：:])",
-            r"\1\n\n\2",
-            srs_md or "",
-        )
-        return text.rstrip() + "\n"
+    def normalize_model_description_labels(srs_md: str) -> str:
+        lines = (srs_md or "").splitlines()
+        normalized: list[str] = []
+        previous_was_model_description = False
+        in_system_context = False
+        in_model_appendix = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^##\s+系統情境\s*$", stripped):
+                in_system_context = True
+                in_model_appendix = False
+            elif re.match(r"^###\s+A\.\s+系統模型\s*$", stripped):
+                in_model_appendix = True
+                in_system_context = False
+            elif re.match(r"^##\s+", stripped):
+                in_system_context = False
+                in_model_appendix = False
+            labels = "用途|反映需求"
+            if in_system_context or in_model_appendix:
+                labels = "Description|用途|反映需求"
+            match = re.match(rf"^\*\*(?:{labels})\*\*[：:]\s*(.*)$", stripped)
+            if match:
+                content = match.group(1).strip()
+                if previous_was_model_description and content and normalized and normalized[-1] != "":
+                    normalized.append("")
+                normalized.append(content)
+                previous_was_model_description = True
+                continue
+            normalized.append(line)
+            previous_was_model_description = False if stripped else previous_was_model_description
+        return "\n".join(normalized).rstrip() + "\n"
+
+    @staticmethod
+    def normalize_serialized_list_cells(markdown_text: str) -> str:
+        def clean_literal(value: str) -> str:
+            text = value.strip()
+            if not (text.startswith("[") and text.endswith("]")):
+                return value
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                return value
+            if not isinstance(parsed, list):
+                return value
+            cleaned = "、".join(str(item).strip() for item in parsed if str(item).strip())
+            prefix = " " if value.startswith(" ") else ""
+            suffix = " " if value.endswith(" ") else ""
+            return f"{prefix}{cleaned}{suffix}"
+
+        def repl(match: re.Match) -> str:
+            cells = [clean_literal(cell) for cell in match.group(0).split("|")]
+            return "|".join(cells)
+
+        return re.sub(r"(?m)^\|.*\|$", repl, markdown_text or "").rstrip() + "\n"
 
     @staticmethod
     def normalize_scope_headings(srs_md: str) -> str:
@@ -251,6 +340,71 @@ class DocumentorSrs:
         ).rstrip() + "\n"
 
     @staticmethod
+    def remove_empty_sections(srs_md: str) -> str:
+        text = str(srs_md or "")
+
+        def is_placeholder_body(body: str) -> bool:
+            cleaned = re.sub(r"<!--.*?-->", "", body or "", flags=re.DOTALL)
+            cleaned = re.sub(r"(?m)^\s*[-*+]\s*", "", cleaned)
+            cleaned = re.sub(r"[（）()]", "", cleaned).strip()
+            if not cleaned:
+                return True
+            if re.fullmatch(r"(?:無|無。|無\.|N/?A|n/?a)", cleaned):
+                return True
+            return bool(
+                re.search(
+                    r"(?:本草稿|本文件|目前)?(?:未明確列出|未列出|沒有|無).{0,40}(?:本節省略|故本節省略)",
+                    cleaned,
+                )
+                or re.search(r"本節省略", cleaned)
+            )
+
+        def remove_empty_requirement_group(match: re.Match) -> str:
+            heading = match.group("heading")
+            body = match.group("body")
+            has_requirement = bool(re.search(r"(?m)^####\s+(?:FR|NFR)-\d+\b", body))
+            if has_requirement:
+                return match.group(0).rstrip() + "\n\n"
+            if is_placeholder_body(body):
+                return ""
+            return match.group(0)
+
+        text = re.sub(
+            r"(?ms)^(?P<heading>###\s+(?:功能性需求|非功能性需求)\s*)\n+(?P<body>.*?)(?=^###\s+|^##\s+|\Z)",
+            remove_empty_requirement_group,
+            text,
+        )
+
+        def remove_empty_top_section(match: re.Match) -> str:
+            heading = match.group("heading")
+            body = match.group("body")
+            if is_placeholder_body(body):
+                return ""
+            return f"{heading.rstrip()}\n\n{body.strip()}\n\n"
+
+        text = re.sub(
+            r"(?ms)^(?P<heading>##\s+系統限制\s*)\n+(?P<body>.*?)(?=^##\s+|\Z)",
+            remove_empty_top_section,
+            text,
+        )
+
+        def remove_empty_requirement_section(match: re.Match) -> str:
+            heading = match.group("heading")
+            body = match.group("body").strip()
+            if not body:
+                return ""
+            if not re.search(r"(?m)^###\s+(?:功能性需求|非功能性需求)\s*$", body):
+                return ""
+            return f"{heading.rstrip()}\n\n{body}\n\n"
+
+        text = re.sub(
+            r"(?ms)^(?P<heading>##\s+需求\s*)\n+(?P<body>.*?)(?=^##\s+|\Z)",
+            remove_empty_requirement_section,
+            text,
+        )
+        return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
+
+    @staticmethod
     # Defines model heading map function for this module workflow.
     def model_heading_map(draft_md: str) -> dict[str, str]:
         headings: dict[str, str] = {}
@@ -286,22 +440,37 @@ class DocumentorSrs:
         draft_md: str,
     ) -> str:
         self.sync_model_images()
+        draft_md = self.normalize_serialized_list_cells(draft_md)
         prompt = generate_srs(draft_md=draft_md)
-        srs_md = self.model.chat(
-            self.build_direct_messages(prompt),
-            action=self.usage_action("documentor.generate_srs"),
-        )
-        srs_md = clean_llm_output(srs_md)
+        action = self.usage_action("documentor.generate_srs")
+        last_error: Optional[ValueError] = None
+        srs_md = ""
+        for attempt in range(2):
+            task = prompt if attempt == 0 else self.retry_srs_prompt(prompt, last_error or ValueError("invalid SRS format"))
+            srs_md = self.model.chat(
+                self.build_direct_messages(task),
+                action=action,
+            )
+            srs_md = clean_llm_output(srs_md)
+            try:
+                self.validate_srs_new_format(srs_md)
+                break
+            except ValueError as exc:
+                last_error = exc
+                if attempt == 1:
+                    raise
         srs_md = self.restore_model_heading_ids(srs_md, draft_md)
         srs_md = self.fix_model_links(srs_md)
-        srs_md = self.fix_design_rationale_links(srs_md)
-        srs_md = self.fix_traceability_requirement_links(srs_md)
         srs_md = normalize_model_image_markdown(srs_md)
         srs_md = self.normalize_scope_headings(srs_md)
         srs_md = self.normalize_system_purpose_paragraph(srs_md)
+        srs_md = self.remove_traceability_sections(srs_md)
+        srs_md = self.restore_appendix_heading(srs_md)
+        srs_md = self.remove_empty_sections(srs_md)
+        srs_md = self.insert_design_rationale_links(srs_md)
         srs_md = self.normalize_requirement_field_spacing(srs_md)
-        srs_md = self.normalize_model_description_spacing(srs_md)
-        srs_md = self.rebuild_traceability_table(srs_md)
+        srs_md = self.normalize_model_description_labels(srs_md)
+        srs_md = self.normalize_serialized_list_cells(srs_md)
         return srs_md
 
     # Defines generate latest srs function for this module workflow.
