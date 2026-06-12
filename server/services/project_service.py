@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, UploadFile
 
-from flow.main import run_export_html_stage, save_cost_summary
+from flow.main import run_export_html_stage, run_export_manual_stage, save_cost_summary
 from flow.setup import Flow
 from storage import Store
 from utils import Logger, export_enabled
@@ -14,7 +14,16 @@ from utils.language import sync_output_language
 from .security import sanitize_filename
 
 
-ALLOWED_REFERENCE_EXTS = {".pdf", ".docx", ".txt", ".md", ".json", ".csv"}
+ALLOWED_REFERENCE_EXTS = {
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+}
 REFERENCE_EXTS_LABEL = ", ".join(sorted(ALLOWED_REFERENCE_EXTS))
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 
@@ -95,6 +104,9 @@ class ProjectService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def references_path(self, project_id: str) -> Path:
+        return self.base_dir / "doc" / project_id
+
     def get_summary(self, project_id: str) -> Dict[str, Any]:
         store = self.ensure_project(project_id)
         artifact = store.load_artifact() or {}
@@ -113,7 +125,6 @@ class ProjectService:
             "has_results": results_dir.exists() and any(results_dir.rglob("*")),
             "has_cost_summary": cost_path.exists(),
             "active_run": active_run,
-            "path": str(store.project_dir),
         }
 
     def update_project(
@@ -151,7 +162,7 @@ class ProjectService:
         self.assert_no_active_run(project_id)
         store = self.ensure_project(project_id)
         project_dir = store.project_dir
-        references_dir = self.references_dir(project_id)
+        references_dir = self.references_path(project_id)
         shutil.rmtree(project_dir)
         if references_dir.exists():
             shutil.rmtree(references_dir)
@@ -163,10 +174,11 @@ class ProjectService:
         *,
         html: bool = True,
         cost: bool = True,
+        manual: bool = True,
     ) -> Dict[str, Any]:
         config = flow.config
         store = flow.store
-        exported: Dict[str, Any] = {"html": False, "cost": False}
+        exported: Dict[str, Any] = {"html": False, "cost": False, "manual": False}
 
         if html and export_enabled(config, "html", True):
             run_export_html_stage(flow)
@@ -174,11 +186,14 @@ class ProjectService:
         if cost and export_enabled(config, "cost", True):
             save_cost_summary(flow)
             exported["cost"] = bool((store.project_dir / "cost_summary.json").exists())
+        if manual and export_enabled(config, "manual", False):
+            run_export_manual_stage(flow)
+            exported["manual"] = bool((store.project_dir / "manual" / "file.json").exists())
 
         return {
             "project_id": store.project_id,
             "exported": exported,
-            "results_dir": str(store.project_dir / "results"),
+            "results_dir": "results",
         }
 
     def export_project(
@@ -187,13 +202,14 @@ class ProjectService:
         *,
         html: bool = True,
         cost: bool = True,
+        manual: bool = True,
     ) -> Dict[str, Any]:
         self.assert_no_active_run(project_id)
         store = self.ensure_project(project_id)
         config = Store(self.base_dir).load_config()
         logger = Logger(store.log_dir, write_file=False)
         flow = Flow(config, store, logger)
-        result = self.export_from_flow(flow, html=html, cost=cost)
+        result = self.export_from_flow(flow, html=html, cost=cost, manual=manual)
         result["project_id"] = project_id
         return result
 
@@ -201,6 +217,7 @@ class ProjectService:
         return {
             "html": bool(export_enabled(config, "html", True)),
             "cost": bool(export_enabled(config, "cost", True)),
+            "manual": bool(export_enabled(config, "manual", False)),
         }
 
     def get_cost_summary(self, project_id: str) -> Dict[str, Any]:
@@ -246,3 +263,11 @@ class ProjectService:
             raise HTTPException(status_code=404, detail="Reference not found")
         target.unlink()
         return {"project_id": project_id, "deleted": True, "name": safe}
+
+    def reference_path(self, project_id: str, name: str) -> Path:
+        self.ensure_project(project_id)
+        safe = sanitize_filename(name)
+        target = self.references_dir(project_id) / safe
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="Reference not found")
+        return target

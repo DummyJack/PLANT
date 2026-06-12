@@ -17,11 +17,14 @@ class RunPersistence:
     def runs_dir(self, project_id: str) -> Path:
         return self.base_dir / "projects" / project_id / "runs"
 
+    def run_dir(self, project_id: str, run_id: str) -> Path:
+        return self.runs_dir(project_id) / run_id
+
     def state_path(self, project_id: str, run_id: str) -> Path:
-        return self.runs_dir(project_id) / f"{run_id}.json"
+        return self.run_dir(project_id, run_id) / "state.json"
 
     def events_path(self, project_id: str, run_id: str) -> Path:
-        return self.runs_dir(project_id) / f"{run_id}.events.jsonl"
+        return self.run_dir(project_id, run_id) / "events.jsonl"
 
     def public_state(self, run: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -84,7 +87,8 @@ class RunPersistence:
             runs_dir = project_path / "runs"
             if not runs_dir.exists():
                 continue
-            for state_file in sorted(runs_dir.glob("run_*.json")):
+            state_files = list(runs_dir.glob("run_*/state.json"))
+            for state_file in sorted(state_files):
                 try:
                     row = json.loads(state_file.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:

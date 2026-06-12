@@ -167,11 +167,20 @@ def build_initial_requirement_candidates_from_stakeholders(
         stakeholder_type = str(stakeholder.get("type") or "").strip()
         raw_texts = stakeholder.get("text") or []
         if isinstance(raw_texts, list):
-            texts = [str(text).strip() for text in raw_texts if str(text).strip()]
+            statement_rows = [
+                (
+                    {"id": str(item.get("id") or "").strip(), "text": str(item.get("text") or "").strip()}
+                    if isinstance(item, dict)
+                    else {"id": "", "text": str(item).strip()}
+                )
+                for item in raw_texts
+            ]
         else:
             text = str(raw_texts or "").strip()
-            texts = [text] if text else []
-        for text in texts:
+            statement_rows = [{"id": "", "text": text}] if text else []
+        statement_rows = [row for row in statement_rows if row.get("text")]
+        for statement in statement_rows:
+            text = str(statement.get("text") or "").strip()
             neutral_text = neutralize_stakeholder_requirement_text(text, stakeholder_name)
             marker = requirement_dedupe_key(f"{stakeholder_name}:{neutral_text}")
             if not marker or marker in seen:
@@ -185,6 +194,7 @@ def build_initial_requirement_candidates_from_stakeholders(
                         "type": stakeholder_type,
                     },
                     "source": "initial",
+                    "source_id": str(statement.get("id") or "").strip(),
                 }
             )
     return ensure_requirement_candidate_ids(candidates)
@@ -210,13 +220,20 @@ def attach_initial_source_ids(
     requirements: List[Dict[str, Any]],
     stakeholders: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    stakeholder_by_name = {
-        str(row.get("name") or "").strip(): str(row.get("id") or "").strip()
-        for row in stakeholders or []
-        if isinstance(row, dict)
-        and str(row.get("name") or "").strip()
-        and str(row.get("id") or "").strip()
-    }
+    statement_by_text = {}
+    for stakeholder in stakeholders or []:
+        if not isinstance(stakeholder, dict):
+            continue
+        stakeholder_name = str(stakeholder.get("name") or "").strip()
+        for statement in stakeholder.get("text") or []:
+            if not isinstance(statement, dict):
+                continue
+            statement_id = str(statement.get("id") or "").strip()
+            statement_text = str(statement.get("text") or "").strip()
+            if not stakeholder_name or not statement_id or not statement_text:
+                continue
+            neutral_text = neutralize_stakeholder_requirement_text(statement_text, stakeholder_name)
+            statement_by_text[(stakeholder_name, requirement_dedupe_key(neutral_text))] = statement_id
     out: List[Dict[str, Any]] = []
     for req in requirements or []:
         row = dict(req)
@@ -227,7 +244,8 @@ def attach_initial_source_ids(
                 if isinstance(stakeholder, dict)
                 else str(stakeholder or "").strip()
             )
-            source_id = stakeholder_by_name.get(stakeholder_name)
+            req_text_key = requirement_dedupe_key(str(row.get("text") or ""))
+            source_id = statement_by_text.get((stakeholder_name, req_text_key))
             if source_id:
                 row["source_id"] = source_id
         out.append(row)
@@ -251,3 +269,23 @@ def next_requirement_id(requirements: List[Dict[str, Any]]) -> str:
         except ValueError:
             continue
     return f"REQ-{max_num + 1}"
+
+
+# ========
+# Defines assign stable SRS ids function for this module workflow.
+# ========
+def assign_stable_srs_ids(artifact: Dict[str, Any]) -> None:
+    counters = {"functional": 0, "non-functional": 0, "constraint": 0}
+    prefixes = {
+        "functional": "FR",
+        "non-functional": "NFR",
+        "constraint": "CON",
+    }
+    for row in artifact.get("REQ") or []:
+        if not isinstance(row, dict):
+            continue
+        req_type = str(row.get("type") or "").strip().lower().replace("_", "-")
+        if req_type not in counters:
+            continue
+        counters[req_type] += 1
+        row["srs_id"] = f"{prefixes[req_type]}-{counters[req_type]}"

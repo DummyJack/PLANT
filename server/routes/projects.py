@@ -2,15 +2,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from model import validate_provider_api_keys
 from storage import Store
 from utils import format_loaded_models_summary
 from utils.language import sync_output_language
 
 from server.services.project_service import ProjectService
 from server.services.run_config import general_formal_meeting_enabled
+from .auth import require_write_access
 
 
 router = APIRouter()
@@ -28,6 +29,7 @@ class ProjectUpdate(BaseModel):
 class ProjectExport(BaseModel):
     html: bool = True
     cost: bool = True
+    manual: bool = True
 
 
 def base_dir(request: Request) -> Path:
@@ -45,17 +47,12 @@ def bootstrap(request: Request):
     store = Store(base_dir(request))
     config_status: Dict[str, Any] = {"loaded": False, "error": None}
     model_summary = ""
-    key_status = {"valid": False, "error": None}
+    key_status = {"valid": True, "error": None}
     config: Optional[Dict[str, Any]] = None
     try:
         config = store.load_config()
         config_status["loaded"] = True
         model_summary = format_loaded_models_summary(config)
-        try:
-            validate_provider_api_keys(config)
-            key_status["valid"] = True
-        except Exception as exc:
-            key_status["error"] = str(exc)
     except Exception as exc:
         config_status["error"] = str(exc)
     return {
@@ -86,6 +83,7 @@ def list_projects(request: Request, enriched: bool = True):
 
 @router.post("/projects")
 def create_project(payload: ProjectCreate, request: Request):
+    require_write_access(request)
     rough_idea = payload.rough_idea.strip()
     if not rough_idea:
         raise HTTPException(status_code=400, detail="rough_idea is required")
@@ -125,10 +123,12 @@ def get_cost_summary(project_id: str, request: Request):
 
 @router.post("/projects/{project_id}/export")
 def export_project(project_id: str, payload: ProjectExport, request: Request):
+    require_write_access(request)
     return project_service(request).export_project(
         project_id,
         html=payload.html,
         cost=payload.cost,
+        manual=payload.manual,
     )
 
 
@@ -137,22 +137,35 @@ def list_references(project_id: str, request: Request):
     return project_service(request).list_references(project_id)
 
 
+@router.get("/projects/{project_id}/references/{name}")
+def download_reference(project_id: str, name: str, request: Request, inline: bool = False):
+    target = project_service(request).reference_path(project_id, name)
+    return FileResponse(
+        target,
+        filename=target.name,
+        content_disposition_type="inline" if inline else "attachment",
+    )
+
+
 @router.post("/projects/{project_id}/references")
 async def upload_reference(
     project_id: str,
     request: Request,
     file: UploadFile = File(...),
 ):
+    require_write_access(request)
     return await project_service(request).upload_reference(project_id, file)
 
 
 @router.delete("/projects/{project_id}/references/{name}")
 def delete_reference(project_id: str, name: str, request: Request):
+    require_write_access(request)
     return project_service(request).delete_reference(project_id, name)
 
 
 @router.patch("/projects/{project_id}")
 def update_project(project_id: str, payload: ProjectUpdate, request: Request):
+    require_write_access(request)
     if payload.rough_idea is None and payload.meta is None:
         raise HTTPException(status_code=400, detail="No fields to update")
     return project_service(request).update_project(
@@ -164,6 +177,7 @@ def update_project(project_id: str, payload: ProjectUpdate, request: Request):
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, request: Request):
+    require_write_access(request)
     return project_service(request).delete_project(project_id)
 
 
@@ -175,5 +189,4 @@ def get_project(project_id: str, request: Request):
     return {
         "project_id": project_id,
         "project": store.load_artifact(),
-        "path": str(store.project_dir),
     }

@@ -127,6 +127,17 @@ def _clean_option_title(value: Any) -> str:
     return re.sub(r"^[A-Z]\s*[:：]\s*", "", title)
 
 
+def _option_letter(index: int) -> str:
+    if index < 1:
+        return ""
+    letters = ""
+    value = index
+    while value:
+        value, rem = divmod(value - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
 def _normalize_options(options: Any) -> List[Dict[str, Any]]:
     if isinstance(options, dict):
         best_options = options.get("best_options", []) or []
@@ -143,17 +154,87 @@ def _normalize_options(options: Any) -> List[Dict[str, Any]]:
         if not isinstance(opt, dict):
             continue
         option = dict(opt)
-        option["id"] = len(all_options) + 1
+        index = len(all_options) + 1
+        option_id = str(option.get("option_id") or option.get("id") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]+", option_id):
+            option_id = _option_letter(index)
+        option["id"] = option_id
+        option["option_id"] = option_id
+        option["index"] = index
         option["title"] = _clean_option_title(opt.get("title", ""))
         all_options.append(option)
 
     if isinstance(compromise, dict) and compromise:
         option = dict(compromise)
-        option["id"] = len(all_options) + 1
+        index = len(all_options) + 1
+        option_id = str(option.get("option_id") or option.get("id") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]+", option_id):
+            option_id = _option_letter(index)
+        option["id"] = option_id
+        option["option_id"] = option_id
+        option["index"] = index
         option["title"] = _clean_option_title(compromise.get("title", ""))
         all_options.append(option)
 
     return all_options
+
+
+def _normalize_choice(value: Any, options: List[Dict[str, Any]]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw == "0":
+        return "0"
+    raw = raw.upper()
+    for opt in options:
+        option_id = str(opt.get("id") or "").strip().upper()
+        if raw == option_id:
+            return option_id
+    return ""
+
+
+def _selected_option_payload(opt: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": opt.get("id"),
+        "option_id": opt.get("option_id") or opt.get("id"),
+        "index": opt.get("index"),
+        "title": _clean_option_title(opt.get("title", "")),
+        "description": str(opt.get("description") or "").strip(),
+        "rationale": str(opt.get("rationale") or "").strip(),
+    }
+
+
+def normalize_decision_options_payload(options: Any) -> Any:
+    normalized = _normalize_options(options)
+    if not normalized:
+        return options
+
+    best_options = [
+        _selected_option_payload(option)
+        for option in normalized
+    ]
+    payload: Dict[str, Any] = {"best_options": best_options}
+
+    source_recommendation = (
+        options.get("recommendation", {})
+        if isinstance(options, dict) and isinstance(options.get("recommendation"), dict)
+        else {}
+    )
+    recommendation = dict(source_recommendation)
+    raw_recommended = (
+        recommendation.get("option_id")
+        or recommendation.get("id")
+        or recommendation.get("choice")
+        or recommendation.get("option")
+    )
+    recommended_id = _normalize_choice(raw_recommended, normalized)
+    if recommended_id:
+        recommendation["option_id"] = recommended_id
+        payload["recommendation"] = recommendation
+    elif recommendation:
+        payload["recommendation"] = recommendation
+
+    return payload
 
 
 def parse_human_decision_response(
@@ -172,12 +253,27 @@ def parse_human_decision_response(
     if isinstance(structured_options, list) and structured_options:
         decision_items = []
         selected_options = []
+        all_options = _normalize_options(options)
         for opt in structured_options:
             if not isinstance(opt, dict):
                 continue
-            title = _clean_option_title(opt.get("title", ""))
+            normalized_id = _normalize_choice(opt.get("id"), all_options)
+            if not normalized_id:
+                raise ValueError("invalid human decision choices")
+            source = next(
+                (
+                    row for row in all_options
+                    if str(row.get("id") or "").strip().upper() == normalized_id
+                ),
+                opt,
+            )
+            title = _clean_option_title(source.get("title", ""))
             desc = str(opt.get("description") or "").strip()
+            if not desc:
+                desc = str(source.get("description") or "").strip()
             rationale = str(opt.get("rationale") or "").strip()
+            if not rationale:
+                rationale = str(source.get("rationale") or "").strip()
             option_text = title
             if desc and desc != title:
                 option_text = f"{title}，{desc}" if title else desc
@@ -187,14 +283,12 @@ def parse_human_decision_response(
                 )
             if option_text:
                 decision_items.append(option_text)
-            selected_options.append(
-                {
-                    "id": opt.get("id"),
-                    "title": title,
-                    "description": desc,
-                    "rationale": rationale,
-                }
-            )
+            selected_options.append(_selected_option_payload({
+                **source,
+                "id": normalized_id or source.get("id") or opt.get("id"),
+                "description": desc,
+                "rationale": rationale,
+            }))
         if not decision_items:
             return {
                 "summary": "人類選擇暫不裁決",
@@ -227,26 +321,26 @@ def parse_human_decision_response(
     if isinstance(choices, list) and choices:
         parsed_choices = []
         for item in choices:
-            try:
-                parsed_choices.append(int(item))
-            except (TypeError, ValueError) as exc:
-                raise ValueError("choices must contain integers") from exc
+            normalized = _normalize_choice(item, all_options)
+            if not normalized:
+                raise ValueError("invalid human decision choices")
+            parsed_choices.append(normalized)
         parsed_choices = list(dict.fromkeys(parsed_choices))
-        if 0 in parsed_choices and len(parsed_choices) > 1:
+        if "0" in parsed_choices and len(parsed_choices) > 1:
             raise ValueError("custom decision cannot be combined with other choices")
-        if parsed_choices == [0]:
+        if parsed_choices == ["0"]:
             if not custom_decision:
                 return {
                     "summary": "人類未輸入裁決",
                     "decision": "",
-                    "chosen_option_id": 0,
+                    "chosen_option_id": "0",
                     "chosen_option_title": "自行輸入裁決",
                 }
             return {
                 "status": "human_decision",
                 "summary": f"由人類裁決: {custom_decision}",
                 "decision": custom_decision,
-                "chosen_option_id": 0,
+                "chosen_option_id": "0",
                 "chosen_option_title": "自行輸入裁決",
             }
         chosen_options = [
@@ -272,6 +366,7 @@ def parse_human_decision_response(
             selected_options.append(
                 {
                     "id": opt.get("id"),
+                    "index": opt.get("index"),
                     "title": title,
                     "description": desc,
                     "rationale": rationale,

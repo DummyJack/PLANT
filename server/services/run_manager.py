@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
 from flow.setup import Flow
-from model import validate_provider_api_keys
+from model import normalize_authentication_error, validate_provider_api_keys
 from storage import Store
 from utils import export_enabled
 from utils.cancel import clear_cancel_checker, register_cancel_checker
@@ -17,14 +17,33 @@ from utils.human import Collect
 from utils.language import sync_output_language
 
 from .event_logger import EventLogger
-from .human_decisions import parse_human_decision_response, parse_stakeholder_response
+from .human_decisions import (
+    normalize_decision_options_payload,
+    parse_human_decision_response,
+    parse_stakeholder_response,
+)
 from .run_config import (
     apply_run_enable_agents,
     apply_run_rounds,
+    apply_run_stage_overrides,
     general_formal_meeting_enabled,
     normalize_attached_reference_paths,
 )
 from .run_persistence import ACTIVE_STATUSES, RunPersistence
+
+
+UI_ERROR_MAX_LENGTH = 500
+MAX_STEP_DELTA_EVENTS_PER_RUN = 1000
+
+
+def _ui_error_message(exc: Exception) -> str:
+    normalized = normalize_authentication_error(exc)
+    text = str(normalized).strip() or "執行失敗"
+    if "\n" in text:
+        text = next((line.strip() for line in text.splitlines() if line.strip()), text)
+    if len(text) > UI_ERROR_MAX_LENGTH:
+        text = text[:UI_ERROR_MAX_LENGTH].rstrip() + "..."
+    return text
 
 
 class RunManager:
@@ -108,6 +127,7 @@ class RunManager:
         rough_idea: Optional[str] = None,
         attached_reference_paths: Optional[List[str]] = None,
         enable_agents: Optional[Dict[str, bool]] = None,
+        stage_overrides: Optional[Dict[str, bool]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         store = Store(self.base_dir, project_id)
@@ -117,6 +137,7 @@ class RunManager:
         base_config = copy.deepcopy(config) if config else Store(self.base_dir).load_config()
         resolved_config = apply_run_rounds(base_config, rounds)
         resolved_config = apply_run_enable_agents(resolved_config, enable_agents)
+        resolved_config = apply_run_stage_overrides(resolved_config, stage_overrides)
         attached_paths = normalize_attached_reference_paths(
             project_id,
             attached_reference_paths,
@@ -240,6 +261,8 @@ class RunManager:
 
             original_user_selection = Collect.user_selection
             original_human_decision = Collect.human_decision_on_issue
+            original_stakeholder_statement_review = Collect.stakeholder_statement_review
+            original_requirements_review = Collect.requirements_review
             Collect.user_selection = staticmethod(
                 lambda proposed, max_select=5: self._request_stakeholder_selection(
                     run_id,
@@ -250,6 +273,12 @@ class RunManager:
             Collect.human_decision_on_issue = staticmethod(
                 lambda issue, options: self._request_human_decision(run_id, issue, options)
             )
+            Collect.stakeholder_statement_review = staticmethod(
+                lambda stakeholders: self._request_stakeholder_statement_review(run_id, stakeholders)
+            )
+            Collect.requirements_review = staticmethod(
+                lambda requirements: self._request_requirements_review(run_id, requirements)
+            )
             output_exported_via_flow = False
             try:
                 mode = self._runs[run_id]["mode"]
@@ -259,6 +288,7 @@ class RunManager:
                 )
                 artifact = self._prepare_artifact_for_run(
                     store,
+                    run_id=run_id,
                     mode=mode,
                     rough_idea=rough_idea,
                     attached_reference_paths=attached_paths,
@@ -278,6 +308,8 @@ class RunManager:
             finally:
                 Collect.user_selection = original_user_selection
                 Collect.human_decision_on_issue = original_human_decision
+                Collect.stakeholder_statement_review = original_stakeholder_statement_review
+                Collect.requirements_review = original_requirements_review
                 clear_cancel_checker(project_id)
 
             self._finish(
@@ -287,15 +319,16 @@ class RunManager:
                 output_exported_via_flow=output_exported_via_flow,
             )
         except Exception as exc:
+            error_text = _ui_error_message(exc)
             with self._lock:
                 run = self._runs[run_id]
                 project_id = str(run.get("project_id") or "")
                 run["status"] = "failed"
-                run["error"] = str(exc)
+                run["error"] = error_text
                 run["finished_at"] = datetime.now().isoformat()
                 self._append_event_locked(
                     run,
-                    {"type": "run_failed", "message": str(exc), "error": str(exc)},
+                    {"type": "run_failed", "message": error_text, "error": error_text},
                 )
                 self._persist_locked(run)
                 self._release_active_locked(run)
@@ -373,12 +406,13 @@ class RunManager:
                 },
             )
         except Exception as exc:
+            error_text = _ui_error_message(exc)
             self._append_event(
                 run_id,
                 {
                     "type": "auto_export_failed",
-                    "message": str(exc),
-                    "error": str(exc),
+                    "message": error_text,
+                    "error": error_text,
                 },
             )
 
@@ -386,6 +420,7 @@ class RunManager:
         self,
         store: Store,
         *,
+        run_id: str,
         mode: str,
         rough_idea: str,
         attached_reference_paths: List[str],
@@ -395,11 +430,20 @@ class RunManager:
 
         if mode == "continue":
             if rough_idea:
-                existing = str(artifact.get("rough_idea") or "").strip()
-                if rough_idea != existing:
-                    artifact["rough_idea"] = rough_idea
-                    sync_output_language(rough_idea, artifact)
-                    changed = True
+                meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+                history = meta.get("continue_instructions")
+                if not isinstance(history, list):
+                    history = []
+                instruction = {
+                    "run_id": run_id,
+                    "text": rough_idea,
+                    "created_at": datetime.now().isoformat(),
+                }
+                history.append(instruction)
+                meta["continue_instruction"] = rough_idea
+                meta["continue_instructions"] = history
+                artifact["meta"] = meta
+                changed = True
             elif artifact.get("rough_idea"):
                 sync_output_language(str(artifact.get("rough_idea") or ""), artifact)
                 changed = True
@@ -432,9 +476,19 @@ class RunManager:
 
     def _append_event_locked(self, run: Dict[str, Any], event: Dict[str, Any]) -> None:
         item = dict(event)
+        if item.get("type") == "step_delta":
+            delta_count = sum(1 for existing in run.get("events", []) if existing.get("type") == "step_delta")
+            if delta_count >= MAX_STEP_DELTA_EVENTS_PER_RUN:
+                return
         item.setdefault("timestamp", datetime.now().isoformat())
         item["id"] = len(run["events"])
         run["events"].append(item)
+        stage_id = item.get("stage_id")
+        if isinstance(stage_id, str) and stage_id:
+            run["current_stage"] = stage_id
+        agent = item.get("agent")
+        if isinstance(agent, str) and agent:
+            run["current_agent"] = agent
         project_id = str(run.get("project_id") or "")
         run_id = str(run.get("run_id") or "")
         if project_id and run_id:
@@ -474,10 +528,7 @@ class RunManager:
             "id": f"stakeholders_{uuid.uuid4().hex[:8]}",
             "kind": "stakeholder_selection",
             "title": "請選擇利害關係人",
-            "description": (
-                f"最多 {max_select} 位。可輸入編號或自訂名稱，例如 1,3,系統管理員；"
-                "也可傳 stakeholders 或 selections 結構化資料。"
-            ),
+            "description": f"最多 {max_select} 位。",
             "proposed": proposed,
             "max_select": max_select,
             "response_schema": {
@@ -491,23 +542,73 @@ class RunManager:
         return parse_stakeholder_response(response, proposed, max_select=max_select)
 
     def _request_human_decision(self, run_id: str, issue: Dict[str, Any], options: Any) -> Dict[str, Any]:
+        normalized_options = normalize_decision_options_payload(options)
         payload = {
             "id": f"decision_{uuid.uuid4().hex[:8]}",
             "kind": "human_decision",
             "title": str((issue or {}).get("title") or "需要人類裁決"),
             "description": str((issue or {}).get("description") or ""),
             "issue": issue,
-            "options": options,
+            "options": normalized_options,
             "response_schema": {
                 "skipped": True,
-                "choices": [1, 2],
+                "choices": ["A", "B"],
                 "custom_decision": "string",
-                "chosen_options": [{"id": 1, "title": "string", "description": "string", "rationale": "string"}],
+                "chosen_options": [{"id": "A", "option_id": "A", "index": 1, "title": "string", "description": "string", "rationale": "string"}],
                 "decision": "string",
             },
         }
         response = self._wait_for_decision(run_id, payload)
-        return parse_human_decision_response(response, options)
+        return parse_human_decision_response(response, normalized_options)
+
+    def _request_stakeholder_statement_review(
+        self,
+        run_id: str,
+        stakeholders: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = {
+            "id": f"stakeholder_statement_{uuid.uuid4().hex[:8]}",
+            "kind": "stakeholder_statement_review",
+            "title": "利害關係人發言",
+            "description": "請確認、直接編輯，或留下 Human Decision。",
+            "options": {
+                "stage_id": "stakeholder_statement",
+                "status": "waiting_for_human_decision",
+                "stakeholders": stakeholders,
+            },
+            "response_schema": {
+                "action": "approve|direct_edit|human_decision|selection_comment|agent_refinement",
+                "stakeholders": [{"name": "string", "text": [{"id": "string", "text": "string"}]}],
+                "human_decision": "string",
+                "selection_comment": {"selected_text": "string", "comment": "string"},
+            },
+        }
+        response = self._wait_for_decision(run_id, payload)
+        return response if isinstance(response, dict) else {"action": "approve"}
+
+    def _request_requirements_review(
+        self,
+        run_id: str,
+        requirements: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = {
+            "id": f"requirements_review_{uuid.uuid4().hex[:8]}",
+            "kind": "requirements_review",
+            "title": "初始需求分析",
+            "description": "請在對話匡加入建議，按確定送出。",
+            "options": {
+                "stage_id": "requirements_review",
+                "status": "waiting_for_human_decision",
+                "requirements": requirements,
+            },
+            "response_schema": {
+                "action": "approve|human_decision|selection_comment|agent_refinement",
+                "human_decision": "string",
+                "selection_comment": {"selected_text": "string", "comment": "string"},
+            },
+        }
+        response = self._wait_for_decision(run_id, payload)
+        return response if isinstance(response, dict) else {"action": "approve"}
 
     def _wait_for_decision(self, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         event = threading.Event()

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from storage import Store
 
 from server.services.config_service import validate_config
+from .auth import require_write_access
 
 
 router = APIRouter()
@@ -32,6 +33,7 @@ def validate_config_endpoint(payload: ConfigUpdate, request: Request):
 
 @router.put("/config")
 def put_config(payload: ConfigUpdate, request: Request):
+    require_write_access(request)
     result = validate_config(payload.config)
     if not result["valid"]:
         raise HTTPException(status_code=400, detail={"errors": result["errors"]})

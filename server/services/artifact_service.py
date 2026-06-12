@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from fastapi import HTTPException
 
-from .security import ensure_extension, resolve_under
+from .security import ALLOWED_OUTPUT_ROOTS, ensure_extension, resolve_project_file, resolve_under
 
 
 TEXT_EXTS = {".json", ".md", ".plantuml", ".txt", ".html", ".csv"}
@@ -35,25 +35,29 @@ class ArtifactService:
     def tree(self, project_id: str) -> List[Dict[str, Any]]:
         root = self.project_dir(project_id)
         out: List[Dict[str, Any]] = []
-        for path in sorted(root.rglob("*")):
-            if path.name == ".DS_Store":
+        for allowed_root in sorted(ALLOWED_OUTPUT_ROOTS):
+            scan_root = root / allowed_root
+            if not scan_root.exists():
                 continue
-            rel = path.relative_to(root).as_posix()
-            out.append(
-                {
-                    "path": rel,
-                    "name": path.name,
-                    "kind": "directory" if path.is_dir() else "file",
-                    "size": path.stat().st_size if path.is_file() else None,
-                    "editable": path.suffix.lower() in EDITABLE_EXTS,
-                    "previewable": path.suffix.lower() in TEXT_EXTS | IMAGE_EXTS,
-                }
-            )
+            for path in sorted(scan_root.rglob("*")):
+                if path.name == ".DS_Store":
+                    continue
+                rel = path.relative_to(root).as_posix()
+                out.append(
+                    {
+                        "path": rel,
+                        "name": path.name,
+                        "kind": "directory" if path.is_dir() else "file",
+                        "size": path.stat().st_size if path.is_file() else None,
+                        "editable": path.suffix.lower() in EDITABLE_EXTS,
+                        "previewable": path.suffix.lower() in TEXT_EXTS | IMAGE_EXTS,
+                    }
+                )
         return out
 
     def read_file(self, project_id: str, relative_path: str) -> Dict[str, Any]:
         root = self.project_dir(project_id)
-        path = resolve_under(self.base_dir, root, relative_path)
+        path = resolve_project_file(self.base_dir, root, relative_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         suffix = path.suffix.lower()
@@ -82,7 +86,7 @@ class ArtifactService:
     def write_file(self, project_id: str, relative_path: str, content: str) -> Dict[str, Any]:
         self._assert_writable(project_id)
         root = self.project_dir(project_id)
-        path = resolve_under(self.base_dir, root, relative_path)
+        path = resolve_project_file(self.base_dir, root, relative_path)
         ensure_extension(path, EDITABLE_EXTS)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="File not found")

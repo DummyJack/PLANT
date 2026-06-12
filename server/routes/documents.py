@@ -3,11 +3,21 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from server.services.security import sanitize_filename
+from .auth import require_write_access
 
 
 router = APIRouter()
 
-ALLOWED_DOC_EXTS = {".pdf", ".docx", ".txt", ".md", ".json", ".csv"}
+ALLOWED_DOC_EXTS = {
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+}
 DOC_EXTS_LABEL = ", ".join(sorted(ALLOWED_DOC_EXTS))
 MAX_DOC_BYTES = 20 * 1024 * 1024
 
@@ -29,6 +39,7 @@ def list_documents(request: Request):
 
 @router.post("/documents")
 async def upload_document(request: Request, file: UploadFile = File(...)):
+    require_write_access(request)
     name = sanitize_filename(file.filename or "")
     suffix = Path(name).suffix.lower()
     if suffix not in ALLOWED_DOC_EXTS:
@@ -46,6 +57,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
 @router.delete("/documents/{name}")
 def delete_document(name: str, request: Request):
+    require_write_access(request)
     safe = sanitize_filename(name)
     target = doc_dir(request) / safe
     if not target.exists() or not target.is_file():

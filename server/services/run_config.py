@@ -53,6 +53,30 @@ def apply_run_rounds(config: Dict[str, Any], rounds_override: Optional[int] = No
     return updated
 
 
+def validate_stage_overrides(stage_overrides: Dict[str, Any]) -> None:
+    if not isinstance(stage_overrides, dict):
+        raise ValueError("stage_overrides must be an object")
+    for key, value in stage_overrides.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("stage_overrides keys must be non-empty strings")
+        if not isinstance(value, bool):
+            raise ValueError(f"stage_overrides[{key!r}] must be a boolean")
+
+
+def apply_run_stage_overrides(
+    config: Dict[str, Any],
+    stage_overrides: Optional[Dict[str, bool]] = None,
+) -> Dict[str, Any]:
+    updated = dict(config)
+    if stage_overrides is None:
+        return updated
+    validate_stage_overrides(stage_overrides)
+    stage = dict(updated.get("stage") or {})
+    stage.update(stage_overrides)
+    updated["stage"] = stage
+    return updated
+
+
 def validate_enable_agents(enable_agents: Dict[str, Any]) -> None:
     if not isinstance(enable_agents, dict):
         raise ValueError("enable_agents must be an object")

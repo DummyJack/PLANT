@@ -2,12 +2,13 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from storage import Store
 from server.services.run_config import general_formal_meeting_enabled
 from server.services.run_manager import sse_done, sse_format, sse_heartbeat
+from .auth import require_project_read_access, require_write_access
 
 
 router = APIRouter()
@@ -20,6 +21,7 @@ class RunCreate(BaseModel):
     rough_idea: Optional[str] = None
     attached_reference_paths: Optional[List[str]] = None
     enable_agents: Optional[Dict[str, bool]] = None
+    stage_overrides: Optional[Dict[str, bool]] = None
 
 
 class DecisionSubmit(BaseModel):
@@ -37,6 +39,7 @@ def list_runs(request: Request, project_id: Optional[str] = Query(default=None))
 
 @router.post("/runs")
 def create_run(payload: RunCreate, request: Request):
+    require_write_access(request)
     if payload.mode not in {"new", "continue"}:
         raise HTTPException(status_code=400, detail="mode must be new or continue")
     try:
@@ -53,6 +56,7 @@ def create_run(payload: RunCreate, request: Request):
             rough_idea=payload.rough_idea,
             attached_reference_paths=payload.attached_reference_paths,
             enable_agents=payload.enable_agents,
+            stage_overrides=payload.stage_overrides,
             config=config,
         )
     except ValueError as exc:
@@ -71,8 +75,12 @@ def get_run(run_id: str, request: Request):
 
 @router.get("/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request, since: int = 0):
-    if not manager(request).get(run_id):
+    run = manager(request).get(run_id)
+    if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    require_project_read_access(request, str(run.get("project_id") or ""))
+    if "application/json" in (request.headers.get("accept") or "").lower():
+        return JSONResponse({"events": manager(request).events_since(run_id, max(0, int(since)))})
 
     async def stream():
         index = max(0, int(since))
@@ -103,6 +111,7 @@ async def run_events(run_id: str, request: Request, since: int = 0):
 
 @router.post("/runs/{run_id}/decisions/{decision_id}")
 def submit_decision(run_id: str, decision_id: str, payload: DecisionSubmit, request: Request):
+    require_write_access(request)
     try:
         return manager(request).submit_decision(run_id, decision_id, payload.payload)
     except KeyError as exc:
@@ -113,6 +122,7 @@ def submit_decision(run_id: str, decision_id: str, payload: DecisionSubmit, requ
 
 @router.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str, request: Request):
+    require_write_access(request)
     try:
         return manager(request).cancel(run_id)
     except KeyError as exc:
