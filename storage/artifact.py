@@ -2,6 +2,7 @@
 import json
 import re
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -81,12 +82,22 @@ def stakeholder_record(row: Any) -> Dict[str, Any]:
         return {"name": "", "text": [str(row).strip()] if str(row).strip() else []}
     text = row.get("text")
     if isinstance(text, list):
-        text_rows = [str(x).strip() for x in text if str(x).strip()]
+        text_rows = []
+        for item in text:
+            if isinstance(item, dict):
+                value = str(item.get("text") or "").strip()
+                if value:
+                    text_rows.append({"id": str(item.get("id") or "").strip(), "text": value})
+                continue
+            value = str(item).strip()
+            if value:
+                text_rows.append({"id": "", "text": value})
     else:
         text_rows = []
     record = {
+        "id": str(row.get("id") or "").strip(),
         "name": str(row.get("name") or row.get("id") or "").strip(),
-        "text": list(dict.fromkeys(text_rows)),
+        "text": text_rows,
     }
     stakeholder_type = str(row.get("type") or "").strip()
     if stakeholder_type:
@@ -127,6 +138,7 @@ def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = N
         if not row.get("name") and not row.get("text"):
             continue
         stakeholders.append({
+            "id": row.get("id", ""),
             "name": row.get("name", ""),
             "type": stakeholder_group(item if isinstance(item, dict) else row),
             "text": row.get("text", []),
@@ -224,6 +236,9 @@ def requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "stakeholder",
         "source",
         "source_id",
+        "related_statement_ids",
+        "trace_confidence",
+        "trace_reason",
     ):
         value = row.get(key)
         if value not in (None, "", []):
@@ -262,6 +277,7 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key in (
         "id",
+        "srs_id",
         "title",
         "type",
         "priority",
@@ -304,6 +320,9 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
             if value:
                 payload[key] = value
     for key in (
+        "source_ids",
+        "related_ids",
+        "derived_from",
         "acceptance_criteria",
         "dependencies",
         "risks",
@@ -314,6 +333,10 @@ def system_requirement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
             rows = [str(item).strip() for item in value if str(item).strip()]
             if rows:
                 payload[key] = rows
+    for key in ("trace_confidence", "trace_reason"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            payload[key] = value
     return payload
 
 
@@ -533,7 +556,7 @@ def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[
     final_label = str(
         item.get("final_label")
         or meeting_row.get("final_label")
-        or item.get("label")
+        or item.get("initial_label")
         or ""
     ).strip()
     if final_label:
@@ -582,10 +605,24 @@ def reindex_conflict_report_rows(rows: Any) -> List[Dict[str, Any]]:
 # Defines conflict requirement signature function for this module workflow.
 # ========
 def conflict_requirement_signature(item: Dict[str, Any]) -> str:
-    req_ids = sorted(conflict_requirement_ids(item))
-    if not req_ids:
+    requirements = item.get("requirements")
+    req_parts: List[str] = []
+    if isinstance(requirements, list):
+        for req in requirements:
+            if not isinstance(req, dict):
+                continue
+            req_id = str(req.get("id") or "").strip()
+            if not req_id:
+                continue
+            req_text = re.sub(r"\s+", " ", str(req.get("text") or "").strip())
+            req_parts.append(f"{req_id}:{req_text}")
+    if not req_parts:
+        req_parts = sorted(conflict_requirement_ids(item))
+    else:
+        req_parts = sorted(req_parts)
+    if not req_parts:
         return ""
-    return "REQSIG:" + "|".join(req_ids)
+    return "REQSIG:" + "|".join(req_parts)
 
 
 FINAL_CONFLICT_STATUSES = {"agreed", "human_decision"}
@@ -813,23 +850,193 @@ def conflict_payload(data: Dict[str, Any], *, include_report: bool = False) -> D
 
 
 # ========
+# Defines normalize conflict meeting payload function for this module workflow.
+# ========
+def normalize_conflict_meeting_payload(value: Any) -> Dict[str, List[Dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for raw_key, rows in value.items():
+        key = str(raw_key or "").strip().lower()
+        if not re.fullmatch(r"r\d+", key):
+            continue
+        cleaned_rows: List[Dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            item = {
+                k: v
+                for k, v in dict(row).items()
+                if k != "review_round" and v not in (None, "", [], {})
+            }
+            if item:
+                cleaned_rows.append(item)
+        if cleaned_rows:
+            out[key] = cleaned_rows
+    return out
+
+
+def conflict_label_from_meeting(meeting: Dict[str, List[Dict[str, Any]]]) -> str:
+    for rows in meeting.values():
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("proposed_label") or row.get("final_label") or row.get("label") or "").strip()
+            if label in {"Conflict", "Neutral"}:
+                return label
+    return ""
+
+
+# ========
+# Defines conflict storage row function for this module workflow.
+# ========
+def conflict_storage_row(
+    item: Dict[str, Any],
+    *,
+    output_id: str,
+    req_refs: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    req_ids = conflict_requirement_ids(item)
+    row: Dict[str, Any] = {"id": output_id}
+    requirements = conflict_requirement_refs({"requirement_ids": req_ids}, req_refs)
+    if requirements:
+        row["requirements"] = requirements
+
+    meeting = normalize_conflict_meeting_payload(item.get("meeting"))
+    inferred_label = conflict_label_from_meeting(meeting)
+    initial_label = str(item.get("initial_label") or item.get("label") or inferred_label).strip()
+    if not initial_label and len(req_ids) == 2:
+        initial_label = "Neutral"
+    elif not initial_label and len(req_ids) > 2:
+        initial_label = "Conflict"
+    initial_type = str(item.get("initial_type") or item.get("type") or item.get("conflict_type") or "").strip()
+    description = str(item.get("description") or "").strip()
+    initial_reason = str(item.get("initial_reason") or item.get("reason") or item.get("rationale") or description).strip()
+    final_label = str(item.get("final_label") or item.get("label") or inferred_label or initial_label).strip()
+    final_type = str(item.get("final_type") or item.get("type") or item.get("conflict_type") or "").strip()
+    if not initial_type and initial_label == "Conflict":
+        initial_type = "other"
+    if not final_type and final_label == "Conflict":
+        final_type = initial_type or "other"
+    if not description:
+        description = initial_reason
+
+    for key, value in (
+        ("initial_label", initial_label),
+        ("initial_type", initial_type),
+        ("initial_reason", initial_reason),
+        ("final_label", final_label),
+        ("final_type", final_type),
+        ("description", description),
+    ):
+        if value:
+            row[key] = value
+    if meeting:
+        row["meeting"] = meeting
+    return row
+
+
+# ========
 # Defines conflict storage payload function for this module workflow.
 # ========
 def conflict_storage_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    payload = conflict_payload(data, include_report=False)
-    if not isinstance(payload, dict):
+    state = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
+    req_refs = requirement_refs_by_id(data)
+    pairs: List[Dict[str, Any]] = []
+    for item in [row for row in (state.get("pairs") or []) if isinstance(row, dict)]:
+        if len(conflict_requirement_ids(item)) != 2:
+            continue
+        pairs.append(conflict_storage_row(item, output_id=conflict_output_id("PAIR", len(pairs) + 1), req_refs=req_refs))
+
+    multiple: List[Dict[str, Any]] = []
+    for item in [row for row in (state.get("multiple") or []) if isinstance(row, dict)]:
+        if len(conflict_requirement_ids(item)) < 2:
+            continue
+        multiple.append(conflict_storage_row(item, output_id=conflict_output_id("MULTIPLE", len(multiple) + 1), req_refs=req_refs))
+
+    payload = {"pairs": pairs, "multiple": multiple}
+    return payload if pairs or multiple else {}
+
+
+def conflict_version_number(key: str) -> int:
+    match = re.fullmatch(r"v(\d+)", str(key).strip(), flags=re.IGNORECASE)
+    return int(match.group(1)) if match else -1
+
+
+def is_versioned_conflict_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and any(conflict_version_number(key) >= 0 for key in payload)
+
+
+def latest_conflict_version_payload(payload: Any) -> Dict[str, Any]:
+    if not is_versioned_conflict_payload(payload):
         return {}
-    return {
-        key: value
-        for key, value in payload.items()
-        if key in {"pairs", "multiple"} and value not in (None, "", [], {})
+    keys = sorted(
+        [key for key in payload if conflict_version_number(key) >= 0],
+        key=conflict_version_number,
+    )
+    latest = payload.get(keys[-1]) if keys else {}
+    return latest if isinstance(latest, dict) else {}
+
+
+def latest_conflict_version_key(payload: Any) -> str:
+    if not is_versioned_conflict_payload(payload):
+        return ""
+    keys = sorted(
+        [key for key in payload if conflict_version_number(key) >= 0],
+        key=conflict_version_number,
+    )
+    return str(keys[-1]) if keys else ""
+
+
+def conflict_detection_signature(payload: Any) -> str:
+    def normalize_row(row: Any) -> Dict[str, Any]:
+        if not isinstance(row, dict):
+            return {"value": row}
+        req_ids = conflict_requirement_ids(row)
+        return {"requirement_ids": sorted(req_ids)}
+
+    source = payload if isinstance(payload, dict) else {}
+    normalized_payload = {
+        "pairs": sorted(
+            [normalize_row(item) for item in (source.get("pairs") or []) if isinstance(item, dict)],
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True),
+        ),
+        "multiple": sorted(
+            [normalize_row(item) for item in (source.get("multiple") or []) if isinstance(item, dict)],
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True),
+        ),
     }
+    return json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def append_conflict_version(existing: Any, current: Dict[str, Any]) -> Dict[str, Any]:
+    if not has_payload_content(current):
+        return existing if isinstance(existing, dict) else {}
+    versions: Dict[str, Any] = {}
+    if is_versioned_conflict_payload(existing):
+        for key, value in existing.items():
+            if conflict_version_number(str(key)) < 0:
+                continue
+            version_payload = dict(value) if isinstance(value, dict) else value
+            if isinstance(version_payload, dict):
+                version_payload.pop("created_at", None)
+            versions[str(key)] = version_payload
+    latest = latest_conflict_version_payload(versions)
+    if conflict_detection_signature(latest) == conflict_detection_signature(current):
+        latest_key = latest_conflict_version_key(versions)
+        if latest_key:
+            versions[latest_key] = current
+        return versions
+    next_num = max([conflict_version_number(key) for key in versions] or [-1]) + 1
+    versions[f"v{next_num}"] = current
+    return versions
 
 
 # ========
 # Defines conflict runtime state function for this module workflow.
 # ========
 def conflict_runtime_state(conflict_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
+    conflict_payload = latest_conflict_version_payload(conflict_payload)
     if not isinstance(conflict_payload, dict):
         return {"report": [], "pairs": [], "multiple": []}
     def runtime_row(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1141,6 +1348,7 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
 # Defines split payload function for this module workflow.
 # ========
 def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
+    base_dir = artifact_dir.parent.parent.parent
     project_file = artifact_dir / "project.json"
     requirements_file = artifact_dir / "requirements.json"
     if not any(path.exists() for path in (project_file, requirements_file)):
@@ -1149,7 +1357,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     project = load_json_path(project_file, {})
     scope = load_json_path(artifact_dir / "scope.json", None)
     requirements = load_json_path(requirements_file, {})
-    conflict_file_payload = load_json_path(artifact_dir / "conflict.json", None)
+    conflict_file_payload = load_json_path(artifact_dir / "result.json", None)
     conflict_report_state = conflict_report_history_state(artifact_dir)
     conflict_report = [
         dict(item) for item in (conflict_report_state.get("report") or [])
@@ -1166,6 +1374,9 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     issues_path = artifact_dir / "meeting" / "issues.json"
     issues = load_json_path(issues_path, {})
     models = load_json_path(artifact_dir / "system_models.json", [])
+    trace_req = load_json_path(base_dir / "trace_req.json", None)
+    if trace_req is None:
+        trace_req = load_json_path(artifact_dir / "trace_req.json", [])
     issue_rows = []
     meeting_issue_rows = []
     if issues_path.exists() and not isinstance(issues, dict):
@@ -1194,10 +1405,8 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
                 if round_num is not None:
                     row["round"] = round_num
                 meeting_issue_rows.append(row)
-    elif isinstance(meeting_issue_section, list):
-        meeting_issue_rows.extend(
-            dict(item) for item in meeting_issue_section if isinstance(item, dict)
-        )
+    elif meeting_issue_section not in (None, {}, []):
+        raise ValueError("issues.json meeting_issues 必須是 object")
     for round_num, item in issue_iter:
         if not isinstance(item, dict):
             continue
@@ -1238,11 +1447,15 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         "issue_proposals": issue_rows,
         "meeting_issues": meeting_issue_rows,
         "system_models": models if isinstance(models, list) else [],
+        "trace_req": trace_req if isinstance(trace_req, list) else [],
     }
     if isinstance(scope, dict) and has_payload_content(scope):
         artifact["scope"] = scope
-    if isinstance(conflict_file_payload, dict) and has_payload_content(conflict_file_payload):
-        conflict_state = conflict_runtime_state(conflict_file_payload)
+    if conflict_report:
+        artifact["conflict_report"] = conflict_report
+    latest_conflict_file_payload = latest_conflict_version_payload(conflict_file_payload)
+    if isinstance(latest_conflict_file_payload, dict) and has_payload_content(latest_conflict_file_payload):
+        conflict_state = conflict_runtime_state(latest_conflict_file_payload)
         if conflict_report:
             conflict_state["report"] = conflict_report
         if resolved_conflict_signatures:
@@ -1272,14 +1485,401 @@ def load_artifact(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     return split_payload(artifact_dir)
 
 
+def trace_req_ids(value: Any) -> List[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def trace_req_next_id(rows: List[Dict[str, Any]]) -> str:
+    max_num = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        match = re.fullmatch(r"TE-(\d+)", str(row.get("event_id") or "").strip())
+        if match:
+            max_num = max(max_num, int(match.group(1)))
+    return f"TE-{max_num + 1}"
+
+
+def trace_req_target_id(value: Any, req_to_srs: Dict[str, str]) -> str:
+    for item in trace_req_ids(value):
+        if item.startswith(("FR-", "NFR-", "CON-")):
+            return item
+        if item in req_to_srs:
+            return req_to_srs[item]
+    return ""
+
+
+def trace_req_trace_id(target_requirement_id: str) -> str:
+    target = str(target_requirement_id or "").strip()
+    return f"TR-{target}" if target else ""
+
+
+def trace_req_first_id(value: Any) -> str:
+    ids = trace_req_ids(value)
+    return ids[0] if ids else ""
+
+
+def trace_req_event_defaults(event_type: str, relation: str = "") -> Dict[str, str]:
+    event = str(event_type or "").strip()
+    rel = str(relation or "").strip()
+    defaults = {
+        "derive_requirement": {"role": "main_chain", "edge_label": "分析"},
+        "formalize_requirement": {"role": "main_chain", "edge_label": ""},
+        "generate_feedback": {"role": "supporting", "edge_label": "依據", "style": "dashed"},
+        "generate_model": {"role": "supporting", "edge_label": "支撐", "style": "dashed"},
+        "detect_conflict": {"role": "main_chain", "edge_label": "衝突"},
+        "resolve_issue": {"role": "main_chain", "edge_label": "解決"},
+    }.get(event, {"role": "supporting", "edge_label": rel})
+    return {
+        "role": defaults.get("role", "supporting"),
+        "edge_label": defaults.get("edge_label", rel),
+        "style": defaults.get("style", ""),
+    }
+
+
+def enrich_trace_req_row(row: Dict[str, Any], req_to_srs: Dict[str, str]) -> Dict[str, Any]:
+    event_type = str(row.get("event_type") or row.get("stage") or "").strip()
+    relation = str(row.get("relation") or "").strip()
+    target_requirement_id = (
+        str(row.get("target_requirement_id") or "").strip()
+    )
+    if target_requirement_id:
+        row["target_requirement_id"] = target_requirement_id
+        row["trace_id"] = str(row.get("trace_id") or "").strip() or trace_req_trace_id(target_requirement_id)
+
+    from_id = str(row.get("from") or "").strip()
+    to_id = str(row.get("to") or "").strip()
+    if from_id:
+        row["from"] = from_id
+    if to_id:
+        row["to"] = to_id
+
+    defaults = trace_req_event_defaults(event_type, relation)
+    row["role"] = str(row.get("role") or defaults["role"]).strip() or defaults["role"]
+    if "edge_label" not in row:
+        row["edge_label"] = defaults["edge_label"]
+    if defaults.get("style") and not str(row.get("style") or "").strip():
+        row["style"] = defaults["style"]
+    return row
+
+
+def trace_req_public_signature(row: Dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "trace_id": str(row.get("trace_id") or "").strip(),
+            "target_requirement_id": str(row.get("target_requirement_id") or "").strip(),
+            "from": str(row.get("from") or "").strip(),
+            "to": str(row.get("to") or "").strip(),
+            "edge_label": str(row.get("edge_label") or "").strip(),
+            "role": str(row.get("role") or "").strip(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def public_trace_req_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    public: Dict[str, Any] = {}
+    for key in (
+        "event_id",
+        "trace_id",
+        "target_requirement_id",
+        "from",
+        "to",
+        "edge_label",
+        "role",
+        "style",
+        "stage",
+        "agent",
+        "confidence",
+        "reason",
+        "trace_reason",
+        "created_at",
+    ):
+        value = row.get(key)
+        if value not in (None, "", []):
+            public[key] = value
+    return public
+
+
+def append_trace_req_event(
+    rows: List[Dict[str, Any]],
+    seen: set[str],
+    *,
+    event_type: str,
+    agent: str,
+    action: str,
+    input_ids: List[str],
+    output_ids: List[str],
+    reason: str = "",
+    stage: str = "",
+    source: str = "",
+    relation: str = "derives",
+    confidence: str = "explicit",
+    target_requirement_id: str = "",
+    from_id: str = "",
+    to_id: str = "",
+    role: str = "",
+    edge_label: str = "",
+    style: str = "",
+) -> None:
+    clean_inputs = list(dict.fromkeys(trace_req_ids(input_ids)))
+    clean_outputs = list(dict.fromkeys(trace_req_ids(output_ids)))
+    if not clean_outputs:
+        return
+    public_signature = trace_req_public_signature({
+        "trace_id": trace_req_trace_id(target_requirement_id),
+        "target_requirement_id": target_requirement_id,
+        "from": from_id or trace_req_first_id(clean_inputs),
+        "to": to_id or trace_req_first_id(clean_outputs),
+        "edge_label": edge_label if edge_label != "" else trace_req_event_defaults(event_type, relation)["edge_label"],
+        "role": role or trace_req_event_defaults(event_type, relation)["role"],
+    })
+    if public_signature in seen:
+        return
+    seen.add(public_signature)
+    row: Dict[str, Any] = {
+        "event_id": trace_req_next_id(rows),
+        "event_type": event_type,
+        "stage": stage or event_type,
+        "agent": agent,
+        "action": action,
+        "source": source,
+        "input_ids": clean_inputs,
+        "output_ids": clean_outputs,
+        "relation": relation,
+        "confidence": confidence,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if target_requirement_id:
+        row["target_requirement_id"] = target_requirement_id
+        row["trace_id"] = trace_req_trace_id(target_requirement_id)
+    if from_id:
+        row["from"] = from_id
+    if to_id:
+        row["to"] = to_id
+    defaults = trace_req_event_defaults(event_type, relation)
+    row["role"] = role or defaults["role"]
+    row["edge_label"] = edge_label if edge_label != "" else defaults["edge_label"]
+    if style or defaults.get("style"):
+        row["style"] = style or defaults.get("style")
+    if reason:
+        row["reason"] = reason
+        row["trace_reason"] = reason
+    rows.append(row)
+
+
+def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    existing = data.get("trace_req")
+    rows: List[Dict[str, Any]] = [
+        dict(row)
+        for row in existing
+        if isinstance(row, dict)
+        and str(row.get("trace_id") or "").strip()
+        and str(row.get("target_requirement_id") or "").strip()
+        and str(row.get("from") or "").strip()
+        and str(row.get("to") or "").strip()
+    ] if isinstance(existing, list) else []
+    req_to_srs = {
+        str(req.get("id") or "").strip(): str(req.get("srs_id") or "").strip()
+        for req in (data.get("REQ") or [])
+        if isinstance(req, dict)
+        and str(req.get("id") or "").strip()
+        and str(req.get("srs_id") or "").strip()
+    }
+    for row in rows:
+        confidence = str(row.get("confidence") or row.get("trace_confidence") or "").strip()
+        if confidence:
+            row["confidence"] = confidence
+        reason = str(row.get("reason") or row.get("trace_reason") or "").strip()
+        if reason:
+            row["reason"] = reason
+        enrich_trace_req_row(row, req_to_srs)
+    for index, row in enumerate(rows, 1):
+        row["event_id"] = f"TE-{index}"
+    seen = {
+        trace_req_public_signature(row)
+        for row in rows
+        if isinstance(row, dict)
+    }
+
+    for req in data.get("REQ") or []:
+        if not isinstance(req, dict):
+            continue
+        req_id = str(req.get("id") or "").strip()
+        if not req_id:
+            continue
+        append_trace_req_event(
+            rows,
+            seen,
+            event_type="derive_requirement",
+            stage="requirements",
+            agent="analyst",
+            action="analyst.requirement",
+            input_ids=trace_req_ids(req.get("source")),
+            output_ids=[req_id],
+            reason=str(req.get("trace_reason") or req.get("rationale") or "").strip(),
+            source=str(req.get("source_id") or "").strip(),
+            relation="derives",
+            confidence=str(req.get("trace_confidence") or "explicit").strip() or "explicit",
+            target_requirement_id=req_to_srs.get(req_id, ""),
+            from_id=trace_req_first_id(req.get("source")),
+            to_id=req_id,
+            role="main_chain",
+            edge_label="分析",
+        )
+        srs_id = str(req.get("srs_id") or "").strip()
+        if srs_id:
+            append_trace_req_event(
+                rows,
+                seen,
+                event_type="formalize_requirement",
+                stage="srs",
+                agent="documentor",
+                action="documentor.generate_srs",
+                input_ids=[req_id],
+                output_ids=[srs_id],
+                relation="formalizes",
+                target_requirement_id=srs_id,
+                from_id=req_id,
+                to_id=srs_id,
+                role="main_chain",
+                edge_label="",
+            )
+
+    feedback = data.get("feedback") if isinstance(data.get("feedback"), dict) else {}
+    feedback_index = 0
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        for item in feedback.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            feedback_index += 1
+            append_trace_req_event(
+                rows,
+                seen,
+                event_type="generate_feedback",
+                stage="domain_research",
+                agent="expert",
+                action="expert.update_feedback",
+                input_ids=trace_req_ids(item.get("related_requirement_ids")),
+                output_ids=[f"FB-{feedback_index}"],
+                reason=str(item.get("trace_reason") or "").strip(),
+                source=str(item.get("source") or "").strip(),
+                relation="supports",
+                confidence=str(item.get("trace_confidence") or ("explicit" if item.get("related_requirement_ids") else "missing")).strip() or "missing",
+                target_requirement_id=trace_req_target_id(item.get("related_requirement_ids"), req_to_srs),
+                from_id=trace_req_first_id(item.get("related_requirement_ids")),
+                to_id=f"FB-{feedback_index}",
+                role="supporting",
+                edge_label="依據",
+                style="dashed",
+            )
+
+    for model in data.get("system_models") or []:
+        if not isinstance(model, dict):
+            continue
+        model_id = str(model.get("id") or "").strip()
+        if not model_id:
+            continue
+        append_trace_req_event(
+            rows,
+            seen,
+            event_type="generate_model",
+            stage="system_model",
+            agent="modeler",
+            action="modeler.generate_model",
+            input_ids=trace_req_ids(model.get("source_ids")) + trace_req_ids(model.get("related_requirement_ids")),
+            output_ids=[model_id],
+            reason=str(model.get("description") or "").strip(),
+            source=str(model.get("source") or "").strip(),
+            relation="models",
+            target_requirement_id=trace_req_target_id(model.get("related_requirement_ids"), req_to_srs),
+            from_id=trace_req_first_id(model.get("source_ids")) or trace_req_first_id(model.get("related_requirement_ids")),
+            to_id=model_id,
+            role="supporting",
+            edge_label="支撐",
+            style="dashed",
+        )
+
+    conflict = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
+    for section in ("pairs", "multiple", "report"):
+        for item in conflict.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            conflict_id = str(item.get("id") or item.get("source_id") or "").strip()
+            req_ids = conflict_requirement_ids(item)
+            if not conflict_id or len(req_ids) < 2:
+                continue
+            append_trace_req_event(
+                rows,
+                seen,
+                event_type="detect_conflict",
+                stage="conflict_detection",
+                agent="analyst",
+                action="analyst.analyze_conflicts",
+                input_ids=req_ids,
+                output_ids=[conflict_id],
+                reason=str(item.get("description") or item.get("reason") or item.get("initial_reason") or "").strip(),
+                relation="detects",
+                target_requirement_id=trace_req_target_id(req_ids, req_to_srs),
+                from_id=trace_req_first_id(req_ids),
+                to_id=conflict_id,
+                role="main_chain",
+                edge_label="衝突",
+            )
+
+    for discussion in data.get("discussions") or []:
+        if not isinstance(discussion, dict):
+            continue
+        for issue in discussion.get("issues") or []:
+            if not isinstance(issue, dict):
+                continue
+            meeting_id = str(issue.get("meeting_id") or "").strip()
+            resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
+            affected_req_ids = trace_req_ids(resolution.get("affected_requirement_ids"))
+            affected_conflict_ids = trace_req_ids(resolution.get("affected_conflict_ids"))
+            if meeting_id and affected_req_ids:
+                append_trace_req_event(
+                    rows,
+                    seen,
+                    event_type="resolve_issue",
+                    stage="formal_meeting",
+                    agent="mediator",
+                    action="mediator.resolve_issue",
+                    input_ids=affected_conflict_ids + [meeting_id],
+                    output_ids=affected_req_ids,
+                    reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
+                    source=meeting_id,
+                    relation="resolves",
+                    target_requirement_id=trace_req_target_id(affected_req_ids, req_to_srs),
+                    from_id=trace_req_first_id(affected_conflict_ids) or meeting_id,
+                    to_id=meeting_id if affected_conflict_ids else trace_req_first_id(affected_req_ids),
+                    role="main_chain",
+                    edge_label="解決",
+                )
+
+    for row in rows:
+        enrich_trace_req_row(row, req_to_srs)
+    public_rows = [public_trace_req_row(row) for row in rows]
+    data["trace_req"] = public_rows
+    return public_rows
+
+
 # ========
 # Defines save artifact function for this module workflow.
 # ========
 def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> None:
     try:
-        from .requirements import renumber_system_requirement_ids
+        from .requirements import assign_stable_srs_ids, renumber_system_requirement_ids
+        from .requirements import attach_initial_source_ids
 
+        data["URL"] = attach_initial_source_ids(data.get("URL", []) or [], stakeholder_rows(data.get("project", data)))
         renumber_system_requirement_ids(data)
+        assign_stable_srs_ids(data)
     except Exception as exc:
         raise RuntimeError("儲存 artifact 前整理 REQ id 失敗") from exc
 
@@ -1290,7 +1890,13 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_json_path(base_dir, project_payload(data, existing_project), project_path)
     save_optional_json_path(base_dir, scope_payload(data), artifact_dir / "scope.json")
     save_json_path(base_dir, requirements_payload(data), artifact_dir / "requirements.json")
-    save_optional_json_path(base_dir, conflict_storage_payload(data), artifact_dir / "conflict.json")
+    conflict_path = artifact_dir / "result.json"
+    existing_conflict_payload = load_json_path(conflict_path, None)
+    save_optional_json_path(
+        base_dir,
+        append_conflict_version(existing_conflict_payload, conflict_storage_payload(data)),
+        conflict_path,
+    )
     save_optional_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
     save_optional_json_path(base_dir, elicitation_payload(data), meeting_dir / "elicitation_meeting.json")
     for pattern in ("formal_meeting_r*.json",):
@@ -1302,6 +1908,9 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     if any(key in data for key in ("issue_proposals", "meeting_issues")):
         save_optional_json_path(base_dir, issue_proposals_payload(data), meeting_dir / "issues.json")
     save_optional_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
+    save_optional_json_path(base_dir, ensure_trace_req(data), base_dir / "trace_req.json")
+    (artifact_dir / "trace_req.json").unlink(missing_ok=True)
+    (artifact_dir / "trace_events.json").unlink(missing_ok=True)
 
 
 # ========

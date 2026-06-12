@@ -275,3 +275,33 @@ class Collect:
             "chosen_option_title": title_label,
             "chosen_options": selected_options,
         }
+
+    @staticmethod
+    def stakeholder_statement_review(stakeholders: List[Dict]) -> Dict:
+        print("\n利害關係人發言已產生：")
+        for index, stakeholder in enumerate(stakeholders or [], 1):
+            name = str(stakeholder.get("name") or f"利害關係人 {index}").strip()
+            print(f"\n{index}. {name}")
+            for item in stakeholder.get("text") or []:
+                text = str(item.get("text") if isinstance(item, dict) else item or "").strip()
+                if text:
+                    print(f"   - {text}")
+        raw = input("\n按 Enter 確認，或輸入修正意見：").strip()
+        if not raw:
+            return {"action": "approve"}
+        return {"action": "human_decision", "human_decision": raw}
+
+    @staticmethod
+    def requirements_review(requirements: List[Dict]) -> Dict:
+        print("\n初始需求分析已產生：")
+        for index, requirement in enumerate(requirements or [], 1):
+            if not isinstance(requirement, dict):
+                continue
+            req_id = str(requirement.get("id") or f"URL-{index}").strip()
+            text = str(requirement.get("text") or requirement.get("description") or "").strip()
+            if text:
+                print(f"  {req_id}. {text}")
+        raw = input("\n按 Enter 確認，或輸入整體/局部建議：").strip()
+        if not raw:
+            return {"action": "approve"}
+        return {"action": "human_decision", "human_decision": raw}

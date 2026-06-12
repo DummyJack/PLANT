@@ -3,7 +3,7 @@ import json
 
 from typing import Dict, List, Optional, Tuple
 
-from .base import BaseLLM
+from .base import AUTH_ERROR_MESSAGE, BaseLLM, normalize_authentication_error
 
 
 def claude_split_messages(
@@ -48,7 +48,7 @@ class ClaudeModel(BaseLLM):
 
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment")
+            raise ValueError(AUTH_ERROR_MESSAGE)
         self.client = anthropic.Anthropic(api_key=api_key)
 
     # ========
@@ -99,6 +99,8 @@ class ClaudeModel(BaseLLM):
             if temp is not None:
                 create_kw["temperature"] = temp
             response = self.client.messages.create(**create_kw)
+        except Exception as exc:
+            raise normalize_authentication_error(exc) from exc
         finally:
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None

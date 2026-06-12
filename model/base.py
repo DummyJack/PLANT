@@ -1,6 +1,7 @@
 # Handles base logic for model provider integration and shared LLM client behavior.
 import inspect
 import os
+import re
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,40 @@ PROVIDER_API_KEY_ENV = {
     "gemini": "GEMINI_API_KEY",
     "local": None,
 }
+
+AUTH_ERROR_MESSAGE = "API Key 無效或已失效，請到設定中重新輸入。"
+
+
+def is_authentication_error(exc: BaseException) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    if status in {401, 403}:
+        return True
+    text = " ".join(
+        str(part)
+        for part in (
+            exc.__class__.__name__,
+            getattr(exc, "code", ""),
+            getattr(exc, "type", ""),
+            getattr(exc, "message", ""),
+            str(exc),
+        )
+        if part
+    ).lower()
+    return bool(
+        re.search(
+            r"unauthorized|authentication|invalid(?:_|\\s|-)*api(?:_|\\s|-)*key|"
+            r"invalid(?:_|\\s|-)*x(?:_|\\s|-)*api(?:_|\\s|-)*key|"
+            r"permission denied|api key not valid|api_key|not found in environment|"
+            r"incorrect api key|invalid token|expired",
+            text,
+        )
+    )
+
+
+def normalize_authentication_error(exc: BaseException) -> BaseException:
+    if is_authentication_error(exc):
+        return ValueError(AUTH_ERROR_MESSAGE)
+    return exc
 
 
 # ========
@@ -45,10 +80,7 @@ def validate_provider_api_keys(config: Dict[str, Any]) -> None:
         if not required_key:
             continue
         if not os.getenv(required_key):
-            raise ValueError(
-                f"找不到 {required_key} 環境變數（provider={used_provider}）\n"
-                f"請在專案主目錄的 .env 檔案中設定 {required_key}=your_api_key"
-            )
+            raise ValueError(AUTH_ERROR_MESSAGE)
 
 
 # ========

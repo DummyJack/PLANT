@@ -6,7 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .base import BaseLLM
+from .base import AUTH_ERROR_MESSAGE, BaseLLM, normalize_authentication_error
 
 
 def gemini_split_messages(
@@ -49,7 +49,7 @@ class GeminiModel(BaseLLM):
             ) from e
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment")
+            raise ValueError(AUTH_ERROR_MESSAGE)
         self.client = genai.Client(api_key=api_key)
 
     # ========
@@ -146,7 +146,10 @@ class GeminiModel(BaseLLM):
         }
         if gen_cfg is not None:
             call_kw["config"] = gen_cfg
-        return self.client.models.generate_content(**call_kw)
+        try:
+            return self.client.models.generate_content(**call_kw)
+        except Exception as exc:
+            raise normalize_authentication_error(exc) from exc
 
     # ========
     # Defines add usage from response function for this module workflow.

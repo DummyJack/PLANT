@@ -4,7 +4,7 @@ import os
 
 from typing import Dict, List, Optional
 
-from .base import BaseLLM
+from .base import AUTH_ERROR_MESSAGE, BaseLLM, normalize_authentication_error
 
 try:
     from openai import OpenAI
@@ -25,7 +25,7 @@ class OpenAIModel(BaseLLM):
             raise ImportError("openai package is required for OpenAIModel")
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment")
+            raise ValueError(AUTH_ERROR_MESSAGE)
         self.client = OpenAI(api_key=api_key)
 
     # ========
@@ -48,6 +48,8 @@ class OpenAIModel(BaseLLM):
                 messages=messages,
                 **kwargs,
             )
+        except Exception as exc:
+            raise normalize_authentication_error(exc) from exc
         finally:
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None
@@ -85,6 +87,8 @@ class OpenAIModel(BaseLLM):
                 response_format={"type": "json_object"},
                 **kwargs,
             )
+        except Exception as exc:
+            raise normalize_authentication_error(exc) from exc
         finally:
             run_s = self.costTracker.end_segment()
         usage = getattr(response, "usage", None) if response is not None else None

@@ -53,3 +53,71 @@ class Logger:
     # ========
     def error(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
+
+    def stage_started(self, stage_id: str, title: str, *, message: str | None = None):
+        self.info("stage started: %s", message or title)
+
+    def stage_completed(self, stage_id: str, title: str, *, message: str | None = None):
+        self.info("stage completed: %s", message or title)
+
+    def step_started(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        *,
+        agent: str | None = None,
+        message: str | None = None,
+    ):
+        if agent:
+            self.info("%s: %s", agent, message or title)
+        else:
+            self.info("%s", message or title)
+
+    def step_delta(
+        self,
+        stage_id: str,
+        step_id: str,
+        content,
+        *,
+        delta_type: str = "text",
+        agent: str | None = None,
+        title: str | None = None,
+    ):
+        return None
+
+    def step_completed(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        *,
+        agent: str | None = None,
+        message: str | None = None,
+        output_path: str | None = None,
+        summary: dict | None = None,
+    ):
+        if output_path:
+            self.info("%s: %s (%s)", agent or "system", message or title, output_path)
+        else:
+            self.info("%s: %s", agent or "system", message or title)
+
+    def artifact_created(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        output_path: str,
+        *,
+        message: str | None = None,
+    ):
+        self.info("%s: %s (%s)", step_id, message or title, output_path)
+
+    def heartbeat(
+        self,
+        stage_id: str | None = None,
+        step_id: str | None = None,
+        *,
+        message: str = "仍在處理中",
+    ):
+        self.info("%s", message)
