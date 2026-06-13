@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 
 from fastapi import HTTPException
 
+from storage.atomic import atomic_write_text
+
 from .security import ALLOWED_OUTPUT_ROOTS, ensure_extension, resolve_project_file, resolve_under
 
 
@@ -96,7 +98,7 @@ class ArtifactService:
             except json.JSONDecodeError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
             content = json.dumps(parsed, ensure_ascii=False, indent=2)
-        path.write_text(content, encoding="utf-8")
+        atomic_write_text(path, content, encoding="utf-8")
         return {"path": relative_path, "saved": True}
 
     @staticmethod

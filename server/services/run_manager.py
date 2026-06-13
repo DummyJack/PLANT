@@ -24,12 +24,14 @@ from .human_decisions import (
 )
 from .run_config import (
     apply_run_enable_agents,
+    apply_run_max_issues,
     apply_run_rounds,
     apply_run_stage_overrides,
     general_formal_meeting_enabled,
     normalize_attached_reference_paths,
 )
 from .run_persistence import ACTIVE_STATUSES, RunPersistence
+from .run_checkpoint import clear_run_checkpoint, clear_run_checkpoint_for_continue, load_run_checkpoint, mark_run_checkpoint
 
 
 UI_ERROR_MAX_LENGTH = 500
@@ -75,6 +77,8 @@ class RunManager:
         merged = dict(disk_runs)
         merged.update(memory_runs)
         rows = list(merged.values())
+        for row in rows:
+            self._attach_run_checkpoint(row)
         rows.sort(key=lambda item: (item.get("started_at", ""), item.get("run_id", "")), reverse=True)
         return rows
 
@@ -124,6 +128,7 @@ class RunManager:
         project_id: str,
         mode: str,
         rounds: Optional[int],
+        max_issues: Optional[int] = None,
         rough_idea: Optional[str] = None,
         attached_reference_paths: Optional[List[str]] = None,
         enable_agents: Optional[Dict[str, bool]] = None,
@@ -135,9 +140,10 @@ class RunManager:
             raise ValueError("Project not found")
 
         base_config = copy.deepcopy(config) if config else Store(self.base_dir).load_config()
-        resolved_config = apply_run_rounds(base_config, rounds)
+        resolved_config = apply_run_stage_overrides(base_config, stage_overrides)
+        resolved_config = apply_run_rounds(resolved_config, rounds)
+        resolved_config = apply_run_max_issues(resolved_config, max_issues)
         resolved_config = apply_run_enable_agents(resolved_config, enable_agents)
-        resolved_config = apply_run_stage_overrides(resolved_config, stage_overrides)
         attached_paths = normalize_attached_reference_paths(
             project_id,
             attached_reference_paths,
@@ -164,6 +170,7 @@ class RunManager:
                 "requires_rounds_input": general_formal_meeting_enabled(base_config) and rounds is None,
                 "config_snapshot": resolved_config,
                 "pending_decision": None,
+                "skip_all_human_interventions": False,
                 "cancel_requested": False,
                 "started_at": datetime.now().isoformat(),
                 "finished_at": None,
@@ -198,6 +205,12 @@ class RunManager:
             pending = run.get("pending_decision") or {}
             if pending and pending.get("id") != decision_id:
                 raise ValueError("decision_id does not match pending decision")
+            if payload.get("skip_all_human_interventions") is True:
+                run["skip_all_human_interventions"] = True
+                payload = {
+                    **payload,
+                    "skipped": True,
+                }
             run["pending_decision"] = None
             run["_decision_response"] = payload
             decision_event = run.get("_decision_event")
@@ -212,6 +225,15 @@ class RunManager:
                     "message": "Human decision submitted",
                 },
             )
+            if payload.get("skip_all_human_interventions") is True:
+                self._append_event_locked(
+                    run,
+                    {
+                        "type": "human_intervention_skip_all_enabled",
+                        "decision_id": decision_id,
+                        "message": "後續人類介入將自動跳過",
+                    },
+                )
             if run["status"] == "waiting_for_human":
                 run["status"] = "running"
             self._persist_locked(run)
@@ -251,6 +273,7 @@ class RunManager:
                 write_file=write_file_log,
             )
             flow = Flow(config, store, logger)
+            flow.run_id = run_id
             with self._lock:
                 self._runs[run_id]["_flow"] = flow
             register_cancel_checker(project_id, lambda: self._cancelled(run_id))
@@ -263,6 +286,8 @@ class RunManager:
             original_human_decision = Collect.human_decision_on_issue
             original_stakeholder_statement_review = Collect.stakeholder_statement_review
             original_requirements_review = Collect.requirements_review
+            original_domain_research_review = Collect.domain_research_review
+            original_meeting_issue_proposal_review = Collect.meeting_issue_proposal_review
             Collect.user_selection = staticmethod(
                 lambda proposed, max_select=5: self._request_stakeholder_selection(
                     run_id,
@@ -278,6 +303,17 @@ class RunManager:
             )
             Collect.requirements_review = staticmethod(
                 lambda requirements: self._request_requirements_review(run_id, requirements)
+            )
+            Collect.domain_research_review = staticmethod(
+                lambda references: self._request_domain_research_review(run_id, references)
+            )
+            Collect.meeting_issue_proposal_review = staticmethod(
+                lambda proposals, round_num, max_issues=5: self._request_meeting_issue_proposal_review(
+                    run_id,
+                    proposals,
+                    round_num,
+                    max_issues=max_issues,
+                )
             )
             output_exported_via_flow = False
             try:
@@ -310,6 +346,8 @@ class RunManager:
                 Collect.human_decision_on_issue = original_human_decision
                 Collect.stakeholder_statement_review = original_stakeholder_statement_review
                 Collect.requirements_review = original_requirements_review
+                Collect.domain_research_review = original_domain_research_review
+                Collect.meeting_issue_proposal_review = original_meeting_issue_proposal_review
                 clear_cancel_checker(project_id)
 
             self._finish(
@@ -323,6 +361,7 @@ class RunManager:
             with self._lock:
                 run = self._runs[run_id]
                 project_id = str(run.get("project_id") or "")
+                stage_id = str(run.get("current_stage") or "")
                 run["status"] = "failed"
                 run["error"] = error_text
                 run["finished_at"] = datetime.now().isoformat()
@@ -333,6 +372,14 @@ class RunManager:
                 self._persist_locked(run)
                 self._release_active_locked(run)
                 run.pop("_flow", None)
+            if project_id:
+                self._record_checkpoint(
+                    project_id,
+                    run_id=run_id,
+                    status="failed",
+                    stage_id=stage_id,
+                    error=error_text,
+                )
             if project_id:
                 clear_cancel_checker(project_id)
 
@@ -354,10 +401,24 @@ class RunManager:
                 run.pop("_flow", None)
             run["status"] = status
             run["finished_at"] = datetime.now().isoformat()
+            stage_id = str(run.get("current_stage") or "")
             self._append_event_locked(run, {"type": f"run_{status}", "message": f"Run {status}"})
             self._persist_locked(run)
             self._release_active_locked(run)
         if project_id:
+            if status == "cancelled":
+                self._record_checkpoint(
+                    project_id,
+                    run_id=run_id,
+                    status="cancelled",
+                    stage_id=stage_id,
+                    error="Run cancelled",
+                )
+            elif status == "completed":
+                try:
+                    clear_run_checkpoint(Store(self.base_dir, project_id))
+                except Exception:
+                    pass
             clear_cancel_checker(project_id)
         if status == "completed" and flow is not None:
             self._auto_export_after_finish(
@@ -366,6 +427,28 @@ class RunManager:
                 flow,
                 output_exported_via_flow=output_exported_via_flow,
             )
+            self._clear_consumed_force_regenerate_flags(flow)
+
+    def _clear_consumed_force_regenerate_flags(self, flow: Flow) -> None:
+        flags = (getattr(flow, "config", {}) or {}).get("force_regenerate_outputs")
+        if not isinstance(flags, dict) or not flags:
+            return
+        try:
+            store = Store(self.base_dir)
+            config = store.load_config()
+            current = config.get("force_regenerate_outputs")
+            if not isinstance(current, dict):
+                return
+            for key in ("DR", "SRS"):
+                if flags.get(key) is True:
+                    current.pop(key, None)
+            if current:
+                config["force_regenerate_outputs"] = current
+            else:
+                config.pop("force_regenerate_outputs", None)
+            store.save_config(config)
+        except Exception:
+            pass
 
     def _auto_export_after_finish(
         self,
@@ -416,6 +499,46 @@ class RunManager:
                 },
             )
 
+    def _record_checkpoint(
+        self,
+        project_id: str,
+        *,
+        run_id: str,
+        status: str,
+        stage_id: str,
+        error: str = "",
+    ) -> None:
+        if not project_id or not stage_id:
+            return
+        try:
+            store = Store(self.base_dir, project_id)
+            checkpoint = mark_run_checkpoint(
+                store,
+                run_id=run_id,
+                status=status,
+                stage_id=stage_id,
+                error=error,
+            )
+            self._append_event(
+                run_id,
+                {
+                    "type": "run_checkpoint_recorded",
+                    "stage_id": stage_id,
+                    "message": "已記錄繼續時可重跑的步驟",
+                    "checkpoint": checkpoint,
+                },
+            )
+        except Exception as exc:
+            self._append_event(
+                run_id,
+                {
+                    "type": "run_checkpoint_record_failed",
+                    "stage_id": stage_id,
+                    "message": _ui_error_message(exc),
+                    "error": _ui_error_message(exc),
+                },
+            )
+
     def _prepare_artifact_for_run(
         self,
         store: Store,
@@ -429,6 +552,8 @@ class RunManager:
         changed = False
 
         if mode == "continue":
+            artifact = clear_run_checkpoint_for_continue(store, artifact)
+            changed = True
             if rough_idea:
                 meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
                 history = meta.get("continue_instructions")
@@ -505,7 +630,29 @@ class RunManager:
     def _public_state(self, run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not run:
             return {}
-        return self._persistence.public_state(run)
+        state = self._persistence.public_state(run)
+        self._attach_run_checkpoint(state)
+        return state
+
+    def _attach_run_checkpoint(self, state: Dict[str, Any]) -> None:
+        project_id = str(state.get("project_id") or "").strip()
+        if not project_id:
+            return
+        if str(state.get("status") or "") == "completed":
+            state.pop("run_checkpoint", None)
+            return
+        try:
+            checkpoint = load_run_checkpoint(Store(self.base_dir, project_id))
+        except Exception:
+            checkpoint = None
+        if not checkpoint:
+            state.pop("run_checkpoint", None)
+            return
+        checkpoint_run_id = str(checkpoint.get("run_id") or "")
+        run_id = str(state.get("run_id") or "")
+        if checkpoint_run_id and run_id and checkpoint_run_id != run_id:
+            return
+        state["run_checkpoint"] = checkpoint
 
     def _project_id_for_run(self, run_id: str) -> Optional[str]:
         with self._lock:
@@ -610,10 +757,78 @@ class RunManager:
         response = self._wait_for_decision(run_id, payload)
         return response if isinstance(response, dict) else {"action": "approve"}
 
+    def _request_domain_research_review(
+        self,
+        run_id: str,
+        references: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = {
+            "id": f"domain_research_review_{uuid.uuid4().hex[:8]}",
+            "kind": "domain_research_review",
+            "title": "領域研究",
+            "description": "請在對話匡加入建議，按確定送出。",
+            "options": {
+                "stage_id": "domain_research_review",
+                "status": "waiting_for_human_decision",
+                "references": references,
+            },
+            "response_schema": {
+                "action": "approve|human_decision",
+                "human_decision": "string",
+                "referenced_files": [{"name": "string", "path": "string", "type": "string"}],
+            },
+        }
+        response = self._wait_for_decision(run_id, payload)
+        return response if isinstance(response, dict) else {"action": "approve"}
+
+    def _request_meeting_issue_proposal_review(
+        self,
+        run_id: str,
+        proposals: List[Dict[str, Any]],
+        round_num: int,
+        max_issues: int = 5,
+    ) -> Dict[str, Any]:
+        payload = {
+            "id": f"meeting_issue_proposal_review_{uuid.uuid4().hex[:8]}",
+            "kind": "meeting_issue_proposal_review",
+            "title": "候選議題",
+            "description": "可輸入自訂議題，按確定送出。",
+            "options": {
+                "stage_id": "meeting_issue_proposal_review",
+                "status": "waiting_for_human_decision",
+                "round_num": round_num,
+                "max_issues": max_issues,
+                "proposals": proposals,
+            },
+            "response_schema": {
+                "action": "approve|human_issues",
+                "custom_issues": [{"title": "string"}],
+            },
+        }
+        response = self._wait_for_decision(run_id, payload)
+        return response if isinstance(response, dict) else {"action": "approve"}
+
     def _wait_for_decision(self, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         event = threading.Event()
         with self._lock:
             run = self._runs[run_id]
+            if (
+                run.get("skip_all_human_interventions") is True
+                and payload.get("kind") != "stakeholder_selection"
+            ):
+                response = self._auto_skip_decision_response(payload)
+                self._append_event_locked(
+                    run,
+                    {
+                        "type": "human_decision_auto_skipped",
+                        "decision_id": payload["id"],
+                        "decision": payload,
+                        "payload": response,
+                        "message": "已自動跳過人類介入",
+                    },
+                )
+                self._persist_locked(run)
+                return response
             run["status"] = "waiting_for_human"
             run["pending_decision"] = payload
             run["_decision_event"] = event
@@ -642,6 +857,13 @@ class RunManager:
                 run["status"] = "running"
             self._persist_locked(run)
             return response
+
+    @staticmethod
+    def _auto_skip_decision_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+        kind = str(payload.get("kind") or "").strip()
+        if kind == "human_decision":
+            return {"skipped": True, "auto_skipped": True}
+        return {"action": "approve", "skipped": True, "auto_skipped": True}
 
 
 def sse_format(event: Dict[str, Any]) -> str:

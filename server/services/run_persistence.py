@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from storage.atomic import atomic_write_text
+
 ACTIVE_STATUSES = {"queued", "running", "waiting_for_human", "cancelling"}
 
 
@@ -39,9 +41,12 @@ class RunPersistence:
         if not project_id or not run_id:
             return
         path = self.state_path(project_id, run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = self.public_state(run)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def append_event(self, project_id: str, run_id: str, event: Dict[str, Any]) -> None:
         path = self.events_path(project_id, run_id)

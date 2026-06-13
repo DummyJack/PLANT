@@ -138,6 +138,16 @@ def _option_letter(index: int) -> str:
     return letters
 
 
+def _option_display_label(value: Any) -> str:
+    rows = [row.strip().upper() for row in str(value or "").split(",") if row.strip()]
+    labels = []
+    for row in rows:
+        label = _option_letter(int(row)) if row.isdigit() else row
+        if label:
+            labels.append(f"選項 {label}")
+    return "、".join(labels) if labels else "選項"
+
+
 def _normalize_options(options: Any) -> List[Dict[str, Any]]:
     if isinstance(options, dict):
         best_options = options.get("best_options", []) or []
@@ -243,6 +253,7 @@ def parse_human_decision_response(
 ) -> Dict[str, Any]:
     if response.get("skipped") is True:
         return {
+            "skipped": True,
             "summary": "人類選擇暫不裁決",
             "decision": "",
             "chosen_option_id": "",
@@ -307,7 +318,7 @@ def parse_human_decision_response(
         )
         return {
             "status": "human_decision",
-            "summary": f"人類採納方案 {choice_label}: {title_label}".strip(),
+            "summary": f"人類採納{_option_display_label(choice_label)}: {title_label}".strip(),
             "decision": decision_text,
             "chosen_option_id": choice_label,
             "chosen_option_title": title_label,
@@ -381,7 +392,7 @@ def parse_human_decision_response(
         )
         return {
             "status": "human_decision",
-            "summary": f"人類採納方案 {choice_label}: {title_label}",
+            "summary": f"人類採納{_option_display_label(choice_label)}: {title_label}",
             "decision": decision_text,
             "chosen_option_id": choice_label,
             "chosen_option_title": title_label,

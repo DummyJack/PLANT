@@ -32,6 +32,14 @@ def validate_config(config: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             errors.append("rounds must be an integer")
 
+    max_issues = config.get("max_issues")
+    if max_issues is not None:
+        try:
+            if int(max_issues) < 1:
+                errors.append("max_issues must be greater than 0")
+        except (TypeError, ValueError):
+            errors.append("max_issues must be an integer")
+
     try:
         validate_provider_api_keys(config)
     except Exception as exc:

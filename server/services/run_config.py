@@ -7,7 +7,27 @@ from utils import stage_enabled
 KNOWN_AGENTS = frozenset(
     {"user", "analyst", "expert", "mediator", "modeler", "documentor"}
 )
-ALWAYS_ENABLED_AGENTS = frozenset({"user", "mediator"})
+
+
+def required_agents_for_enabled_stages(config: Dict[str, Any]) -> set[str]:
+    required: set[str] = set()
+    if stage_enabled(config, "init", True):
+        required.add("user")
+    if stage_enabled(config, "elicitation", True):
+        required.update({"user", "mediator"})
+    if stage_enabled(config, "conflict_detection", True):
+        required.update({"analyst", "mediator"})
+    if stage_enabled(config, "research_domain", True):
+        required.add("expert")
+    if stage_enabled(config, "system_model", True):
+        required.add("modeler")
+    if stage_enabled(config, "draft", True):
+        required.add("analyst")
+    if formal_meeting_enabled(config):
+        required.update({"user", "mediator"})
+    if stage_enabled(config, "DR", True) or stage_enabled(config, "SRS", True):
+        required.add("documentor")
+    return required
 
 
 def formal_meeting_enabled(config: Dict[str, Any]) -> bool:
@@ -50,6 +70,19 @@ def resolve_run_rounds(
 def apply_run_rounds(config: Dict[str, Any], rounds_override: Optional[int] = None) -> Dict[str, Any]:
     updated = dict(config)
     updated["rounds"] = resolve_run_rounds(config, rounds_override)
+    return updated
+
+
+def apply_run_max_issues(
+    config: Dict[str, Any],
+    max_issues_override: Optional[int] = None,
+) -> Dict[str, Any]:
+    updated = dict(config)
+    value = max_issues_override if max_issues_override is not None else updated.get("max_issues", 5)
+    max_issues = int(value)
+    if max_issues < 1:
+        raise ValueError("max_issues must be greater than 0")
+    updated["max_issues"] = max_issues
     return updated
 
 
@@ -114,7 +147,7 @@ def apply_run_enable_agents(
     if enable_agents_override is not None:
         validate_enable_agents(enable_agents_override)
         merged.update(enable_agents_override)
-    for agent in ALWAYS_ENABLED_AGENTS:
+    for agent in required_agents_for_enabled_stages(updated):
         merged[agent] = True
     updated["enable_agents"] = merged
     return updated

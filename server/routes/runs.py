@@ -6,7 +6,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from storage import Store
-from server.services.run_config import general_formal_meeting_enabled
 from server.services.run_manager import sse_done, sse_format, sse_heartbeat
 from .auth import require_project_read_access, require_write_access
 
@@ -18,6 +17,7 @@ class RunCreate(BaseModel):
     project_id: str
     mode: str = "continue"
     rounds: Optional[int] = None
+    max_issues: Optional[int] = None
     rough_idea: Optional[str] = None
     attached_reference_paths: Optional[List[str]] = None
     enable_agents: Optional[Dict[str, bool]] = None
@@ -44,15 +44,11 @@ def create_run(payload: RunCreate, request: Request):
         raise HTTPException(status_code=400, detail="mode must be new or continue")
     try:
         config = Store(request.app.state.base_dir).load_config()
-        if general_formal_meeting_enabled(config) and payload.rounds is None:
-            raise HTTPException(
-                status_code=400,
-                detail="rounds is required when general_formal_meeting is enabled",
-            )
         return manager(request).start_run(
             project_id=payload.project_id,
             mode=payload.mode,
             rounds=payload.rounds,
+            max_issues=payload.max_issues,
             rough_idea=payload.rough_idea,
             attached_reference_paths=payload.attached_reference_paths,
             enable_agents=payload.enable_agents,
