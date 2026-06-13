@@ -13,7 +13,7 @@ function decisionPayloadText(event: RunEvent): string {
         .filter(Boolean)
     : [];
   if (stakeholders.length) {
-    return `已選擇利害關係人：${stakeholders.join("、")}`;
+    return `已提交決策\n選擇：\n${stakeholders.join("\n")}`;
   }
 
   const selections = Array.isArray(payload.selections)
@@ -26,10 +26,32 @@ function decisionPayloadText(event: RunEvent): string {
         .filter(Boolean)
     : [];
   if (selections.length) {
-    return `已選擇利害關係人：${selections.join("、")}`;
+    return `已提交決策\n選擇：\n${selections.join("\n")}`;
   }
 
+  const humanDecision = String(payload.human_decision ?? "").trim();
+  if (humanDecision) {
+    return `已提交決策\n建議：\n${humanDecision}`;
+  }
+
+  const customIssues = Array.isArray(payload.custom_issues)
+    ? payload.custom_issues
+        .map((row) => {
+          if (!row || typeof row !== "object") return "";
+          const item = row as Record<string, unknown>;
+          return String(item.title ?? "").trim();
+        })
+        .filter(Boolean)
+    : [];
+  if (customIssues.length) {
+    return `已提交決策\n議題：\n${customIssues
+      .map((issue, index) => `議題 ${index + 1}：${issue}`)
+      .join("\n")}`;
+  }
+
+  if (payload.skip_all_human_interventions === true) return "後續人類介入將自動跳過";
   if (payload.skipped === true) return "已略過本次裁決";
+  if (payload.action === "approve") return "已提交決策\n無補充建議";
   return "已提交決策";
 }
 
@@ -87,6 +109,7 @@ function logMessageToAgent(text: string): { speaker: string; text: string } | nu
   const arrow =
     /^\s*(user|analyst|expert|modeler|mediator|documentor|documenter)\s*(?:→|->)\s*([^：:]+)?[：:]\s*([\s\S]+)$/i.exec(value);
   if (arrow) {
+    if (String(arrow[2] ?? "").trim()) return null;
     const rawSpeaker = arrow[1].toLowerCase();
     const target = String(arrow[2] ?? "").trim();
     const body = arrow[3].trim();
@@ -126,21 +149,35 @@ function deltaContentText(content: unknown): string {
   return String(content).trim();
 }
 
+function deltaContentLabel(content: unknown): string {
+  if (!content || typeof content !== "object") return "";
+  const item = content as Record<string, unknown>;
+  return String(item.title ?? item.heading ?? item.id ?? "").trim();
+}
+
+function elicitationSpeechText(content: unknown): string {
+  if (!content || typeof content !== "object") return deltaContentText(content);
+  const item = content as Record<string, unknown>;
+  return String(item.body ?? item.text ?? item.markdown ?? item.content ?? "").trim();
+}
+
 export function logEventToChat(event: RunEvent): ChatMessage | null {
   if (event.type === "stage_completed") return null;
 
   if (event.type === "stage_started") {
     if (event.stage_id === "export") return null;
+    const label = workspaceEventText(event, "階段開始");
+    if (event.stage_id === "formal_meeting" && /^正式會議$/.test(label.trim())) {
+      return null;
+    }
+    const round = /^第\s*(\d+)\s*輪正式會議開始$/.exec(label.trim())?.[1];
     return {
       id: `stage-${event.id}`,
       role: "system",
       kind: "stage",
       status: "running",
       stage: event.stage_id,
-      text: workspaceEventText(
-        event,
-        "階段開始",
-      ),
+      text: round ? `第 ${round} 輪會議` : label,
       timestamp: event.timestamp,
     };
   }
@@ -233,6 +270,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       };
     }
     if (
+      event.step_id === "init.suggest_stakeholders" ||
       event.step_id === "init.write_stakeholder_text" ||
       event.step_id === "init.analyze_scenario" ||
       event.step_id === "elicitation.extract_requirements" ||
@@ -272,15 +310,24 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
     if (event.delta_type === "model") return null;
     if (event.delta_type === "markdown_section" && event.stage_id === "draft") return null;
     if (event.delta_type === "markdown_section" && event.stage_id === "document_generation") return null;
-    const text = deltaContentText(event.content);
+    const text =
+      event.stage_id === "elicitation" && event.delta_type === "speech"
+        ? elicitationSpeechText(event.content)
+        : deltaContentText(event.content);
     if (!text) return null;
     const speaker = event.agent || "mediator";
+    const label =
+      event.stage_id === "elicitation" &&
+      event.delta_type === "speech" &&
+      speaker === "user"
+        ? deltaContentLabel(event.content) || agentLabel(speaker)
+        : agentLabel(speaker);
     return {
       id: `delta-${event.id}`,
       role: "agent",
       kind: event.delta_type === "speech" ? "speech" : "action",
       speaker,
-      label: agentLabel(speaker),
+      label,
       action: event.delta_type === "speech" ? undefined : event.step_id ?? event.action,
       stage: event.stage_id,
       status: "running",
@@ -302,7 +349,9 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   }
 
   if (event.type === "log") {
-    const parsed = logMessageToAgent(workspaceEventText(event, ""));
+    const rawText = workspaceEventText(event, "");
+    if (/^\s*(討論完成|收斂結果)[:：]/.test(rawText)) return null;
+    const parsed = logMessageToAgent(rawText);
     if (!parsed) return null;
     return {
       id: `log-${event.id}`,
@@ -347,10 +396,6 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
     };
   }
   if (event.type === "human_decision_submitted") {
-    const payload = event.payload ?? {};
-    if (Array.isArray(payload.stakeholders) || Array.isArray(payload.selections)) {
-      return null;
-    }
     return {
       id: `user-dec-${event.id}`,
       role: "user",
@@ -374,15 +419,12 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   if (event.type === "run_started") {
     return null;
   }
-  if (
-    event.type === "run_completed" ||
-    event.type === "run_failed" ||
-    event.type === "run_cancelled"
-  ) {
+  if (event.type === "run_completed") {
+    return null;
+  }
+  if (event.type === "run_failed" || event.type === "run_cancelled") {
     const label =
-      event.type === "run_completed"
-        ? "執行完成"
-        : event.type === "run_failed"
+      event.type === "run_failed"
           ? "執行失敗"
           : "已取消";
     return {
@@ -398,6 +440,25 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
 }
 
 export function logEventToChats(event: RunEvent): ChatMessage[] {
+  if (event.type === "step_started" && event.step_id === "init.write_stakeholder_text") {
+    const message = logEventToChat(event);
+    const title = String(event.title ?? "").trim();
+    const isRevision = /修正|Human Decision|回饋/i.test(title);
+    const output: ChatMessage = {
+      id: `stakeholder-statement-output-${event.id}`,
+      role: "agent",
+      kind: "output",
+      speaker: event.agent || "user",
+      label: agentLabel(event.agent || "user"),
+      action: isRevision ? "stakeholder_statement_revision" : "stakeholder_statement",
+      stage: event.stage_id,
+      status: "done",
+      text: isRevision ? "發言修正" : "利害關係人發言",
+      outputPath: "artifact/project.json",
+      timestamp: event.timestamp,
+    };
+    return [message, output].filter((item): item is ChatMessage => !!item);
+  }
   const message = logEventToChat(event);
   return message ? [message] : [];
 }

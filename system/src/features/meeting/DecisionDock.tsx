@@ -2,13 +2,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Edit3, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { submitDecision } from "@/api/runs";
+import { ReferenceFileIcon, referenceExt, referenceLabel } from "@/features/documents/ReferenceFileIcon";
 import { useUiStore } from "@/stores/uiStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
 
 interface DecisionDockProps {
   run: RunState;
-  reviewSuggestions?: string[];
+  reviewSuggestions?: ReviewSuggestion[];
   onClearReviewSuggestions?: () => void;
   onEditReviewSuggestion?: (index: number) => void;
   onRemoveReviewSuggestion?: (index: number) => void;
@@ -28,11 +29,45 @@ const STAKEHOLDER_TYPES = [
 ];
 const OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
+function optionDisplayLabel(value: string, index: number) {
+  const raw = value.trim().toUpperCase();
+  const letter = /^\d+$/.test(raw)
+    ? OPTION_LETTERS[Math.max(0, Number(raw) - 1)]
+    : raw || OPTION_LETTERS[index] || String(index + 1);
+  return `選項 ${letter}`;
+}
+
 interface CustomStakeholder {
   id: string;
   name: string;
   type: string;
   reason: string;
+}
+
+export interface ReviewReference {
+  name: string;
+  size?: number;
+}
+
+export interface ReviewSuggestion {
+  text: string;
+  references?: ReviewReference[];
+}
+
+function ReferenceChip({ reference }: { reference: ReviewReference }) {
+  return (
+    <span className="inline-flex max-w-[210px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700">
+      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+        <ReferenceFileIcon name={reference.name} />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[11px] font-semibold leading-4">{reference.name}</span>
+        <span className="block text-[10px] font-medium leading-3 text-slate-400">
+          {referenceLabel(reference.name)}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 export function DecisionDock({
@@ -94,9 +129,17 @@ export function DecisionDock({
   const waitingForResume = submitMut.isPending;
   const actionDisabled = waitingForResume || !canWrite;
 
-  if (decision.kind === "stakeholder_statement_review" || decision.kind === "requirements_review") {
+  if (
+    decision.kind === "stakeholder_statement_review" ||
+    decision.kind === "requirements_review" ||
+    decision.kind === "domain_research_review" ||
+    decision.kind === "meeting_issue_proposal_review"
+  ) {
     const isRequirementsReview = decision.kind === "requirements_review";
-    const renderSuggestion = (value: string) => {
+    const isDomainReview = decision.kind === "domain_research_review";
+    const isMeetingIssueReview = decision.kind === "meeting_issue_proposal_review";
+    const renderSuggestion = (suggestion: ReviewSuggestion) => {
+      const value = suggestion.text;
       const tokens = Array.from(new Set(value.match(/@[A-Za-z0-9_-]+/g) ?? []));
       const text = value
         .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
@@ -104,6 +147,13 @@ export function DecisionDock({
         .trim();
       return (
         <div className="flex min-w-0 flex-col gap-1">
+          {suggestion.references?.length ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {suggestion.references.map((reference) => (
+                <ReferenceChip key={reference.name} reference={reference} />
+              ))}
+            </div>
+          ) : null}
           {tokens.length > 0 && (
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               {tokens.map((token) => (
@@ -121,15 +171,40 @@ export function DecisionDock({
       );
     };
     const submitReview = () => {
-      const suggestions = reviewSuggestions.map((item) => item.trim()).filter(Boolean);
+      const suggestions = reviewSuggestions
+        .map((item) => ({ ...item, text: item.text.trim() }))
+        .filter((item) => item.text || item.references?.length);
       if (!suggestions.length) {
         submitMut.mutate({ action: "approve" });
         return;
       }
+      if (isMeetingIssueReview) {
+        submitMut.mutate({
+          action: "human_issues",
+          custom_issues: suggestions.map((item) => ({ title: item.text })),
+        });
+        onClearReviewSuggestions?.();
+        return;
+      }
       const feedback = suggestions
-        .map((text, index) => `建議 ${index + 1}: ${text}`)
+        .map((item, index) => {
+          const refs = (item.references ?? []).map((ref) => `@${ref.name}`).join(" ");
+          return `建議 ${index + 1}：${[refs, item.text].filter(Boolean).join(" ")}`;
+        })
         .join("\n\n");
-      submitMut.mutate({ action: "human_decision", human_decision: feedback });
+      const referencedFiles = suggestions
+        .flatMap((item) => item.references ?? [])
+        .filter((ref, index, rows) => rows.findIndex((row) => row.name === ref.name) === index)
+        .map((ref) => ({
+          name: ref.name,
+          path: `${run.project_id}/${ref.name}`,
+          type: referenceExt(ref.name).slice(1),
+        }));
+      submitMut.mutate({
+        action: "human_decision",
+        human_decision: feedback,
+        referenced_files: isDomainReview ? referencedFiles : undefined,
+      });
       onClearReviewSuggestions?.();
     };
     return (
@@ -138,28 +213,25 @@ export function DecisionDock({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-[13px] font-semibold text-slate-900">
-                {isRequirementsReview ? "建議（使用者需求）" : "建議（利害關係人發言）"}
+                {isDomainReview
+                  ? "建議（領域研究）"
+                  : isRequirementsReview
+                    ? "建議（使用者需求）"
+                    : isMeetingIssueReview
+                      ? "候選議題"
+                    : "建議（利害關係人發言）"}
               </div>
               <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
                 使用者介入
               </span>
             </div>
             <p className="mt-0.5 text-[11px] leading-5 text-slate-500">
-              {isRequirementsReview ? "按確定送出" : "右側可編輯發言，按確定送出"}
+              {isDomainReview || isRequirementsReview || isMeetingIssueReview
+                ? "按確定送出"
+                : "右側可編輯發言，按確定送出"}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={actionDisabled}
-              onClick={() => {
-                submitMut.mutate({ skipped: true });
-                onClearReviewSuggestions?.();
-              }}
-            >
-              Skip
-            </button>
             <button
               type="button"
               className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
@@ -175,13 +247,13 @@ export function DecisionDock({
         <div className="rounded-lg border border-gray-200 bg-white p-2">
           <div className="space-y-1">
             {reviewSuggestions.length ? (
-              reviewSuggestions.map((text, index) => (
+              reviewSuggestions.map((suggestion, index) => (
                 <div
-                  key={`${text}-${index}`}
+                  key={`${suggestion.text}-${index}`}
                   className="flex items-start gap-2 rounded-md bg-slate-50 px-2 py-2 text-[11px] leading-5 text-slate-600"
                 >
                   <div className="min-w-0 flex-1 break-words">
-                    {renderSuggestion(text)}
+                    {renderSuggestion(suggestion)}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <button
@@ -209,7 +281,7 @@ export function DecisionDock({
               ))
             ) : (
               <div className="rounded-md bg-slate-50 px-2 py-3 text-center text-[11px] leading-4 text-slate-400">
-                在下方對話匡輸入建議後按「+」。
+                {isMeetingIssueReview ? "在下方對話匡輸入自訂議題後按「+」。" : "在下方對話匡輸入建議後按「+」。"}
               </div>
             )}
           </div>
@@ -473,7 +545,7 @@ export function DecisionDock({
               disabled={actionDisabled}
               onClick={() => submitMut.mutate({ skipped: true })}
             >
-              Skip
+              本次跳過
             </button>
             <button
               type="button"
@@ -496,7 +568,8 @@ export function DecisionDock({
               (recommendedId === optionValue ||
                 recommendedId === String(i + 1) ||
                 recommendedId.toUpperCase() === (OPTION_LETTERS[i] ?? "").toUpperCase());
-            const title = opt.title || opt.summary || `方案 ${optionValue}`;
+            const optionLabel = optionDisplayLabel(optionValue, i);
+            const title = opt.title || opt.summary || optionLabel;
             const description = opt.description || (opt.summary !== title ? opt.summary : "");
             return (
               <button
@@ -518,13 +591,13 @@ export function DecisionDock({
               >
                 <span
                     className={cn(
-                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold",
+                    "flex h-5 min-w-12 shrink-0 items-center justify-center rounded-md px-1.5 text-[10px] font-semibold",
                     active
                       ? "bg-white/15 text-white"
                       : "bg-slate-100 text-slate-500",
                   )}
                 >
-                  {OPTION_LETTERS[i] ?? optionValue}
+                  {optionLabel}
                 </span>
                   <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 flex-wrap items-center gap-2">

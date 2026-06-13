@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { runEventsUrl, type RunEvent } from "@/api/runs";
 import { useChatStore } from "@/stores/chatStore";
+import { useUiStore } from "@/stores/uiStore";
 import {
   buildInitialUserMessage,
   logEventToChats,
   mergeChatMessages,
 } from "@/utils/logParser";
+import { outputPathFromRunEvent } from "@/utils/outputFollow";
 import type { RunState } from "@/types/api";
 
 export function useRunEvents(
@@ -24,6 +26,7 @@ export function useRunEvents(
   roughIdeaRef.current = roughIdea;
   const appendMessage = useChatStore((s) => s.appendMessage);
   const setMessages = useChatStore((s) => s.setMessages);
+  const setAutoOutputPath = useUiStore((s) => s.setAutoOutputPath);
   const queryClient = useQueryClient();
 
   const processEvent = useCallback(
@@ -32,6 +35,11 @@ export function useRunEvents(
         if (prev.some((e) => e.id === event.id)) return prev;
         return [...prev, event];
       });
+      const followPath = outputPathFromRunEvent(event);
+      if (followPath) {
+        setAutoOutputPath(followPath);
+        queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      }
       const chats = logEventToChats(event);
       for (const chat of chats) {
         appendMessage(chat);
@@ -53,7 +61,7 @@ export function useRunEvents(
         onComplete?.();
       }
     },
-    [appendMessage, onComplete, queryClient],
+    [appendMessage, onComplete, queryClient, setAutoOutputPath],
   );
 
   // Reset event buffer when run changes or disconnects
@@ -129,7 +137,16 @@ export function useRunEvents(
       esRef.current = null;
       setConnected(false);
     };
-  }, [run?.run_id, run?.status, roughIdea, processEvent, setMessages, appendMessage, queryClient, onComplete]);
+  }, [
+    run?.run_id,
+    run?.status,
+    roughIdea,
+    processEvent,
+    setMessages,
+    appendMessage,
+    queryClient,
+    onComplete,
+  ]);
 
   useEffect(() => {
     if (!run?.run_id) return;

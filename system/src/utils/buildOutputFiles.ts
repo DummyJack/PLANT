@@ -23,7 +23,7 @@ const OUTPUT_LABELS: Record<string, string> = {
 
 function reportLabel(name: string) {
   const version = /^conflict_report_v(\d+)\.(?:html|md|json)$/i.exec(name)?.[1];
-  return version ? `衝突報告 v${Number(version)}` : name.replace(/\.(?:html|md|json)$/i, "");
+  return version ? `Report v${Number(version)}` : name.replace(/\.(?:html|md|json)$/i, "");
 }
 
 const OUTPUT_PATTERNS: Array<{
@@ -67,6 +67,11 @@ const OUTPUT_PATTERNS: Array<{
     },
   },
   {
+    test: /^artifact\/MoM\/R\d+-M\d+\.md$/i,
+    kind: "markdown",
+    label: (_p, name) => name.replace(/\.md$/i, ""),
+  },
+  {
     test: /^results\/[^/]+\/[^/]+\.html$/i,
     kind: "html",
     label: (_p, name) => name.replace(/\.html$/i, ""),
@@ -86,11 +91,6 @@ const OUTPUT_PATTERNS: Array<{
     test: /^artifact\/(project|scope|system_models|requirements|feedback|result)\.json$/i,
     kind: "json",
     label: (path, name) => OUTPUT_LABELS[path] ?? name.replace(/\.json$/i, ""),
-  },
-  {
-    test: /^artifact\/report\/conflict_report_v\d+\.json$/i,
-    kind: "json",
-    label: (_p, name) => reportLabel(name),
   },
   {
     test: /^artifact\/report\/conflict_report_v\d+\.md$/i,
@@ -121,7 +121,7 @@ function outputKind(path: string): OutputFile["kind"] | null {
 }
 
 function isOutputRoot(path: string): boolean {
-  return /^(artifact|results|output|manual)\//i.test(path);
+  return /^(artifact|results|output)\//i.test(path);
 }
 
 function defaultOutputLabel(path: string, name: string): string {
@@ -138,10 +138,58 @@ function modelBaseForPath(path: string, name: string): string | undefined {
 export function buildOutputFiles(items: FileTreeNode[]): OutputFile[] {
   const files: OutputFile[] = [];
   const seen = new Set<string>();
+  const availablePaths = new Set(
+    items.filter((item) => item.kind === "file").map((item) => item.path),
+  );
 
   for (const item of items) {
     if (item.kind !== "file") continue;
+    if (/^manual\//i.test(item.path)) continue;
+    if (/^artifact\/meeting\/issues\.json$/i.test(item.path)) continue;
     if (/^results\/report\/conflict_report\.html$/i.test(item.path)) continue;
+    if (/^artifact\/report\/conflict_report_v\d+\.json$/i.test(item.path)) continue;
+    const momMd = /^artifact\/MoM\/(R\d+-M\d+)\.md$/i.exec(item.path);
+    if (momMd && availablePaths.has(`results/MoM/${momMd[1]}.html`)) {
+      continue;
+    }
+    const modelAsset = /^artifact\/models\/(.+)\.(png|svg|plantuml|puml)$/i.exec(item.path);
+    if (modelAsset) {
+      const [, base, ext] = modelAsset;
+      const pngPath = `artifact/models/${base}.png`;
+      if (/^svg$/i.test(ext) && availablePaths.has(pngPath)) {
+        continue;
+      }
+    }
+    const resultModelImage = /^results\/models\/(.+)\.(png|svg)$/i.exec(item.path);
+    if (resultModelImage) {
+      const [, base] = resultModelImage;
+      if (
+        availablePaths.has(`artifact/models/${base}.png`) ||
+        availablePaths.has(`artifact/models/${base}.svg`)
+      ) {
+        continue;
+      }
+    }
+    const draftMd = /^artifact\/drafts\/draft_v(\d+)\.md$/i.exec(item.path);
+    if (draftMd && availablePaths.has(`results/drafts/draft_v${draftMd[1]}.html`)) {
+      continue;
+    }
+    if (
+      /^output\/srs\.md$/i.test(item.path) &&
+      availablePaths.has("results/srs.html")
+    ) {
+      continue;
+    }
+    if (
+      /^output\/design_rationale\.md$/i.test(item.path) &&
+      availablePaths.has("results/design_rationale.html")
+    ) {
+      continue;
+    }
+    const reportRaw = /^artifact\/report\/conflict_report_v(\d+)\.(?:md|json)$/i.exec(item.path);
+    if (reportRaw && availablePaths.has(`results/report/conflict_report_v${reportRaw[1]}.html`)) {
+      continue;
+    }
     if (seen.has(item.path)) continue;
     let matched = false;
     for (const pattern of OUTPUT_PATTERNS) {
@@ -179,7 +227,15 @@ export function buildOutputFiles(items: FileTreeNode[]): OutputFile[] {
       return 5;
     };
     const d = order(a.path) - order(b.path);
-    return d !== 0 ? d : a.label.localeCompare(b.label, "zh-Hant");
+    if (d !== 0) return d;
+    const momA = /^R(\d+)-M(\d+)$/i.exec(a.label);
+    const momB = /^R(\d+)-M(\d+)$/i.exec(b.label);
+    if (momA && momB) {
+      const roundDiff = Number(momA[1]) - Number(momB[1]);
+      if (roundDiff !== 0) return roundDiff;
+      return Number(momA[2]) - Number(momB[2]);
+    }
+    return a.label.localeCompare(b.label, "zh-Hant");
   });
 }
 
@@ -191,22 +247,27 @@ export function resolvePreferredOutputPath(
 
   const candidates: string[] = [];
   const draft = /^artifact\/drafts\/draft_v(\d+)\.md$/i.exec(path);
-  if (draft) candidates.push(`results/drafts/draft_v${draft[1]}.html`);
+  if (draft) candidates.push(`results/drafts/draft_v${draft[1]}.html`, path);
   const draftHtml = /^results\/drafts\/draft_v(\d+)\.html$/i.exec(path);
-  if (draftHtml) candidates.push(path);
+  if (draftHtml) candidates.push(path, `artifact/drafts/draft_v${draftHtml[1]}.md`);
 
   const report = /^artifact\/report\/conflict_report_v(\d+)\.(?:md|json)$/i.exec(path);
-  if (report) candidates.push(`results/report/conflict_report_v${report[1]}.html`);
+  if (report) candidates.push(`results/report/conflict_report_v${report[1]}.html`, path);
   const reportHtml = /^results\/report\/conflict_report_v(\d+)\.html$/i.exec(path);
-  if (reportHtml) candidates.push(path);
+  if (reportHtml) candidates.push(path, `artifact/report/conflict_report_v${reportHtml[1]}.md`);
 
-  if (/^output\/srs\.md$/i.test(path)) candidates.push("results/srs.html");
-  if (/^results\/srs\.html$/i.test(path)) candidates.push(path);
+  const mom = /^artifact\/MoM\/(R\d+-M\d+)\.md$/i.exec(path);
+  if (mom) candidates.push(`results/MoM/${mom[1]}.html`, path);
+  const momHtml = /^results\/MoM\/(R\d+-M\d+)\.html$/i.exec(path);
+  if (momHtml) candidates.push(path, `artifact/MoM/${momHtml[1]}.md`);
+
+  if (/^output\/srs\.md$/i.test(path)) candidates.push("results/srs.html", path);
+  if (/^results\/srs\.html$/i.test(path)) candidates.push(path, "output/srs.md");
   if (/^output\/design_rationale\.md$/i.test(path)) {
-    candidates.push("results/design_rationale.html");
+    candidates.push("results/design_rationale.html", path);
   }
   if (/^results\/design_rationale\.html$/i.test(path)) {
-    candidates.push(path);
+    candidates.push(path, "output/design_rationale.md");
   }
 
   candidates.push(path);

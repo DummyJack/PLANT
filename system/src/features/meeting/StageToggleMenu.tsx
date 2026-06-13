@@ -12,14 +12,14 @@ const STAGE_ROWS: Array<{
   label: string;
   keys: string[];
 }> = [
-  { id: "init", label: "Init", keys: ["init"] },
-  { id: "elicitation", label: "Elicitation", keys: ["elicitation"] },
-  { id: "conflict_detection", label: "Conflict Detection", keys: ["conflict_detection"] },
-  { id: "research_domain", label: "Research Domain", keys: ["research_domain"] },
-  { id: "system_model", label: "System Model", keys: ["system_model"] },
-  { id: "draft", label: "Draft", keys: ["default_update_draft", "general_update_draft"] },
-  { id: "default_meeting", label: "Default Meeting", keys: ["default_formal_meeting", "default_update_draft"] },
-  { id: "general_meeting", label: "General Meeting", keys: ["general_formal_meeting", "general_update_draft"] },
+  { id: "init", label: "初始階段", keys: ["init"] },
+  { id: "elicitation", label: "需求擷取", keys: ["elicitation"] },
+  { id: "conflict_detection", label: "衝突辨識", keys: ["conflict_detection"] },
+  { id: "research_domain", label: "領域研究", keys: ["research_domain"] },
+  { id: "system_model", label: "系統模型", keys: ["system_model"] },
+  { id: "draft", label: "草稿化", keys: ["draft"] },
+  { id: "default_meeting", label: "預設會議", keys: ["default_formal_meeting", "default_update_draft"] },
+  { id: "general_meeting", label: "一般會議", keys: ["general_formal_meeting", "general_update_draft"] },
   { id: "DR", label: "Design Rationale", keys: ["DR"] },
   { id: "SRS", label: "SRS", keys: ["SRS"] },
 ];
@@ -30,7 +30,10 @@ function stageEnabled(
   stageOverrides?: Record<string, boolean>,
 ) {
   const stage = config?.stage ?? {};
-  return keys.every((key) => (stageOverrides?.[key] ?? stage[key]) === true);
+  return keys.every((key) => {
+    if (stage[key] === false) return false;
+    return (stageOverrides?.[key] ?? stage[key]) === true;
+  });
 }
 
 function setStageKeys(config: PlantConfig, keys: string[], enabled: boolean): PlantConfig {
@@ -41,16 +44,45 @@ function setStageKeys(config: PlantConfig, keys: string[], enabled: boolean): Pl
   return { ...config, stage };
 }
 
+function setForceRegenerateOutputs(
+  config: PlantConfig,
+  keys: string[],
+  enabled: boolean,
+  existingOutputs?: { DR?: boolean; SRS?: boolean },
+): PlantConfig {
+  const force = { ...((config.force_regenerate_outputs as Record<string, boolean> | undefined) ?? {}) };
+  for (const key of keys) {
+    if ((key === "DR" || key === "SRS") && enabled && existingOutputs?.[key]) {
+      force[key] = true;
+    }
+    if ((key === "DR" || key === "SRS") && !enabled) {
+      delete force[key];
+    }
+  }
+  if (!Object.keys(force).length) {
+    const { force_regenerate_outputs: _forceRegenerateOutputs, ...rest } = config;
+    return rest;
+  }
+  return { ...config, force_regenerate_outputs: force };
+}
+
 interface StageToggleMenuProps {
   disabled?: boolean;
   disabledReason?: string;
   stageOverrides?: Record<string, boolean>;
+  existingOutputs?: {
+    DR?: boolean;
+    SRS?: boolean;
+  };
+  compact?: boolean;
 }
 
 export function StageToggleMenu({
   disabled = false,
   disabledReason,
   stageOverrides,
+  existingOutputs,
+  compact = false,
 }: StageToggleMenuProps) {
   const queryClient = useQueryClient();
   const pushNotice = useNoticeStore((s) => s.pushNotice);
@@ -97,8 +129,14 @@ export function StageToggleMenu({
     if (disabled) return;
     const config = configQuery.data;
     if (!config) return;
-    const nextEnabled = !stageEnabled(config, keys);
-    saveMut.mutate(setStageKeys(config, keys, nextEnabled));
+    const nextEnabled = !stageEnabled(config, keys, stageOverrides);
+    const nextConfig = setForceRegenerateOutputs(
+      setStageKeys(config, keys, nextEnabled),
+      keys,
+      nextEnabled,
+      existingOutputs,
+    );
+    saveMut.mutate(nextConfig);
   };
 
   return (
@@ -107,7 +145,8 @@ export function StageToggleMenu({
         type="button"
         aria-label="階段"
         className={cn(
-          "inline-flex h-7 w-7 items-center justify-center rounded-control border text-xs font-medium transition",
+          "inline-flex h-7 items-center gap-1.5 rounded-control border text-xs font-medium transition",
+          compact ? "w-7 justify-center px-0" : "px-2.5",
           disabled && !open
             ? "border-gray-200 bg-gray-50 text-slate-400 hover:border-slate-300 hover:text-slate-600"
             : open
@@ -120,10 +159,13 @@ export function StageToggleMenu({
         }}
       >
         <Layers className="h-3.5 w-3.5" />
+        <span className={cn(compact && "sr-only")}>階段</span>
       </button>
-      <span className="pointer-events-none absolute left-0 top-full z-40 mt-2 whitespace-nowrap rounded-control border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 opacity-0 shadow-md transition-opacity delay-500 duration-150 group-hover:opacity-100">
-        階段
-      </span>
+      {compact && (
+        <span className="pointer-events-none absolute left-0 top-full z-40 mt-2 whitespace-nowrap rounded-control border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 opacity-0 shadow-md transition-opacity delay-500 duration-150 group-hover:opacity-100">
+          階段
+        </span>
+      )}
       {open && (
         <div className="absolute left-0 top-full z-30 mt-2 w-64 rounded-card border border-gray-200 bg-white p-2 shadow-lg">
           {configQuery.isLoading ? (
@@ -131,17 +173,20 @@ export function StageToggleMenu({
           ) : (
             <div className="space-y-1">
               {STAGE_ROWS.map((row) => {
-                const overridden = row.keys.some((key) => key in (stageOverrides ?? {}));
+                const overrideLocksClosed = row.keys.some(
+                  (key) => (stageOverrides ?? {})[key] === false,
+                );
                 const enabled = stageEnabled(configQuery.data, row.keys, stageOverrides);
+                const locked = overrideLocksClosed;
                 return (
                   <button
                     key={row.id}
                     type="button"
-                    disabled={disabled || saveMut.isPending || !configQuery.data || overridden}
+                    disabled={disabled || saveMut.isPending || !configQuery.data || locked}
                     title={
                       disabled
                         ? (disabledReason ?? "執行中不可調整階段")
-                        : overridden
+                        : locked
                           ? "既有檔案已完成，此階段繼續專案時會跳過"
                           : undefined
                     }

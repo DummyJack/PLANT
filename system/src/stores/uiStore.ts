@@ -5,11 +5,18 @@ import type { DiscussionMode } from "@/types/api";
 interface UiState {
   activeProjectId: string | null;
   selectedOutputPath: string | null;
+  selectedOutputAnchor: string | null;
+  autoFollowOutput: boolean;
+  manualOutputLock: boolean;
+  currentAutoOutputPath: string | null;
   scrollTargetMessageId: string | null;
   activeFlowMessageId: string | null;
   attachedDocIds: string[];
   stagedReferenceFiles: File[];
   meetingRounds: number;
+  meetingMaxIssues: number;
+  meetingRoundsOverridden: boolean;
+  meetingMaxIssuesOverridden: boolean;
   discussionMode: DiscussionMode;
   enabledAgents: Record<string, boolean>;
   visiblePanels: {
@@ -17,9 +24,12 @@ interface UiState {
     workspace: boolean;
     output: boolean;
   };
+  dismissedRunCheckpointKeys: Record<string, string>;
   canWrite: boolean;
   setActiveProjectId: (id: string | null) => void;
-  setSelectedOutputPath: (path: string | null) => void;
+  setSelectedOutputPath: (path: string | null, source?: "auto" | "manual" | "system", anchor?: string | null) => void;
+  setAutoOutputPath: (path: string | null) => void;
+  resumeOutputAutoFollow: () => void;
   setScrollTargetMessageId: (id: string | null) => void;
   setActiveFlowMessageId: (id: string | null) => void;
   addStagedReferenceFile: (file: File) => void;
@@ -28,10 +38,13 @@ interface UiState {
   toggleAttachedDoc: (id: string) => void;
   clearAttachedDocs: () => void;
   setMeetingRounds: (n: number) => void;
+  setMeetingMaxIssues: (n: number) => void;
+  setMeetingDefaults: (rounds?: number | null, maxIssues?: number | null) => void;
   setDiscussionMode: (m: DiscussionMode) => void;
   setEnabledAgents: (agents: Record<string, boolean>) => void;
   toggleAgent: (agent: string) => void;
   togglePanelVisibility: (panel: "references" | "workspace" | "output") => void;
+  dismissRunCheckpoint: (projectId: string, checkpointKey: string) => void;
   setCanWrite: (canWrite: boolean) => void;
 }
 
@@ -49,11 +62,18 @@ export const useUiStore = create<UiState>()(
     (set) => ({
       activeProjectId: null,
       selectedOutputPath: null,
+      selectedOutputAnchor: null,
+      autoFollowOutput: true,
+      manualOutputLock: false,
+      currentAutoOutputPath: null,
       scrollTargetMessageId: null,
       activeFlowMessageId: null,
       attachedDocIds: [],
       stagedReferenceFiles: [],
       meetingRounds: 1,
+      meetingMaxIssues: 5,
+      meetingRoundsOverridden: false,
+      meetingMaxIssuesOverridden: false,
       discussionMode: "sequential",
       enabledAgents: { ...defaultAgents },
       visiblePanels: {
@@ -61,9 +81,43 @@ export const useUiStore = create<UiState>()(
         workspace: true,
         output: true,
       },
+      dismissedRunCheckpointKeys: {},
       canWrite: false,
-      setActiveProjectId: (id) => set({ activeProjectId: id, selectedOutputPath: null }),
-      setSelectedOutputPath: (path) => set({ selectedOutputPath: path }),
+      setActiveProjectId: (id) =>
+        set({
+          activeProjectId: id,
+          selectedOutputPath: null,
+          selectedOutputAnchor: null,
+          autoFollowOutput: true,
+          manualOutputLock: false,
+          currentAutoOutputPath: null,
+        }),
+      setSelectedOutputPath: (path, source = "manual", anchor = null) =>
+        set((s) => {
+          const nextAutoFollow = source === "manual" ? false : s.autoFollowOutput;
+          const nextManualLock = source === "manual" ? true : s.manualOutputLock;
+          if (
+            s.selectedOutputPath === path &&
+            s.selectedOutputAnchor === anchor &&
+            s.autoFollowOutput === nextAutoFollow &&
+            s.manualOutputLock === nextManualLock
+          ) {
+            return s;
+          }
+          return {
+            selectedOutputPath: path,
+            selectedOutputAnchor: anchor,
+            autoFollowOutput: nextAutoFollow,
+            manualOutputLock: nextManualLock,
+          };
+        }),
+      setAutoOutputPath: (path) =>
+        set((s) => (s.currentAutoOutputPath === path ? s : { currentAutoOutputPath: path })),
+      resumeOutputAutoFollow: () =>
+        set(() => ({
+          autoFollowOutput: true,
+          manualOutputLock: false,
+        })),
       setScrollTargetMessageId: (id) => set({ scrollTargetMessageId: id }),
       setActiveFlowMessageId: (id) => set({ activeFlowMessageId: id }),
       addStagedReferenceFile: (file) =>
@@ -85,12 +139,21 @@ export const useUiStore = create<UiState>()(
             : [...s.attachedDocIds, id],
         })),
       clearAttachedDocs: () => set({ attachedDocIds: [] }),
-      setMeetingRounds: (n) => set({ meetingRounds: n }),
+      setMeetingRounds: (n) => set({ meetingRounds: n, meetingRoundsOverridden: true }),
+      setMeetingMaxIssues: (n) => set({ meetingMaxIssues: n, meetingMaxIssuesOverridden: true }),
+      setMeetingDefaults: (rounds, maxIssues) =>
+        set((s) => ({
+          meetingRounds: s.meetingRoundsOverridden || rounds == null ? s.meetingRounds : rounds,
+          meetingMaxIssues:
+            s.meetingMaxIssuesOverridden || maxIssues == null ? s.meetingMaxIssues : maxIssues,
+          meetingRoundsOverridden: s.meetingRoundsOverridden,
+          meetingMaxIssuesOverridden: s.meetingMaxIssuesOverridden,
+        })),
       setDiscussionMode: (m) => set({ discussionMode: m }),
       setEnabledAgents: (agents) => set({ enabledAgents: agents }),
       toggleAgent: (agent) =>
         set((s) => {
-          if (agent === "mediator") return s;
+          if (agent === "user" || agent === "mediator") return s;
           return {
             enabledAgents: {
               ...s.enabledAgents,
@@ -105,12 +168,20 @@ export const useUiStore = create<UiState>()(
             [panel]: !s.visiblePanels[panel],
           },
         })),
+      dismissRunCheckpoint: (projectId, checkpointKey) =>
+        set((s) => ({
+          dismissedRunCheckpointKeys: {
+            ...s.dismissedRunCheckpointKeys,
+            [projectId]: checkpointKey,
+          },
+        })),
       setCanWrite: (canWrite) => set({ canWrite }),
     }),
     {
       name: "plant-ui-state",
       partialize: (state) => ({
         activeProjectId: state.activeProjectId,
+        dismissedRunCheckpointKeys: state.dismissedRunCheckpointKeys,
       }),
     },
   ),

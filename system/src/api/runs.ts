@@ -10,6 +10,7 @@ export function createRun(body: {
   project_id: string;
   mode?: "new" | "continue";
   rounds?: number | null;
+  max_issues?: number | null;
   rough_idea?: string | null;
   attached_reference_paths?: string[] | null;
   enable_agents?: Record<string, boolean>;

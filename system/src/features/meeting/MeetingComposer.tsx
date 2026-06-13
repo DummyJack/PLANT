@@ -4,10 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { fetchConfig, updateConfig } from "@/api/config";
 import { fetchModelApiKeys } from "@/api/secrets";
 import { AGENT_LABELS, HEADER_AGENT_ORDER } from "@/constants/agents";
+import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
 import { useUiStore } from "@/stores/uiStore";
 import { useNoticeStore } from "@/stores/noticeStore";
+import type { RunCheckpoint } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { errorMessage } from "@/utils/errorMessage";
+import { RunCheckpointNotice } from "./RunCheckpointNotice";
 
 interface MeetingComposerProps {
   value: string;
@@ -25,10 +28,13 @@ interface MeetingComposerProps {
   submitDisabled?: boolean;
   reviewMode?: boolean;
   humanDecisionMode?: boolean;
-  reviewTarget?: "stakeholders" | "requirements";
-  onAddReviewSuggestion?: () => void;
+  reviewTarget?: "stakeholders" | "requirements" | "domain" | "meeting_issues";
+  onAddReviewSuggestion?: (suggestion?: { text: string; references?: ReferenceMention[] }) => void;
   onConfirmHumanDecision?: () => void;
+  onSkipAllHumanInterventions?: () => void;
+  skipAllHumanInterventionsLoading?: boolean;
   mentionOptions?: string[];
+  referenceMentionOptions?: ReferenceMention[];
   stakeholderSelectionMode?: boolean;
   customStakeholderDraft?: {
     name: string;
@@ -38,6 +44,14 @@ interface MeetingComposerProps {
   stakeholderTypeOptions?: Array<{ value: string; label: string }>;
   onCustomStakeholderDraftChange?: (patch: Partial<{ name: string; type: string; reason: string }>) => void;
   onAddCustomStakeholder?: () => void;
+  runCheckpoint?: RunCheckpoint | null;
+  stageOverrides?: Record<string, boolean>;
+  onDismissRunCheckpoint?: () => void;
+}
+
+interface ReferenceMention {
+  name: string;
+  size?: number;
 }
 
 const AGENT_OPTION_LABELS: Record<string, string> = {
@@ -49,11 +63,58 @@ const AGENT_OPTION_LABELS: Record<string, string> = {
   documentor: "Documentor",
 };
 
-const LOCKED_AGENTS = new Set<string>();
-
 function normalizeMentionTokens(tokens: string[]): string[] {
   const unique = Array.from(new Set(tokens));
   return unique.includes("@All") ? ["@All"] : unique;
+}
+
+function stageEnabled(
+  config: Awaited<ReturnType<typeof fetchConfig>>["config"] | undefined,
+  stageOverrides: Record<string, boolean> | undefined,
+  key: string,
+  fallback = true,
+): boolean {
+  const stage = config?.stage ?? {};
+  return stageOverrides?.[key] ?? stage[key] ?? fallback;
+}
+
+function requiredAgentReasons(
+  config: Awaited<ReturnType<typeof fetchConfig>>["config"] | undefined,
+  stageOverrides?: Record<string, boolean>,
+): Record<string, string[]> {
+  const reasons: Record<string, string[]> = {};
+  const add = (agent: string, reason: string) => {
+    reasons[agent] = [...(reasons[agent] ?? []), reason];
+  };
+  if (stageEnabled(config, stageOverrides, "init")) add("user", "初始階段");
+  if (stageEnabled(config, stageOverrides, "elicitation")) {
+    add("user", "需求擷取");
+    add("mediator", "需求擷取");
+  }
+  if (stageEnabled(config, stageOverrides, "conflict_detection")) {
+    add("analyst", "衝突辨識");
+    add("mediator", "衝突辨識");
+  }
+  if (stageEnabled(config, stageOverrides, "research_domain")) {
+    add("expert", "領域研究");
+  }
+  if (stageEnabled(config, stageOverrides, "system_model")) {
+    add("modeler", "系統模型");
+  }
+  if (stageEnabled(config, stageOverrides, "draft")) {
+    add("analyst", "草稿化");
+  }
+  if (
+    stageEnabled(config, stageOverrides, "default_formal_meeting") ||
+    stageEnabled(config, stageOverrides, "general_formal_meeting")
+  ) {
+    add("user", "會議");
+    add("mediator", "會議");
+  }
+  if (stageEnabled(config, stageOverrides, "DR") || stageEnabled(config, stageOverrides, "SRS")) {
+    add("documentor", "規格化");
+  }
+  return reasons;
 }
 
 function apiKeyConfiguredMap(
@@ -94,15 +155,23 @@ export function MeetingComposer({
   reviewTarget = "stakeholders",
   onAddReviewSuggestion,
   onConfirmHumanDecision,
+  onSkipAllHumanInterventions,
+  skipAllHumanInterventionsLoading = false,
   mentionOptions = [],
+  referenceMentionOptions = [],
   stakeholderSelectionMode = false,
   customStakeholderDraft,
   stakeholderTypeOptions = [],
   onCustomStakeholderDraftChange,
   onAddCustomStakeholder,
+  runCheckpoint,
+  stageOverrides,
+  onDismissRunCheckpoint,
 }: MeetingComposerProps) {
   const meetingRounds = useUiStore((s) => s.meetingRounds);
   const setMeetingRounds = useUiStore((s) => s.setMeetingRounds);
+  const meetingMaxIssues = useUiStore((s) => s.meetingMaxIssues);
+  const setMeetingMaxIssues = useUiStore((s) => s.setMeetingMaxIssues);
   const enabledAgents = useUiStore((s) => s.enabledAgents);
   const toggleAgent = useUiStore((s) => s.toggleAgent);
   const pushNotice = useNoticeStore((s) => s.pushNotice);
@@ -110,6 +179,9 @@ export function MeetingComposer({
   const [showAgentPopover, setShowAgentPopover] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [selectedReferences, setSelectedReferences] = useState<ReferenceMention[]>([]);
+  const [compactButtons, setCompactButtons] = useState(false);
+  const composerRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const configQuery = useQuery({
@@ -128,22 +200,31 @@ export function MeetingComposer({
   const displayAgents = HEADER_AGENT_ORDER;
   const agentButtonDisabled = !!disabled && !readonlyAgentSettings;
   const configuredProviders = apiKeyConfiguredMap(keyQuery.data?.providers);
+  const lockedAgentReasons = requiredAgentReasons(configQuery.data, stageOverrides);
   const idleSubmitLabel = submitLabel ?? (noProject ? "執行" : "繼續");
+  const readyToRecover = !!runCheckpoint && !running && !stopping;
+  const submitTitle = readyToRecover
+    ? "會先清理上次未完成的產出，再從此階段重新執行"
+    : idleSubmitLabel;
   const continueMode = !noProject && !running && !stopping;
   const inputDisabled =
     reviewMode || stakeholderSelectionMode || humanDecisionMode
       ? !canWrite
       : !!disabled || continueMode;
   const mentionTokens = normalizeMentionTokens(value.match(/@[A-Za-z0-9_-]+/g) ?? []);
-  const visibleInputValue = reviewMode
+  const isDomainReview = reviewMode && reviewTarget === "domain";
+  const isMeetingIssueReview = reviewMode && reviewTarget === "meeting_issues";
+  const reviewUsesMention = reviewMode && !isMeetingIssueReview;
+  const visibleInputValue = reviewMode && !isMeetingIssueReview
     ? value
         .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
         .replace(/\s{2,}/g, " ")
         .trimStart()
     : value;
-  const mentionMatch = reviewMode ? /@([A-Za-z0-9_-]*)$/.exec(visibleInputValue) : null;
+  const mentionPattern = isDomainReview ? /@([^\s]*)$/ : /@([A-Za-z0-9_-]*)$/;
+  const mentionMatch = reviewMode && !isMeetingIssueReview ? mentionPattern.exec(visibleInputValue) : null;
   const mentionQuery = mentionMatch?.[1] ?? "";
-  const mentionItems = mentionOptions
+  const mentionItems = (isDomainReview ? referenceMentionOptions.map((item) => item.name) : mentionOptions)
     .filter((id) => id.toLowerCase().includes(mentionQuery.toLowerCase()))
     .slice(0, 8);
   const showMentionPopover =
@@ -164,19 +245,34 @@ export function MeetingComposer({
   }, [showAgentPopover]);
 
   useEffect(() => {
+    const root = composerRef.current;
+    if (!root) return;
+
+    const updateLayout = () => {
+      const nextCompact = root.getBoundingClientRect().width < 430;
+      setCompactButtons((current) => (current === nextCompact ? current : nextCompact));
+    };
+
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(root);
+    updateLayout();
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     setMentionActiveIndex(0);
   }, [mentionQuery, mentionItems.length]);
 
-  const saveDefaults = async (
-    nextAgents = enabledAgents,
-    nextRounds = meetingRounds,
-  ) => {
+  useEffect(() => {
+    if (!isDomainReview) setSelectedReferences([]);
+  }, [isDomainReview]);
+
+  const saveAgentDefaults = async (nextAgents = enabledAgents) => {
     try {
       const { config } = await fetchConfig();
       await updateConfig({
         ...config,
-        rounds: nextRounds,
-        enable_agents: { ...nextAgents, mediator: true },
+        enable_agents: { ...nextAgents },
       });
       pushNotice({
         tone: "success",
@@ -196,8 +292,25 @@ export function MeetingComposer({
     const target = textareaRef.current;
     const raw = visibleInputValue;
     const cursor = target?.selectionStart ?? raw.length;
-    const before = raw.slice(0, cursor).replace(/@([A-Za-z0-9_-]*)$/, "");
+    const before = raw
+      .slice(0, cursor)
+      .replace(isDomainReview ? /@([^\s]*)$/ : /@([A-Za-z0-9_-]*)$/, "");
     const after = raw.slice(cursor);
+    if (isDomainReview) {
+      const reference = referenceMentionOptions.find((item) => item.name === id);
+      if (reference) {
+        setSelectedReferences((items) =>
+          items.some((item) => item.name === reference.name) ? items : [...items, reference],
+        );
+      }
+      onChange(`${before}${after}`.trimStart());
+      setMentionOpen(false);
+      window.requestAnimationFrame(() => {
+        target?.focus();
+        target?.setSelectionRange(before.length, before.length);
+      });
+      return;
+    }
     const token = `@${id}`;
     const nextTokens =
       token === "@All"
@@ -218,7 +331,7 @@ export function MeetingComposer({
     const after = visibleInputValue.slice(cursor);
     const needsPrefix = before.endsWith("@") ? "" : before && !/\s$/.test(before) ? " @" : "@";
     const nextBefore = `${before}${needsPrefix}`;
-    onChange(composeReviewValue(`${nextBefore}${after}`));
+    onChange(isDomainReview ? `${nextBefore}${after}` : composeReviewValue(`${nextBefore}${after}`));
     setMentionOpen(true);
     window.requestAnimationFrame(() => {
       target?.focus();
@@ -236,15 +349,38 @@ export function MeetingComposer({
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  const addReviewSuggestion = () => {
+    if (isMeetingIssueReview) {
+      if (!value.trim()) return;
+      onAddReviewSuggestion?.();
+      return;
+    }
+    if (!isDomainReview) {
+      onAddReviewSuggestion?.();
+      return;
+    }
+    onAddReviewSuggestion?.({
+      text: value.trim(),
+      references: selectedReferences,
+    });
+    setSelectedReferences([]);
+  };
+
   return (
-    <div className="composer-shadow shrink-0 border-t border-gray-100 bg-white px-3 pb-4 pt-3">
+    <div ref={composerRef} className="shrink-0 px-3 pb-4 pt-3">
+      <RunCheckpointNotice
+        checkpoint={runCheckpoint}
+        compact={compactButtons}
+        onDismiss={onDismissRunCheckpoint}
+      />
       <div className="flex items-center gap-2">
         <div className="relative" ref={agentRef}>
           <button
             type="button"
             title="選擇啟用的代理（套用於下一次 Agent 執行）"
             className={cn(
-              "relative inline-flex h-[54px] shrink-0 items-center gap-1.5 rounded-bubble border px-3 text-sm font-medium transition-colors disabled:opacity-40",
+              "relative inline-flex h-[54px] shrink-0 items-center justify-center gap-1.5 rounded-bubble border text-sm font-medium transition-colors disabled:opacity-40",
+              compactButtons ? "w-[54px] px-0" : "px-3",
               showAgentPopover
                 ? "border-slate-300 bg-white text-slate-800 shadow-sm"
                 : "border-gray-200 bg-gray-50 text-slate-600 hover:bg-white hover:text-slate-800",
@@ -255,7 +391,7 @@ export function MeetingComposer({
             }}
           >
             <Bot className="h-4 w-4" />
-            Agent
+            <span className={cn(compactButtons && "sr-only")}>Agent</span>
           </button>
 
           {showAgentPopover && (
@@ -264,31 +400,52 @@ export function MeetingComposer({
                 <p className="text-center text-xs font-semibold text-slate-800">代理人設定</p>
               </div>
               <div className="border-b border-gray-100 px-3 py-2.5">
-                <div className="flex items-center gap-3 text-xs text-slate-600">
-                  <label htmlFor="meeting-rounds" className="shrink-0 font-medium text-slate-700">
-                    回合數
-                  </label>
-                  <input
-                    id="meeting-rounds"
-                    type="number"
-                    min={1}
-                    max={99}
-                    step={1}
-                    className="h-7 w-14 rounded-control border border-gray-200 bg-gray-50 px-2 text-center text-xs font-medium text-slate-700 focus:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
-                    disabled={disabled || readonlyAgentSettings}
-                    value={meetingRounds}
-                    onChange={(e) => {
-                      const next = Math.max(1, Number(e.target.value || 1));
-                      setMeetingRounds(next);
-                      void saveDefaults(enabledAgents, next);
-                    }}
-                  />
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="meeting-rounds" className="shrink-0 font-medium text-slate-700">
+                      回合數
+                    </label>
+                    <input
+                      id="meeting-rounds"
+                      type="number"
+                      min={1}
+                      max={99}
+                      step={1}
+                      className="h-7 w-12 rounded-control border border-gray-200 bg-gray-50 px-2 text-center text-xs font-medium text-slate-700 focus:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+                      disabled={disabled || readonlyAgentSettings}
+                      value={meetingRounds}
+                      onChange={(e) => {
+                        const next = Math.max(1, Number(e.target.value || 1));
+                        setMeetingRounds(next);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2" title="每輪最大討論議題數">
+                    <label htmlFor="meeting-max-issues" className="shrink-0 font-medium text-slate-700">
+                      議題數
+                    </label>
+                    <input
+                      id="meeting-max-issues"
+                      type="number"
+                      min={1}
+                      max={20}
+                      step={1}
+                      className="h-7 w-12 rounded-control border border-gray-200 bg-gray-50 px-2 text-center text-xs font-medium text-slate-700 focus:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+                      disabled={disabled || readonlyAgentSettings}
+                      value={meetingMaxIssues}
+                      onChange={(e) => {
+                        const next = Math.max(1, Number(e.target.value || 1));
+                        setMeetingMaxIssues(next);
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="py-1">
                 {displayAgents.map((id) => {
                   const on = enabledAgents[id] !== false;
-                  const locked = LOCKED_AGENTS.has(id);
+                  const lockReasons = lockedAgentReasons[id] ?? [];
+                  const locked = lockReasons.length > 0;
                   const ready = agentReady(configQuery.data, id, configuredProviders);
                   const unavailable = !ready;
                   return (
@@ -303,7 +460,11 @@ export function MeetingComposer({
                         (disabled || readonlyAgentSettings) && "opacity-50",
                         !readonlyAgentSettings && disabled && "pointer-events-none",
                       )}
-                      title={locked ? "此代理固定啟用" : undefined}
+                      title={
+                        locked
+                          ? `目前階段需要此代理：${lockReasons.join("、")}`
+                          : undefined
+                      }
                     >
                       <input
                         type="checkbox"
@@ -321,7 +482,7 @@ export function MeetingComposer({
                             [id]: !on,
                           };
                           toggleAgent(id);
-                          void saveDefaults(nextAgents, meetingRounds);
+                          void saveAgentDefaults(nextAgents);
                         }}
                       />
                       <span className={cn((!on || unavailable) && !locked && "text-slate-400")}>
@@ -335,25 +496,66 @@ export function MeetingComposer({
           )}
         </div>
 
-        <div className="relative flex min-h-[54px] min-w-0 flex-1 items-start gap-2 rounded-bubble border border-gray-200 bg-gray-50 p-2">
+        <div className="relative flex min-h-[54px] min-w-0 flex-1 items-start gap-2 rounded-bubble border border-gray-100 bg-transparent p-2">
           <div
             className={cn(
               "flex min-w-0 flex-1 gap-2",
-              reviewMode ? "flex-col items-stretch" : "flex-wrap items-center",
+              reviewUsesMention ? "flex-col items-stretch" : "flex-wrap items-center",
             )}
           >
-            {reviewMode && (
+            {reviewUsesMention && (
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <button
                   type="button"
                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-slate-400 hover:bg-white hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-30"
-                  disabled={!canWrite || mentionOptions.length === 0}
+                  disabled={
+                    !canWrite ||
+                    (isDomainReview ? referenceMentionOptions.length === 0 : mentionOptions.length === 0)
+                  }
                   onClick={openMentionPicker}
-                  title={reviewTarget === "requirements" ? "引用需求 ID" : "引用利害關係人發言 ID"}
+                  title={
+                    isDomainReview
+                      ? "引用文件"
+                      : reviewTarget === "requirements"
+                        ? "引用需求 ID"
+                        : "引用利害關係人發言 ID"
+                  }
                 >
                   @
                 </button>
-                {mentionTokens.map((token) => (
+                {isDomainReview
+                  ? selectedReferences.map((reference) => (
+                    <span
+                      key={reference.name}
+                      className="inline-flex max-w-[220px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700"
+                    >
+                      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+                        <ReferenceFileIcon name={reference.name} />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] font-semibold leading-4">
+                          {reference.name}
+                        </span>
+                        <span className="block text-[10px] font-medium leading-3 text-slate-400">
+                          {referenceLabel(reference.name)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] leading-none text-white hover:bg-slate-700"
+                        onClick={() =>
+                          setSelectedReferences((items) =>
+                            items.filter((item) => item.name !== reference.name),
+                          )
+                        }
+                        aria-label={`移除 ${reference.name}`}
+                        title="移除引用"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))
+                  : mentionTokens.map((token) => (
                     <span
                       key={token}
                       className="inline-flex max-w-full items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600"
@@ -379,7 +581,7 @@ export function MeetingComposer({
               className={cn(
                 "min-h-[36px] min-w-0 resize-none bg-transparent px-1 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none",
                 stakeholderSelectionMode ? "flex-[1.15]" : "flex-1",
-                reviewMode && "w-full flex-none",
+                reviewUsesMention && "w-full flex-none",
               )}
               placeholder={
                 !canWrite
@@ -391,17 +593,23 @@ export function MeetingComposer({
                   : reviewMode
                   ? reviewTarget === "requirements"
                     ? "輸入建議(@：可以引用需求)"
-                    : "輸入建議(@：可以引用利害關係人發言)"
+                    : isDomainReview
+                      ? "輸入建議(@：可以引用文件)"
+                    : isMeetingIssueReview
+                      ? "輸入自訂議題"
+                      : "輸入建議(@：可以引用利害關係人發言)"
                   : humanDecisionMode
                   ? "輸入自訂決策"
                   : stakeholderSelectionMode
                   ? "自訂利害關係人"
                   : running
                     ? "執行中，請稍候…"
-                    : !noProject
-                    ? `已選擇既有專案，按「${idleSubmitLabel}」執行`
+                  : !noProject
+                    ? readyToRecover
+                      ? "偵測到上次中斷，按「繼續」會清理並重跑"
+                      : "已選擇此專案，按「執行」可以繼續討論"
                     : disabled
-                    ? `已選擇既有專案，按「${idleSubmitLabel}」執行`
+                    ? "已選擇此專案，按「執行」可以繼續討論"
                     : "輸入初步想法"
               }
               disabled={inputDisabled}
@@ -410,17 +618,24 @@ export function MeetingComposer({
                   onCustomStakeholderDraftChange?.({ name: e.target.value });
                   return;
                 }
-              const inlineTokens = e.target.value.match(/@[A-Za-z0-9_-]+/g);
-              const inlineText = e.target.value
-                .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
-                .replace(/\s{2,}/g, " ")
-                .trimStart();
-              const next = reviewMode
-                ? composeReviewValue(inlineText, inlineTokens ?? mentionTokens)
-                : e.target.value;
+                const inlineTokens =
+                  isDomainReview || isMeetingIssueReview
+                    ? null
+                    : e.target.value.match(/@[A-Za-z0-9_-]+/g);
+                const inlineText = isDomainReview || isMeetingIssueReview
+                  ? e.target.value
+                  : e.target.value
+                      .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
+                      .replace(/\s{2,}/g, " ")
+                      .trimStart();
+                const next = reviewMode
+                  ? isDomainReview || isMeetingIssueReview
+                    ? inlineText
+                    : composeReviewValue(inlineText, inlineTokens ?? mentionTokens)
+                  : e.target.value;
                 onChange(next);
-                if (reviewMode) {
-                  setMentionOpen(/@([A-Za-z0-9_-]*)$/.test(e.target.value));
+                if (reviewMode && !isMeetingIssueReview) {
+                  setMentionOpen(mentionPattern.test(e.target.value));
                 }
               }}
               onKeyDown={(e) => {
@@ -456,8 +671,8 @@ export function MeetingComposer({
                   e.preventDefault();
                   if (stakeholderSelectionMode) {
                     onAddCustomStakeholder?.();
-                  } else if (value.trim()) {
-                    if (reviewMode) onAddReviewSuggestion?.();
+                  } else if (value.trim() || (reviewMode && isDomainReview && selectedReferences.length)) {
+                    if (reviewMode) addReviewSuggestion();
                     else if (humanDecisionMode) onConfirmHumanDecision?.();
                     else onSubmit();
                   }
@@ -509,7 +724,12 @@ export function MeetingComposer({
           </div>
 
           {showMentionPopover && (
-            <div className="absolute bottom-full left-2 z-30 mb-2 w-52 overflow-hidden rounded-control border border-gray-200 bg-white shadow-lg">
+            <div
+              className={cn(
+                "absolute bottom-full left-2 z-30 mb-2 overflow-hidden rounded-control border border-gray-200 bg-white shadow-lg",
+                isDomainReview ? "w-72" : "w-52",
+              )}
+            >
               <div className="border-b border-gray-100 px-2 py-1.5 text-[10px] font-semibold text-slate-400">
                 引用
               </div>
@@ -530,7 +750,33 @@ export function MeetingComposer({
                       insertMention(id);
                     }}
                   >
-                    {id}
+                    {isDomainReview ? (
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={cn(
+                            "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
+                            index === mentionActiveIndex
+                              ? "bg-white/15 text-white"
+                              : "bg-slate-100 text-slate-500",
+                          )}
+                        >
+                          <ReferenceFileIcon name={id} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{id}</span>
+                          <span
+                            className={cn(
+                              "block text-[10px]",
+                              index === mentionActiveIndex ? "text-white/70" : "text-slate-400",
+                            )}
+                          >
+                            {referenceLabel(id)}
+                          </span>
+                        </span>
+                      </span>
+                    ) : (
+                      id
+                    )}
                   </button>
                 ))}
               </div>
@@ -540,7 +786,7 @@ export function MeetingComposer({
           <div
             className={cn(
               "flex shrink-0 items-center gap-2",
-              reviewMode ? "mt-10 self-start" : "self-center",
+              reviewUsesMention ? "mt-10 self-start" : "self-center",
             )}
           >
             {stakeholderSelectionMode && (
@@ -564,8 +810,8 @@ export function MeetingComposer({
               <button
                 type="button"
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={!canWrite || !value.trim()}
-                onClick={onAddReviewSuggestion}
+                disabled={!canWrite || (!value.trim() && (!isDomainReview || !selectedReferences.length))}
+                onClick={addReviewSuggestion}
                 aria-label="加入建議"
                 title="加入"
               >
@@ -573,11 +819,21 @@ export function MeetingComposer({
               </button>
             )}
 
-            {(!humanDecisionMode || running) && (
+            {(reviewMode || humanDecisionMode) && onSkipAllHumanInterventions ? (
+              <button
+                type="button"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!canWrite || skipAllHumanInterventionsLoading}
+                onClick={onSkipAllHumanInterventions}
+              >
+                全部跳過
+              </button>
+            ) : (!humanDecisionMode || running) && (
               <button
                 type="button"
                 className={cn(
-                  "inline-flex shrink-0 items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium text-white disabled:opacity-40",
+                  "inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl text-sm font-medium text-white disabled:opacity-40",
+                  compactButtons ? "w-10 px-0" : "px-4",
                   running ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800",
                   stopping && "bg-red-400 hover:bg-red-400",
                 )}
@@ -589,9 +845,13 @@ export function MeetingComposer({
                       : disabled || submitDisabled || loading || (noProject && !value.trim())
                 }
                 onClick={running ? onStop : onSubmit}
+                aria-label={stopping ? "停止中" : running ? "停止" : idleSubmitLabel}
+                title={stopping ? "停止中" : running ? "停止" : submitTitle}
               >
                 {running ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-                {stopping ? "停止中..." : running ? "停止" : idleSubmitLabel}
+                <span className={cn(compactButtons && "sr-only")}>
+                  {stopping ? "停止中..." : running ? "停止" : idleSubmitLabel}
+                </span>
               </button>
             )}
           </div>

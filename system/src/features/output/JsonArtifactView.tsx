@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
 import { fetchFile } from "@/api/projects";
 import { agentLabel } from "@/constants/agents";
+import { useEffect } from "react";
 import type { ReactNode } from "react";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,6 +28,40 @@ function firstHtmlHeading(value: string) {
   if (!match) return "";
   return decodeHtmlEntities(match[1].replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function htmlSectionText(value: string, heading: string) {
+  const pattern = new RegExp(
+    `<h[1-6]\\b[^>]*>\\s*${escapeRegExp(heading)}\\s*<\\/h[1-6]>([\\s\\S]*?)(?=<h[1-6]\\b|$)`,
+    "i",
+  );
+  const match = pattern.exec(value);
+  if (!match) return "";
+  return decodeHtmlEntities(match[1].replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstMarkdownHeading(value: string) {
+  const match = /^#\s+(.+)$/m.exec(value);
+  return match?.[1]?.trim() ?? "";
+}
+
+function markdownSectionText(value: string, heading: string) {
+  const pattern = new RegExp(
+    `^##\\s+${escapeRegExp(heading)}\\s*$([\\s\\S]*?)(?=^##\\s+|\\s*$)`,
+    "m",
+  );
+  const match = pattern.exec(value);
+  if (!match) return "";
+  return match[1]
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
     .trim();
 }
 
@@ -174,15 +210,30 @@ function requirementTypeAbbrev(value: string) {
   return value;
 }
 
+function optionLabel(value: string, index: number) {
+  const raw = value.trim().toUpperCase();
+  if (/^\d+$/.test(raw)) return String.fromCharCode(64 + Math.max(1, Number(raw)));
+  return raw || String.fromCharCode(65 + index);
+}
+
 function modelDescriptionText(value: string) {
   const purpose = /\*\*用途\*\*\s*[：:]\s*([\s\S]*?)(?=\n?\s*\*\*反映需求\*\*\s*[：:]|$)/.exec(value);
   if (purpose) return purpose[1].trim();
   return value;
 }
 
-function RequirementsView({ data }: { data: Record<string, unknown> }) {
+function RequirementsView({ data, anchor }: { data: Record<string, unknown>; anchor?: string | null }) {
   const urls = list(data.URL);
   const reqs = list(data.REQ);
+  useEffect(() => {
+    if (anchor !== "requirements-req") return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("requirements-req")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, [anchor]);
   const renderRows = (rows: unknown[], kind: "URL" | "REQ") => {
     if (rows.length === 0) {
       return <p className="text-sm text-slate-500">無任何內容</p>;
@@ -201,9 +252,9 @@ function RequirementsView({ data }: { data: Record<string, unknown> }) {
           <thead className="bg-slate-50 text-xs text-slate-500">
             <tr>
               <th className="border-b px-3 py-2 text-left">ID</th>
-              {kind === "REQ" && <th className="border-b px-3 py-2 text-left">Type</th>}
-              <th className="border-b px-3 py-2 text-left">Description</th>
-              {kind === "URL" && <th className="border-b px-3 py-2 text-left">Source</th>}
+              {kind === "REQ" && <th className="border-b px-3 py-2 text-left">類型</th>}
+              <th className="border-b px-3 py-2 text-left">描述</th>
+              {kind === "URL" && <th className="border-b px-3 py-2 text-left">來源</th>}
             </tr>
           </thead>
           <tbody>
@@ -255,18 +306,78 @@ function RequirementsView({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="min-h-0 overflow-y-auto">
       <Section title="使用者需求" titleAlign="center" titleSize="sm">{renderRows(urls, "URL")}</Section>
-      <Section title="正式需求" titleAlign="center" titleSize="sm">{renderRows(reqs, "REQ")}</Section>
+      <div id="requirements-req">
+        <Section title="正式需求" titleAlign="center" titleSize="sm">{renderRows(reqs, "REQ")}</Section>
+      </div>
     </div>
   );
 }
 
-function FeedbackView({ data }: { data: Record<string, unknown> }) {
-  const sections: Array<[string, unknown[]]> = [
-    ["Findings", list(data.findings)],
-    ["Constraints", list(data.constraints)],
-    ["Risks", list(data.risks)],
-    ["Recommendations", list(data.recommendations)],
+function externalDocumentSources(projectData: Record<string, unknown>): Array<Record<string, unknown>> {
+  const meta = isRecord(projectData.meta) ? projectData.meta : {};
+  const review = isRecord(projectData.domain_research_review)
+    ? projectData.domain_research_review
+    : {};
+  const referencedFiles = [
+    ...list(meta.domain_research_referenced_files),
+    ...list(meta.attached_references),
+    ...list(review.referenced_files),
   ];
+  const seen = new Set<string>();
+  return referencedFiles
+    .map((row) => {
+      if (isRecord(row)) {
+        const name = text(row.name) || text(row.path);
+        const path = text(row.path);
+        return {
+          title: name || path,
+          path,
+          type: text(row.type),
+        };
+      }
+      const value = String(row ?? "").trim();
+      return {
+        title: value.split("/").pop() || value,
+        path: value,
+      };
+    })
+    .filter((row) => {
+      const key = `${text(row.title)}|${text(row.path)}`;
+      if (!text(row.title) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function FeedbackView({ projectId, data }: { projectId: string | null; data: Record<string, unknown> }) {
+  const sections: Array<[string, unknown[]]> = [
+    ["發現", list(data.findings)],
+    ["限制", list(data.constraints)],
+    ["風險", list(data.risks)],
+    ["建議", list(data.recommendations)],
+  ];
+  const project = useQuery({
+    queryKey: ["file", projectId, "artifact/project.json"],
+    queryFn: () => fetchFile(projectId!, "artifact/project.json"),
+    enabled: !!projectId,
+    retry: false,
+  });
+  let projectData: Record<string, unknown> = {};
+  try {
+    const parsed = project.data?.content ? JSON.parse(project.data.content) : {};
+    projectData = isRecord(parsed) ? parsed : {};
+  } catch {
+    projectData = {};
+  }
+  const sources = [...list(data.sources), ...externalDocumentSources(projectData)];
+  const seenSources = new Set<string>();
+  const uniqueSources = sources.filter((row) => {
+    const item = isRecord(row) ? row : {};
+    const key = text(item.url) || text(item.path) || text(item.title) || text(item.name) || String(row);
+    if (!key || seenSources.has(key)) return false;
+    seenSources.add(key);
+    return true;
+  });
   return (
     <div className="min-h-0 overflow-y-auto">
       <ArtifactHeading border={false}>領域研究</ArtifactHeading>
@@ -302,6 +413,36 @@ function FeedbackView({ data }: { data: Record<string, unknown> }) {
           )}
         </Section>
       ))}
+      <Section title="來源">
+        {uniqueSources.length === 0 ? (
+          <p className="text-sm text-slate-500">無任何來源</p>
+        ) : (
+          <div className="space-y-2">
+            {uniqueSources.map((row, index) => {
+              const item = isRecord(row) ? row : {};
+              const title = text(item.title) || text(item.name) || text(item.path) || text(item.url) || String(row);
+              const url = text(item.url);
+              return (
+                <Card key={index}>
+                  {url ? (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                    >
+                      <span className="min-w-0 truncate">{title}</span>
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                    </a>
+                  ) : (
+                    <p className="text-sm font-medium text-slate-800">{title}</p>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }
@@ -319,8 +460,8 @@ function ScopeView({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="min-h-0 overflow-y-auto">
       <ArtifactHeading border={false}>需求範圍</ArtifactHeading>
-      <Section title="In Scope">{render(list(data.in_scope))}</Section>
-      <Section title="Out of Scope">{render(list(data.out_of_scope))}</Section>
+      <Section title="範圍內">{render(list(data.in_scope))}</Section>
+      <Section title="範圍外">{render(list(data.out_of_scope))}</Section>
     </div>
   );
 }
@@ -330,9 +471,9 @@ function ProjectView({ data }: { data: Record<string, unknown> }) {
     <div className="min-h-0 overflow-y-auto">
       <section className="border-b border-gray-100 px-4 py-3">
         <Card>
-          <div className="text-xs font-semibold text-slate-500">Rough Idea</div>
+          <div className="text-xs font-semibold text-slate-500">初始想法</div>
           <p className="mt-1 text-sm text-slate-800">{text(data.rough_idea)}</p>
-          <div className="mt-3 text-xs font-semibold text-slate-500">Scenario</div>
+          <div className="mt-3 text-xs font-semibold text-slate-500">情境</div>
           <p className="mt-1 text-sm text-slate-800">{text(data.scenario)}</p>
         </Card>
       </section>
@@ -446,8 +587,8 @@ function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
                 )}
                 <div className="mb-3 grid grid-cols-4 gap-px overflow-hidden rounded-control border border-slate-200 bg-slate-100 text-center text-xs">
                   {[
-                    ["Pair", pairs.length],
-                    ["Multiple", multipleCount],
+                    ["兩兩比對", pairs.length],
+                    ["多方比對", multipleCount],
                     ["衝突", conflictCount],
                     ["非衝突", nonConflictCount],
                   ].map(([label, value]) => (
@@ -561,9 +702,9 @@ function ConflictReportView({ data }: { data: unknown[] }) {
                       return (
                         <div key={optionIndex} className="rounded-control bg-slate-50 p-2">
                           <div className="flex flex-wrap gap-1">
-                            {text(opt.option) && <Chip>Option {text(opt.option)}</Chip>}
+                            <Chip>選項 {optionLabel(text(opt.option), optionIndex)}</Chip>
                             {text(opt.strategy) && <Chip>{text(opt.strategy)}</Chip>}
-                            {opt.recommendation === true && <Chip>recommended</Chip>}
+                            {opt.recommendation === true && <Chip>建議</Chip>}
                           </div>
                           <p className="mt-1 text-xs leading-relaxed text-slate-700">
                             {text(opt.description)}
@@ -586,23 +727,28 @@ function IssuesView({ data }: { data: Record<string, unknown> }) {
   const groups = isRecord(data.meeting_issues) ? data.meeting_issues : data;
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="Issues">
+      <Section title="議題" titleAlign="center" titleSize="sm">
         <div className="space-y-3">
           {Object.entries(groups).filter(([, value]) => Array.isArray(value)).map(([round, rows]) => (
             <div key={round}>
-              <div className="mb-1 text-xs font-semibold uppercase text-slate-500">{round}</div>
+              <div className="mb-1 text-xs font-semibold uppercase text-slate-500">{round.toUpperCase()}</div>
               <div className="space-y-2">
                 {list(rows).map((row, index) => {
                   const item = isRecord(row) ? row : {};
+                  const participants = valueList(item.participants);
                   return (
                     <Card key={index}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold text-slate-800">{text(item.issue_id)}</span>
-                        {text(item.importance) && <Chip>{text(item.importance)}</Chip>}
-                        {text(item.proposed_by) && <Chip>proposed by {agentLabel(text(item.proposed_by))}</Chip>}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                        <span className="text-sm font-semibold text-slate-800">
+                          {[text(item.issue_id) || text(item.id), text(item.title)].filter(Boolean).join(" ")}
+                        </span>
+                        {text(item.proposed_by) && <Chip>提出者：{agentLabel(text(item.proposed_by))}</Chip>}
+                        {text(item.category) && <Chip>類型：{text(item.category)}</Chip>}
+                        {text(item.discussion_mode) && <Chip>模式：{text(item.discussion_mode)}</Chip>}
+                        {participants.length > 0 && (
+                          <Chip>參與者：{participants.map(agentLabel).join(", ")}</Chip>
+                        )}
                       </div>
-                      <p className="mt-1 text-sm font-medium text-slate-800">{text(item.title)}</p>
-                      <p className="mt-2 text-sm leading-relaxed text-slate-700">{text(item.expect_outcome) || text(item.reason)}</p>
                     </Card>
                   );
                 })}
@@ -701,27 +847,137 @@ function valueList(value: unknown): string[] {
     : [];
 }
 
-function MeetingHeading({
-  projectId,
-  meetingId,
-}: {
-  projectId: string | null;
-  meetingId: string;
-}) {
-  const mom = useQuery({
-    queryKey: ["formal-meeting-title", projectId, meetingId],
-    queryFn: () => fetchFile(projectId!, `results/MoM/${meetingId}.html`),
+async function fetchMeetingMomMeta(projectId: string, meetingId: string) {
+  const paths = [
+    `artifact/MoM/${meetingId}.md`,
+    `results/MoM/${meetingId}.md`,
+    `results/MoM/${meetingId}.html`,
+    `artifact/MoM/${meetingId}.html`,
+  ];
+  for (const path of paths) {
+    try {
+      const file = await fetchFile(projectId, path);
+      if (file.type === "html") {
+        return {
+          title: firstHtmlHeading(file.content),
+          summary: htmlSectionText(file.content, "摘要"),
+        };
+      }
+      return {
+        title: firstMarkdownHeading(file.content),
+        summary: markdownSectionText(file.content, "摘要"),
+      };
+    } catch {
+      continue;
+    }
+  }
+  return { title: "", summary: "" };
+}
+
+function useMeetingMomMeta(projectId: string | null, meetingId: string) {
+  return useQuery({
+    queryKey: ["formal-meeting-mom-meta", projectId, meetingId],
+    queryFn: () => fetchMeetingMomMeta(projectId!, meetingId),
     enabled: !!projectId && !!meetingId,
     retry: false,
   });
-  const title =
-    mom.data?.type === "html" ? firstHtmlHeading(mom.data.content) : "";
+}
+
+function MeetingHeading({
+  meetingId,
+  title,
+}: {
+  meetingId: string;
+  title: string;
+}) {
 
   return (
     <>
       {meetingId}
       {title ? `：${title}` : ""}
     </>
+  );
+}
+
+function MeetingSummarySection({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-control border border-gray-200 bg-white px-3 py-2">
+      <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function FormalMeetingIssueCard({
+  projectId,
+  issue,
+  index,
+}: {
+  projectId: string | null;
+  issue: Record<string, unknown>;
+  index: number;
+}) {
+  const participants = valueList(issue.participants);
+  const meetingId = text(issue.meeting_id) || `Meeting ${index + 1}`;
+  const momMeta = useMeetingMomMeta(projectId, meetingId);
+  const title =
+    text(issue.title) ||
+    text(issue.issue_title) ||
+    text(issue.topic) ||
+    momMeta.data?.title ||
+    "";
+  const summary =
+    momMeta.data?.summary ||
+    (isRecord(issue.resolution) ? text(issue.resolution.summary) : "") ||
+    "";
+
+  return (
+    <article className="rounded-control border border-gray-200 bg-white">
+      <div className="border-b border-gray-100 px-3 py-2">
+        <div className="text-sm font-semibold text-slate-800">
+          <MeetingHeading meetingId={meetingId} title={title} />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-500">
+          {text(issue.category) && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5">
+              {text(issue.category)}
+            </span>
+          )}
+          {text(issue.discussion_mode) && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5">
+              {text(issue.discussion_mode)}
+            </span>
+          )}
+          {text(issue.proposed_by) && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5">
+              提出者：{agentLabel(text(issue.proposed_by))}
+            </span>
+          )}
+          {participants.length > 0 && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5">
+              參與者：{participants.map(agentLabel).join(", ")}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="space-y-2 px-3 py-3">
+        {summary && <MeetingSummarySection>{summary}</MeetingSummarySection>}
+        {isRecord(issue.resolution) && (
+          <div className="rounded-control border border-emerald-100 bg-emerald-50 px-3 py-2">
+            <div className="text-xs font-semibold text-emerald-800">決議</div>
+            <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-emerald-900">
+              {text(issue.resolution.summary) ||
+                text(issue.resolution.decision) ||
+                JSON.stringify(issue.resolution, null, 2)}
+            </div>
+          </div>
+        )}
+        {!isRecord(issue.resolution) && (
+          <p className="text-sm text-slate-500">尚無決議摘要</p>
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -740,68 +996,25 @@ function FormalMeetingView({
 
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="會議紀錄">
+      <div className="px-4 py-2">
         {issues.length === 0 ? (
           <p className="text-sm text-slate-500">尚無正式會議議題</p>
         ) : (
           <div className="space-y-3">
             {issues.map((issue, index) => {
               if (!isRecord(issue)) return null;
-              const participants = valueList(issue.participants);
-              const meetingId = text(issue.meeting_id) || `Meeting ${index + 1}`;
               return (
-                <article
+                <FormalMeetingIssueCard
                   key={index}
-                  className="rounded-control border border-gray-200 bg-white"
-                >
-                  <div className="border-b border-gray-100 px-3 py-2">
-                    <div className="text-sm font-semibold text-slate-800">
-                      <MeetingHeading projectId={projectId} meetingId={meetingId} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-500">
-                      {text(issue.category) && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                          {text(issue.category)}
-                        </span>
-                      )}
-                      {text(issue.discussion_mode) && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                          {text(issue.discussion_mode)}
-                        </span>
-                      )}
-                      {text(issue.proposed_by) && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                          proposed by {agentLabel(text(issue.proposed_by))}
-                        </span>
-                      )}
-                      {participants.length > 0 && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                          Participants: {participants.map(agentLabel).join(", ")}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="space-y-2 px-3 py-3">
-                    {isRecord(issue.resolution) && (
-                      <div className="rounded-control border border-emerald-100 bg-emerald-50 px-3 py-2">
-                        <div className="text-xs font-semibold text-emerald-800">Resolution</div>
-                        <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-emerald-900">
-                          {text(issue.resolution.summary) ||
-                            text(issue.resolution.decision) ||
-                            JSON.stringify(issue.resolution, null, 2)}
-                        </div>
-                      </div>
-                    )}
-                    {!isRecord(issue.resolution) && (
-                      <p className="text-sm text-slate-500">尚無決議摘要</p>
-                    )}
-                  </div>
-                </article>
+                  projectId={projectId}
+                  issue={issue}
+                  index={index}
+                />
               );
             })}
           </div>
         )}
-      </Section>
+      </div>
     </div>
   );
 }
@@ -810,10 +1023,12 @@ export function JsonArtifactView({
   projectId,
   path,
   content,
+  anchor,
 }: {
   projectId: string | null;
   path: string;
   content: string;
+  anchor?: string | null;
 }) {
   let data: unknown;
   try {
@@ -832,10 +1047,10 @@ export function JsonArtifactView({
     return <FormalMeetingView projectId={projectId} data={data} />;
   }
   if (isRecord(data) && /requirements\.json$/i.test(path)) {
-    return <RequirementsView data={data} />;
+    return <RequirementsView data={data} anchor={anchor} />;
   }
   if (isRecord(data) && /feedback\.json$/i.test(path)) {
-    return <FeedbackView data={data} />;
+    return <FeedbackView projectId={projectId} data={data} />;
   }
   if (isRecord(data) && /scope\.json$/i.test(path)) {
     return <ScopeView data={data} />;

@@ -17,26 +17,54 @@ interface OutputFilePickerProps {
 
 const GROUPS = [
   { id: "documents", label: "Output" },
-  { id: "drafts", label: "Draft" },
+  { id: "drafts", label: "Drafts" },
   { id: "meetingData", label: "Meeting" },
   { id: "meetings", label: "MoM" },
   { id: "reports", label: "Conflict" },
-  { id: "models", label: "Model" },
+  { id: "models", label: "Models" },
   { id: "artifacts", label: "Artifact" },
 ] as const;
 
 function groupForFile(file: OutputFile): (typeof GROUPS)[number]["id"] {
   if (file.path.startsWith("results/MoM/")) return "meetings";
+  if (file.path.startsWith("artifact/MoM/")) return "meetings";
   if (file.path.includes("/meeting/")) return "meetingData";
   if (
     file.path.startsWith("results/report/") ||
     file.path.startsWith("artifact/report/")
   ) return "reports";
-  if (file.kind === "image") return "models";
+  if (file.kind === "image" || file.kind === "plantuml") return "models";
   if (file.path.startsWith("output/")) return "documents";
   if (file.path.startsWith("results/") && !file.path.includes("/drafts/")) return "documents";
   if (file.path.includes("/drafts/")) return "drafts";
   return "artifacts";
+}
+
+function isSelectableOutputFile(file: OutputFile, files: OutputFile[]) {
+  if (
+    file.kind !== "html" &&
+    file.kind !== "json" &&
+    file.kind !== "image" &&
+    file.kind !== "markdown" &&
+    file.kind !== "plantuml"
+  ) {
+    return false;
+  }
+  if (file.kind === "image") {
+    const imageBase =
+      file.modelBase ??
+      file.label.replace(/\.(?:png|svg)$/i, "") ??
+      file.path.replace(/^.*\//, "").replace(/\.(?:png|svg)$/i, "");
+    return !files.some(
+      (candidate) =>
+        candidate.kind === "plantuml" &&
+        (
+          candidate.modelBase === imageBase ||
+          candidate.label.replace(/\.(?:plantuml|puml)$/i, "") === imageBase
+        ),
+    );
+  }
+  return true;
 }
 
 export function OutputFilePicker({ projectId, items, compact }: OutputFilePickerProps) {
@@ -49,14 +77,7 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
 
   const files = useMemo(() => buildOutputFiles(items), [items]);
   const selectableFiles = useMemo(
-    () =>
-      files.filter(
-        (file) =>
-          file.kind === "html" ||
-          file.kind === "json" ||
-          file.kind === "image" ||
-          file.kind === "markdown",
-      ),
+    () => files.filter((file) => isSelectableOutputFile(file, files)),
     [files],
   );
   const grouped = useMemo(
@@ -84,7 +105,9 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
   }, [open]);
 
   useEffect(() => {
-    if (selectedGroupId) setActiveGroupId(selectedGroupId);
+    if (selectedGroupId) {
+      setActiveGroupId((current) => (current === selectedGroupId ? current : selectedGroupId));
+    }
   }, [selectedGroupId]);
 
   useEffect(() => {
@@ -95,8 +118,10 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
     const update = () => {
       const panelWidth = panel.getBoundingClientRect().width;
       const rootWidth = root.getBoundingClientRect().width;
-      setCompactMenu(compact ?? panelWidth < 420);
-      setMenuWidth(Math.max(160, Math.min(360, panelWidth - 24, rootWidth)));
+      const nextCompact = compact ?? panelWidth < 420;
+      const nextWidth = Math.max(160, Math.min(360, panelWidth - 24, rootWidth));
+      setCompactMenu((current) => (current === nextCompact ? current : nextCompact));
+      setMenuWidth((current) => (current === nextWidth ? current : nextWidth));
     };
     const observer = new ResizeObserver(() => {
       window.requestAnimationFrame(update);
@@ -108,30 +133,33 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
 
   useEffect(() => {
     if (!projectId) {
-      if (selectedOutputPath !== null) setSelectedOutputPath(null);
+      if (selectedOutputPath !== null) setSelectedOutputPath(null, "system");
       return;
     }
     if (selectableFiles.length === 0) {
-      if (selectedOutputPath !== null) setSelectedOutputPath(null);
+      if (selectedOutputPath !== null) setSelectedOutputPath(null, "system");
       return;
     }
     const preferred = resolvePreferredOutputPath(selectedOutputPath, selectableFiles);
     if (preferred && preferred !== selectedOutputPath) {
-      setSelectedOutputPath(preferred);
+      setSelectedOutputPath(preferred, "system");
       return;
     }
     if (!selectedOutputPath || !selectableFiles.some((f) => f.path === selectedOutputPath)) {
       if (preferred) {
-        setSelectedOutputPath(preferred);
+        setSelectedOutputPath(preferred, "system");
         return;
       }
       const srs =
         selectableFiles.find((f) => f.path === "results/srs.html") ??
         selectableFiles.find((f) => f.path === "output/srs.md");
       const html = selectableFiles.find((f) => f.kind === "html");
-      setSelectedOutputPath(srs?.path ?? html?.path ?? selectableFiles[selectableFiles.length - 1].path);
+      setSelectedOutputPath(
+        srs?.path ?? html?.path ?? selectableFiles[selectableFiles.length - 1].path,
+        "system",
+      );
     }
-  }, [projectId, filePaths, selectableFiles, selectedOutputPath, setSelectedOutputPath]);
+  }, [projectId, filePaths, selectedOutputPath, setSelectedOutputPath]);
 
   const disabled = !projectId || selectableFiles.length === 0;
 

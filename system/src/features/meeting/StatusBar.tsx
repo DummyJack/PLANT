@@ -2,6 +2,7 @@ import { agentLabel } from "@/constants/agents";
 import { useChatStore } from "@/stores/chatStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { runStageActivityLabel } from "@/utils/runStageLabel";
 
 interface StatusBarProps {
   run: RunState | null;
@@ -121,6 +122,13 @@ export function StatusBar({
         return {
           text: `${parsed.agent}: ${parsed.action}`,
           pulse: false,
+        };
+      }
+      const stageLabel = runStageActivityLabel(run.current_stage);
+      if (stageLabel) {
+        return {
+          text: stageLabel,
+          pulse: true,
         };
       }
       if (latestActionText) {

@@ -45,16 +45,40 @@ export interface RunState {
   attached_reference_paths?: string[];
   requires_rounds_input: boolean;
   pending_decision: PendingDecision | null;
+  skip_all_human_interventions?: boolean;
   cancel_requested: boolean;
   started_at: string;
   finished_at: string | null;
   error: string | null;
   event_count: number;
+  run_checkpoint?: RunCheckpoint | null;
+}
+
+export interface RunCheckpoint {
+  status: "failed" | "cancelled" | "interrupted" | string;
+  stage_id: string;
+  step_id?: string;
+  run_id: string;
+  error?: string;
+  dirty_outputs?: string[];
+  last_round?: number;
+  round?: number;
+  issue_id?: string;
+  agent?: string;
+  action?: string;
+  resume_policy?: string;
+  created_at?: string;
 }
 
 export interface PendingDecision {
   id: string;
-  kind: "stakeholder_selection" | "human_decision" | "stakeholder_statement_review" | "requirements_review";
+  kind:
+    | "stakeholder_selection"
+    | "human_decision"
+    | "stakeholder_statement_review"
+    | "requirements_review"
+    | "domain_research_review"
+    | "meeting_issue_proposal_review";
   title: string;
   description: string;
   proposed?: Array<{ name: string; type: string; reason: string }>;
@@ -150,6 +174,7 @@ export interface AgentModelConfig {
 
 export interface PlantConfig {
   rounds?: number;
+  max_issues?: number;
   stage?: Record<string, boolean>;
   export?: Record<string, boolean>;
   agent_models?: Record<string, AgentModelConfig>;

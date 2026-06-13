@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, FileUp, MoreHorizontal, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import {
   deleteReference,
   referenceDownloadUrl,
@@ -9,8 +10,8 @@ import {
 } from "@/api/projects";
 import { PanelChrome } from "@/components/PanelChrome";
 import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
+import { ReferenceFileIcon } from "@/features/documents/ReferenceFileIcon";
 import { useProjectData } from "@/hooks/useProjectData";
-import { useActiveRun } from "@/hooks/useActiveRun";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
 import { errorMessage } from "@/utils/errorMessage";
@@ -30,6 +31,32 @@ type ReferencePreview = {
   url?: string;
   kind: "text" | "pdf" | "unsupported";
   error?: string;
+};
+
+interface FileSystemEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  fullPath: string;
+}
+
+interface FileSystemFileEntry extends FileSystemEntry {
+  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+}
+
+interface FileSystemDirectoryEntry extends FileSystemEntry {
+  createReader: () => FileSystemDirectoryReader;
+}
+
+interface FileSystemDirectoryReader {
+  readEntries: (
+    successCallback: (entries: FileSystemEntry[]) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+}
+
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntry | null;
 };
 
 const SUPPORTED_REFERENCE_EXTS = [
@@ -68,6 +95,68 @@ function isPdfReference(name: string): boolean {
   return referenceExt(name) === ".pdf";
 }
 
+function isSupportedReferenceName(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return SUPPORTED_REFERENCE_EXTS.some((ext) => lowerName.endsWith(ext));
+}
+
+function hasSupportedDragFile(items: DataTransferItemList): boolean {
+  const fileItems = Array.from(items).filter((item) => item.kind === "file");
+  if (!fileItems.length) return false;
+  return fileItems.some((item) => {
+    const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
+    if (entry?.isDirectory) return true;
+    const name = item.getAsFile()?.name;
+    return !name || isSupportedReferenceName(name);
+  });
+}
+
+function readFileEntry(entry: FileSystemFileEntry): Promise<File> {
+  return new Promise((resolve, reject) => {
+    entry.file(resolve, reject);
+  });
+}
+
+function readDirectoryEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  return new Promise((resolve, reject) => {
+    reader.readEntries(resolve, reject);
+  });
+}
+
+async function readAllDirectoryEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemEntry[]> {
+  const reader = entry.createReader();
+  const entries: FileSystemEntry[] = [];
+  while (true) {
+    const batch = await readDirectoryEntries(reader);
+    if (!batch.length) break;
+    entries.push(...batch);
+  }
+  return entries;
+}
+
+async function filesFromEntry(entry: FileSystemEntry): Promise<File[]> {
+  if (entry.isFile) return [await readFileEntry(entry as FileSystemFileEntry)];
+  if (!entry.isDirectory) return [];
+  const entries = await readAllDirectoryEntries(entry as FileSystemDirectoryEntry);
+  const nested = await Promise.all(entries.map(filesFromEntry));
+  return nested.flat();
+}
+
+async function filesFromDataTransfer(dataTransfer: DataTransfer): Promise<File[]> {
+  const itemFiles = await Promise.all(
+    Array.from(dataTransfer.items)
+      .filter((item) => item.kind === "file")
+      .map(async (item) => {
+        const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
+        if (entry) return filesFromEntry(entry);
+        const file = item.getAsFile();
+        return file ? [file] : [];
+      }),
+  );
+  const files = itemFiles.flat();
+  return files.length ? files : Array.from(dataTransfer.files);
+}
+
 function triggerDownload(url: string, filename: string) {
   const link = document.createElement("a");
   link.href = url;
@@ -80,10 +169,9 @@ function triggerDownload(url: string, filename: string) {
 export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
+  const panelMeasureRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const { references } = useProjectData(projectId);
-  const { activeRun } = useActiveRun(projectId);
   const [dragOver, setDragOver] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
@@ -91,8 +179,9 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
   const [menuName, setMenuName] = useState<string | null>(null);
   const [preview, setPreview] = useState<ReferencePreview | null>(null);
-  const [compactUpload, setCompactUpload] = useState(false);
-  const [toolbarWrapped, setToolbarWrapped] = useState(false);
+  const [dragRejected, setDragRejected] = useState(false);
+  const [controlsStacked, setControlsStacked] = useState(false);
+  const [controlsNarrow, setControlsNarrow] = useState(false);
   const stagedReferenceFiles = useUiStore((s) => s.stagedReferenceFiles);
   const addStagedReferenceFile = useUiStore((s) => s.addStagedReferenceFile);
   const removeStagedReferenceFile = useUiStore((s) => s.removeStagedReferenceFile);
@@ -112,9 +201,8 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const allVisibleSelected =
     filteredRows.length > 0 && selectedVisibleNames.length === filteredRows.length;
   const someVisibleSelected = selectedVisibleNames.length > 0;
-  const runActive = !!activeRun;
-  const uploadDisabled = runActive || !canWrite;
-  const writeDisabled = runActive || !canWrite;
+  const uploadDisabled = !canWrite;
+  const writeDisabled = !canWrite;
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -127,39 +215,21 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   }, []);
 
   useEffect(() => {
-    const toolbar = toolbarRef.current;
-    const header = toolbar?.parentElement?.parentElement;
-    const titleGroup = header?.firstElementChild as HTMLElement | null;
-    if (!toolbar || !header || !titleGroup) return;
+    const measure = panelMeasureRef.current;
+    const panel = measure?.closest(".card");
+    if (!measure || !panel) return;
 
-    const updateCompactState = () => {
-      const previousHeaderJustify = header.style.justifyContent;
-      const previousTitleBasis = titleGroup.style.flexBasis;
-      const previousTitleJustify = titleGroup.style.justifyContent;
-
-      header.style.justifyContent = "";
-      titleGroup.style.flexBasis = "6rem";
-      titleGroup.style.justifyContent = "";
-
-      const toolbarTop = toolbar.getBoundingClientRect().top;
-      const titleTop = titleGroup.getBoundingClientRect().top;
-      const wrappedToNextLine = toolbarTop > titleTop + 4;
-      const overflowing = toolbar.scrollWidth > toolbar.clientWidth + 1;
-
-      header.style.justifyContent = previousHeaderJustify;
-      titleGroup.style.flexBasis = previousTitleBasis;
-      titleGroup.style.justifyContent = previousTitleJustify;
-
-      setToolbarWrapped(wrappedToNextLine);
-      setCompactUpload(wrappedToNextLine || overflowing);
+    const updateControlsLayout = () => {
+      const panelWidth = panel.getBoundingClientRect().width;
+      const nextStacked = panelWidth < 390;
+      const nextNarrow = panelWidth < 340;
+      setControlsStacked((current) => (current === nextStacked ? current : nextStacked));
+      setControlsNarrow((current) => (current === nextNarrow ? current : nextNarrow));
     };
 
-    const observer = new ResizeObserver(() => {
-      window.requestAnimationFrame(updateCompactState);
-    });
-    observer.observe(header);
-    observer.observe(toolbar);
-    updateCompactState();
+    const observer = new ResizeObserver(updateControlsLayout);
+    observer.observe(panel);
+    updateControlsLayout();
     return () => observer.disconnect();
   }, []);
 
@@ -202,26 +272,32 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     },
   });
 
-  const handleFiles = (fileList: FileList | null) => {
-    const files = Array.from(fileList ?? []);
+  const handleFiles = (files: File[]) => {
     if (!files.length) return;
-    const invalidFiles = files.filter((file) => {
-      const lowerName = file.name.toLowerCase();
-      return !SUPPORTED_REFERENCE_EXTS.some((ext) => lowerName.endsWith(ext));
-    });
+    const invalidFiles = files.filter((file) => !isSupportedReferenceName(file.name));
+    const validFiles = files.filter((file) => isSupportedReferenceName(file.name));
     if (invalidFiles.length) {
       setFormatError(
-        `文件庫僅支援：${REFERENCE_EXTS_LABEL}。不支援：${invalidFiles
+        `文件庫僅支援：${REFERENCE_EXTS_LABEL}\n不支援：${invalidFiles
           .map((file) => file.name)
           .join("、")}`,
       );
-      return;
     }
+    if (!validFiles.length) return;
     if (projectId) {
-      uploadMut.mutate(files);
+      uploadMut.mutate(validFiles);
     } else {
-      files.forEach(addStagedReferenceFile);
+      validFiles.forEach(addStagedReferenceFile);
     }
+  };
+
+  const updateDragState = (event: DragEvent<HTMLElement>) => {
+    if (uploadDisabled) return;
+    event.preventDefault();
+    const supported = hasSupportedDragFile(event.dataTransfer.items);
+    event.dataTransfer.dropEffect = supported ? "copy" : "none";
+    setDragOver(supported);
+    setDragRejected(!supported);
   };
 
   const downloadNames = (names: string[]) => {
@@ -307,75 +383,92 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     }
   };
 
+  const toolbar = (
+    <div
+      className={cn(
+        "flex min-w-0 items-center justify-center gap-1.5",
+        controlsStacked ? "mx-auto w-full max-w-[480px]" : "max-[520px]:w-full",
+      )}
+    >
+      <label className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2 text-xs text-slate-500 focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100">
+        <Search className="h-3.5 w-3.5 shrink-0" />
+        <input
+          className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
+          placeholder="搜尋"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      <input
+        ref={fileRef}
+        type="file"
+        className="hidden"
+        accept={REFERENCE_ACCEPT}
+        multiple
+        disabled={uploadDisabled}
+        onChange={(e) => {
+          handleFiles(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        disabled={uploadDisabled}
+        title="上傳文件"
+        className={cn(
+          "inline-flex h-8 shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40",
+          controlsNarrow && "w-8 justify-center px-0",
+        )}
+        onClick={() => fileRef.current?.click()}
+      >
+        <FileUp className="h-3.5 w-3.5" />
+        <span className={cn(controlsNarrow && "sr-only")}>上傳</span>
+      </button>
+    </div>
+  );
+
   return (
     <PanelChrome
       title="文件庫"
-      bodyClassName="flex flex-col"
-      headerClassName={cn(toolbarWrapped && "justify-center")}
-      titleGroupClassName={cn(toolbarWrapped && "basis-full justify-center")}
-      trailing={
-        <div
-          ref={toolbarRef}
-          className="flex min-w-0 items-center justify-center gap-1.5 max-[520px]:w-full"
-        >
-          <label className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2 text-xs text-slate-500 focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100">
-            <Search className="h-3.5 w-3.5 shrink-0" />
-            <input
-              className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
-              placeholder="搜尋"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          <input
-            ref={fileRef}
-            type="file"
-            className="hidden"
-            accept={REFERENCE_ACCEPT}
-            multiple
-            disabled={uploadDisabled}
-            onChange={(e) => {
-              handleFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            disabled={uploadDisabled}
-            title="上傳文件"
-            className={cn(
-              "inline-flex h-8 shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40",
-              compactUpload && "w-8 justify-center px-0",
-            )}
-            onClick={() => fileRef.current?.click()}
-          >
-            <FileUp className="h-3.5 w-3.5" />
-            <span className={cn(compactUpload && "sr-only")}>上傳</span>
-          </button>
-        </div>
+      bodyClassName="flex flex-col bg-slate-50/50"
+      centerTitle={controlsStacked}
+      headerClassName={cn(controlsStacked && "min-h-10 border-b-0 py-2")}
+      titleClassName={cn(controlsStacked && "text-base")}
+      trailing={!controlsStacked && toolbar}
+      subheader={
+        <>
+          <div ref={panelMeasureRef} className="pointer-events-none absolute inset-x-0 top-0 h-0 overflow-hidden opacity-0" />
+          {controlsStacked && (
+            <div className="flex shrink-0 border-b border-gray-100 px-4 py-2">
+              {toolbar}
+            </div>
+          )}
+        </>
       }
     >
       <div
         className={cn(
-          "relative flex min-h-0 flex-1 flex-col transition-colors",
+          "relative flex min-h-0 flex-1 flex-col bg-slate-50/50 transition-colors",
           dragOver && !uploadDisabled && "bg-slate-50",
+          dragRejected && !uploadDisabled && "cursor-not-allowed",
           uploadDisabled && "opacity-50",
         )}
+        onDragEnter={updateDragState}
         onDragOver={(e) => {
-          if (uploadDisabled) return;
-          e.preventDefault();
-          setDragOver(true);
+          updateDragState(e);
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
             setDragOver(false);
+            setDragRejected(false);
           }
         }}
-        onDrop={(e) => {
+        onDrop={async (e) => {
           if (uploadDisabled) return;
           e.preventDefault();
           setDragOver(false);
-          handleFiles(e.dataTransfer.files);
+          setDragRejected(false);
+          handleFiles(await filesFromDataTransfer(e.dataTransfer));
         }}
       >
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -384,6 +477,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               className={cn(
                 "flex min-h-full w-full flex-col items-center justify-center px-3 py-8 text-center transition-colors",
                 dragOver && !uploadDisabled && "bg-slate-50",
+                dragRejected && !uploadDisabled && "cursor-not-allowed",
               )}
             >
               <FileUp className="mb-3 h-6 w-6 text-slate-400" />
@@ -392,12 +486,21 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   ? "請先啟動後上傳"
                   : dragOver
                     ? "放開以上傳"
+                    : dragRejected
+                      ? "此格式不支援"
                     : "拖曳檔案至此區域上傳"}
               </p>
             </div>
           ) : (
             <div ref={menuRef} className="w-full min-w-0">
-              <div className="grid grid-cols-[24px_minmax(0,1fr)_64px_28px] items-center gap-2 border-b border-gray-100 px-1 pb-2 text-[11px] font-medium text-slate-400">
+              <div
+                className={cn(
+                  "grid items-center gap-2 border-b border-gray-100 px-1 pb-2 text-[11px] font-medium text-slate-400",
+                  controlsStacked
+                    ? "grid-cols-[24px_minmax(0,1fr)_28px]"
+                    : "grid-cols-[24px_minmax(0,1fr)_64px_28px]",
+                )}
+              >
                 <input
                   type="checkbox"
                   aria-label="選取全部文件"
@@ -421,7 +524,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   }}
                 />
                 <span>名稱</span>
-                <span>種類</span>
+                {!controlsStacked && <span>種類</span>}
                 <div className="relative flex justify-end">
                   {someVisibleSelected && (
                     <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-control bg-white">
@@ -460,7 +563,12 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     return (
                       <li
                         key={row.id}
-                        className="group grid grid-cols-[24px_minmax(0,1fr)_64px_28px] items-center gap-2 border-b border-gray-100 px-1 py-2 text-xs hover:bg-gray-50"
+                        className={cn(
+                          "group grid items-center gap-2 border-b border-gray-100 px-1 py-2 text-xs hover:bg-gray-50",
+                          controlsStacked
+                            ? "grid-cols-[24px_minmax(0,1fr)_28px]"
+                            : "grid-cols-[24px_minmax(0,1fr)_64px_28px]",
+                        )}
                       >
                         <input
                           type="checkbox"
@@ -481,15 +589,18 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                         />
                         <button
                           type="button"
-                          className="min-w-0 truncate text-left font-medium text-slate-700 hover:text-slate-950 hover:underline"
+                          className="flex min-w-0 items-center gap-2 text-left font-medium text-slate-700 hover:text-slate-950 hover:underline"
                           title={row.name}
                           onClick={() => void openReferencePreview(row.name)}
                         >
-                          {basename(row.name)}
+                          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+                            <ReferenceFileIcon name={row.name} />
+                          </span>
+                          <span className="min-w-0 truncate">{basename(row.name)}</span>
                         </button>
-                        <span className="truncate text-[11px] text-slate-400">
+                        {!controlsStacked && <span className="truncate text-[11px] text-slate-400">
                           {extensionLabel(row.name)}
-                        </span>
+                        </span>}
                         <div className="relative flex justify-end">
                           <button
                             type="button"
@@ -547,7 +658,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
             setDragOver(false);
           }}
         >
-          <p className="overflow-x-auto whitespace-nowrap text-[11px] leading-4 text-slate-400">
+          <p className="truncate whitespace-nowrap text-[11px] leading-4 text-slate-400">
             <span className="font-medium">可支援檔案：</span>
             {REFERENCE_EXTS_LABEL}
           </p>
@@ -616,7 +727,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                 {preview.loading ? (
                   <p className="text-sm text-slate-500">讀取文件中...</p>
                 ) : preview.error ? (
-                  <div className="space-y-3">
+                  <div className="flex flex-col items-center gap-3 text-center">
                     <p className="text-sm leading-6 text-slate-500">{preview.error}</p>
                     <button
                       type="button"
@@ -631,7 +742,6 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   <iframe
                     title={preview.name}
                     src={preview.url}
-                    sandbox=""
                     className="h-[60vh] w-full rounded-control border border-gray-200"
                   />
                 ) : (
@@ -648,7 +758,13 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
             <div className="w-full max-w-[280px] rounded-card border border-gray-200 bg-white p-4 shadow-lg">
               <div className="mb-3">
                 <p className="text-sm font-semibold text-slate-900">無法處理文件</p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">{formatError}</p>
+                <div className="mt-2 space-y-2 text-xs leading-5 text-slate-500">
+                  {formatError.split("\n").map((line) => (
+                    <p key={line} className="break-words">
+                      {line}
+                    </p>
+                  ))}
+                </div>
               </div>
               <div className="flex justify-end">
                 <button

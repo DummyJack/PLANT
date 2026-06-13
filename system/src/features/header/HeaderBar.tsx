@@ -200,7 +200,7 @@ function AgentConfigPopover({
   return (
     <div
       ref={popoverRef}
-      className="absolute left-0 top-full z-30 mt-1 w-56 rounded-control border border-gray-200 bg-white p-3 shadow-lg"
+      className="absolute left-1/2 top-full z-30 mt-1 w-56 -translate-x-1/2 rounded-control border border-gray-200 bg-white p-3 shadow-lg"
     >
       <div className="space-y-2">
         <div className="block">
@@ -778,14 +778,14 @@ export function HeaderBar() {
   );
 
   return (
-    <header className="shrink-0 border-b border-gray-200 bg-white">
+    <header className="shrink-0 bg-slate-50">
       {!apiOk && (
         <div className="bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
           API 金鑰或設定異常：{bootstrap.data?.api_keys.error ?? "請檢查 .env"}
         </div>
       )}
       <div className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2">
-        <div className="justify-self-start text-base font-bold tracking-tight text-slate-900">
+        <div className="justify-self-start text-lg font-bold tracking-tight text-slate-900">
           PLANT
         </div>
 

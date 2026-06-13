@@ -51,6 +51,34 @@ function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
+function isHistoricalTransientEvent(event: Parameters<typeof logEventToChat>[0]) {
+  return (
+    event.type === "heartbeat" ||
+    event.type === "cancel_requested" ||
+    event.type === "run_completed" ||
+    event.type === "run_failed" ||
+    event.type === "run_cancelled"
+  );
+}
+
+function historicalEventMessages(event: Parameters<typeof logEventToChat>[0]): ChatMessage[] {
+  if (isHistoricalTransientEvent(event)) return [];
+  const messages = logEventToChats(event);
+  if (event.type !== "stage_started") return messages;
+  return messages.map((message) =>
+    message.role === "system" && message.kind === "stage" && message.status === "running"
+      ? { ...message, status: "done" }
+      : message,
+  );
+}
+
+function historicalLogMessages(events: unknown[]): ChatMessage[] {
+  return attachMomLinks(events.flatMap((event) => {
+    const row = event as Parameters<typeof logEventToChat>[0];
+    return historicalEventMessages(row);
+  }));
+}
+
 async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
   try {
     const { runs } = await fetchRuns(projectId);
@@ -79,9 +107,7 @@ async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
         : Array.isArray(body.events)
           ? body.events
           : [];
-      return attachMomLinks(rows.flatMap((e) =>
-        logEventToChats(e as Parameters<typeof logEventToChat>[0]),
-      ));
+      return historicalLogMessages(rows);
     }
 
     const text = await res.text();
@@ -91,7 +117,7 @@ async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
       if (!trimmed.startsWith("data:")) continue;
       try {
         const event = JSON.parse(trimmed.slice(5).trim());
-        messages.push(...logEventToChats(event));
+        messages.push(...historicalEventMessages(event));
       } catch {
         /* skip malformed SSE chunks */
       }
@@ -113,6 +139,13 @@ export function useProjectChatHydration(
   const hydratedKeyRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasHistory, setHasHistory] = useState(false);
+
+  useEffect(() => {
+    hydratedKeyRef.current = null;
+    setMessages([]);
+    setHasHistory(false);
+    setLoading(!!projectId);
+  }, [projectId, setMessages]);
 
   useEffect(() => {
     if (!projectId) {

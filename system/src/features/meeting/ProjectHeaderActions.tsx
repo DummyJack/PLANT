@@ -23,11 +23,13 @@ function projectOptionLabel(project: {
 interface ProjectHeaderActionsProps {
   onRequestDeleteProject?: () => void;
   deletingProject?: boolean;
+  compact?: boolean;
 }
 
 export function ProjectHeaderActions({
   onRequestDeleteProject,
   deletingProject = false,
+  compact = false,
 }: ProjectHeaderActionsProps) {
   const bootstrap = useBootstrap();
   const projectId = useUiStore((s) => s.activeProjectId);
@@ -83,10 +85,10 @@ export function ProjectHeaderActions({
 
   return (
     <div className="relative flex min-w-0 items-center gap-1.5">
-      {projectId && hasManual && (
+      {projectId && hasManual && !compact && (
         <button
           type="button"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
           aria-label="說明文件"
           title="說明文件"
           onClick={() => {
@@ -94,6 +96,7 @@ export function ProjectHeaderActions({
           }}
         >
           <BookOpen className="h-3.5 w-3.5" />
+          <span>說明文件</span>
         </button>
       )}
 
@@ -163,7 +166,20 @@ export function ProjectHeaderActions({
             <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
           {actionMenuOpen && (
-            <div className="absolute right-0 top-full z-40 mt-3 w-28 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
+            <div className="absolute right-0 top-full z-40 mt-3 w-32 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
+              {hasManual && compact && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
+                  onClick={() => {
+                    setActionMenuOpen(false);
+                    window.open(manualIndexUrl(projectId), "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  說明文件
+                </button>
+              )}
               <button
                 type="button"
                 disabled={runActive || !canWrite}

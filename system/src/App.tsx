@@ -23,6 +23,11 @@ const EMPTY_ITEMS: FileTreeNode[] = [];
 
 type LayoutMode = "desktop" | "tablet" | "mobile";
 
+function positiveConfigNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
 function currentLayoutMode(): LayoutMode {
   if (typeof window === "undefined") return "desktop";
   if (window.innerWidth < 768) return "mobile";
@@ -48,6 +53,7 @@ export default function App() {
   const clearMessages = useChatStore((s) => s.clearMessages);
   const clearAttachedDocs = useUiStore((s) => s.clearAttachedDocs);
   const setEnabledAgents = useUiStore((s) => s.setEnabledAgents);
+  const setMeetingDefaults = useUiStore((s) => s.setMeetingDefaults);
   const visiblePanels = useUiStore((s) => s.visiblePanels);
   const layoutMode = useLayoutMode();
   const bootstrap = useBootstrap();
@@ -62,11 +68,14 @@ export default function App() {
             ...config.enable_agents,
           });
         }
+        const rounds = positiveConfigNumber(config.rounds);
+        const maxIssues = positiveConfigNumber(config.max_issues);
+        setMeetingDefaults(rounds, maxIssues);
       })
       .catch(() => {
         /* keep uiStore defaults */
       });
-  }, [setEnabledAgents]);
+  }, [setEnabledAgents, setMeetingDefaults]);
 
   useEffect(() => {
     clearMessages();
