@@ -10,6 +10,8 @@ from utils.topology import normalize_dr_model_path
 
 
 class DocumentorDrContext:
+    TRACE_AGENT_REPAIR_MAX_ROUNDS = 2
+
     @staticmethod
     def clean_repeated_text(value: Any) -> str:
         text = str(value or "").strip()
@@ -860,6 +862,7 @@ class DocumentorDrContext:
             }
             req_context["trace_graph"] = cls.build_trace_graph(req_context)
             req_context["trace_warnings"] = cls.validate_trace_context(req_context)
+            req_context["trace_repair_tasks"] = cls.build_trace_repair_tasks(req_context)
             for warning in req_context["trace_warnings"]:
                 logger = getattr(self, "logger", None)
                 if logger:
@@ -946,6 +949,354 @@ class DocumentorDrContext:
             warnings.append(f"{srs_id or req_id} has meetings but no visible formalize_requirement meeting")
 
         return warnings
+
+    @classmethod
+    def build_trace_repair_tasks(cls, requirement: Dict[str, Any]) -> List[Dict[str, Any]]:
+        req_id = str(requirement.get("id") or "").strip()
+        srs_id = str(requirement.get("srs_id") or req_id).strip()
+        graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
+        visible_ids = {
+            str(node.get("id") or "").strip()
+            for node in (graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+        edge_pairs = {
+            (str(edge.get("from") or "").strip(), str(edge.get("to") or "").strip())
+            for edge in (graph.get("edges") or [])
+            if isinstance(edge, dict)
+        }
+        tasks: List[Dict[str, Any]] = []
+
+        def add_task(
+            repair_type: str,
+            reason: str,
+            *,
+            candidate_from: str = "",
+            candidate_to: str = "",
+            edge_label: str = "",
+            confidence: str = "medium",
+            evidence_ids: List[str] | None = None,
+        ) -> None:
+            task_index = len(tasks) + 1
+            tasks.append({
+                "task_id": f"TR-{srs_id or req_id}-{task_index}",
+                "target_requirement_id": srs_id or req_id,
+                "repair_type": repair_type,
+                "candidate_from": candidate_from,
+                "candidate_to": candidate_to,
+                "edge_label": edge_label,
+                "confidence": confidence,
+                "status": "needs_agent_repair",
+                "reason": reason,
+                "evidence_ids": evidence_ids or [item for item in (candidate_from, candidate_to) if item],
+                "runtime_rule": "Agent may propose a repair, but runtime must validate node existence, allowed edge type, duplicate edges, and meeting action before applying it as formal trace.",
+                "max_agent_repair_rounds": cls.TRACE_AGENT_REPAIR_MAX_ROUNDS,
+                "stop_conditions": [
+                    "no_new_proposal",
+                    "all_proposals_rejected",
+                    "trace_warnings_not_reduced",
+                    "max_rounds_reached",
+                ],
+            })
+
+        url_rows = [row for row in requirement.get("user_requirements") or [] if isinstance(row, dict)]
+        for url in url_rows:
+            url_id = str(url.get("id") or "").strip()
+            source_id = str(url.get("source_id") or "").strip()
+            related_statement_ids = [
+                str(item).strip()
+                for item in (url.get("related_statement_ids") or [])
+                if str(item).strip()
+            ]
+            if source_id and (source_id, url_id) not in edge_pairs:
+                add_task(
+                    "connect_statement_to_url",
+                    f"{url_id} declares source_id {source_id}, but the topology did not include that source edge.",
+                    candidate_from=source_id,
+                    candidate_to=url_id,
+                    edge_label="整理",
+                    confidence="high",
+                )
+            for statement_id in related_statement_ids:
+                if (statement_id, url_id) not in edge_pairs:
+                    add_task(
+                        "connect_statement_to_url",
+                        f"{url_id} declares related_statement_id {statement_id}, but the topology did not include that source edge.",
+                        candidate_from=statement_id,
+                        candidate_to=url_id,
+                        edge_label="整理",
+                        confidence="high",
+                    )
+            if not source_id and not related_statement_ids:
+                add_task(
+                    "identify_url_source",
+                    f"{url_id} has no explicit source_id or related_statement_ids; Agent may identify candidate stakeholder evidence for human review.",
+                    candidate_to=url_id,
+                    edge_label="整理",
+                    confidence="low",
+                    evidence_ids=[url_id],
+                )
+
+        formalize_meeting_ids = [
+            str(row.get("id") or "").strip()
+            for row in (requirement.get("meetings") or [])
+            if isinstance(row, dict)
+            and cls.is_requirement_formalization_meeting(row)
+            and str(row.get("id") or "").strip()
+        ]
+        resolve_meeting_ids = [
+            str(row.get("id") or "").strip()
+            for row in (requirement.get("meetings") or [])
+            if isinstance(row, dict)
+            and cls.is_conflict_resolution_meeting(row)
+            and str(row.get("id") or "").strip()
+        ]
+        last_formalize_id = formalize_meeting_ids[-1] if formalize_meeting_ids else ""
+        last_resolve_id = resolve_meeting_ids[-1] if resolve_meeting_ids else ""
+
+        for section, repair_type, edge_label in (
+            ("feedback", "connect_feedback_to_formalize_meeting", ""),
+            ("system_models", "connect_model_to_formalize_meeting", ""),
+        ):
+            if not last_formalize_id:
+                continue
+            for row in [item for item in (requirement.get(section) or []) if isinstance(item, dict)]:
+                row_id = str(row.get("id") or "").strip()
+                if row_id and row_id not in visible_ids:
+                    add_task(
+                        repair_type,
+                        f"{row_id} is related to the requirement but is not connected to a formalization meeting.",
+                        candidate_from=row_id,
+                        candidate_to=last_formalize_id,
+                        edge_label=edge_label,
+                        confidence="medium",
+                    )
+
+        conflict_ids = [
+            str(row.get("id") or "").strip()
+            for row in (requirement.get("conflicts") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        ]
+        if conflict_ids and not last_resolve_id:
+            add_task(
+                "identify_conflict_resolution_meeting",
+                f"{', '.join(conflict_ids)} has no visible resolve_conflict meeting; Agent may identify a candidate meeting or request human confirmation.",
+                edge_label="解決",
+                confidence="low",
+                evidence_ids=conflict_ids,
+            )
+        elif last_resolve_id and last_formalize_id and (last_resolve_id, last_formalize_id) not in edge_pairs:
+            add_task(
+                "connect_resolve_to_formalize_meeting",
+                f"{last_resolve_id} and {last_formalize_id} are both present but are not connected in the topology.",
+                candidate_from=last_resolve_id,
+                candidate_to=last_formalize_id,
+                edge_label="正式化",
+                confidence="high",
+            )
+
+        if requirement.get("meetings") and not last_formalize_id:
+            add_task(
+                "identify_formalization_meeting",
+                f"{srs_id or req_id} has meetings but no visible formalize_requirement meeting.",
+                confidence="low",
+                evidence_ids=[
+                    str(row.get("id") or "").strip()
+                    for row in (requirement.get("meetings") or [])
+                    if isinstance(row, dict) and str(row.get("id") or "").strip()
+                ],
+            )
+
+        return tasks
+
+    @classmethod
+    def split_agent_repair_tasks(cls, requirement: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        agent_tasks: List[Dict[str, Any]] = []
+        human_tasks: List[Dict[str, Any]] = list(requirement.get("trace_human_review_tasks") or [])
+        for task in requirement.get("trace_repair_tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            confidence = str(task.get("confidence") or "").strip().lower()
+            if confidence == "low":
+                review_task = dict(task)
+                review_task["status"] = "needs_human_review"
+                human_tasks.append(review_task)
+            else:
+                agent_tasks.append(task)
+        return agent_tasks, human_tasks
+
+    @classmethod
+    def public_dr_requirement_context(cls, requirement: Dict[str, Any]) -> Dict[str, Any]:
+        public = dict(requirement)
+        graph = public.get("trace_graph")
+        if isinstance(graph, dict) and "all_nodes" in graph:
+            public["trace_graph"] = {key: value for key, value in graph.items() if key != "all_nodes"}
+        return public
+
+    @classmethod
+    def public_dr_requirement_contexts(cls, requirements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [cls.public_dr_requirement_context(req) for req in requirements]
+
+    @staticmethod
+    def trace_target_aliases(requirement: Dict[str, Any]) -> set[str]:
+        return {
+            str(requirement.get("id") or "").strip(),
+            str(requirement.get("srs_id") or "").strip(),
+        } - {""}
+
+    @classmethod
+    def validate_trace_repair_proposal(cls, requirement: Dict[str, Any], proposal: Dict[str, Any]) -> Dict[str, Any]:
+        graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
+        graph_node_rows = [
+            node for node in (graph.get("all_nodes") or graph.get("nodes") or [])
+            if isinstance(node, dict)
+        ]
+        node_ids = {
+            str(node.get("id") or "").strip()
+            for node in graph_node_rows
+            if str(node.get("id") or "").strip()
+        }
+        for section in ("stakeholder_statements", "user_requirements", "conflicts", "feedback", "system_models", "meetings"):
+            for row in requirement.get(section) or []:
+                if isinstance(row, dict) and str(row.get("id") or "").strip():
+                    node_ids.add(str(row.get("id") or "").strip())
+        target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        if target_id:
+            node_ids.add(target_id)
+        target_requirement_id = str(proposal.get("target_requirement_id") or "").strip()
+        if target_requirement_id and target_requirement_id not in cls.trace_target_aliases(requirement):
+            errors = [f"target_requirement_id does not match requirement: {target_requirement_id}"]
+            return {
+                "accepted": False,
+                "errors": errors,
+                "normalized": {
+                    "from": "",
+                    "to": "",
+                    "relation": "",
+                    "repair_type": str(proposal.get("repair_type") or "").strip(),
+                    "status": "rejected",
+                },
+            }
+        edge_pairs = {
+            (str(edge.get("from") or "").strip(), str(edge.get("to") or "").strip())
+            for edge in (graph.get("edges") or [])
+            if isinstance(edge, dict)
+        }
+        candidate_from = str(proposal.get("candidate_from") or proposal.get("from") or "").strip()
+        candidate_to = str(proposal.get("candidate_to") or proposal.get("to") or "").strip()
+        repair_type = str(proposal.get("repair_type") or "").strip()
+        edge_label = str(proposal.get("edge_label") or "").strip()
+        allowed_labels_by_type = {
+            "connect_statement_to_url": {"整理"},
+            "connect_feedback_to_formalize_meeting": {""},
+            "connect_model_to_formalize_meeting": {""},
+            "connect_resolve_to_formalize_meeting": {"正式化"},
+            "identify_url_source": {"整理"},
+            "identify_conflict_resolution_meeting": {"解決"},
+            "identify_formalization_meeting": {""},
+        }
+        errors: List[str] = []
+        if repair_type not in allowed_labels_by_type:
+            errors.append(f"unsupported repair_type: {repair_type or '<empty>'}")
+        if candidate_from and candidate_from not in node_ids:
+            errors.append(f"candidate_from does not exist in trace_graph: {candidate_from}")
+        if candidate_to and candidate_to not in node_ids:
+            errors.append(f"candidate_to does not exist in trace_graph: {candidate_to}")
+        if candidate_from and candidate_to and (candidate_from, candidate_to) in edge_pairs:
+            errors.append(f"duplicate edge: {candidate_from}->{candidate_to}")
+        if repair_type in allowed_labels_by_type and edge_label not in allowed_labels_by_type[repair_type]:
+            errors.append(f"edge_label {edge_label or '<empty>'} is not allowed for {repair_type}")
+        return {
+            "accepted": not errors,
+            "errors": errors,
+            "normalized": {
+                "from": candidate_from,
+                "to": candidate_to,
+                "relation": edge_label,
+                "repair_type": repair_type,
+                "status": "validated" if not errors else "rejected",
+            },
+        }
+
+    @classmethod
+    def apply_trace_repair_proposals(cls, requirement: Dict[str, Any], proposals: List[Dict[str, Any]]) -> Dict[str, Any]:
+        graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
+        all_nodes = [
+            node for node in (graph.get("all_nodes") or graph.get("nodes") or [])
+            if isinstance(node, dict)
+        ]
+        edges = [
+            dict(edge) for edge in (graph.get("edges") or [])
+            if isinstance(edge, dict)
+        ]
+        applied: List[Dict[str, Any]] = []
+        for proposal in proposals or []:
+            if not isinstance(proposal, dict):
+                continue
+            validation = cls.validate_trace_repair_proposal(requirement, proposal)
+            if not validation.get("accepted"):
+                continue
+            normalized = validation.get("normalized") if isinstance(validation.get("normalized"), dict) else {}
+            from_id = str(normalized.get("from") or "").strip()
+            to_id = str(normalized.get("to") or "").strip()
+            if not from_id or not to_id:
+                continue
+            edge = {
+                "from": from_id,
+                "to": to_id,
+                "relation": str(normalized.get("relation") or "").strip(),
+            }
+            if edge not in edges:
+                edges.append(edge)
+                applied.append(normalized)
+        if not applied:
+            return requirement
+        updated = dict(requirement)
+        updated["trace_graph"] = cls.visible_trace_graph(
+            all_nodes=all_nodes,
+            edges=edges,
+            target_id=str(updated.get("srs_id") or updated.get("id") or "").strip(),
+        )
+        updated["trace_repair_applied"] = list((updated.get("trace_repair_applied") or [])) + applied
+        updated["trace_warnings"] = cls.validate_trace_context(updated)
+        updated["trace_repair_tasks"] = cls.build_trace_repair_tasks(updated)
+        return updated
+
+    @classmethod
+    def visible_trace_graph(
+        cls,
+        *,
+        all_nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, str]],
+        target_id: str,
+    ) -> Dict[str, Any]:
+        incoming_by_target: Dict[str, List[str]] = {}
+        for edge in edges:
+            from_id = str(edge.get("from") or "").strip()
+            to_id = str(edge.get("to") or "").strip()
+            if from_id and to_id:
+                incoming_by_target.setdefault(to_id, []).append(from_id)
+        connected_node_ids = {target_id}
+        stack = [target_id]
+        while stack:
+            current_id = stack.pop()
+            for from_id in incoming_by_target.get(current_id, []):
+                if from_id in connected_node_ids:
+                    continue
+                connected_node_ids.add(from_id)
+                stack.append(from_id)
+        visible_nodes = [
+            node
+            for node in all_nodes
+            if str(node.get("id") or "").strip() in connected_node_ids
+        ]
+        visible_edges = [
+            edge
+            for edge in edges
+            if str(edge.get("from") or "").strip() in connected_node_ids
+            and str(edge.get("to") or "").strip() in connected_node_ids
+        ]
+        return {"nodes": visible_nodes, "edges": visible_edges, "all_nodes": all_nodes}
 
     @classmethod
     def build_trace_graph(cls, requirement: Dict[str, Any]) -> Dict[str, Any]:
@@ -1265,15 +1616,15 @@ class DocumentorDrContext:
         for url in url_rows:
             url_source_id = str(url.get("source_id") or "").strip()
             if url_source_id:
-                add_edge(url_source_id, url.get("id"), "分析")
+                add_edge(url_source_id, url.get("id"), "整理")
                 continue
             for source_id in url.get("related_statement_ids") or []:
-                add_edge(source_id, url.get("id"), "分析")
+                add_edge(source_id, url.get("id"), "整理")
 
         for conflict in conflict_rows:
             related_sources = [str(item).strip() for item in (conflict.get("related_user_requirements") or []) if str(item).strip()]
             for source_id in related_sources:
-                add_edge(source_id, conflict.get("id"), "衝突")
+                add_edge(source_id, conflict.get("id"), "")
 
         for feedback in feedback_rows:
             related_sources = [str(item).strip() for item in (feedback.get("related_sources") or []) if str(item).strip()]
@@ -1290,7 +1641,7 @@ class DocumentorDrContext:
                 if str(row.get("id") or "").strip()
             ]
             for source_id in source_ids:
-                add_edge(source_id, model_id, "分析")
+                add_edge(source_id, model_id, "建模")
 
         conflict_ids = [str(row.get("id") or "").strip() for row in conflict_rows if str(row.get("id") or "").strip()]
         feedback_ids = [str(row.get("id") or "").strip() for row in feedback_rows if str(row.get("id") or "").strip()]
@@ -1315,18 +1666,20 @@ class DocumentorDrContext:
         explicit_feedback_meeting_ids = set()
         explicit_model_meeting_ids = set()
         for meeting_id in meeting_ids:
+            meeting = meeting_by_id.get(meeting_id, {})
+            is_formalization_meeting = cls.is_requirement_formalization_meeting(meeting)
             source_ids = {
                 str(source_id).strip()
-                for source_id in (meeting_by_id.get(meeting_id, {}).get("source_ids") or [])
+                for source_id in (meeting.get("source_ids") or [])
                 if str(source_id).strip()
             }
             for feedback_id in feedback_ids:
                 if feedback_id in source_ids:
-                    add_edge(feedback_id, meeting_id, "依據")
+                    add_edge(feedback_id, meeting_id, "" if is_formalization_meeting else "依據")
                     explicit_feedback_meeting_ids.add(feedback_id)
             for model_id in model_ids:
                 if model_id in source_ids:
-                    add_edge(model_id, meeting_id, "支撐")
+                    add_edge(model_id, meeting_id, "" if is_formalization_meeting else "建模")
                     explicit_model_meeting_ids.add(model_id)
 
         if meeting_ids:
@@ -1337,16 +1690,38 @@ class DocumentorDrContext:
                     for conflict_id in conflict_ids:
                         add_edge(conflict_id, meeting_id, "解決")
                 if index > 0:
-                    relation = "細化" if cls.is_requirement_clarification_meeting(meeting) else ""
+                    previous_meeting = meeting_by_id.get(meeting_ids[index - 1], {})
+                    if cls.is_requirement_clarification_meeting(meeting):
+                        relation = "釐清"
+                    elif is_formalization_meeting and cls.is_conflict_resolution_meeting(previous_meeting):
+                        relation = "正式化"
+                    else:
+                        relation = ""
                     add_edge(meeting_ids[index - 1], meeting_id, relation)
                 if is_formalization_meeting:
-                    for source_id in url_ids + conflict_ids + feedback_ids + model_ids:
-                        add_edge(source_id, meeting_id, "正式")
+                    for source_id in ([] if conflict_ids else url_ids):
+                        add_edge(source_id, meeting_id, "正式化")
 
-            terminal_meeting_id = ""
+            primary_formalization_meeting_id = formalization_meeting_ids[-1] if formalization_meeting_ids else ""
+            for feedback_id in feedback_ids:
+                if primary_formalization_meeting_id:
+                    add_edge(feedback_id, primary_formalization_meeting_id, "")
+            for model_id in model_ids:
+                if primary_formalization_meeting_id:
+                    add_edge(model_id, primary_formalization_meeting_id, "")
+            for meeting_id in meeting_ids:
+                if meeting_id in formalization_meeting_ids or meeting_id in clarification_meeting_ids:
+                    continue
+                if cls.is_conflict_resolution_meeting(meeting_by_id.get(meeting_id, {})):
+                    continue
+                if primary_formalization_meeting_id:
+                    add_edge(meeting_id, primary_formalization_meeting_id, "")
+                else:
+                    add_edge(meeting_id, target_id, "")
+
             if clarification_meeting_ids:
                 terminal_meeting_id = clarification_meeting_ids[-1]
-                add_edge(terminal_meeting_id, target_id, "細化")
+                add_edge(terminal_meeting_id, target_id, "")
             elif formalization_meeting_ids:
                 terminal_meeting_id = formalization_meeting_ids[-1]
                 add_edge(terminal_meeting_id, target_id, "")
@@ -1354,33 +1729,11 @@ class DocumentorDrContext:
             for url in url_rows:
                 add_edge(url.get("id"), target_id, "")
 
-        incoming_by_target: Dict[str, List[str]] = {}
-        for edge in edges:
-            from_id = str(edge.get("from") or "").strip()
-            to_id = str(edge.get("to") or "").strip()
-            if from_id and to_id:
-                incoming_by_target.setdefault(to_id, []).append(from_id)
-        connected_node_ids = {target_id}
-        stack = [target_id]
-        while stack:
-            current_id = stack.pop()
-            for from_id in incoming_by_target.get(current_id, []):
-                if from_id in connected_node_ids:
-                    continue
-                connected_node_ids.add(from_id)
-                stack.append(from_id)
-        visible_nodes = [
-            node
-            for node in nodes.values()
-            if str(node.get("id") or "").strip() in connected_node_ids
-        ]
-        visible_edges = [
-            edge
-            for edge in edges
-            if str(edge.get("from") or "").strip() in connected_node_ids
-            and str(edge.get("to") or "").strip() in connected_node_ids
-        ]
-        return {"nodes": visible_nodes, "edges": visible_edges}
+        return cls.visible_trace_graph(
+            all_nodes=list(nodes.values()),
+            edges=edges,
+            target_id=target_id,
+        )
 
     @staticmethod
     def split_dr_body_context(

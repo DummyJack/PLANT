@@ -1,54 +1,35 @@
 # Handles meeting execution, response collection, records, and issue state.
 import json
+import importlib.util
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+try:
+    from . import mom
+except ImportError:  # pragma: no cover - supports direct file loading in small tools.
+    _mom_spec = importlib.util.spec_from_file_location("meeting_mom", Path(__file__).with_name("mom.py"))
+    if _mom_spec is None or _mom_spec.loader is None:
+        raise
+    mom = importlib.util.module_from_spec(_mom_spec)
+    _mom_spec.loader.exec_module(mom)
 
 # Defines MediatorRecords class for this module workflow.
 class MediatorRecords:
     @staticmethod
     # Defines clean repeated text function for this module workflow.
     def clean_repeated_text(value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        text = re.sub(r"\s+", " ", text)
-        for sep in ("，", "；", ";", "。"):
-            parts = [part.strip() for part in text.split(sep) if part.strip()]
-            if len(parts) < 2:
-                continue
-            cleaned: List[str] = []
-            for part in parts:
-                if part not in cleaned:
-                    cleaned.append(part)
-            if len(cleaned) != len(parts):
-                text = sep.join(cleaned)
-                if value and str(value).strip().endswith(sep):
-                    text += sep
-        half = len(text) // 2
-        if half > 12 and len(text) % 2 == 0 and text[:half].strip("，；;。 ") == text[half:].strip("，；;。 "):
-            text = text[:half].strip("，；;。 ")
-        return text.strip()
+        return mom.clean_repeated_text(value)
 
     @staticmethod
     # Defines valid mom artifact id function for this module workflow.
     def valid_mom_artifact_id(value: Any, prefixes: tuple[str, ...]) -> bool:
-        text = str(value or "").strip()
-        if not text:
-            return False
-        prefix_pattern = "|".join(re.escape(prefix) for prefix in prefixes)
-        return bool(re.fullmatch(rf"(?:{prefix_pattern})-\d+", text))
+        return mom.valid_artifact_id(value, prefixes)
 
     @classmethod
     # Defines clean id list function for this module workflow.
     def clean_id_list(cls, values: Any, prefixes: tuple[str, ...]) -> List[str]:
-        rows = values if isinstance(values, list) else [values]
-        out: List[str] = []
-        for value in rows:
-            text = str(value or "").strip()
-            if cls.valid_mom_artifact_id(text, prefixes) and text not in out:
-                out.append(text)
-        return out
+        return mom.clean_id_list(values, prefixes)
 
     @classmethod
     # Defines clean mom question function for this module workflow.
@@ -61,11 +42,12 @@ class MediatorRecords:
     @staticmethod
     # Defines natural artifact id sort key for this module workflow.
     def artifact_id_sort_key(value: Any) -> tuple[str, int, str]:
-        text = str(value or "").strip()
-        match = re.fullmatch(r"([A-Za-z]+)-(\d+)", text)
-        if not match:
-            return (text, 999999, text)
-        return (match.group(1).upper(), int(match.group(2)), text)
+        return mom.artifact_id_sort_key(value)
+
+    @staticmethod
+    # Defines option display label function for this module workflow.
+    def option_display_label(value: Any, index: int = 0) -> str:
+        return mom.option_display_label(value, index)
 
     @classmethod
     # Defines normalized issue title function for this module workflow.
@@ -285,8 +267,23 @@ class MediatorRecords:
                 parts.append(summary)
         return "；".join(parts) if parts else "本次會議未產生 artifact 更新"
 
-    # Defines polish meeting note header function for this module workflow.
-    def polish_meeting_note_header(
+    @classmethod
+    # Defines unclear mom header text function for this module workflow.
+    def unclear_mom_header_text(cls, value: Any, *, allow_empty: bool = False) -> bool:
+        return mom.unclear_header_text(value, allow_empty=allow_empty)
+
+    @classmethod
+    # Defines mom referenced ids function for this module workflow.
+    def mom_referenced_ids(
+        cls,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+    ) -> List[str]:
+        return mom.referenced_ids(issue, conversation, resolution)
+
+    # Defines write meeting note header function for this module workflow.
+    def write_meeting_note_header(
         self,
         *,
         issue: Dict[str, Any],
@@ -306,6 +303,7 @@ class MediatorRecords:
 
         action_summaries: List[str] = []
         discussion_snippets: List[Dict[str, str]] = []
+        human_decision_notes: List[str] = []
         for entry in conversation or []:
             if not isinstance(entry, dict) or entry.get("is_reply"):
                 continue
@@ -321,27 +319,50 @@ class MediatorRecords:
                 line = self.action_result_summary(result)
                 if line:
                     action_summaries.append(line)
+        human_choice = resolution.get("human_choice") if isinstance(resolution.get("human_choice"), dict) else {}
+        if human_choice:
+            chosen_option_id = str(human_choice.get("chosen_option_id") or "").strip()
+            chosen_option_title = str(human_choice.get("chosen_option_title") or "").strip()
+            if chosen_option_id or chosen_option_title:
+                human_decision_notes.append(
+                    f"人類採納{self.option_display_label(chosen_option_id) if chosen_option_id else '自訂裁決'}"
+                    + (f"：{chosen_option_title}" if chosen_option_title else "")
+                )
+            for option in human_choice.get("chosen_options") or []:
+                if isinstance(option, dict):
+                    option_id = str(option.get("id") or option.get("option_id") or "").strip()
+                    title = self.clean_repeated_text(option.get("title", ""))
+                    description = self.clean_repeated_text(option.get("description", ""))
+                    note = "，".join(part for part in (title, description) if part)
+                    if option_id or note:
+                        human_decision_notes.append(
+                            f"{self.option_display_label(option_id)}：{note}" if option_id else note
+                        )
+        referenced_ids = self.mom_referenced_ids(issue, conversation, resolution)
 
         prompt = """# 任務
-你負責整理單一正式會議議題的 MoM header，輸出更清楚的「本議題摘要」與「本議題決議」。
+你負責根據會議證據撰寫單一正式會議議題的 MoM header，輸出清楚的「摘要」與「決議」。
 
 # 邊界
 - 只能輸出 JSON object。
-- 只能改寫 display_title、summary、decision。
+- 只能根據 context 內已存在的 issue、discussion_snippets、resolution、human_decision_notes、action_summaries、artifact_updates 撰寫。
 - 不得新增 artifact id、需求內容、決議、風險、open question 或 action 產物。
-- 不得改寫討論紀錄、產出明細或待確認事項。
-- 若資訊不足，沿用原始 resolution 欄位。
+- 不得把尚未裁決的事項寫成已裁決。
+- 若資訊不足，必須明確寫「尚未形成決議」或沿用 fallback，不可編造。
 - display_title 最多 80 字，必須保留原本已出現的 REQ/URL/SM/OQ id。
 - summary 必須是 2 到 4 句，說清楚：本議題討論的核心問題、主要參與者關注點、討論後確認的範圍或差異。
 - decision 必須整理既有 resolution、agreed_points、human decision 或 action_summaries；說清楚最後採納的處理方式、影響的需求/模型/衝突 ID、後續要落實的內容。
-- 若沒有決議，只能輸出空字串，不可編造。
+- 若有 human_decision_notes，decision 必須明確包含採納的「選項 A」或自訂裁決內容。
+- 若沒有決議，decision 輸出「尚未形成決議；...」並說明仍缺什麼。
 - 不要只輸出 agreed、resolved、completed 或單一句狀態。
+- evidence 必須列出 1 到 5 個使用到的來源線索，來源只能來自 context。
 
 # 輸出 JSON
 {
   "display_title": "給人看的短標題",
   "summary": "本議題摘要，2 到 4 句",
-  "decision": "本議題決議，包含採納內容與影響對象"
+  "decision": "本議題決議，包含採納內容與影響對象；沒有決議時寫尚未形成決議",
+  "evidence": ["使用到的來源線索"]
 }"""
         context = {
             "fallback": {
@@ -350,6 +371,7 @@ class MediatorRecords:
                 "decision": decision,
                 "outcome": outcome,
             },
+            "referenced_ids": referenced_ids[:20],
             "issue": {
                 "title": issue.get("title", ""),
                 "description": issue.get("description", ""),
@@ -364,7 +386,10 @@ class MediatorRecords:
                 "agreed_points": resolution.get("agreed_points", []),
                 "unresolved_points": resolution.get("unresolved_points", []),
                 "recommendation": resolution.get("recommendation", {}),
+                "human_choice": human_choice,
+                "artifact_updates": resolution.get("artifact_updates", {}),
             },
+            "human_decision_notes": list(dict.fromkeys(human_decision_notes))[:8],
             "action_summaries": list(dict.fromkeys(action_summaries))[:8],
             "discussion_snippets": discussion_snippets[:6],
         }
@@ -377,9 +402,36 @@ class MediatorRecords:
         polished: Dict[str, str] = {}
         for key, limit in (("display_title", 80), ("summary", 500), ("decision", 350)):
             value = self.clean_repeated_text(data.get(key, ""))
-            if value:
+            if value and not self.unclear_mom_header_text(value, allow_empty=(key == "decision")):
                 polished[key] = value[:limit].rstrip()
+        evidence = data.get("evidence")
+        if isinstance(evidence, list):
+            evidence_rows = [
+                self.clean_repeated_text(item)
+                for item in evidence
+                if self.clean_repeated_text(item)
+            ]
+            if evidence_rows:
+                polished["evidence"] = "；".join(evidence_rows[:5])[:500].rstrip()
         return polished
+
+    # Defines write conflict discussion groups function for this module workflow.
+    def write_conflict_discussion_groups(
+        self,
+        *,
+        issue: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        resolution: Dict[str, Any],
+        conflict_options: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return mom.write_conflict_discussion_groups(
+            issue=issue,
+            conversation=conversation,
+            resolution=resolution,
+            conflict_options=conflict_options,
+            chat_json=getattr(self, "chat_json", None),
+            build_direct_messages=getattr(self, "build_direct_messages", None),
+        )
 
 
     # Defines write meeting note function for this module workflow.
@@ -412,7 +464,7 @@ class MediatorRecords:
         summary = self.clean_repeated_text(resolution.get("summary", ""))
         decision = self.clean_repeated_text(resolution.get("decision", ""))
         outcome = self.meeting_outcome(conversation or [], resolution or {})
-        polish = self.polish_meeting_note_header(
+        polish = self.write_meeting_note_header(
             issue=issue or {},
             conversation=conversation or [],
             resolution=resolution or {},
@@ -426,13 +478,13 @@ class MediatorRecords:
         decision = polish.get("decision") if "decision" in polish else decision
         md = f"# {display_title}\n\n"
         if proposer:
-            md += f"- **Proposed by**: {proposer}\n"
+            md += f"- **提出者**: {proposer}\n"
         else:
-            md += "- **Proposed by**: mediator\n"
-        md += f"- **Participants**: {', '.join(participants) if participants else '（無參與者）'}\n"
+            md += "- **提出者**: mediator\n"
+        md += f"- **參與者**: {', '.join(participants) if participants else '（無參與者）'}\n"
         status = resolution.get("status", "")
         if status:
-            md += f"- **Status**: {status}\n"
+            md += f"- **狀態**: {status}\n"
 
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
@@ -613,7 +665,7 @@ class MediatorRecords:
                 md += "\n"
 
         if options:
-            md += "### Decision Options\n\n"
+            md += "### 決策選項\n\n"
             for index, option in enumerate(options):
                 if not isinstance(option, dict):
                     continue
@@ -632,10 +684,10 @@ class MediatorRecords:
                     option_rows = [row for row in (option.get("options") or []) if isinstance(row, dict)]
                     for option_index, row in enumerate(option_rows, start=1):
                         option_id = str(row.get("id") or "").strip()
-                        label = f"選項{option_id}" if option_id else f"選項{option_index}"
+                        label = self.option_display_label(option_id, option_index - 1)
                         title = str(row.get("title") or "").strip()
                         summary_text = str(row.get("summary") or "").strip()
-                        line = f"{option_index}. "
+                        line = f"{label}. "
                         if title:
                             line += f"{title}"
                             if summary_text:
@@ -655,7 +707,7 @@ class MediatorRecords:
                 if not option_id:
                     option_id = chr(ord("A") + index)
                 title = str(option.get("title") or option.get("strategy") or "").strip()
-                heading = f"Option {option_id}"
+                heading = self.option_display_label(option_id, index)
                 if title:
                     heading += f"：{title}"
                 md += f"#### {heading}\n\n"
@@ -683,18 +735,18 @@ class MediatorRecords:
                 ]
                 if recommendation_notes:
                     md += f"- **推薦理由**: {'; '.join(recommendation_notes)}\n"
-                for label, key in (("Pros", "pros"), ("Cons", "cons"), ("Impact", "impact")):
+                for label, key in (("優點", "pros"), ("限制", "cons"), ("影響", "impact")):
                     values = [str(x).strip() for x in (option.get(key) or []) if str(x).strip()]
                     if values:
                         md += f"- **{label}**: {'; '.join(values)}\n"
                 if option.get("risk"):
-                    md += f"- **Risk**: {option.get('risk')}\n"
+                    md += f"- **風險**: {option.get('risk')}\n"
                 md += "\n"
         if recommendation:
-            md += "### Recommendation\n\n"
+            md += "### 建議\n\n"
             option_id = str(recommendation.get("option_id") or recommendation.get("option") or "").strip()
             if option_id:
-                md += f"- **Option**: {option_id}\n"
+                md += f"- **建議選項**: {self.option_display_label(option_id)}\n"
             conflict_ids = [
                 str(value).strip()
                 for value in (recommendation.get("conflict_ids") or [])
@@ -703,7 +755,7 @@ class MediatorRecords:
             if conflict_ids:
                 md += f"- **適用衝突**: {'、'.join(conflict_ids)}\n"
             if recommendation.get("rationale"):
-                md += f"- **Rationale**: {recommendation.get('rationale')}\n"
+                md += f"- **理由**: {recommendation.get('rationale')}\n"
             md += "\n"
         md += "\n"
 
@@ -831,18 +883,18 @@ class MediatorRecords:
                     heading += f": {title}"
                 out.extend([heading, ""])
                 if req_type:
-                    out.append(f"- **Type**: {req_type}")
+                    out.append(f"- **類型**: {req_type}")
                 if requirement:
-                    out.append(f"- **Requirement**: {requirement}")
+                    out.append(f"- **需求**: {requirement}")
                 if acceptance:
-                    out.extend(["- **Acceptance Criteria**:", *[f"  - {item}" for item in acceptance]])
+                    out.extend(["- **驗收條件**:", *[f"  - {item}" for item in acceptance]])
                 if risks:
-                    out.extend(["- **Risks**:", *[f"  - {item}" for item in risks]])
+                    out.extend(["- **風險**:", *[f"  - {item}" for item in risks]])
                 out.append("")
             reason_text = str(reason or "").strip()
             if reason_text:
                 lines = reason_lines(reason_text)
-                out.extend(["**Reason**:"])
+                out.extend(["**理由**:"])
                 out.extend(f"- {line}" for line in lines)
             return "\n".join(out).strip()
 
@@ -850,7 +902,7 @@ class MediatorRecords:
         def render_user_requirements_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
-            out = ["### User Requirements", "", "| ID | Requirement | Stakeholder | Source |", "|---|---|---|---|"]
+            out = ["### 使用者需求", "", "| ID | 需求 | 利害關係人 | 來源 |", "|---|---|---|---|"]
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -863,7 +915,7 @@ class MediatorRecords:
         def render_conflict_report_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
-            out = ["### 衝突處理", "", "| ID | Type | Description | Recommendation |", "|---|---|---|---|"]
+            out = ["### 衝突處理", "", "| ID | 類型 | 描述 | 建議 |", "|---|---|---|---|"]
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -887,10 +939,10 @@ class MediatorRecords:
             if not isinstance(scope, dict) or not any(scope.get(key) for key in scope):
                 return ""
             labels = {
-                "in_scope": "In Scope",
-                "out_of_scope": "Out of Scope",
-                "assumptions": "Assumptions",
-                "risks": "Risks",
+                "in_scope": "範圍內",
+                "out_of_scope": "範圍外",
+                "assumptions": "假設",
+                "risks": "風險",
             }
             out = ["### Scope 更新"]
             for key, label in labels.items():
@@ -899,7 +951,7 @@ class MediatorRecords:
                     out.extend(["", f"{label}", *[f"- {value}" for value in values]])
             reason_text = str(reason or "").strip()
             if reason_text:
-                out.extend(["", f"**Reason**: {reason_text}"])
+                out.extend(["", f"**理由**: {reason_text}"])
             return "\n".join(out)
 
         # Defines render analysis markdown function for this module workflow.
@@ -916,7 +968,7 @@ class MediatorRecords:
                 parts.append(scope)
             reason = str(artifacts.get("requirement_reason") or "").strip()
             if reason and not artifacts.get("REQ"):
-                parts.append(f"**Reason**: {reason}")
+                parts.append(f"**理由**: {reason}")
             if not parts:
                 return ""
             return "\n\n".join(parts)
@@ -926,10 +978,10 @@ class MediatorRecords:
             if not isinstance(feedback, dict) or not feedback:
                 return ""
             labels = {
-                "findings": "Findings",
-                "constraints": "Constraints",
-                "risks": "Risks",
-                "recommendations": "Recommendations",
+                "findings": "發現",
+                "constraints": "限制",
+                "risks": "風險",
+                "recommendations": "建議",
             }
             parts = []
             for key, label in labels.items():
@@ -944,9 +996,9 @@ class MediatorRecords:
                         source = str(row.get("source") or "").strip()
                         details = []
                         if related:
-                            details.append(f"Related: {related}")
+                            details.append(f"相關需求: {related}")
                         if source:
-                            details.append(f"Source: {source}")
+                            details.append(f"來源: {source}")
                         suffix = f" ({'; '.join(details)})" if details else ""
                         if text:
                             lines.append(f"- {text}{suffix}")
@@ -956,7 +1008,7 @@ class MediatorRecords:
                     parts.append("\n".join(lines))
             sources = as_text_list(feedback.get("sources"))
             if sources:
-                parts.append("**Sources**\n" + "\n".join(f"- {source}" for source in sources))
+                parts.append("**來源**\n" + "\n".join(f"- {source}" for source in sources))
             if not parts:
                 return ""
             return "### 領域回饋\n\n" + "\n\n".join(parts)
@@ -980,7 +1032,7 @@ class MediatorRecords:
                     fallback_rows.append(row)
             sorted_ids = sorted(ordered_ids, key=self.artifact_id_sort_key)
             display_rows = [latest_by_id[model_id] for model_id in sorted_ids] + fallback_rows
-            out = ["### 模型更新", "", "| ID | Type | Name | Related Requirements |", "|---|---|---|---|"]
+            out = ["### 模型更新", "", "| ID | 類型 | 名稱 | 相關需求 |", "|---|---|---|---|"]
             for row in display_rows:
                 if not isinstance(row, dict):
                     continue
@@ -1036,7 +1088,7 @@ class MediatorRecords:
             out = [
                 "### 模型變更",
                 "",
-                "| Change | ID | Type | Name | Related Requirements |",
+                "| 變更 | ID | 類型 | 名稱 | 相關需求 |",
                 "|---|---|---|---|---|",
             ]
             for row in display_rows:
@@ -1159,7 +1211,15 @@ class MediatorRecords:
 
         main_records = [c for c in conversation if not c.get("is_reply", False)]
         md += "## 討論紀錄\n\n"
-        if not main_records:
+        conflict_discussion_groups = self.write_conflict_discussion_groups(
+            issue=issue or {},
+            conversation=conversation or [],
+            resolution=resolution or {},
+            conflict_options=options if isinstance(options, list) else [],
+        )
+        if conflict_discussion_groups:
+            md += mom.render_discussion_groups(conflict_discussion_groups) + "\n\n"
+        elif not main_records:
             md += "（本議題無人發言）\n\n"
         else:
             for c in main_records:

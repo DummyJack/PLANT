@@ -43,7 +43,7 @@ def update_report() -> str:
 使用輸入中的定案描述，不重新分析。
 
 ### 解決選項
-1. 選項內容。
+選項 A：選項內容。
 
 ### 建議解法
 使用輸入中的 recommended_resolution。

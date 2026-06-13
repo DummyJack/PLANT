@@ -1,10 +1,10 @@
 # Handles module workflow behavior.
-from datetime import datetime, timezone
 import json
 import re
 
 from agents.skills.base import get_skill
 from storage import parse_first_json
+from storage.artifact import append_trace_req_row, trace_req_public_signature
 
 from .actions.feedback import update_feedback
 from .actions.read_reference import read_docs
@@ -237,17 +237,6 @@ def research_source(artifact):
     return "initial"
 
 
-def next_trace_req_id(artifact: dict) -> str:
-    max_num = 0
-    for row in artifact.get("trace_req") or []:
-        if not isinstance(row, dict):
-            continue
-        match = re.fullmatch(r"TE-(\d+)", str(row.get("event_id") or "").strip())
-        if match:
-            max_num = max(max_num, int(match.group(1)))
-    return f"TE-{max_num + 1}"
-
-
 def feedback_item_count(artifact: dict) -> int:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     count = 0
@@ -269,6 +258,15 @@ def append_feedback_trace_req(artifact: dict, feedback_delta: dict, *, source_re
     events = artifact.setdefault("trace_req", [])
     if not isinstance(events, list):
         artifact["trace_req"] = events = []
+    seen = {
+        trace_req_public_signature(row)
+        for row in events
+        if isinstance(row, dict)
+        and str(row.get("trace_id") or "").strip()
+        and str(row.get("target_requirement_id") or "").strip()
+        and str(row.get("from") or "").strip()
+        and str(row.get("to") or "").strip()
+    }
     req_to_srs = {
         str(req.get("id") or "").strip(): str(req.get("srs_id") or "").strip()
         for req in (artifact.get("REQ") or [])
@@ -298,22 +296,21 @@ def append_feedback_trace_req(artifact: dict, feedback_delta: dict, *, source_re
                 "",
             )
             feedback_id = f"FB-{next_feedback_index}"
-            events.append({
-                "event_id": next_trace_req_id(artifact),
-                "stage": "domain_research",
-                "agent": "expert",
-                "confidence": confidence,
-                "reason": reason,
-                "trace_reason": reason,
-                "target_requirement_id": target_requirement_id,
-                "trace_id": f"TR-{target_requirement_id}" if target_requirement_id else "",
-                "from": related_ids[0] if related_ids else "",
-                "to": feedback_id,
-                "role": "supporting",
-                "edge_label": "依據",
-                "style": "dashed",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            append_trace_req_row(
+                events,
+                seen,
+                target_requirement_id=target_requirement_id,
+                from_id=related_ids[0] if related_ids else "",
+                to_id=feedback_id,
+                role="supporting",
+                edge_label="依據",
+                style="dashed",
+                stage="domain_research",
+                agent="expert",
+                confidence=confidence,
+                reason=reason,
+                trace_reason=reason or source_ref,
+            )
             next_feedback_index += 1
 
 # ========
@@ -365,6 +362,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
         url_requirements = research_requirement_candidates(artifact)
         existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
+        meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
         return {
             "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
             "scenario": str(scenario_source or "").strip(),
@@ -378,6 +376,8 @@ class ExpertDomainResearch(ExpertResearchPlan):
             "document_evidence_count": len(artifact.get("document_evidence", []) or []),
             "has_read_file": "read_file" in self.tools,
             "has_web_search": "web_search" in self.tools,
+            "user_guidance": str(meta.get("domain_research_user_guidance") or "").strip(),
+            "referenced_files": meta.get("domain_research_referenced_files") or [],
             "actions_taken": actions_taken or [],
             "iteration": iteration + 1,
             "max_iterations": max_iterations,

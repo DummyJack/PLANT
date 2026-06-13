@@ -892,11 +892,16 @@ class AnalystConflicts:
             if not recommended_resolution:
                 raise RuntimeError(f"conflict resolution 缺少 recommended_resolution: {conflict_id}")
             clean_options: List[Dict[str, Any]] = []
-            for option in resolution_options:
+            for option_index, option in enumerate(resolution_options):
                 if not isinstance(option, dict):
                     continue
+                raw_option = str(option.get("option") or "").strip().upper()
+                if raw_option.isdigit():
+                    option_label = chr(ord("A") + max(0, int(raw_option) - 1))
+                else:
+                    option_label = raw_option or chr(ord("A") + option_index)
                 clean_option = {
-                    "option": str(option.get("option") or "").strip(),
+                    "option": option_label,
                     "strategy": str(option.get("strategy") or "").strip(),
                     "description": str(option.get("description") or "").strip(),
                     "pros": [

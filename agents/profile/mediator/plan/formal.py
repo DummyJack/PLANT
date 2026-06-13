@@ -57,6 +57,7 @@ def select_issues(
 - 本輪 round={round_num}，is_last_round={str(is_last_round).lower()}，max_issues={max_items}，already_discussed_artifact_ids={json.dumps(skip_artifact_ids, ensure_ascii=False)}。
 - 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。
 - proposal 是候選訊號；Mediator 負責合併、淘汰、排序與定題。
+- proposed_by="human" 是人工加入議題，最高優先；只要未超過 max_issues，不得被 agent 議題擠掉。
 - proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
 - proposal.issue_level 分為 blocking / improvement：
   - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或合規底線，優先進 issues。
@@ -786,6 +787,8 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
 
         # Defines proposal priority function for this module workflow.
         def proposal_priority(row: Dict[str, Any]) -> int:
+            if str((row or {}).get("proposed_by") or "").strip().lower() == "human":
+                return -100
             issue_level = str((row or {}).get("issue_level") or "").strip()
             focus = str((row or {}).get("issue_focus") or "").strip()
             category = str((row or {}).get("category") or "").strip()

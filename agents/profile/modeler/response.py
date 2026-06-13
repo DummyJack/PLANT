@@ -58,6 +58,9 @@ class ModelerResponse:
                     "format_error": "system_modeling requires artifact context",
                     "summary": "modeler system_modeling 缺少 artifact，無法執行建模流程",
                 }
+            logger = getattr(self, "logger", None)
+            if logger is not None:
+                logger.info("=== Modeler: 系統模型 ===")
             loop_result = self.run_model_loop(
                 artifact,
                 recent_discussions=kwargs.get("previous_responses"),
@@ -88,6 +91,19 @@ class ModelerResponse:
                         "related_requirement_ids": result.get("related_requirement_ids") or [],
                     }
                 )
+            if logger is not None:
+                if model_changes:
+                    labels = [
+                        str(change.get("name") or change.get("id") or "").strip()
+                        for change in model_changes
+                        if str(change.get("name") or change.get("id") or "").strip()
+                    ]
+                    logger.info(
+                        "Modeler: 系統模型已更新%s",
+                        f"：{'、'.join(labels)}" if labels else "",
+                    )
+                else:
+                    logger.info("Modeler: 系統模型無需新增或更新")
             model_action_result = {
                 "action": action,
                 "steps": [

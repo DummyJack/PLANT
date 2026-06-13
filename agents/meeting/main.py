@@ -564,7 +564,7 @@ class MeetingRunner:
                 "會議記錄",
                 agent="mediator",
                 message="MoM",
-                output_path=f"results/MoM/{mom_id.upper()}.html",
+                output_path=f"artifact/MoM/{mom_id}.md",
             )
             return
         self.logger.info("  已保存：%s", issue_id)
@@ -1219,7 +1219,7 @@ class MeetingRunner:
                 "conflict_detection.write_report",
                 "產生衝突報告",
                 agent="analyst",
-                output_path=f"results/report/conflict_report_v{version}.html",
+                output_path=f"artifact/report/conflict_report_v{version}.md",
             )
         except Exception as e:
             raise RuntimeError("更新 conflict report 失敗") from e
@@ -2511,25 +2511,6 @@ class MeetingRunner:
             )
         resolution = self.collect.human_decision_on_issue(display_issue, options)
         human_status = str(resolution.get("status") or "").strip()
-        if human_status != "human_decision":
-            pending = self.mediator.build_issue_result(
-                status="",
-                summary=resolution.get("summary") or "人類暫未裁決。",
-                decision="",
-                agreed_points=[],
-                unresolved_points=["等待人類裁決。"],
-                needs_human=True,
-                options=status_resolution.get("options", []),
-                recommendation=status_resolution.get("recommendation", {}),
-                mediator_compromise=status_resolution.get("mediator_compromise", {}),
-            )
-            pending["artifact_updates"] = self.artifact_updates_summary(
-                issue,
-                conversation,
-                pending,
-            )
-            return pending
-        decision_text = str(resolution.get("decision", ""))
         affected_conflict_ids = [
             sid for sid in issue_artifact_ids(issue)
             if isinstance(sid, str) and sid.startswith(("CR-", "PAIR-", "MULTIPLE-"))
@@ -2558,6 +2539,65 @@ class MeetingRunner:
                     conflict_rows,
                     target_ids=set(affected_conflict_ids),
                 )
+        if resolution.get("skipped") is True:
+            recommendation = status_resolution.get("recommendation")
+            if not isinstance(recommendation, dict):
+                recommendation = {}
+            compromise = status_resolution.get("mediator_compromise")
+            if not isinstance(compromise, dict):
+                compromise = {}
+            recommended_text = (
+                str(recommendation.get("description") or "").strip()
+                or str(recommendation.get("summary") or "").strip()
+                or str(recommendation.get("title") or "").strip()
+                or str(compromise.get("description") or "").strip()
+                or str(compromise.get("summary") or "").strip()
+                or str(compromise.get("title") or "").strip()
+                or str(status_resolution.get("summary") or "").strip()
+                or "使用者略過本次裁決，Agent 採用目前推薦方案繼續。"
+            )
+            wrapped = self.mediator.build_issue_result(
+                status="agreed",
+                summary=recommended_text,
+                decision=recommended_text,
+                mediator_compromise=compromise,
+                agreed_points=[recommended_text] if recommended_text else [],
+                unresolved_points=[],
+                affected_conflict_ids=affected_conflict_ids,
+                url_updates=url_updates,
+                needs_human=False,
+                recommendation=recommendation,
+            )
+            wrapped["agent_choice"] = {
+                "source": "agent_auto_decision_after_skip",
+                "reason": "human_decision_skipped",
+                "recommendation": recommendation,
+            }
+            wrapped["artifact_updates"] = self.artifact_updates_summary(
+                issue,
+                conversation,
+                wrapped,
+            )
+            return wrapped
+        if human_status != "human_decision":
+            pending = self.mediator.build_issue_result(
+                status="",
+                summary=resolution.get("summary") or "人類暫未裁決。",
+                decision="",
+                agreed_points=[],
+                unresolved_points=["等待人類裁決。"],
+                needs_human=True,
+                options=status_resolution.get("options", []),
+                recommendation=status_resolution.get("recommendation", {}),
+                mediator_compromise=status_resolution.get("mediator_compromise", {}),
+            )
+            pending["artifact_updates"] = self.artifact_updates_summary(
+                issue,
+                conversation,
+                pending,
+            )
+            return pending
+        decision_text = str(resolution.get("decision", ""))
 
         wrapped = self.mediator.build_issue_result(
             status="human_decision",
