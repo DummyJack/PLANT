@@ -180,7 +180,7 @@
     },
     {
       "label": "trace_req.json",
-      "href": "projects/trace_req.json"
+      "href": "projects/{project_id}/trace_req.json"
     },
     {
       "label": "models/外送平台主要角色用例圖.plantuml",
@@ -290,7 +290,7 @@
     },
     {
       "label": "trace_req.json",
-      "href": "projects/trace_req.json"
+      "href": "projects/{project_id}/trace_req.json"
     },
     {
       "label": "models/外送平台主要角色用例圖.plantuml",

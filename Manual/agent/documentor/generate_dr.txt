@@ -28,16 +28,18 @@ Requirement Context:
 - 主體以正式需求 block 為單位，不以會議為單位。
 - Trace 是連貫形成鏈，不是 evidence 清單；每一步都要說明它如何承接前一步。
 - Trace Explanation 是用來解釋 runtime 插入的 Trace Topology；文字要說明圖中的節點與連線如何形成正式需求。
-- Trace Explanation 不要重述 Description 的需求內容；只說明來源、分析、會議與正式化的形成脈絡。
+- Trace Explanation 不要重述 Description 的需求內容；只說明來源整理、會議決策與正式化的形成脈絡。
 - Trace Explanation 必須能對照 Topology 路徑閱讀；每個 bullet 第一句必須用該段 evidence ID 開頭，並說明該 ID 做了什麼、如何影響下一個節點或正式需求。
-- 若 topology 中有 CR、Feedback、System Model 或 Meeting，需說明它們如何由 URL 觸發、如何在會議中提供依據/支撐或被解決。
-- topology edge label 使用短語意：ST→URL 為「分析」、URL/CR/FB/SM→formalize meeting 為「正式」、CR→resolve meeting 為「解決」、clarify meeting 為「細化」、FB→meeting 為「依據」、SM→meeting 為「支撐」。
-- 只有 formalize_requirement meeting 才代表正式化；clarify_requirement meeting 只能說明後續細化或補充，不要寫成正式化終點。
+- 若 topology 中有 CR、Feedback、System Model 或 Meeting，需說明它們如何由 URL 觸發、如何在會議中提供依據、建模或被解決。
+- topology edge label 使用短語意：ST→URL 為「整理」、URL→CR 不顯示文字、CR→resolve meeting 為「解決」、沒有衝突時 URL→formalize meeting 為「正式化」、有衝突時 resolve meeting→formalize meeting 為「正式化」、formalize meeting→clarify meeting 為「釐清」、FB→formalize meeting 與 SM→formalize meeting 不顯示文字。
+- 只有 formalize_requirement meeting 才代表正式化；若有後續 clarify_requirement meeting，則由最後一個 clarify_requirement meeting 連到正式需求但不顯示文字，表示釐清後收斂。clarify_requirement meeting 不要寫成正式化本身。
 - 不要把 topology 中所有相關 evidence 寫成同等重要；請依 edge path 說明主要形成鏈，旁支 evidence 只說明它補充了哪個決策、限制、模型依據或需求欄位。
-- Meeting Discussion 必須依 meeting 時序書寫；若同時有 resolve_conflict、formalize_requirement、clarify_requirement，順序必須是先解決衝突，再正式化，再說明後續細化。
-- 不要只寫「提供支撐」、「成為依據」這種泛稱；必須說清楚支撐哪個會議決定、哪個正式需求或哪個限制。
+- Meeting Discussion 必須依 meeting 時序書寫；若同時有 resolve_conflict、formalize_requirement、clarify_requirement，順序必須是先解決衝突，再正式化，再說明後續釐清。
+- 不要只寫「成為依據」這種泛稱；必須說清楚依據哪個會議決定、哪個正式需求或哪個限制。
 - 若 Requirement Context 含 trace_warnings，代表該 evidence 關聯不足或被排除；不要把 warning 中被排除的 evidence 寫成已形成正式 trace。
 - 若 trace_warnings 顯示 evidence 被排除或未連上，不得在 Trace Explanation 中宣稱它已支撐該需求；只能說該 evidence 未形成可確認追蹤路徑。
+- trace_repair_tasks 已由 runtime 的 repair loop 處理；Design Rationale 正文只描述已驗證 trace、trace_warnings 與 trace_human_review_tasks，不輸出 repair proposal。
+- 若含 trace_human_review_tasks，代表修補需要人工確認；只能說明仍待確認，不得寫成已驗證、已套用或已進正式圖的 trace。
 - Evidence ID 只用純文字引用，例如 `CR-1`、`SM-3`、`R1-M2`；不要輸出 Markdown 連結。
 - 同一句中同一批 evidence ID 只能出現一次；不要寫「見 Appendix」。
 - 不貼完整 evidence；完整內容由 trace topology modal 顯示。
@@ -70,7 +72,7 @@ Feedback
 - 只有有相關 FB-* 時輸出。FB-* 補充「...」，作為需求正式化時的限制、風險或外部依據。
 
 System Model
-- 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到「...」流程、狀態或互動，支撐此需求的系統設計。
+- 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到「...」流程、狀態或互動，建模此需求的系統設計。
 
 Meeting Discussion
 - 只有有相關 meeting 時輸出。R*-M* 根據 URL-*、CR-*、FB-* 或 SM-* 討論後，決定「...」。

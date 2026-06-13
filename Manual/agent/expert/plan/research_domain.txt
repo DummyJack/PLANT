@@ -45,6 +45,8 @@
 - 如果沒有上述外部研究觸發條件、沒有高價值且可取得可靠來源的研究問題，可以選 done，但 reasoning 必須明確說明未觸發外部研究條件。
 - 只有存在 high-value research_issue 時，才規劃 research_issue，最後執行 update_feedback。
 - 需要專案文件證據時先用 read_reference_docs。
+- 若目前專案狀態包含 referenced_files，必須先規劃 read_reference_docs，且 query 應聚焦使用者建議與這些文件。
+- 若 referenced_files 為空，不要因為文件庫有檔案就自動規劃 read_reference_docs；只有研究問題明確需要專案文件證據時才使用。
 - 需要外部證據時用 research_issue；每個 research_issue 只處理一個明確高價值問題。
 - 若多個高價值問題分屬不同面向，可以拆成多個 research_issue；最多 4 個。
 - 不要把法規、安全、責任歸屬、營運限制與驗收標準全部塞進同一個過大的 query。
