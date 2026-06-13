@@ -429,14 +429,90 @@ def renumber_issue_proposals(
             round_num = int(new_row.get("round") or 1)
         except (TypeError, ValueError):
             round_num = 1
+        old_id = clean_text(new_row.get("issue_id") or new_row.get("id"))
+        if (
+            str(new_row.get("proposed_by") or "").strip().lower() == "human"
+            and re.fullmatch(rf"R{round_num}-H\d+", old_id)
+        ):
+            new_row["issue_id"] = old_id
+            rows.append(new_row)
+            continue
         counters[round_num] = counters.get(round_num, 0) + 1
         new_id = f"R{round_num}-I{counters[round_num]}"
-        old_id = clean_text(new_row.get("issue_id") or new_row.get("id"))
         if old_id:
             id_map[old_id] = new_id
         new_row["issue_id"] = new_id
         rows.append(new_row)
     return rows, id_map
+
+
+def human_issue_titles(response: Any, *, max_issues: int) -> List[str]:
+    if not isinstance(response, dict):
+        return []
+    values = response.get("custom_issues")
+    if values is None:
+        values = response.get("issues")
+    if values is None:
+        values = response.get("titles")
+    titles: List[str] = []
+    if isinstance(values, list):
+        for item in values:
+            if isinstance(item, dict):
+                title = clean_text(item.get("title"))
+            else:
+                title = clean_text(item)
+            if title and title not in titles:
+                titles.append(title)
+            if len(titles) >= max_issues:
+                break
+    return titles
+
+
+def apply_human_issue_proposals(
+    proposals: List[Dict[str, Any]],
+    response: Any,
+    *,
+    round_num: int,
+    max_issues: int,
+) -> List[Dict[str, Any]]:
+    titles = human_issue_titles(response, max_issues=max_issues)
+    if not titles:
+        return proposals
+    rows = [row for row in proposals or [] if isinstance(row, dict)]
+    used = {
+        int(match.group(1))
+        for row in rows
+        for match in [re.fullmatch(rf"R{round_num}-H(\d+)", clean_text(row.get("issue_id")))]
+        if match
+    }
+    next_num = 1
+    human_rows: List[Dict[str, Any]] = []
+    for title in titles:
+        while next_num in used:
+            next_num += 1
+        issue_id = f"R{round_num}-H{next_num}"
+        used.add(next_num)
+        next_num += 1
+        human_rows.append({
+            "issue_id": issue_id,
+            "round": round_num,
+            "title": title,
+            "category": "clarify_requirement",
+            "issue_focus": "human_added_issue",
+            "issue_level": "blocking",
+            "importance": "high",
+            "expect_outcome": "釐清並決定此議題在本輪會議中的處理方式。",
+            "reason": "使用者於候選議題階段人工加入。",
+            "proposed_by": "human",
+            "sources": [
+                {
+                    "artifact": "human_issue_proposal",
+                    "ids": [issue_id],
+                    "evidence": title,
+                }
+            ],
+        })
+    return [*human_rows, *rows]
 
 
 def update_trace_proposal_ids(trace: Any, id_map: Dict[str, str]) -> Any:
@@ -472,7 +548,7 @@ def renumber_meeting_issues(
     for row in [r for r in issues or [] if isinstance(r, dict)]:
         new_row = dict(row)
         issue_id = clean_text(new_row.get("id"))
-        if not issue_id:
+        if not re.fullmatch(r"M-\d+", issue_id):
             while next_num in used_nums:
                 next_num += 1
             issue_id = f"M-{next_num}"
@@ -1321,10 +1397,32 @@ def run_meeting_round_block(
         coordinator.flow.store.save_artifact(artifact)
         current_round_proposals: List[Dict[str, Any]] = []
     else:
+        proposal_step_id = f"formal_meeting.round_{round_num}.propose_issues"
+        coordinator.flow.logger.step_started(
+            "formal_meeting",
+            proposal_step_id,
+            "Agent 議題提案",
+            agent="mediator",
+            message="Agent 正在提出候選議題 ...",
+        )
         current_round_proposals = collect_issue_proposals(
             coordinator, meeting_artifact, round_num=round_num,
         )
         current_round_proposals, _ = renumber_issue_proposals(current_round_proposals)
+        max_issues = max(1, int(getattr(coordinator.flow.config, "get", lambda *_: 5)("max_issues", 5) or 5))
+        if current_round_proposals:
+            current_round_proposals = apply_human_issue_proposals(
+                current_round_proposals,
+                Collect.meeting_issue_proposal_review(
+                    current_round_proposals,
+                    round_num,
+                    max_issues=max_issues,
+                ),
+                round_num=round_num,
+                max_issues=max_issues,
+            )
+        else:
+            coordinator.flow.logger.info("Issue Proposal：無候選議題，略過人工介入")
         review = pre_round_review(current_round_proposals, round_num=round_num)
         save_pre_round_review(artifact, review)
     existing_issue_proposals = artifact.get("issue_proposals", []) or []

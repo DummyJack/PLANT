@@ -107,7 +107,7 @@ def save_conflict_report(
         "conflict_detection.write_report",
         "產生衝突報告",
         agent="analyst",
-        output_path=f"results/report/conflict_report_v{round_num}.html",
+        output_path=f"artifact/report/conflict_report_v{round_num}.md",
     )
     return True
 

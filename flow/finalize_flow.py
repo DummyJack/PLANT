@@ -29,13 +29,13 @@ def generate_dr(
         "document_generation.generate_dr",
         "Design Rationale",
         agent="documentor",
-        output_path="results/design_rationale.html",
+        output_path="output/design_rationale.md",
     )
     flow.logger.artifact_created(
         "document_generation",
         "document_generation.generate_dr",
         "Design Rationale 已產生",
-        "results/design_rationale.html",
+        "output/design_rationale.md",
     )
     flow.store.save_artifact(artifact)
 
@@ -65,13 +65,13 @@ def generate_srs(
         "document_generation.generate_srs",
         "SRS",
         agent="documentor",
-        output_path="results/srs.html",
+        output_path="output/srs.md",
     )
     flow.logger.artifact_created(
         "document_generation",
         "document_generation.generate_srs",
         "SRS 已產生",
-        "results/srs.html",
+        "output/srs.md",
     )
 
     flow.store.save_artifact(artifact)

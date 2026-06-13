@@ -11,6 +11,7 @@ from utils.cancel import raise_if_cancelled
 from storage import markdown as markdown_storage
 from storage.export import export_project_manual, should_export_html, should_export_manual
 from flow.init_flow import emit_markdown_section_deltas
+from server.services.run_checkpoint import record_run_checkpoint
 
 
 MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
@@ -22,6 +23,30 @@ def _project_id_from_flow(flow) -> Optional[str]:
 
 def _check_flow_cancelled(flow) -> None:
     raise_if_cancelled(_project_id_from_flow(flow))
+
+
+def _checkpoint_step(
+    flow,
+    *,
+    stage_id: str,
+    step_id: str,
+    round_num: int | None = None,
+    agent: str = "",
+    action: str = "",
+) -> None:
+    run_id = str(getattr(flow, "run_id", "") or "")
+    if not run_id:
+        return
+    record_run_checkpoint(
+        flow.store,
+        run_id=run_id,
+        status="running",
+        stage_id=stage_id,
+        step_id=step_id,
+        round_num=round_num,
+        agent=agent,
+        action=action,
+    )
 
 
 # ========
@@ -53,6 +78,14 @@ def run_one_round(
     artifact: Dict[str, Any],
     round_num: int,
 ) -> Dict[str, Any]:
+    _checkpoint_step(
+        flow,
+        stage_id="formal_meeting",
+        step_id=f"formal_meeting.round_{round_num}.run_meeting",
+        round_num=round_num,
+        agent="mediator",
+        action="run_meeting",
+    )
     flow.logger.stage_started("formal_meeting", "正式會議", message=f"第 {round_num} 輪正式會議開始")
     flow.logger.info(f"=== Round {round_num}: 開會 ===")
     flow.logger.step_started(
@@ -204,7 +237,7 @@ def completed_meeting_rounds_from_issue_state(flow) -> set[int]:
         data = json.loads(issues_path.read_text(encoding="utf-8"))
     except Exception:
         return set()
-    section = data.get("meeting_issues") if isinstance(data, dict) else []
+    section = data.get("meeting_issues") if isinstance(data, dict) else {}
     rows: List[Dict[str, Any]] = []
     if isinstance(section, dict):
         for key, values in section.items():
@@ -219,8 +252,6 @@ def completed_meeting_rounds_from_issue_state(flow) -> set[int]:
                 if section_round is not None:
                     row["round"] = section_round
                 rows.append(row)
-    elif isinstance(section, list):
-        rows = [row for row in section if isinstance(row, dict)]
     else:
         return set()
     by_round: Dict[int, list[Dict[str, Any]]] = {}
@@ -292,29 +323,59 @@ def has_existing_dr(flow) -> bool:
     return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
+def force_regenerate_output(config: Dict[str, Any], key: str) -> bool:
+    flags = config.get("force_regenerate_outputs")
+    return isinstance(flags, dict) and flags.get(key) is True
+
+
 # ========
 # Defines run specification stage function for this module workflow.
 # ========
-def run_specification_stage(flow, artifact: Dict[str, Any]) -> None:
+def run_specification_stage(
+    flow,
+    artifact: Dict[str, Any],
+    *,
+    force_regenerate: bool = False,
+) -> None:
     flow.logger.stage_started("document_generation", "規格化")
     flow.logger.info("=== 規格化 ===")
+    force_dr = force_regenerate or force_regenerate_output(flow.config, "DR")
+    force_srs = force_regenerate or force_regenerate_output(flow.config, "SRS")
     if not stage_enabled(flow.config, "DR", stage_enabled(flow.config, "SRS")):
         flow.logger.info("跳過 DR")
-    elif has_existing_dr(flow):
+    elif has_existing_dr(flow) and not force_dr:
         require_dr_draft_inputs(flow)
         flow.logger.info("DR 已存在，不重新產生")
     else:
         require_dr_draft_inputs(flow)
+        if force_dr and has_existing_dr(flow):
+            flow.logger.info("已要求重新產生 DR")
+        _checkpoint_step(
+            flow,
+            stage_id="document_generation",
+            step_id="document_generation.generate_dr",
+            agent="documentor",
+            action="generate_dr",
+        )
         flow.generate_dr(artifact)
         flow.store.save_artifact(artifact)
 
     if not stage_enabled(flow.config, "SRS"):
         flow.logger.info("跳過 SRS")
-    elif has_existing_srs(flow):
+    elif has_existing_srs(flow) and not force_srs:
         require_srs_draft_inputs(flow)
         flow.logger.info("SRS 已存在，不重新產生")
     else:
         require_srs_draft_inputs(flow)
+        if force_srs and has_existing_srs(flow):
+            flow.logger.info("已要求重新產生 SRS")
+        _checkpoint_step(
+            flow,
+            stage_id="document_generation",
+            step_id="document_generation.generate_srs",
+            agent="documentor",
+            action="generate_srs",
+        )
         flow.generate_srs(artifact)
         flow.store.save_artifact(artifact)
     flow.logger.stage_completed("document_generation", "規格化")
@@ -374,13 +435,13 @@ def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[st
             f"Draft v{next_version}",
             agent="analyst",
             message=f"{label}：正式會議關閉，已更新需求草稿",
-            output_path=f"results/drafts/draft_v{next_version}.html",
+            output_path=f"artifact/drafts/draft_v{next_version}.md",
         )
         flow.logger.artifact_created(
             "draft",
             f"draft.{action}",
             f"Draft v{next_version}",
-            f"results/drafts/draft_v{next_version}.html",
+            f"artifact/drafts/draft_v{next_version}.md",
         )
     flow.logger.stage_completed("draft", "草稿更新")
     return artifact
@@ -508,7 +569,10 @@ def run_output_stage(flow) -> None:
 # ========
 def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     run_formal = formal_meeting_stage_enabled(flow.config)
+    general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
+    default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
     end_round = formal_meeting_end_round(flow.config) if run_formal else 0
+    ran_general_meeting_this_run = False
     artifact = {
         "rough_idea": rough_idea,
         "stakeholders": [],
@@ -551,10 +615,19 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         for round_num in range(1, end_round + 1):
             _check_flow_cancelled(flow)
             artifact = run_one_round(flow, artifact, round_num)
+            if general_enabled and (round_num > 1 or not default_enabled):
+                ran_general_meeting_this_run = True
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
-    run_specification_stage(flow, artifact)
+    if ran_general_meeting_this_run:
+        artifact.setdefault("meta", {})["general_meeting_ran_this_run"] = True
+        flow.store.save_artifact(artifact)
+    run_specification_stage(
+        flow,
+        artifact,
+        force_regenerate=ran_general_meeting_this_run,
+    )
     _check_flow_cancelled(flow)
     run_output_stage(flow)
     flow.logger.info("流程完成！")
@@ -584,8 +657,11 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     flow.logger.stage_completed("init", "初始階段")
 
     run_formal = formal_meeting_stage_enabled(flow.config)
+    general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
+    default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
     start_round = next_meeting_round_from_mom(flow)
     end_round = formal_meeting_end_round(flow.config, start_round=start_round) if run_formal else 0
+    ran_general_meeting_this_run = False
     if run_formal:
         artifact.setdefault("meta", {})["meeting_end_round"] = end_round
         if start_round > end_round:
@@ -615,10 +691,19 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         for round_num in range(start_round, end_round + 1):
             _check_flow_cancelled(flow)
             artifact = run_one_round(flow, artifact, round_num)
+            if general_enabled and (round_num > 1 or not default_enabled):
+                ran_general_meeting_this_run = True
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
-    run_specification_stage(flow, artifact)
+    if ran_general_meeting_this_run:
+        artifact.setdefault("meta", {})["general_meeting_ran_this_run"] = True
+        flow.store.save_artifact(artifact)
+    run_specification_stage(
+        flow,
+        artifact,
+        force_regenerate=ran_general_meeting_this_run,
+    )
     _check_flow_cancelled(flow)
     run_output_stage(flow)
     flow.logger.info("流程完成！")

@@ -17,7 +17,6 @@ from agents.profile.user.stakeholder import (
     normalize_stakeholder_text,
     parse_selection,
 )
-from agents.profile.expert.feedback import empty_feedback_marker
 from storage.requirements import (
     attach_initial_source_ids,
     build_initial_requirement_candidates_from_stakeholders,
@@ -26,6 +25,40 @@ from storage.requirements import (
     requirement_dedupe_key,
 )
 from flow.meeting.conflict_review import save_conflict_report
+from server.services.run_checkpoint import record_run_checkpoint
+
+SUPPORTED_REFERENCE_EXTS = {
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+}
+
+
+def _checkpoint_step(
+    flow,
+    *,
+    stage_id: str,
+    step_id: str,
+    agent: str = "",
+    action: str = "",
+) -> None:
+    run_id = str(getattr(flow, "run_id", "") or "")
+    if not run_id:
+        return
+    record_run_checkpoint(
+        flow.store,
+        run_id=run_id,
+        status="running",
+        stage_id=stage_id,
+        step_id=step_id,
+        agent=agent,
+        action=action,
+    )
 
 
 def emit_requirement_deltas(flow, stage_id: str, step_id: str, rows: list[Dict[str, Any]]) -> None:
@@ -178,6 +211,34 @@ def requirements_review_feedback(review: Dict[str, Any]) -> str:
                 if part
             )
     return feedback.strip()
+
+
+def domain_research_review_feedback(review: Dict[str, Any]) -> str:
+    if not isinstance(review, dict):
+        return ""
+    return str(review.get("human_decision") or "").strip()
+
+
+def domain_research_review_references(review: Dict[str, Any], project_id: str) -> list[str]:
+    if not isinstance(review, dict):
+        return []
+    rows = review.get("referenced_files")
+    if not isinstance(rows, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            raw_path = str(row.get("path") or "").strip()
+            name = raw_path.rsplit("/", 1)[-1]
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(f"{project_id}/{name}" if project_id else name)
+    return out
 
 
 def requirements_from_analysis(
@@ -347,7 +408,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 "init.write_stakeholder_text",
                 "整理利害關係人需求",
                 agent="user",
-                message="利害關係人正在發言中 ...",
+                message="發言中 ...",
             )
             generated_stakeholders = flow.user_agent.write_stakeholder_text(
                 rough_idea,
@@ -393,7 +454,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 "init.write_stakeholder_text",
                 "根據 Human Decision 修正利害關係人需求",
                 agent="user",
-                message="User Agent 正在根據人工回饋更新利害關係人發言",
+                message="已收到回饋，更新中 ...",
             )
             generated_stakeholders = flow.user_agent.write_stakeholder_text(
                 f"{rough_idea}\n\nHuman Decision:\n{feedback}",
@@ -481,7 +542,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                     "init.analyze_requirements_review",
                     "根據使用者建議修正初始需求",
                     agent="analyst",
-                    message="Analyst 正在根據建議更新 User Requirements",
+                    message="已收到回饋，更新中 ...",
                 )
                 revised_candidates = requirements_from_analysis(
                     flow,
@@ -677,29 +738,82 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     feedback_covers_urls = feedback_covers_current_urls(artifact)
     if not stage_enabled(flow.config, "research_domain"):
         flow.logger.info("跳過領域研究")
-    elif has_feedback_payload(artifact) and (research_domain_completed or feedback_covers_urls):
-        if feedback_covers_urls:
-            meta["research_domain_completed"] = True
-            meta["research_domain_coverage"] = "covered_current_urls"
-            flow.store.save_artifact(artifact)
-        flow.logger.info("✓ 領域研究已存在，跳過重新生成")
-        reused_research_domain = True
     else:
-        require_stage_inputs(flow, artifact, "research_domain")
-        flow.logger.step_started(
-            "research_domain",
-            "research_domain.research",
-            "執行領域研究",
+        references = []
+        project_id = str(getattr(flow.store, "project_id", "") or "").strip()
+        references_dir = flow.store.base_dir / "doc" / project_id if project_id else None
+        if references_dir and references_dir.exists():
+            references = [
+                {"name": path.name, "size": path.stat().st_size}
+                for path in sorted(references_dir.iterdir())
+                if path.is_file() and path.suffix.lower() in SUPPORTED_REFERENCE_EXTS
+            ]
+        _checkpoint_step(
+            flow,
+            stage_id="research_domain",
+            step_id="research_domain.review",
             agent="expert",
-            message="尋找中 ...",
+            action="review_domain_research_inputs",
         )
-        flow.expert_agent.run_research_loop(
-            artifact,
+        review = Collect.domain_research_review(references)
+        artifact.setdefault("domain_research_reviews", []).append(review)
+        artifact["domain_research_review"] = review
+        feedback = domain_research_review_feedback(review)
+        referenced_files = domain_research_review_references(
+            review,
+            project_id,
         )
-        if not has_feedback_payload(artifact):
-            artifact["feedback"] = empty_feedback_marker("domain research completed with no high-value URL-backed findings")
-        artifact.setdefault("meta", {})["research_domain_completed"] = True
-        ran_research_domain = True
+        if feedback or referenced_files:
+            meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+            if feedback:
+                meta["domain_research_user_guidance"] = feedback
+            if referenced_files:
+                meta["attached_references"] = referenced_files
+                meta["domain_research_referenced_files"] = referenced_files
+            artifact["meta"] = meta
+            flow.store.save_artifact(artifact)
+        research_domain_completed = bool(meta.get("research_domain_completed"))
+        feedback_covers_urls = feedback_covers_current_urls(artifact)
+        if (
+            not feedback
+            and not referenced_files
+            and has_feedback_payload(artifact)
+            and (research_domain_completed or feedback_covers_urls)
+        ):
+            if feedback_covers_urls:
+                meta["research_domain_completed"] = True
+                meta["research_domain_coverage"] = "covered_current_urls"
+                artifact["meta"] = meta
+                flow.store.save_artifact(artifact)
+            flow.logger.info("✓ 領域研究已存在，跳過重新生成")
+            reused_research_domain = True
+        elif feedback or referenced_files:
+            meta.pop("research_domain_completed", None)
+            meta.pop("research_domain_coverage", None)
+            artifact["meta"] = meta
+            flow.store.save_artifact(artifact)
+        require_stage_inputs(flow, artifact, "research_domain")
+        if not reused_research_domain:
+            _checkpoint_step(
+                flow,
+                stage_id="research_domain",
+                step_id="research_domain.research",
+                agent="expert",
+                action="run_research_loop",
+            )
+            flow.logger.step_started(
+                "research_domain",
+                "research_domain.research",
+                "執行領域研究",
+                agent="expert",
+                message="尋找中 ...",
+            )
+            flow.expert_agent.run_research_loop(
+                artifact,
+            )
+            ran_research_domain = True
+            if has_feedback_payload(artifact):
+                artifact.setdefault("meta", {})["research_domain_completed"] = True
     flow.store.save_artifact(artifact)
     dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     if ran_research_domain and not has_feedback_payload(artifact):
@@ -731,6 +845,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         flow.logger.info("✓ 系統模型已存在，跳過重新生成")
     else:
         require_stage_inputs(flow, artifact, "system_model")
+        _checkpoint_step(
+            flow,
+            stage_id="system_model",
+            step_id="system_model.generate_models",
+            agent="modeler",
+            action="generate_system_models",
+        )
         flow.logger.step_started(
             "system_model",
             "system_model.generate_models",
@@ -778,6 +899,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         flow.logger.info("✓ 需求草稿已存在，跳過重新生成")
     else:
         require_stage_inputs(flow, artifact, "draft")
+        _checkpoint_step(
+            flow,
+            stage_id="draft",
+            step_id="draft.create_draft",
+            agent="analyst",
+            action="create_draft",
+        )
         flow.logger.step_started(
             "draft",
             "draft.create_draft",
@@ -804,13 +932,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             "draft.create_draft",
             "Draft v0",
             agent="analyst",
-            output_path="results/drafts/draft_v0.html",
+            output_path="artifact/drafts/draft_v0.md",
         )
         flow.logger.artifact_created(
             "draft",
             "draft.create_draft",
             "Draft v0 已產生",
-            "results/drafts/draft_v0.html",
+            "artifact/drafts/draft_v0.md",
         )
     flow.logger.stage_completed("draft", "草稿化")
 

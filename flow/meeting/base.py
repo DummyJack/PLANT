@@ -589,7 +589,7 @@ class MeetingCoordinator:
             "draft.update_draft",
             f"Draft v{next_version}",
             agent="analyst",
-            output_path=f"results/drafts/draft_v{next_version}.html",
+            output_path=f"artifact/drafts/draft_v{next_version}.md",
         )
         return next_version
 
@@ -997,7 +997,7 @@ class MeetingCoordinator:
             "draft.update_draft",
             f"Draft v{next_version}",
             agent="analyst",
-            output_path=f"results/drafts/draft_v{next_version}.html",
+            output_path=f"artifact/drafts/draft_v{next_version}.md",
         )
         return True
 
