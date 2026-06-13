@@ -2,7 +2,7 @@
 import base64
 import html
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 def clean_repeated_text(value: Any) -> str:
@@ -46,6 +46,19 @@ def render_trace_topology_assets() -> str:
 .dr-trace-topology__svg {
   display: block;
   min-width: 1120px;
+}
+.dr-trace-topology--fallback {
+  border: 1px solid #dfe5ef;
+  background: #fbfcfe;
+  padding: 12px 14px;
+}
+.dr-trace-topology--fallback ul {
+  margin: 8px 0 0;
+  padding-left: 1.25rem;
+}
+.dr-trace-fallback__warning {
+  margin: 6px 0 0;
+  color: #8a4b00;
 }
 .dr-trace-edge {
   fill: none;
@@ -484,6 +497,55 @@ def validate_rendered_trace_edges(
         raise ValueError(f"trace topology render missing edges: {', '.join(missing_render_edges)}")
 
 
+def render_trace_links_fallback(requirement: Dict[str, Any], error: Exception | None = None) -> str:
+    graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
+    nodes = {
+        str(node.get("id") or "").strip(): str(node.get("label") or node.get("id") or "").strip()
+        for node in (graph.get("all_nodes") or graph.get("nodes") or [])
+        if isinstance(node, dict) and str(node.get("id") or "").strip()
+    }
+    rows: List[str] = []
+    for edge in graph.get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        from_id = str(edge.get("from") or "").strip()
+        to_id = str(edge.get("to") or "").strip()
+        if not from_id or not to_id:
+            continue
+        label = str(edge.get("relation") or "").strip()
+        label_text = f" ({label})" if label else ""
+        rows.append(
+            "<li>"
+            f"<code>{html_attr(from_id)}</code> → <code>{html_attr(to_id)}</code>{html_attr(label_text)}"
+            "</li>"
+        )
+        nodes.setdefault(from_id, from_id)
+        nodes.setdefault(to_id, to_id)
+    error_markup = ""
+    if error:
+        error_markup = f'<p class="dr-trace-fallback__warning">Topology render fallback: {html_attr(error)}</p>'
+    if not rows:
+        target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        rows.append(f"<li><code>{html_attr(target_id)}</code></li>")
+    return (
+        '<div class="dr-trace-topology dr-trace-topology--fallback" data-layout-quality="fallback">'
+        "<p><strong>Trace Links</strong></p>"
+        f"{error_markup}"
+        "<ul>"
+        + "".join(rows)
+        + "</ul></div>"
+    )
+
+
+def trace_topology_rects_overlap(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float], padding: float = 0) -> bool:
+    return not (
+        a[2] + padding <= b[0]
+        or b[2] + padding <= a[0]
+        or a[3] + padding <= b[1]
+        or b[3] + padding <= a[1]
+    )
+
+
 def render_trace_topology(requirement: Dict[str, Any]) -> str:
     graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
     graph_nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict) and str(node.get("id") or "").strip()]
@@ -532,42 +594,159 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             if node_id:
                 order_map[node_id] = float(index)
 
-    column_specs = [
-        ("Source", 24, 180),
-        ("User Requirement", 246, 210),
-        ("Analysis", 510, 190),
-        ("Meeting", 754, 190),
-        ("Requirement", 994, 180),
+    layout_attempts = [
+        {
+            "column_specs": [
+                ("Source", 24, 180),
+                ("User Requirement", 246, 210),
+                ("Analysis", 510, 190),
+                ("Meeting", 754, 190),
+                ("Requirement", 994, 180),
+            ],
+            "row_gap": 18,
+            "view_width": 1200,
+        },
+        {
+            "column_specs": [
+                ("Source", 24, 190),
+                ("User Requirement", 274, 220),
+                ("Analysis", 580, 205),
+                ("Meeting", 870, 205),
+                ("Requirement", 1148, 190),
+            ],
+            "row_gap": 30,
+            "view_width": 1368,
+        },
+        {
+            "column_specs": [
+                ("Source", 24, 200),
+                ("User Requirement", 308, 235),
+                ("Analysis", 670, 220),
+                ("Meeting", 1010, 220),
+                ("Requirement", 1320, 200),
+            ],
+            "row_gap": 42,
+            "view_width": 1550,
+        },
     ]
-    width_by_column = {name: width for name, _, width in column_specs}
     node_height = 44
-    row_gap = 18
     top = 0
-    max_nodes = max(len(groups[name]) for name, _, _ in column_specs)
-    height = top + max_nodes * node_height + max(0, max_nodes - 1) * row_gap + 18
-    node_positions: Dict[str, tuple[int, int, int]] = {}
-    node_markup: List[str] = []
 
-    for name, x, width in column_specs:
-        count = len(groups[name])
-        column_height = count * node_height + max(0, count - 1) * row_gap
-        y_start = top + max(0, (height - top - 18 - column_height) // 2)
-        for index, node in enumerate(groups[name]):
-            y = y_start + index * (node_height + row_gap)
-            node_id = str(node.get("id") or "").strip()
-            node_positions[node_id] = (x, y, width)
-            node_markup.append(trace_topology_svg_node(
-                node_id=node_id,
-                label=str(node.get("label") or node_id),
-                node_type=str(node.get("type") or ""),
-                title=str(node.get("title") or node_id),
-                content=str(node.get("content") or ""),
-                content_format=str(node.get("content_format") or "text"),
-                x=x,
-                y=y,
-                width=width,
-                target=name == "Requirement",
-            ))
+    def edge_label_width(label: str) -> int:
+        width = 10
+        for char in str(label or ""):
+            width += 14 if ord(char) > 127 else 7
+        return max(30, width)
+
+    def edge_label_rect(x: float, y: float, label: str) -> Tuple[float, float, float, float]:
+        width = edge_label_width(label)
+        height = 18
+        return (x - width / 2, y - height / 2, x + width / 2, y + height / 2)
+
+    def assess_trace_topology_layout(
+        positions: Dict[str, tuple[int, int, int]],
+        valid_edges_for_layout: List[Dict[str, Any]],
+    ) -> List[str]:
+        issues: List[str] = []
+        node_rects = {
+            node_id: (x, y, x + width, y + node_height)
+            for node_id, (x, y, width) in positions.items()
+        }
+        for edge in valid_edges_for_layout:
+            label = str(edge.get("relation") or "").strip()
+            if not label:
+                continue
+            start = positions.get(str(edge.get("from") or ""))
+            end = positions.get(str(edge.get("to") or ""))
+            if not start or not end:
+                continue
+            sx, sy = start[0] + start[2], start[1] + node_height // 2
+            ex, ey = end[0], end[1] + node_height // 2
+            label_box = edge_label_rect((sx + ex) / 2, (sy + ey) / 2 - 10, label)
+            for node_id, node_box in node_rects.items():
+                if node_id in {str(edge.get("from") or ""), str(edge.get("to") or "")}:
+                    continue
+                if trace_topology_rects_overlap(label_box, node_box, padding=6):
+                    issues.append(f"edge label {trace_topology_edge_key(edge)} overlaps {node_id}")
+                    break
+        columns: Dict[int, List[Tuple[float, float, float, float]]] = {}
+        for x, y, width in positions.values():
+            columns.setdefault(x, []).append((x, y, x + width, y + node_height))
+        for rects in columns.values():
+            rects.sort(key=lambda rect: rect[1])
+            for index in range(1, len(rects)):
+                if rects[index][1] - rects[index - 1][3] < 16:
+                    issues.append("nodes too dense")
+                    break
+        return issues
+
+    def build_layout(attempt: Dict[str, Any], edges_for_layout: List[Dict[str, Any]]) -> Dict[str, Any]:
+        column_specs = attempt["column_specs"]
+        row_gap = int(attempt["row_gap"])
+        max_nodes = max(len(groups[name]) for name, _, _ in column_specs)
+        height = top + max_nodes * node_height + max(0, max_nodes - 1) * row_gap + 18
+        node_positions: Dict[str, tuple[int, int, int]] = {}
+        node_markup: List[str] = []
+        for name, x, width in column_specs:
+            count = len(groups[name])
+            column_height = count * node_height + max(0, count - 1) * row_gap
+            y_start = top + max(0, (height - top - 18 - column_height) // 2)
+            for index, node in enumerate(groups[name]):
+                y = y_start + index * (node_height + row_gap)
+                node_id = str(node.get("id") or "").strip()
+                node_positions[node_id] = (x, y, width)
+                node_markup.append(trace_topology_svg_node(
+                    node_id=node_id,
+                    label=str(node.get("label") or node_id),
+                    node_type=str(node.get("type") or ""),
+                    title=str(node.get("title") or node_id),
+                    content=str(node.get("content") or ""),
+                    content_format=str(node.get("content_format") or "text"),
+                    x=x,
+                    y=y,
+                    width=width,
+                    target=name == "Requirement",
+                ))
+        valid_edges = collect_valid_trace_edges(edges_for_layout, node_positions)
+        return {
+            "height": height,
+            "node_positions": node_positions,
+            "node_markup": node_markup,
+            "valid_edges": valid_edges,
+            "view_width": int(attempt["view_width"]),
+            "issues": assess_trace_topology_layout(node_positions, valid_edges),
+        }
+
+    selected_graph_edges = graph_edges
+    compact_label_mode = False
+    selected_layout = build_layout(layout_attempts[-1], selected_graph_edges)
+    selected_attempt_index = len(layout_attempts) - 1
+    for attempt_index, attempt in enumerate(layout_attempts):
+        candidate = build_layout(attempt, selected_graph_edges)
+        selected_layout = candidate
+        selected_attempt_index = attempt_index
+        if not candidate["issues"]:
+            break
+    if selected_layout["issues"]:
+        main_chain_labels = {"整理", "解決", "正式化", "釐清"}
+        selected_graph_edges = [
+            {
+                **edge,
+                "relation": str(edge.get("relation") or "").strip()
+                if str(edge.get("relation") or "").strip() in main_chain_labels
+                else "",
+            }
+            for edge in graph_edges
+        ]
+        compact_label_mode = True
+        selected_layout = build_layout(layout_attempts[-1], selected_graph_edges)
+        selected_attempt_index = len(layout_attempts)
+
+    height = selected_layout["height"]
+    view_width = selected_layout["view_width"]
+    node_positions = selected_layout["node_positions"]
+    node_markup = selected_layout["node_markup"]
+    layout_quality = "needs-review" if selected_layout["issues"] else "ok"
 
     def edge_path(
         start: tuple[int, int, int],
@@ -589,20 +768,13 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         ly = (sy + ey) / 2 - 10
         return path + edge_label_markup(lx, ly, clean_label)
 
-    def edge_label_width(label: str) -> int:
-        width = 10
-        for char in str(label or ""):
-            width += 14 if ord(char) > 127 else 7
-        return max(30, width)
-
     def edge_label_markup(x: float, y: float, label: str) -> str:
         clean_label = str(label or "").strip()
         if not clean_label:
             return ""
-        width = edge_label_width(clean_label)
-        height = 18
-        rect_x = x - width / 2
-        rect_y = y - height / 2
+        rect_x, rect_y, rect_right, rect_bottom = edge_label_rect(x, y, clean_label)
+        width = rect_right - rect_x
+        height = rect_bottom - rect_y
         return (
             f'<g class="dr-trace-edge-label-wrap">'
             f'<rect class="dr-trace-edge-label-bg" x="{rect_x:.1f}" y="{rect_y:.1f}" '
@@ -640,7 +812,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         return "".join(paths)
 
     edges: List[str] = []
-    valid_edges = collect_valid_trace_edges(graph_edges, node_positions)
+    valid_edges = selected_layout["valid_edges"]
     rendered_edge_keys: set[str] = set()
     incoming_by_target: Dict[str, List[Dict[str, Any]]] = {}
     for edge in valid_edges:
@@ -666,11 +838,21 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         ))
         rendered_edge_keys.add(key)
     validate_rendered_trace_edges(valid_edges, rendered_edge_keys)
+    layout_notice = ""
+    if layout_quality != "ok" or compact_label_mode:
+        notice = "Trace topology layout needs review."
+        if compact_label_mode:
+            notice = "Trace topology labels were simplified for readability."
+        layout_notice = f'<p class="dr-trace-fallback__warning">{html_attr(notice)}</p>'
 
     return (
         '<div class="dr-trace-topology">'
         '<div class="dr-trace-topology__graph">'
-        f'<svg class="dr-trace-topology__svg" viewBox="0 0 1200 {height}" height="{height}" role="img" aria-label="Trace topology">'
+        f'{layout_notice}'
+        f'<svg class="dr-trace-topology__svg" viewBox="0 0 {view_width} {height}" height="{height}" '
+        f'data-layout-quality="{layout_quality}" data-layout-attempt="{selected_attempt_index + 1}" '
+        f'data-compact-labels="{"true" if compact_label_mode else "false"}" '
+        'role="img" aria-label="Trace topology">'
         f'<defs><marker id="{marker_id}" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">'
         '<path d="M0,0 L0,6 L9,3 z" fill="#c8d2e2"></path>'
         '</marker></defs>'
@@ -710,7 +892,12 @@ def inject_trace_topologies(body: str, requirements: List[Dict[str, Any]]) -> st
     for block in blocks:
         match = re.search(r"(?m)^###\s*((?:FR|NFR|CON)-\d+)\s*[:：]", block)
         req = req_by_srs_id.get(match.group(1)) if match else None
-        topology = render_trace_topology(req) if req else ""
+        topology = ""
+        if req:
+            try:
+                topology = render_trace_topology(req)
+            except Exception as exc:
+                topology = render_trace_links_fallback(req, exc)
         if topology and "dr-trace-topology" not in block:
             block = re.sub(
                 r"(?m)^(\*\*Description\*\*:[^\n]*(?:\n)?)",

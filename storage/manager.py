@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .atomic import atomic_write_text
 from .artifact import (
     get_draft_version as artifact_get_draft_version,
     load_artifact as artifact_load_artifact,
@@ -134,8 +135,11 @@ class Store:
     # Defines save config function for this module workflow.
     # ========
     def save_config(self, config: Dict[str, Any]):
-        with open(self.base_dir / "config.json", "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        atomic_write_text(
+            self.base_dir / "config.json",
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
     # ========

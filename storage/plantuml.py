@@ -11,6 +11,8 @@ import urllib.error
 import urllib.request
 import zlib
 
+from .atomic import atomic_write_bytes, atomic_write_text
+
 
 PLANTUML_SERVER = os.getenv("PLANTUML_SERVER_URL", "https://www.plantuml.com/plantuml").rstrip("/")
 
@@ -63,8 +65,7 @@ def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     models_dir = artifact_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     filepath = models_dir / filename
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(plantuml_code)
+    atomic_write_text(filepath, plantuml_code, encoding="utf-8")
     return filename
 
 
@@ -84,7 +85,7 @@ def _render_with_local_command(plantuml_code: str, filepath: Path) -> bool:
             check=False,
         )
         if result.returncode == 0 and output_path.exists():
-            filepath.write_bytes(output_path.read_bytes())
+            atomic_write_bytes(filepath, output_path.read_bytes())
             return True
         print(f"PlantUML 本機指令輸出失敗 {filepath.name}: {result.stderr.strip() or result.stdout.strip()}")
         return False
@@ -110,7 +111,7 @@ def _render_with_local_jar(plantuml_code: str, filepath: Path) -> bool:
             check=False,
         )
         if result.returncode == 0 and output_path.exists():
-            filepath.write_bytes(output_path.read_bytes())
+            atomic_write_bytes(filepath, output_path.read_bytes())
             return True
         print(f"PlantUML JAR 輸出失敗 {filepath.name}: {result.stderr.strip() or result.stdout.strip()}")
         return False
@@ -123,7 +124,7 @@ def _render_with_server(plantuml_code: str, filepath: Path) -> bool:
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = resp.read()
         if data:
-            filepath.write_bytes(data)
+            atomic_write_bytes(filepath, data)
             return True
     except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, OSError) as e:
         print(f"PlantUML 遠端 PNG 輸出失敗 {filepath.name}: {e}")

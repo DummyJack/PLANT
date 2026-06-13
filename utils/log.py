@@ -1,4 +1,6 @@
 # Handles log logic for shared utility behavior for the Plant runtime.
+from __future__ import annotations
+
 import logging
 
 from datetime import datetime

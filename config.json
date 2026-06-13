@@ -1,8 +1,9 @@
 {
   "rounds": 1,
-  "max_issues": 3,
-  "max_stakeholders": 5,
-  "elicitation_max_turns": 5,
+  "max_issues": 1,
+  "max_stakeholders": 2,
+  "elicitation_max_turns": 1,
+  "human_skip_judge": false,
   "stage": {
     "init": true,
     "elicitation": true,

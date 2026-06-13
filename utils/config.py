@@ -157,8 +157,6 @@ def has_scope_payload(artifact: Dict[str, Any]) -> bool:
 # ========
 def has_feedback_payload(artifact: Dict[str, Any]) -> bool:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-    if feedback.get("status") == "no_applicable_feedback":
-        return True
     return any(
         bool(feedback.get(key))
         for key in ("findings", "sources", "constraints", "risks", "recommendations")

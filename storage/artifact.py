@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .atomic import atomic_write_text
 from .json import save_json_file
 
 
@@ -1349,6 +1350,7 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
 # ========
 def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     base_dir = artifact_dir.parent.parent.parent
+    project_dir = artifact_dir.parent
     project_file = artifact_dir / "project.json"
     requirements_file = artifact_dir / "requirements.json"
     if not any(path.exists() for path in (project_file, requirements_file)):
@@ -1374,9 +1376,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     issues_path = artifact_dir / "meeting" / "issues.json"
     issues = load_json_path(issues_path, {})
     models = load_json_path(artifact_dir / "system_models.json", [])
-    trace_req = load_json_path(base_dir / "trace_req.json", None)
-    if trace_req is None:
-        trace_req = load_json_path(artifact_dir / "trace_req.json", [])
+    trace_req = load_json_path(project_dir / "trace_req.json", [])
     issue_rows = []
     meeting_issue_rows = []
     if issues_path.exists() and not isinstance(issues, dict):
@@ -1405,7 +1405,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
                 if round_num is not None:
                     row["round"] = round_num
                 meeting_issue_rows.append(row)
-    elif meeting_issue_section not in (None, {}, []):
+    elif meeting_issue_section not in (None, {}):
         raise ValueError("issues.json meeting_issues 必須是 object")
     for round_num, item in issue_iter:
         if not isinstance(item, dict):
@@ -1526,11 +1526,11 @@ def trace_req_event_defaults(event_type: str, relation: str = "") -> Dict[str, s
     event = str(event_type or "").strip()
     rel = str(relation or "").strip()
     defaults = {
-        "derive_requirement": {"role": "main_chain", "edge_label": "分析"},
+        "derive_requirement": {"role": "main_chain", "edge_label": "整理"},
         "formalize_requirement": {"role": "main_chain", "edge_label": ""},
         "generate_feedback": {"role": "supporting", "edge_label": "依據", "style": "dashed"},
-        "generate_model": {"role": "supporting", "edge_label": "支撐", "style": "dashed"},
-        "detect_conflict": {"role": "main_chain", "edge_label": "衝突"},
+        "generate_model": {"role": "supporting", "edge_label": "建模", "style": "dashed"},
+        "detect_conflict": {"role": "main_chain", "edge_label": ""},
         "resolve_issue": {"role": "main_chain", "edge_label": "解決"},
     }.get(event, {"role": "supporting", "edge_label": rel})
     return {
@@ -1606,6 +1606,58 @@ def public_trace_req_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return public
 
 
+def append_trace_req_row(
+    rows: List[Dict[str, Any]],
+    seen: set[str],
+    *,
+    trace_id: str = "",
+    target_requirement_id: str,
+    from_id: str,
+    to_id: str,
+    edge_label: str = "",
+    role: str = "supporting",
+    style: str = "",
+    stage: str = "",
+    agent: str = "",
+    confidence: str = "explicit",
+    reason: str = "",
+    trace_reason: str = "",
+) -> None:
+    target = str(target_requirement_id or "").strip()
+    source = str(from_id or "").strip()
+    target_node = str(to_id or "").strip()
+    if not target or not source or not target_node:
+        return
+    row = {
+        "trace_id": str(trace_id or "").strip() or trace_req_trace_id(target),
+        "target_requirement_id": target,
+        "from": source,
+        "to": target_node,
+        "edge_label": str(edge_label or "").strip(),
+        "role": str(role or "supporting").strip() or "supporting",
+    }
+    public_signature = trace_req_public_signature(row)
+    if public_signature in seen:
+        return
+    seen.add(public_signature)
+    row["event_id"] = trace_req_next_id(rows)
+    if style:
+        row["style"] = style
+    if stage:
+        row["stage"] = stage
+    if agent:
+        row["agent"] = agent
+    if confidence:
+        row["confidence"] = confidence
+    detail = str(trace_reason or reason or "").strip()
+    if reason:
+        row["reason"] = reason
+    if detail:
+        row["trace_reason"] = detail
+    row["created_at"] = datetime.now(timezone.utc).isoformat()
+    rows.append(row)
+
+
 def append_trace_req_event(
     rows: List[Dict[str, Any]],
     seen: set[str],
@@ -1631,46 +1683,22 @@ def append_trace_req_event(
     clean_outputs = list(dict.fromkeys(trace_req_ids(output_ids)))
     if not clean_outputs:
         return
-    public_signature = trace_req_public_signature({
-        "trace_id": trace_req_trace_id(target_requirement_id),
-        "target_requirement_id": target_requirement_id,
-        "from": from_id or trace_req_first_id(clean_inputs),
-        "to": to_id or trace_req_first_id(clean_outputs),
-        "edge_label": edge_label if edge_label != "" else trace_req_event_defaults(event_type, relation)["edge_label"],
-        "role": role or trace_req_event_defaults(event_type, relation)["role"],
-    })
-    if public_signature in seen:
-        return
-    seen.add(public_signature)
-    row: Dict[str, Any] = {
-        "event_id": trace_req_next_id(rows),
-        "event_type": event_type,
-        "stage": stage or event_type,
-        "agent": agent,
-        "action": action,
-        "source": source,
-        "input_ids": clean_inputs,
-        "output_ids": clean_outputs,
-        "relation": relation,
-        "confidence": confidence,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if target_requirement_id:
-        row["target_requirement_id"] = target_requirement_id
-        row["trace_id"] = trace_req_trace_id(target_requirement_id)
-    if from_id:
-        row["from"] = from_id
-    if to_id:
-        row["to"] = to_id
     defaults = trace_req_event_defaults(event_type, relation)
-    row["role"] = role or defaults["role"]
-    row["edge_label"] = edge_label if edge_label != "" else defaults["edge_label"]
-    if style or defaults.get("style"):
-        row["style"] = style or defaults.get("style")
-    if reason:
-        row["reason"] = reason
-        row["trace_reason"] = reason
-    rows.append(row)
+    append_trace_req_row(
+        rows,
+        seen,
+        target_requirement_id=target_requirement_id,
+        from_id=from_id or trace_req_first_id(clean_inputs),
+        to_id=to_id or trace_req_first_id(clean_outputs),
+        edge_label=edge_label if edge_label != "" else defaults["edge_label"],
+        role=role or defaults["role"],
+        style=style or defaults.get("style", ""),
+        stage=stage or event_type,
+        agent=agent,
+        confidence=confidence,
+        reason=reason,
+        trace_reason=reason,
+    )
 
 
 def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1713,42 +1741,31 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         req_id = str(req.get("id") or "").strip()
         if not req_id:
             continue
-        append_trace_req_event(
+        append_trace_req_row(
             rows,
             seen,
-            event_type="derive_requirement",
-            stage="requirements",
-            agent="analyst",
-            action="analyst.requirement",
-            input_ids=trace_req_ids(req.get("source")),
-            output_ids=[req_id],
-            reason=str(req.get("trace_reason") or req.get("rationale") or "").strip(),
-            source=str(req.get("source_id") or "").strip(),
-            relation="derives",
-            confidence=str(req.get("trace_confidence") or "explicit").strip() or "explicit",
             target_requirement_id=req_to_srs.get(req_id, ""),
             from_id=trace_req_first_id(req.get("source")),
             to_id=req_id,
+            edge_label="整理",
             role="main_chain",
-            edge_label="分析",
+            stage="requirements",
+            agent="analyst",
+            reason=str(req.get("trace_reason") or req.get("rationale") or "").strip(),
+            confidence=str(req.get("trace_confidence") or "explicit").strip() or "explicit",
         )
         srs_id = str(req.get("srs_id") or "").strip()
         if srs_id:
-            append_trace_req_event(
+            append_trace_req_row(
                 rows,
                 seen,
-                event_type="formalize_requirement",
-                stage="srs",
-                agent="documentor",
-                action="documentor.generate_srs",
-                input_ids=[req_id],
-                output_ids=[srs_id],
-                relation="formalizes",
                 target_requirement_id=srs_id,
                 from_id=req_id,
                 to_id=srs_id,
-                role="main_chain",
                 edge_label="",
+                role="main_chain",
+                stage="srs",
+                agent="documentor",
             )
 
     feedback = data.get("feedback") if isinstance(data.get("feedback"), dict) else {}
@@ -1758,25 +1775,19 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             if not isinstance(item, dict):
                 continue
             feedback_index += 1
-            append_trace_req_event(
+            append_trace_req_row(
                 rows,
                 seen,
-                event_type="generate_feedback",
-                stage="domain_research",
-                agent="expert",
-                action="expert.update_feedback",
-                input_ids=trace_req_ids(item.get("related_requirement_ids")),
-                output_ids=[f"FB-{feedback_index}"],
-                reason=str(item.get("trace_reason") or "").strip(),
-                source=str(item.get("source") or "").strip(),
-                relation="supports",
-                confidence=str(item.get("trace_confidence") or ("explicit" if item.get("related_requirement_ids") else "missing")).strip() or "missing",
                 target_requirement_id=trace_req_target_id(item.get("related_requirement_ids"), req_to_srs),
                 from_id=trace_req_first_id(item.get("related_requirement_ids")),
                 to_id=f"FB-{feedback_index}",
-                role="supporting",
                 edge_label="依據",
+                role="supporting",
                 style="dashed",
+                stage="domain_research",
+                agent="expert",
+                reason=str(item.get("trace_reason") or "").strip(),
+                confidence=str(item.get("trace_confidence") or ("explicit" if item.get("related_requirement_ids") else "missing")).strip() or "missing",
             )
 
     for model in data.get("system_models") or []:
@@ -1785,24 +1796,18 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         model_id = str(model.get("id") or "").strip()
         if not model_id:
             continue
-        append_trace_req_event(
+        append_trace_req_row(
             rows,
             seen,
-            event_type="generate_model",
-            stage="system_model",
-            agent="modeler",
-            action="modeler.generate_model",
-            input_ids=trace_req_ids(model.get("source_ids")) + trace_req_ids(model.get("related_requirement_ids")),
-            output_ids=[model_id],
-            reason=str(model.get("description") or "").strip(),
-            source=str(model.get("source") or "").strip(),
-            relation="models",
             target_requirement_id=trace_req_target_id(model.get("related_requirement_ids"), req_to_srs),
             from_id=trace_req_first_id(model.get("source_ids")) or trace_req_first_id(model.get("related_requirement_ids")),
             to_id=model_id,
+            edge_label="建模",
             role="supporting",
-            edge_label="支撐",
             style="dashed",
+            stage="system_model",
+            agent="modeler",
+            reason=str(model.get("description") or "").strip(),
         )
 
     conflict = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
@@ -1814,22 +1819,17 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             req_ids = conflict_requirement_ids(item)
             if not conflict_id or len(req_ids) < 2:
                 continue
-            append_trace_req_event(
+            append_trace_req_row(
                 rows,
                 seen,
-                event_type="detect_conflict",
-                stage="conflict_detection",
-                agent="analyst",
-                action="analyst.analyze_conflicts",
-                input_ids=req_ids,
-                output_ids=[conflict_id],
-                reason=str(item.get("description") or item.get("reason") or item.get("initial_reason") or "").strip(),
-                relation="detects",
                 target_requirement_id=trace_req_target_id(req_ids, req_to_srs),
                 from_id=trace_req_first_id(req_ids),
                 to_id=conflict_id,
+                edge_label="",
                 role="main_chain",
-                edge_label="衝突",
+                stage="conflict_detection",
+                agent="analyst",
+                reason=str(item.get("description") or item.get("reason") or item.get("initial_reason") or "").strip(),
             )
 
     for discussion in data.get("discussions") or []:
@@ -1843,23 +1843,17 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             affected_req_ids = trace_req_ids(resolution.get("affected_requirement_ids"))
             affected_conflict_ids = trace_req_ids(resolution.get("affected_conflict_ids"))
             if meeting_id and affected_req_ids:
-                append_trace_req_event(
+                append_trace_req_row(
                     rows,
                     seen,
-                    event_type="resolve_issue",
-                    stage="formal_meeting",
-                    agent="mediator",
-                    action="mediator.resolve_issue",
-                    input_ids=affected_conflict_ids + [meeting_id],
-                    output_ids=affected_req_ids,
-                    reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
-                    source=meeting_id,
-                    relation="resolves",
                     target_requirement_id=trace_req_target_id(affected_req_ids, req_to_srs),
                     from_id=trace_req_first_id(affected_conflict_ids) or meeting_id,
                     to_id=meeting_id if affected_conflict_ids else trace_req_first_id(affected_req_ids),
-                    role="main_chain",
                     edge_label="解決",
+                    role="main_chain",
+                    stage="formal_meeting",
+                    agent="mediator",
+                    reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
                 )
 
     for row in rows:
@@ -1908,7 +1902,8 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     if any(key in data for key in ("issue_proposals", "meeting_issues")):
         save_optional_json_path(base_dir, issue_proposals_payload(data), meeting_dir / "issues.json")
     save_optional_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
-    save_optional_json_path(base_dir, ensure_trace_req(data), base_dir / "trace_req.json")
+    save_optional_json_path(base_dir, ensure_trace_req(data), artifact_dir.parent / "trace_req.json")
+    (base_dir / "trace_req.json").unlink(missing_ok=True)
     (artifact_dir / "trace_req.json").unlink(missing_ok=True)
     (artifact_dir / "trace_events.json").unlink(missing_ok=True)
 
@@ -1920,8 +1915,7 @@ def save_draft(artifact_dir: Path, content: str, version: int) -> None:
     drafts_dir = artifact_dir / "drafts"
     drafts_dir.mkdir(parents=True, exist_ok=True)
     path = drafts_dir / f"draft_v{version}.md"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    atomic_write_text(path, content, encoding="utf-8")
 
 
 # ========

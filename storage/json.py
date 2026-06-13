@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Union
 
+from .atomic import atomic_write_text
+
 
 SCI_JSON_NUMBER = re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+")
 
@@ -104,6 +106,8 @@ def save_json_file(
     path = Path(filepath)
     if not path.is_absolute():
         path = base_dir / filepath
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=indent)
+    atomic_write_text(
+        path,
+        json.dumps(data, ensure_ascii=False, indent=indent),
+        encoding="utf-8",
+    )

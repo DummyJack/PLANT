@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from scripts.build_file import write_manifest
 from utils import export_enabled
+from .atomic import atomic_write_text
 
 
 MANUAL_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "manual"
@@ -34,7 +35,7 @@ def export_project_manual(
     html = html.replace('href="styles.css"', 'href="../../../manual/styles.css"')
     html = html.replace('src="main.js"', 'src="../../../manual/main.js"')
     html = html.replace('  <link rel="icon" type="image/png" href="img/logo.png" />\n', "")
-    (manual_dir / "index.html").write_text(html, encoding="utf-8")
+    atomic_write_text(manual_dir / "index.html", html, encoding="utf-8")
 
     for stale_asset in ("main.js", "styles.css"):
         path = manual_dir / stale_asset

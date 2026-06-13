@@ -5,6 +5,8 @@ from typing import Optional
 from markdown_it import MarkdownIt
 import re
 
+from .atomic import atomic_write_text
+
 
 # ========
 # Defines clean llm output function for this module workflow.
@@ -239,8 +241,7 @@ def save_markdown(
     target_dir = markdown_target_dir(artifact_dir, output_dir, filename)
     target_dir.mkdir(parents=True, exist_ok=True)
     filepath = target_dir / filename
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(clean_markdown_for_storage(content))
+    atomic_write_text(filepath, clean_markdown_for_storage(content), encoding="utf-8")
 
 
 # ========
@@ -620,7 +621,7 @@ def save_markdown_as_html(
     toc_entries = html_toc_entries(html_body) if needs_floating_toc else []
     html = wrap_html_document(html_body, title=md_path.stem, toc_entries=toc_entries)
     html_path.parent.mkdir(parents=True, exist_ok=True)
-    html_path.write_text(html, encoding="utf-8")
+    atomic_write_text(html_path, html, encoding="utf-8")
 
 
 # ========

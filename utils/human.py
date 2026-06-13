@@ -1,5 +1,7 @@
 # Handles human logic for shared utility behavior for the Plant runtime.
+import json
 import re
+from pathlib import Path
 from typing import Dict, List
 
 
@@ -9,6 +11,76 @@ STAKEHOLDER_CATEGORY_LABELS = {
     "external_party": "外部相關單位",
 }
 STAKEHOLDER_CATEGORY_VALUES = set(STAKEHOLDER_CATEGORY_LABELS.keys())
+
+
+def cli_skip_all_interventions() -> bool:
+    config_path = Path.cwd() / "config.json"
+    if not config_path.exists():
+        config_path = Path(__file__).resolve().parent.parent / "config.json"
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            config = json.load(f)
+    except Exception:
+        return False
+    return bool(config.get("human_skip_judge", False))
+
+
+def reference_type(name: str) -> str:
+    suffix = Path(name).suffix.lower().lstrip(".")
+    return suffix or "file"
+
+
+def referenced_files_from_cli_text(raw: str, references: List[Dict]) -> tuple[str, List[Dict]]:
+    text = str(raw or "")
+    rows: List[Dict] = []
+    seen = set()
+    by_index = {}
+    by_name = {}
+    for index, reference in enumerate(references or [], 1):
+        if not isinstance(reference, dict):
+            continue
+        name = str(reference.get("name") or "").strip()
+        if not name:
+            continue
+        by_index[str(index)] = name
+        by_name[name.lower()] = name
+
+    def add_name(name: str) -> None:
+        clean = str(name or "").strip()
+        if not clean or clean in seen:
+            return
+        seen.add(clean)
+        rows.append({
+            "name": clean,
+            "path": clean,
+            "type": reference_type(clean),
+        })
+
+    for token in re.findall(r"@(\d+)(?=\s|$|[,，;；])", text):
+        if token in by_index:
+            add_name(by_index[token])
+            text = re.sub(rf"@{re.escape(token)}(?=\s|$|[,，;；])", " ", text)
+
+    for token in re.findall(r"(?<!\S)(\d+)(?=\s|$|[,，;；])", text):
+        if token in by_index:
+            add_name(by_index[token])
+            text = re.sub(rf"(?<!\S){re.escape(token)}(?=\s|$|[,，;；])", " ", text, count=1)
+
+    for lower_name, name in sorted(by_name.items(), key=lambda item: len(item[1]), reverse=True):
+        marker = f"@{name}"
+        if marker.lower() in text.lower():
+            add_name(name)
+            text = re.sub(re.escape(marker), " ", text, flags=re.IGNORECASE)
+        elif lower_name in text.lower():
+            for match in re.finditer(re.escape(name), text, flags=re.IGNORECASE):
+                before = text[match.start() - 1] if match.start() > 0 else " "
+                if before in {"@", " ", "\n", "\t", ",", "，", ";", "；"}:
+                    add_name(name)
+                    text = text[:match.start()] + " " + text[match.end():]
+                    break
+
+    text = re.sub(r"[ \t]{2,}", " ", text).strip(" ,，;；\n\t")
+    return text, rows
 
 
 # ========
@@ -131,6 +203,14 @@ class Collect:
     # ========
     @staticmethod
     def human_decision_on_issue(issue: Dict, options) -> Dict:
+        if cli_skip_all_interventions():
+            return {
+                "summary": "CLI 設定已跳過本次裁決",
+                "decision": "",
+                "chosen_option_id": "",
+                "chosen_option_title": "",
+            }
+
         def clean_option_title(value) -> str:
             title = str(value or "").strip()
             return re.sub(r"^[A-Z]\s*[:：]\s*", "", title)
@@ -278,6 +358,9 @@ class Collect:
 
     @staticmethod
     def stakeholder_statement_review(stakeholders: List[Dict]) -> Dict:
+        if cli_skip_all_interventions():
+            return {"action": "approve", "skipped": True, "auto_skipped": True}
+
         print("\n利害關係人發言已產生：")
         for index, stakeholder in enumerate(stakeholders or [], 1):
             name = str(stakeholder.get("name") or f"利害關係人 {index}").strip()
@@ -293,6 +376,9 @@ class Collect:
 
     @staticmethod
     def requirements_review(requirements: List[Dict]) -> Dict:
+        if cli_skip_all_interventions():
+            return {"action": "approve", "skipped": True, "auto_skipped": True}
+
         print("\n初始需求分析已產生：")
         for index, requirement in enumerate(requirements or [], 1):
             if not isinstance(requirement, dict):
@@ -305,3 +391,57 @@ class Collect:
         if not raw:
             return {"action": "approve"}
         return {"action": "human_decision", "human_decision": raw}
+
+    @staticmethod
+    def domain_research_review(references: List[Dict]) -> Dict:
+        if cli_skip_all_interventions():
+            return {"action": "approve", "skipped": True, "auto_skipped": True}
+
+        if references:
+            print("\n可引用文件：")
+            for index, reference in enumerate(references, 1):
+                if not isinstance(reference, dict):
+                    continue
+                name = str(reference.get("name") or "").strip()
+                if name:
+                    print(f"  {index}. {name}")
+        raw = input("\n輸入領域研究建議；引用文件請直接輸入編號(按 Enter 確認)：").strip()
+        if not raw:
+            return {"action": "approve"}
+        feedback, referenced_files = referenced_files_from_cli_text(raw, references)
+        return {
+            "action": "human_decision",
+            "human_decision": feedback,
+            "referenced_files": referenced_files,
+        }
+
+    @staticmethod
+    def meeting_issue_proposal_review(
+        proposals: List[Dict],
+        round_num: int,
+        max_issues: int = 5,
+    ) -> Dict:
+        if cli_skip_all_interventions():
+            return {"action": "approve", "custom_issues": [], "skipped": True, "auto_skipped": True}
+
+        print(f"\n第 {round_num} 輪候選議題已產生：")
+        for row in proposals or []:
+            if not isinstance(row, dict):
+                continue
+            issue_id = str(row.get("issue_id") or "").strip()
+            title = str(row.get("title") or "").strip()
+            proposed_by = str(row.get("proposed_by") or "").strip()
+            if title:
+                print(f"- {issue_id} {title} ({proposed_by})")
+        raw = input("\n可輸入自訂議題 title，多筆請用換行或分號分隔；Enter 跳過：").strip()
+        if not raw:
+            return {"action": "approve", "custom_issues": []}
+        titles = [
+            item.strip()
+            for item in re.split(r"[\n;；]+", raw)
+            if item.strip()
+        ]
+        return {
+            "action": "human_issues",
+            "custom_issues": [{"title": title} for title in titles[:max_issues]],
+        }
