@@ -36,6 +36,8 @@ Discussion Rows:
 # Generation Rules
 - 先看 User Requirements（URL-*）原文，再看各 agent 的 pair_reviews。
 - discussion_rows 只在 pair_reviews 證據不足時作補充參考。
+- 解讀 pair_reviews 時需依 agent 職責加權：Analyst 代表需求語意與 SRS 邊界；Expert 只代表外部義務、法規/標準、合規、風險或品質底線；Modeler 只代表流程、狀態、資料、角色互動、責任邊界與模型可共存性。
+- 若 Expert 或 Modeler 因 pair 不屬於自身職責而維持 current_label，這不是一般投票支持，而是「職責外不介入」。
 - 若 pair_reviews 與 pair 原文足以支持改判，new_label 可改為 Conflict 或 Neutral。
 - 若 extracted_pair_reviews 為空，預設維持 current_label，除非 User Requirements（URL-*）原文本身已足以明確推翻現標籤。
 - 若證據不足、理由不一致或沒有明確共識，維持 current_label。

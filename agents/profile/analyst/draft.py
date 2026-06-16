@@ -404,7 +404,9 @@ def draft_contract_issues(
     issues: List[str] = []
     source = md or ""
     forbidden_patterns = {
-        "contains_placeholder": r"待補",
+        "contains_placeholder": (
+            r"(?m)(?:^|[|:：\-*#\s])(?:待補|TBD|TODO|未填|未定|待確認|待釐清)(?:[|,，。；;:：\s]|$)"
+        ),
         "contains_ellipsis_summary": (
             r"其餘(?:需求|項目|內容|條目|REQ|URL|部分)?(?:同上|略|依輸入資料內容)"
             r"|格式同上"

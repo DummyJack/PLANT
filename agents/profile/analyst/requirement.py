@@ -439,6 +439,10 @@ class AnalystRequirementFlow:
                     + "; ".join(coverage_issues)
                 )
 
+        data = self.normalize_requirement_titles(
+            data,
+            stakeholder_names=self.requirement_title_stakeholders(context),
+        )
         title_issues = self.requirement_title_issues(
             data.get("REQ") if isinstance(data, dict) else [],
             stakeholder_names=self.requirement_title_stakeholders(context),
@@ -457,6 +461,10 @@ class AnalystRequirementFlow:
             data = self.requirement_update_payload(
                 data,
                 action_name=f"{action_name} title repair",
+            )
+            data = self.normalize_requirement_titles(
+                data,
+                stakeholder_names=self.requirement_title_stakeholders(context),
             )
             title_issues = self.requirement_title_issues(
                 data.get("REQ") if isinstance(data, dict) else [],
@@ -870,6 +878,40 @@ class AnalystRequirementFlow:
                 if len(name) >= 2:
                     names.append(name)
         return list(dict.fromkeys(names))
+
+    @staticmethod
+    # Defines normalize requirement titles function for this module workflow.
+    def normalize_requirement_titles(
+        data: Dict[str, Any],
+        *,
+        stakeholder_names: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            return data
+        rows = data.get("REQ")
+        if not isinstance(rows, list):
+            return data
+        prefixes = [
+            str(name or "").strip()
+            for name in (stakeholder_names or [])
+            if len(str(name or "").strip()) >= 2
+        ]
+        if not prefixes:
+            return data
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            if not title:
+                continue
+            for prefix in prefixes:
+                if not title.startswith(prefix):
+                    continue
+                next_title = title[len(prefix):].lstrip(" ：:，,、-－—")
+                if next_title:
+                    row["title"] = next_title
+                break
+        return data
 
     @staticmethod
     # Defines requirement title issues function for this module workflow.

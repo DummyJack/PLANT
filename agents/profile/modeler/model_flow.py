@@ -133,6 +133,12 @@ class ModelerModeling(ModelPlan):
         return {
             "modeling_phase": phase,
             "modeling_policy": policy,
+            "resume_checkpoint": (
+                artifact.get("meta", {}).get("last_resume_checkpoint")
+                if isinstance(artifact.get("meta"), dict)
+                and isinstance(artifact.get("meta", {}).get("last_resume_checkpoint"), dict)
+                else {}
+            ),
             "issue": self.model_issue_context(issue),
             "scenario": artifact.get("scenario", "") or artifact.get("rough_idea", ""),
             "stakeholders": self.model_stakeholders(artifact),
@@ -196,6 +202,17 @@ class ModelerModeling(ModelPlan):
         self, action, params, artifact, last_observation=None,
     ):
         obs: Dict = {"action": action, "result": None, "error": None, "summary": ""}
+        checkpoint_target = params.get("target") if isinstance(params.get("target"), dict) else {}
+        checkpoint_label = (
+            str(checkpoint_target.get("target_model_id") or "").strip()
+            or str(checkpoint_target.get("type") or "").strip()
+            or action
+        )
+        self.record_runtime_checkpoint(
+            stage_id="system_model",
+            step_id=f"system_model.{action}.{checkpoint_label}",
+            action=action,
+        )
 
         if action == "plan_models":
             reqs = self.model_requirements(artifact)
@@ -336,9 +353,34 @@ class ModelerModeling(ModelPlan):
                 related_requirement_ids = self.related_req_ids(result, target)
                 if related_requirement_ids:
                     new_row["related_requirement_ids"] = related_requirement_ids
+                current_issue = (
+                    artifact.get("current_issue")
+                    if isinstance(artifact.get("current_issue"), dict)
+                    else {}
+                )
+                source_ids = [
+                    str(value).strip()
+                    for source in (
+                        (existing or {}).get("source_ids"),
+                        result.get("source_ids"),
+                        target.get("source_ids"),
+                    )
+                    for value in (source if isinstance(source, list) else [source])
+                    if str(value or "").strip()
+                ]
+                source_ids.extend(
+                    str(value).strip()
+                    for value in (current_issue.get("meeting_id"), current_issue.get("id"))
+                    if str(value or "").strip()
+                )
                 source_text = str(result.get("source") or "").strip()
                 if source_text:
                     new_row["source"] = source_text
+                    source_ids.append(source_text)
+                elif source_ids:
+                    new_row["source"] = source_ids[0]
+                if source_ids:
+                    new_row["source_ids"] = list(dict.fromkeys(source_ids))
                 if existing:
                     existing.clear()
                     existing.update(new_row)
@@ -492,7 +534,7 @@ class ModelerModeling(ModelPlan):
                         "name": target.get("name"),
                     }
                     obs["error"] = "plantuml_validation_failed"
-                    obs["summary"] = f"{diagram_type} 驗證失敗"
+                obs["summary"] = f"{diagram_type} 驗證失敗"
             return obs
 
         obs["error"] = f"未知動作: {action}"
@@ -780,13 +822,36 @@ class ModelerModeling(ModelPlan):
         )
         model_artifact["modeling_phase"] = "initial_system_model"
         model_artifact["modeling_policy"] = modeling_phase_policy("initial_system_model")
+        self.record_runtime_checkpoint(
+            stage_id="system_model",
+            step_id="system_model.ensure_context_diagram",
+            action="ensure_context_diagram",
+        )
         self.ensure_context_diagram(model_artifact)
+        artifact["system_models"] = self.parse_model_output(
+            model_artifact.get("system_models", []),
+            source=model_artifact.get("model_source", ""),
+        )
+        store = getattr(self, "runtime_store", None)
+        if store:
+            store.save_artifact(artifact)
         self.run_model_loop(model_artifact, modeling_phase="initial_system_model")
         model_data = self.parse_model_output(
             model_artifact.get("system_models", []),
             source=model_artifact.get("model_source", ""),
         )
+        artifact["system_models"] = model_data
+        if store:
+            store.save_artifact(artifact)
+        self.record_runtime_checkpoint(
+            stage_id="system_model",
+            step_id="system_model.ensure_use_case",
+            action="ensure_use_case",
+        )
         self.ensure_use_case(model_data, model_artifact)
+        artifact["system_models"] = model_data
+        if store:
+            store.save_artifact(artifact)
         return model_data
 
     # Defines ensure context diagram function for this module workflow.

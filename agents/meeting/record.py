@@ -350,9 +350,10 @@ class MediatorRecords:
 - 不得把尚未裁決的事項寫成已裁決。
 - 若資訊不足，必須明確寫「尚未形成決議」或沿用 fallback，不可編造。
 - display_title 最多 80 字，必須保留原本已出現的 REQ/URL/SM/OQ id。
-- summary 必須是 2 到 4 句，說清楚：本議題討論的核心問題、主要參與者關注點、討論後確認的範圍或差異。
-- decision 必須整理既有 resolution、agreed_points、human decision 或 action_summaries；說清楚最後採納的處理方式、影響的需求/模型/衝突 ID、後續要落實的內容。
-- 若有 human_decision_notes，decision 必須明確包含採納的「選項 A」或自訂裁決內容。
+- summary 必須像正式會議摘要：用 2 到 4 句整理本議題討論的核心問題、主要參與者關注點、已確認的差異與收斂方向；不要寫成流水帳或只列選項代號。
+- decision 必須像正式會議決議：明確寫出最後採納的處理方式、影響的需求/模型/衝突 ID、後續要落實的內容；不要只寫「採用 A」、「選 B」或只列狀態。
+- 若有 human_decision_notes，decision 必須把採納選項寫成完整內容，例如「採用選項 A：完整顯示配送費率與預估里程」，不可只寫「採用選項 A」。
+- summary 或 decision 若提到選項 A/B/C，必須把選項內容自然寫進句子中；不要用孤立括號補充，也不可只寫 A/B/C。
 - 若沒有決議，decision 輸出「尚未形成決議；...」並說明仍缺什麼。
 - 不要只輸出 agreed、resolved、completed 或單一句狀態。
 - evidence 必須列出 1 到 5 個使用到的來源線索，來源只能來自 context。
@@ -489,78 +490,6 @@ class MediatorRecords:
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
 
-        # Conflict-resolution MoMs should still show decision options when the
-        # resolution itself only records the final decision.
-        def conflict_report_markdown_options() -> List[Dict[str, Any]]:
-            if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
-                return []
-            store = getattr(self, "store", None)
-            artifact_dir = getattr(store, "artifact_dir", None)
-            if not artifact_dir:
-                return []
-            report_dir = Path(artifact_dir) / "report"
-            if not report_dir.exists():
-                return []
-            versioned_paths: List[tuple[int, Path]] = []
-            for path in report_dir.glob("conflict_report_v*.md"):
-                raw_version = path.stem.removeprefix("conflict_report_v")
-                if raw_version.isdigit():
-                    versioned_paths.append((int(raw_version), path))
-            if not versioned_paths:
-                return []
-            versioned_paths.sort(key=lambda item: item[0], reverse=True)
-            try:
-                text = versioned_paths[0][1].read_text(encoding="utf-8")
-            except Exception:
-                return []
-            affected_ids = [
-                str(value).strip()
-                for value in (resolution.get("affected_conflict_ids") or [])
-                if str(value).strip()
-            ]
-            if not affected_ids:
-                affected_ids = [
-                    str(value).strip()
-                    for value in (issue.get("trace") or {}).get("artifact_ids", [])
-                    if str(value).strip().startswith("CR-")
-                ]
-            affected_set = set(affected_ids)
-            matches = list(re.finditer(r"(?m)^##\s+(CR-\d+)(?:[：:]\s*(.*))?$", text))
-            blocks: List[Dict[str, Any]] = []
-            for index, match in enumerate(matches):
-                conflict_id = match.group(1).strip()
-                if affected_set and conflict_id not in affected_set:
-                    continue
-                title = str(match.group(2) or "").strip()
-                start = match.end()
-                end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-                body = text[start:end].strip()
-
-                # Defines section extract function for this module workflow.
-                def section(name: str) -> str:
-                    section_match = re.search(
-                        rf"(?ms)^###\s+{re.escape(name)}\s*\n(.*?)(?=^###\s+|\Z)",
-                        body,
-                    )
-                    if not section_match:
-                        return ""
-                    return section_match.group(1).strip()
-
-                options_md = section("解決選項")
-                recommendation_md = section("建議解法")
-                if not options_md and not recommendation_md:
-                    continue
-                lines = [f"#### {conflict_id}{f'：{title}' if title else ''}", ""]
-                if options_md:
-                    lines.extend([options_md, ""])
-                if recommendation_md:
-                    if recommendation_md.startswith("建議"):
-                        lines.extend([recommendation_md, ""])
-                    else:
-                        lines.extend([f"建議採用{recommendation_md}", ""])
-                blocks.append({"kind": "conflict_markdown", "markdown": "\n".join(lines).strip()})
-            return blocks
-
         def conflict_report_decision_options() -> List[Dict[str, Any]]:
             if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
                 return []
@@ -601,6 +530,7 @@ class MediatorRecords:
             conflict_blocks: List[Dict[str, Any]] = []
             for row in scoped_rows:
                 conflict_id = str(row.get("id") or "").strip()
+                row_title = str(row.get("title") or "").strip()
                 row_description = str(row.get("description") or "").strip()
                 recommended = str(row.get("recommended_resolution") or "").strip()
                 row_options: List[Dict[str, Any]] = []
@@ -608,14 +538,13 @@ class MediatorRecords:
                     if not isinstance(option, dict):
                         continue
                     option_id = str(option.get("option") or option.get("id") or "").strip()
-                    strategy = str(option.get("strategy") or option.get("title") or "").strip()
                     description = str(option.get("description") or option.get("summary") or "").strip()
-                    if not any((option_id, strategy, description)):
+                    if not any((option_id, description)):
                         continue
                     row_options.append(
                         {
                             "id": option_id,
-                            "title": strategy,
+                            "title": "",
                             "summary": description,
                             "recommended": bool(option.get("recommendation")),
                         }
@@ -625,7 +554,7 @@ class MediatorRecords:
                         {
                             "kind": "conflict_decision",
                             "conflict_id": conflict_id,
-                            "title": row_description,
+                            "title": row_title or row_description,
                             "options": row_options,
                             "recommended_resolution": recommended,
                         }
@@ -634,12 +563,82 @@ class MediatorRecords:
             return conflict_blocks
 
         if not options:
-            options = conflict_report_markdown_options() or conflict_report_decision_options()
+            options = conflict_report_decision_options()
         if str((issue or {}).get("category") or "").strip() == "resolve_conflict":
             recommendation = {}
 
+        def option_detail_map(option_rows: List[Dict[str, Any]]) -> Dict[str, str]:
+            details: Dict[str, str] = {}
+            for option_index, option in enumerate(option_rows or []):
+                if not isinstance(option, dict):
+                    continue
+                if option.get("kind") == "conflict_decision":
+                    for nested_index, row in enumerate(option.get("options") or []):
+                        if not isinstance(row, dict):
+                            continue
+                        option_id = str(row.get("id") or row.get("option") or "").strip()
+                        label = self.option_display_label(option_id, nested_index)
+                        detail = self.clean_repeated_text(
+                            row.get("summary") or row.get("description") or row.get("title") or ""
+                        )
+                        if detail:
+                            details[label] = detail
+                    continue
+                option_id = str(option.get("id") or option.get("option_id") or option.get("option") or "").strip()
+                label = self.option_display_label(option_id, option_index)
+                detail = self.clean_repeated_text(
+                    option.get("summary") or option.get("description") or option.get("title") or ""
+                )
+                if detail:
+                    details[label] = detail
+            return details
+
+        def expand_option_mentions(text: Any, option_rows: List[Dict[str, Any]]) -> str:
+            value = self.clean_repeated_text(text)
+            if not value:
+                return ""
+            details = option_detail_map(option_rows)
+            for label, detail in details.items():
+                raw_label = label.replace("選項 ", "").strip()
+                if not raw_label:
+                    continue
+                if not detail or detail in value:
+                    continue
+                replacement = f"{label}：{detail}"
+                next_value = re.sub(
+                    rf"(採用|選擇|建議採用|決議採用)(選項|方案)?\s*{re.escape(raw_label)}(?![A-Za-z])",
+                    rf"\1{replacement}",
+                    value,
+                    count=1,
+                )
+                if next_value != value:
+                    value = next_value
+                    continue
+                next_value = re.sub(
+                    rf"(選項|方案)\s*{re.escape(raw_label)}(?![A-Za-z])",
+                    replacement,
+                    value,
+                    count=1,
+                )
+                if next_value != value:
+                    value = next_value
+                    continue
+                value = re.sub(
+                    rf"(?<![A-Za-z]){re.escape(raw_label)}(?![A-Za-z])",
+                    replacement,
+                    value,
+                    count=1,
+                )
+            value = re.sub(r"。{2,}", "。", value)
+            value = re.sub(r"．{2,}", "．", value)
+            return value
+
+        if str((issue or {}).get("category") or "").strip() == "resolve_conflict":
+            summary = expand_option_mentions(summary, options)
+            decision = expand_option_mentions(decision, options)
+
         agreed_points = [
-            self.clean_repeated_text(value)
+            expand_option_mentions(value, options)
             for value in (resolution.get("agreed_points", []) or [])
             if self.clean_repeated_text(value)
         ]
@@ -669,11 +668,6 @@ class MediatorRecords:
             for index, option in enumerate(options):
                 if not isinstance(option, dict):
                     continue
-                if option.get("kind") == "conflict_markdown":
-                    block_markdown = str(option.get("markdown") or "").strip()
-                    if block_markdown:
-                        md += block_markdown + "\n\n"
-                    continue
                 if option.get("kind") == "conflict_decision":
                     conflict_id = str(option.get("conflict_id") or "").strip()
                     title = str(option.get("title") or "").strip()
@@ -685,22 +679,10 @@ class MediatorRecords:
                     for option_index, row in enumerate(option_rows, start=1):
                         option_id = str(row.get("id") or "").strip()
                         label = self.option_display_label(option_id, option_index - 1)
-                        title = str(row.get("title") or "").strip()
                         summary_text = str(row.get("summary") or "").strip()
-                        line = f"{label}. "
-                        if title:
-                            line += f"{title}"
-                            if summary_text:
-                                line += f"：{summary_text}"
-                        else:
-                            line += summary_text or label
+                        line = f"{label}："
+                        line += summary_text or label
                         md += line.rstrip() + "\n"
-                    recommended_resolution = str(option.get("recommended_resolution") or "").strip()
-                    if recommended_resolution:
-                        if recommended_resolution.startswith("建議"):
-                            md += f"\n{recommended_resolution}\n"
-                        else:
-                            md += f"\n建議採用{recommended_resolution}\n"
                     md += "\n"
                     continue
                 option_id = str(option.get("id") or option.get("option_id") or option.get("option") or "").strip()
@@ -915,22 +897,26 @@ class MediatorRecords:
         def render_conflict_report_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
-            out = ["### 衝突處理", "", "| ID | 類型 | 描述 | 建議 |", "|---|---|---|---|"]
+            out = ["### 衝突處理", "", "| ID | 標題 | 類型 | 描述 | 解決選項 | 建議 |", "|---|---|---|---|---|---|"]
             for row in rows:
                 if not isinstance(row, dict):
                     continue
                 label = row.get("label") or row.get("type") or ""
                 recommendation = row.get("recommended_resolution") or ""
-                if not recommendation and isinstance(row.get("resolution_options"), list):
-                    option_texts = []
-                    for option in row.get("resolution_options") or []:
-                        if isinstance(option, dict):
-                            text = option.get("description") or option.get("recommendation") or ""
-                            if text:
-                                option_texts.append(str(text).strip())
-                    recommendation = "; ".join(option_texts)
+                option_texts = []
+                for option_index, option in enumerate(row.get("resolution_options") or [], start=1):
+                    if not isinstance(option, dict):
+                        continue
+                    option_id = str(option.get("option") or option.get("id") or "").strip()
+                    if option_id.isdigit():
+                        option_id = chr(ord("A") + max(0, int(option_id) - 1))
+                    if not option_id:
+                        option_id = chr(ord("A") + option_index - 1)
+                    text = str(option.get("description") or option.get("summary") or "").strip()
+                    if text:
+                        option_texts.append(f"選項 {option_id}：{text}")
                 out.append(
-                    f"| {table_cell(row.get('id'))} | {table_cell(label)} | {table_cell(row.get('description'))} | {table_cell(recommendation)} |"
+                    f"| {table_cell(row.get('id'))} | {table_cell(row.get('title'))} | {table_cell(label)} | {table_cell(row.get('description'))} | {table_cell('; '.join(option_texts))} | {table_cell(recommendation)} |"
                 )
             return "\n".join(out)
 

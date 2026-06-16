@@ -15,12 +15,15 @@ def generate_scope() -> str:
 - scenario 只作為產品邊界背景。
 - URL / User Requirements 是 scope 的主要直接來源。
 - current_scope 若存在，只作為避免重複與延續既有邊界，不可無來源擴張。
+- scope_consideration / human_decision 若存在，代表使用者對初始需求範圍的審查考量；只能用來檢查遺漏、過寬、過窄或分類錯誤，不是直接採納指令。
+- 不得因審查考量出現某方向，就把該方向加入 in_scope / out_of_scope；只有 scenario 或 URL / User Requirements 已支持時，才可反映到 scope。
 
 # Input
-- scenario、URL / User Requirements 與 current_scope 由 runtime context 提供。
+- scenario、URL / User Requirements、current_scope、scope_consideration 與 human_decision 由 runtime context 提供。
 
 # Generation Rules
 - 只根據產品情境與 URL / User Requirements 判斷；不得新增未被資料支持的範圍。
+- 使用者審查考量若缺少 scenario 或 URL 支持，保留為後續確認方向，不要寫入 scope。
 - Scope 是專案邊界，不是需求清單；詳細功能、驗收條件、限制與風險留給後續需求條目與草稿章節處理。
 - 範圍內（in_scope）只放高層系統責任邊界，不放逐條 User Requirement；每項應代表一組能力域、流程域、資料責任或外部介接邊界。
 - in_scope 建議 3 到 7 項；不得把 URL-* 需求逐條改寫成 scope。

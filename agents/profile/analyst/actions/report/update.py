@@ -22,6 +22,8 @@ def update_report() -> str:
 - 報告 H1 標題固定使用「需求衝突報告」。
 - 每筆衝突使用 id 作為顯示編號；不要輸出 Source 欄位。
 - 不要輸出 Label 欄位，也不要輸出 Type 欄位；label/type 只供內部判斷，不放進 Markdown 報告。
+- 解決選項只顯示「選項 A：處理方式」；不要顯示 strategy、策略名稱或方法分類。
+- 建議解法不要顯示 strategy、策略名稱或方法分類；若輸入含策略名稱，改以「建議採用選項 A」或具體處理方式描述。
 - 涉及需求必須完整列出每個需求 ID 與需求內容；多需求也要逐筆列出，不省略、不留下空白段落。
 - 不要產生 Executive Summary。
 - 不要產生整體 recommendations 區塊。

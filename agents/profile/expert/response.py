@@ -22,6 +22,23 @@ class ExpertResponse:
     ) -> Dict[str, Any]:
         if not isinstance(last_result, dict) or last_result.get("error"):
             issue = observation.get("issue") if isinstance(observation.get("issue"), dict) else {}
+            full_issue = kwargs.get("issue") if isinstance(kwargs.get("issue"), dict) else {}
+            contract = (
+                full_issue.get("conflict_review_contract")
+                if isinstance(full_issue.get("conflict_review_contract"), dict)
+                else {}
+            )
+            if str(contract.get("type") or "").strip() == "pair_reviews":
+                return self.issue_response_decision(
+                    observation,
+                    done_reasoning="上一輪領域專家回應已符合格式契約，結束本次回應。",
+                    active_reasoning="pair-review 只根據 pair 原文、current_label 與會議脈絡判斷，不執行領域研究或工具查詢。",
+                    available_actions={
+                        "respond_issue": "使用時機：根據 pair 原文與目前討論輸出衝突再審查意見。不要使用：文件查詢、外部研究或 feedback 更新。寫回或影響：只產生 pair_reviews 發言，不更新 feedback。",
+                    },
+                    default_action="respond_issue",
+                    last_result=last_result,
+                )
             if issue.get("id") != "OQ" and external_research_required({"issue": issue}):
                 return {
                     "action": "done",

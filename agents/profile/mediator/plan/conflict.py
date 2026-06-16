@@ -34,6 +34,10 @@ def build_conflict_review(
 
 - participants 只能從可選參與者代號中挑選，不可包含 user。
 - participants 至少需要兩位；若某角色角度對本批項目沒有幫助，可以不安排。
+- conflict review 應依職責安排，不是讓所有 agent 都投票：
+  - analyst：需求槽位、SRS 邊界、可驗證性、是否需要合併/改寫/裁定；通常應參與。
+  - expert：只有待審項目涉及外部法規、標準、合規、安全、隱私、稽核、第三方限制、領域風險或品質底線時才安排。
+  - modeler：只有待審項目涉及流程、狀態、資料、角色互動、責任邊界、模型多重度或可共存性時才安排。
 - participants 的陣列順序即為 sequential 時的發言順序。
 - 若需逐步比對證據、修正他人判準或逐筆重判，可優先 sequential；若只需快速蒐集獨立判斷可選 simultaneous。
 """

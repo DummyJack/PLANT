@@ -13,9 +13,7 @@ from .validation import conflict_records, signoff_decisions
 from .actions.conflict.group_detection import group_detection
 from .actions.conflict.pair_detection import pair_detection
 from .actions.conflict.review import review_reason, review_signoff
-from .actions.report.create import create_report
 from .actions.report.resolution import report_resolution
-from .actions.report.update import update_report
 from .skill import conflict_skill_subset
 
 
@@ -39,8 +37,72 @@ def clean_conflict_report_markdown(markdown: Any) -> str:
         "",
         text,
     )
+    text = re.sub(
+        r"(?m)^(選項\s+[A-Z]：)(?:需求整合|條件邏輯|利害關係人協商|優先順序決策|技術方案|需求拆解|折衷方案|範圍調整|分階段處理|並行處理)。",
+        r"\1",
+        text,
+    )
+    text = re.sub(r"建議採用[「『][^」』]+[」』]策略", "建議採用選項 A", text)
+    text = re.sub(r"建議採用[^，。\s]{2,12}策略", "建議採用選項 A", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def conflict_report_markdown_from_rows(rows: List[Dict[str, Any]]) -> str:
+    def text(value: Any) -> str:
+        return str(value or "").strip()
+
+    def bullet_requirement(req: Dict[str, Any]) -> str:
+        req_id = text(req.get("id"))
+        req_text = text(req.get("text") or req.get("description"))
+        if req_id and req_text:
+            return f"- {req_id}：{req_text}"
+        if req_id:
+            return f"- {req_id}"
+        if req_text:
+            return f"- {req_text}"
+        return ""
+
+    blocks = ["# 需求衝突報告"]
+    for index, row in enumerate(rows or [], start=1):
+        if not isinstance(row, dict):
+            continue
+        conflict_id = text(row.get("id")) or f"CR-{index}"
+        title = text(row.get("title") or row.get("description")) or "需求衝突"
+        blocks.extend(["", f"## {conflict_id}：{title}"])
+
+        requirements = [
+            bullet_requirement(req)
+            for req in (row.get("requirements") or [])
+            if isinstance(req, dict)
+        ]
+        if requirements:
+            blocks.extend(["", "### 涉及需求", *[line for line in requirements if line]])
+
+        description = text(row.get("description"))
+        if description:
+            blocks.extend(["", "### 衝突描述", description])
+
+        options = []
+        for option_index, option in enumerate(row.get("resolution_options") or [], start=1):
+            if not isinstance(option, dict):
+                continue
+            option_id = text(option.get("option") or option.get("id"))
+            if option_id.isdigit():
+                option_id = chr(ord("A") + max(0, int(option_id) - 1))
+            if not option_id:
+                option_id = chr(ord("A") + option_index - 1)
+            description_text = text(option.get("description") or option.get("summary"))
+            if description_text:
+                options.append(f"選項 {option_id}：{description_text}")
+        if options:
+            blocks.extend(["", "### 解決選項", *options])
+
+        recommended = text(row.get("recommended_resolution"))
+        if recommended:
+            blocks.extend(["", "### 建議解法", recommended])
+
+    return clean_conflict_report_markdown("\n".join(blocks).strip())
 
 
 # ========
@@ -321,7 +383,6 @@ class AnalystConflicts:
                     kwargs.get("artifact") or {},
                     round_num=kwargs.get("round_num"),
                     recent_decisions_limit=kwargs.get("recent_decisions_limit"),
-                    previous_report=kwargs.get("previous_report"),
                 )
             elif action == "resolve_conflicts":
                 output = self.resolve_conflicts(kwargs.get("artifact") or {})
@@ -376,14 +437,12 @@ class AnalystConflicts:
         artifact: Dict[str, Any],
         round_num: Optional[int] = None,
         recent_decisions_limit: Optional[int] = None,
-        previous_report: Optional[str] = None,
     ) -> str:
         return self.run_conflict_analysis_loop(
             "generate_conflict_report",
             artifact=artifact,
             round_num=round_num,
             recent_decisions_limit=recent_decisions_limit,
-            previous_report=previous_report,
         )
 
     # Defines run pair conflict detection function for this module workflow.
@@ -813,9 +872,9 @@ class AnalystConflicts:
         artifact: Dict[str, Any],
         round_num: Optional[int] = None,
         recent_decisions_limit: Optional[int] = None,
-        previous_report: Optional[str] = None,
     ) -> str:
         _ = recent_decisions_limit
+        _ = round_num
         conflict_rows = artifact.get("conflict_report", []) or []
         conflict_rows = [
             row for row in conflict_rows
@@ -823,23 +882,7 @@ class AnalystConflicts:
         ]
         if not conflict_rows:
             return ""
-        context: Any = {
-            "conflict_report": conflict_rows,
-        }
-        previous_report_text = (previous_report or "").strip()
-        if previous_report_text:
-            context = {
-                "previous_conflict_report": previous_report_text,
-                "conflict_report": conflict_rows,
-            }
-            task = update_report()
-        else:
-            task = create_report()
-        try:
-            raw = self.invoke_conflict_skill(task, context=context, mode="report")
-        except Exception as e:
-            raise RuntimeError(f"conflict report 生成失敗: {e}") from e
-        out = clean_conflict_report_markdown(raw)
+        out = conflict_report_markdown_from_rows(conflict_rows)
         if not out:
             raise RuntimeError("conflict report 無內容")
         return out
@@ -900,9 +943,14 @@ class AnalystConflicts:
                     option_label = chr(ord("A") + max(0, int(raw_option) - 1))
                 else:
                     option_label = raw_option or chr(ord("A") + option_index)
+                strategy = str(option.get("strategy") or "").strip()
+                if re.fullmatch(r"[A-Za-z][A-Za-z\s/-]*", strategy):
+                    raise RuntimeError(
+                        f"conflict resolution strategy 使用舊英文格式: {conflict_id}: {strategy}"
+                    )
                 clean_option = {
                     "option": option_label,
-                    "strategy": str(option.get("strategy") or "").strip(),
+                    "strategy": strategy,
                     "description": str(option.get("description") or "").strip(),
                     "pros": [
                         str(x).strip()

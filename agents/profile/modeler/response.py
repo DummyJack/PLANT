@@ -59,13 +59,18 @@ class ModelerResponse:
                     "summary": "modeler system_modeling 缺少 artifact，無法執行建模流程",
                 }
             logger = getattr(self, "logger", None)
-            if logger is not None:
-                logger.info("=== Modeler: 系統模型 ===")
+            issue = kwargs.get("issue")
+            issue_category = str((issue or {}).get("category") or "").strip() if isinstance(issue, dict) else ""
+            modeling_phase = (
+                "post_requirement_formalization"
+                if issue_category == "formalize_requirement"
+                else "align_model_issue"
+            )
             loop_result = self.run_model_loop(
                 artifact,
                 recent_discussions=kwargs.get("previous_responses"),
-                issue=kwargs.get("issue"),
-                modeling_phase="align_model_issue",
+                issue=issue,
+                modeling_phase=modeling_phase,
             )
             trace = loop_result.get("opa_trace") if isinstance(loop_result, dict) else []
             model_changes = []
@@ -76,19 +81,22 @@ class ModelerResponse:
                 if decision_action not in {"create_model", "update_model"}:
                     continue
                 result = row.get("result") if isinstance(row.get("result"), dict) else {}
-                model_id = str(result.get("target_model_id") or "").strip()
+                if result.get("error"):
+                    continue
+                payload = result.get("result") if isinstance(result.get("result"), dict) else result
+                model_id = str(payload.get("target_model_id") or "").strip()
                 if not model_id:
                     continue
-                operation = str(result.get("operation") or "").strip()
+                operation = str(payload.get("operation") or "").strip()
                 if operation not in {"create", "update"}:
                     operation = "create" if decision_action == "create_model" else "update"
                 model_changes.append(
                     {
                         "operation": operation,
                         "id": model_id,
-                        "type": str(result.get("type") or "").strip(),
-                        "name": str(result.get("name") or "").strip(),
-                        "related_requirement_ids": result.get("related_requirement_ids") or [],
+                        "type": str(payload.get("type") or "").strip(),
+                        "name": str(payload.get("name") or "").strip(),
+                        "related_requirement_ids": payload.get("related_requirement_ids") or [],
                     }
                 )
             if logger is not None:
@@ -102,8 +110,6 @@ class ModelerResponse:
                         "Modeler: 系統模型已更新%s",
                         f"：{'、'.join(labels)}" if labels else "",
                     )
-                else:
-                    logger.info("Modeler: 系統模型無需新增或更新")
             model_action_result = {
                 "action": action,
                 "steps": [

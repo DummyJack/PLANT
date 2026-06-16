@@ -490,11 +490,13 @@ class MediatorDiscussion:
             isinstance(contract, dict)
             and str(contract.get("type") or "").strip() == "pair_reviews"
         )
-        use_artifact_tools = agent.should_use_artifact_query(
-            issue=prompt_issue,
-            related_context=final_related_context,
-            previous_responses=previous_responses,
-        )
+        use_artifact_tools = False
+        if not is_pair_review_round:
+            use_artifact_tools = agent.should_use_artifact_query(
+                issue=prompt_issue,
+                related_context=final_related_context,
+                previous_responses=previous_responses,
+            )
         response = agent.chat_for_issue_response(
             agent.build_direct_messages(user_prompt),
             include_stance=not is_answer_question and not is_elicitation and not is_pair_review_round,
@@ -643,6 +645,8 @@ class MediatorDiscussion:
             )
             record.extend(answer_records)
             oq_records.extend(answer_oq)
+            if answer_records and self.is_open_question_answer_issue(issue):
+                continue
             try:
                 response = self.collect_issue_response(
                     agent,
@@ -788,6 +792,7 @@ class MediatorDiscussion:
             list(previous_responses or []) + record,
             registry,
             issue,
+            artifact,
         ):
             answer_records, answer_oq = self.answer_questions_for_agent(
                 list(previous_responses or []) + record,
@@ -811,9 +816,15 @@ class MediatorDiscussion:
         record: List[Dict],
         registry,
         issue: Optional[Dict[str, Any]] = None,
+        artifact: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         targets: List[str] = []
-        for row in self.pending_open_questions(record, issue=issue, registry=registry):
+        for row in self.pending_open_questions(
+            record,
+            issue=issue,
+            registry=registry,
+            artifact=artifact,
+        ):
             target = str(row.get("to_agent") or "").strip()
             if target and registry and registry.get(target):
                 targets.append(target)
@@ -859,8 +870,10 @@ class MediatorDiscussion:
         *,
         issue: Optional[Dict[str, Any]] = None,
         registry=None,
+        artifact: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         answered = set()
+        answered_questions = set()
         for c in record:
             if not c.get("is_reply"):
                 continue
@@ -870,9 +883,50 @@ class MediatorDiscussion:
             answer_agent = str(c.get("agent") or "").strip()
             if question and from_agent and answer_agent:
                 answered.add((from_agent, answer_agent, question))
+                answered_questions.add(question)
 
         pending: List[Dict] = []
         seen = set()
+        if self.is_open_question_answer_issue(issue) and isinstance(artifact, dict):
+            source_ids = self.open_question_source_ids(issue)
+            for row in artifact.get("open_questions") or []:
+                if not isinstance(row, dict):
+                    continue
+                qid = str(row.get("id") or "").strip()
+                if source_ids and qid not in source_ids:
+                    continue
+                question = str(row.get("question") or "").strip()
+                if not question:
+                    continue
+                if str(row.get("status") or "").strip().lower() == "answered":
+                    continue
+                if question in answered_questions:
+                    continue
+                from_agent = str(row.get("from_agent") or "mediator").strip() or "mediator"
+                to_agent, target_stakeholders = self.normalize_open_question_target(
+                    row.get("to") or row.get("to_agent"),
+                    issue=issue,
+                    registry=registry,
+                )
+                if not to_agent or to_agent == from_agent:
+                    continue
+                key = (from_agent, to_agent, question)
+                if key in seen or key in answered:
+                    continue
+                seen.add(key)
+                pending_row = {
+                    "id": qid,
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "question": question,
+                }
+                reason = str(row.get("reason") or "").strip()
+                if reason:
+                    pending_row["reason"] = reason
+                if target_stakeholders:
+                    pending_row["target_stakeholders"] = target_stakeholders
+                    pending_row["to_stakeholder"] = target_stakeholders[0]
+                pending.append(pending_row)
         for c in record:
             if c.get("is_reply"):
                 continue
@@ -917,9 +971,10 @@ class MediatorDiscussion:
         *,
         issue: Optional[Dict[str, Any]] = None,
         registry=None,
+        artifact: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         return [
-            q for q in self.pending_open_questions(record, issue=issue, registry=registry)
+            q for q in self.pending_open_questions(record, issue=issue, registry=registry, artifact=artifact)
             if q.get("to_agent") == to_agent_name
         ]
 
@@ -935,7 +990,7 @@ class MediatorDiscussion:
         added: List[Dict] = []
         oq_records: List[Dict] = []
         current_record = list(record)
-        for agent_name in self.pending_question_targets(current_record, registry, issue):
+        for agent_name in self.pending_question_targets(current_record, registry, issue, artifact):
             answer_records, answer_oq = self.answer_questions_for_agent(
                 current_record,
                 agent_name,
@@ -962,7 +1017,13 @@ class MediatorDiscussion:
         issue: Optional[Dict[str, Any]] = None,
         related_context: Optional[Dict[str, Any]] = None,
     ) -> tuple:
-        questions = self.get_questions_to_agent(record, agent_name, issue=issue, registry=registry)
+        questions = self.get_questions_to_agent(
+            record,
+            agent_name,
+            issue=issue,
+            registry=registry,
+            artifact=artifact,
+        )
         if not questions:
             return ([], [])
         target_agent = registry.get(agent_name) if registry else None
@@ -998,7 +1059,7 @@ class MediatorDiscussion:
                 resp = dict(resp)
                 resp["reply_to_question"] = q_record["question"]
                 resp["reply_to_agent"] = q_record["from_agent"]
-                answer_text = resp.get("text", "")
+                answer = resp.get("text", "")
                 entry = {
                     "agent": agent_name,
                     "round_index": (issue or {}).get("discussion_round_index"),
@@ -1007,7 +1068,34 @@ class MediatorDiscussion:
                 }
                 added.append(entry)
                 current_record.append(entry)
-                oq_records.append({**q_record, "status": "answered", "answer_text": answer_text})
+                oq_records.append({**q_record, "status": "answered", "answer": answer})
             except Exception as e:
                 raise RuntimeError("open question 回答失敗") from e
         return (added, oq_records)
+
+    @staticmethod
+    # Defines is open question answer issue function for this module workflow.
+    def is_open_question_answer_issue(issue: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(issue, dict):
+            return False
+        issue_id = str(issue.get("id") or "").strip()
+        focus = str(issue.get("issue_focus") or "").strip()
+        return issue_id == "OQ" or issue_id.startswith("OQ-") or focus == "open_question_answer"
+
+    @staticmethod
+    # Defines open question source ids function for this module workflow.
+    def open_question_source_ids(issue: Optional[Dict[str, Any]]) -> set[str]:
+        if not isinstance(issue, dict):
+            return set()
+        ids: set[str] = set()
+        for source in issue.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            artifact = str(source.get("artifact") or "").strip()
+            if artifact != "open_questions":
+                continue
+            for item in source.get("ids") or []:
+                value = str(item or "").strip()
+                if value:
+                    ids.add(value)
+        return ids

@@ -22,6 +22,10 @@ class AnalystScope:
                 context["scenario"] = str(rough_idea or "").strip()
             if artifact.get("scope"):
                 context["current_scope"] = artifact["scope"]
+            if artifact.get("scope_review_feedback"):
+                consideration = str(artifact["scope_review_feedback"] or "").strip()
+                context["scope_consideration"] = consideration
+                context["human_decision"] = consideration
             req_pool = requirement_discussion_pool(artifact)
             if req_pool:
                 context["URL"] = req_pool

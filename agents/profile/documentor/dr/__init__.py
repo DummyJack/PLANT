@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List
 
 from agents.profile.documentor.actions.dr import design_rationale
+from storage.artifact import ensure_trace_req
 from utils.topology import (
     inject_trace_topologies,
     render_trace_topology_assets,
@@ -50,6 +51,8 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             "# Trace Repair Proposal\n"
             "你是 trace repair agent。請只根據 trace_repair_tasks 提出可驗證的修補 proposal。\n"
             "不得新增不存在的 evidence id，不得把低信心推測當成正式 trace。\n"
+            "edge_label 只能依 repair_type 使用 runtime 允許值；不要自創長句、同義詞或說明文字。\n"
+            "connect_statement_to_url / identify_url_source 只能用「整理」；connect_resolve_to_formalize_meeting 只能用「正式化」；identify_conflict_resolution_meeting 只能用「解決」；connect_feedback_to_formalize_meeting、connect_model_to_formalize_meeting、identify_formalization_meeting 必須用空字串。\n"
             "只輸出 JSON，不要 Markdown。\n\n"
             "# Output JSON\n"
             "{\n"
@@ -59,7 +62,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             '      "repair_type": "connect_statement_to_url | connect_feedback_to_formalize_meeting | connect_model_to_formalize_meeting | connect_resolve_to_formalize_meeting | identify_url_source | identify_conflict_resolution_meeting | identify_formalization_meeting",\n'
             '      "candidate_from": "existing evidence id or empty",\n'
             '      "candidate_to": "existing evidence id or empty",\n'
-            '      "edge_label": "整理 | 解決 | 正式化 | empty string",\n'
+            '      "edge_label": "整理 | 解決 | 正式化 | empty string; must match repair_type",\n'
             '      "reason": "why this repair follows the task",\n'
             '      "confidence": "high | medium | low"\n'
             "    }\n"
@@ -142,6 +145,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
 
     def generate_dr(self, artifact: Dict[str, Any]) -> str:
         artifact_for_dr = dict(artifact or {})
+        ensure_trace_req(artifact_for_dr)
         versioned_conflicts = self.versioned_conflict_report_rows()
         if versioned_conflicts:
             conflict_state = dict(artifact_for_dr.get("conflict") or {})

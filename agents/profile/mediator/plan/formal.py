@@ -57,7 +57,8 @@ def select_issues(
 - 本輪 round={round_num}，is_last_round={str(is_last_round).lower()}，max_issues={max_items}，already_discussed_artifact_ids={json.dumps(skip_artifact_ids, ensure_ascii=False)}。
 - 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。
 - proposal 是候選訊號；Mediator 負責合併、淘汰、排序與定題。
-- proposed_by="human" 是人工加入議題，最高優先；只要未超過 max_issues，不得被 agent 議題擠掉。
+- proposed_by="human" 是人工加入議題；只要格式有效且數量未超過 max_issues，必須納入本輪 issues，不得直接 discarded、不得只放 backlog，也不得被一般 agent 議題擠掉。
+- human 議題不必固定排第一；Mediator 應依 blocking 程度、依賴順序、衝突風險、SRS 定稿影響安排討論順序。若 human 議題依賴其他議題的結論，可排在相關前置議題之後。
 - proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
 - proposal.issue_level 分為 blocking / improvement：
   - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或合規底線，優先進 issues。
@@ -787,8 +788,6 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
 
         # Defines proposal priority function for this module workflow.
         def proposal_priority(row: Dict[str, Any]) -> int:
-            if str((row or {}).get("proposed_by") or "").strip().lower() == "human":
-                return -100
             issue_level = str((row or {}).get("issue_level") or "").strip()
             focus = str((row or {}).get("issue_focus") or "").strip()
             category = str((row or {}).get("category") or "").strip()
@@ -797,12 +796,13 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 for key in ("title", "expect_outcome", "reason")
             )
             level_rank = 0 if issue_level == "blocking" else 10
+            human_bias = -1 if str((row or {}).get("proposed_by") or "").strip().lower() == "human" else 0
             if (
                 focus == "open_question_answer"
                 or category == "clarify_requirement"
                 and "OQ-" in title_reason
             ):
-                return level_rank + 0
+                return level_rank + 0 + human_bias
             if (
                 focus == "requirement_completeness"
                 or "Requirement Completeness" in title_reason
@@ -811,16 +811,16 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 or "validation" in title_reason
                 or "metric" in title_reason
             ):
-                return level_rank + 1
+                return level_rank + 1 + human_bias
             if focus == "boundary_responsibility" or category == "define_boundary":
-                return level_rank + 2
+                return level_rank + 2 + human_bias
             if focus == "tradeoff" or category == "tradeoff":
-                return level_rank + 3
+                return level_rank + 3 + human_bias
             if focus == "model_alignment" or category == "align_model":
-                return level_rank + 4
+                return level_rank + 4 + human_bias
             if focus == "new_requirement":
-                return level_rank + 5
-            return level_rank + 5
+                return level_rank + 5 + human_bias
+            return level_rank + 5 + human_bias
 
         # Defines proposal type key function for this module workflow.
         def proposal_type_key(row: Dict[str, Any]) -> str:
@@ -874,11 +874,99 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
             if not isinstance(triage, dict):
                 raise RuntimeError("Issue triage must return a JSON object")
 
+        human_proposals = [
+            row for row in proposals
+            if isinstance(row, dict)
+            and str(row.get("proposed_by") or "").strip().lower() == "human"
+        ]
+
+        def is_human_proposal(row: Dict[str, Any]) -> bool:
+            return str((row or {}).get("proposed_by") or "").strip().lower() == "human"
+
+        def issue_rows() -> List[Dict[str, Any]]:
+            return [row for row in (triage.get("issues") or []) if isinstance(row, dict)]
+
+        def displace_lowest_priority_non_human() -> None:
+            issues = issue_rows()
+            if len(issues) < max_items:
+                return
+            candidates = [
+                row for row in issues
+                if not is_human_proposal(row)
+            ]
+            if not candidates:
+                return
+            displaced = max(
+                candidates,
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
+            triage["issues"] = [
+                row for row in issues
+                if not self.same_issue_proposal(row, displaced)
+            ]
+            triage.setdefault("backlog", []).append(displaced)
+
+        for human in human_proposals:
+            already_in_issues = any(
+                self.same_issue_proposal(human, row)
+                for row in issue_rows()
+                if isinstance(row, dict)
+            )
+            if not already_in_issues:
+                displace_lowest_priority_non_human()
+                triage.setdefault("issues", []).append(human)
+            triage["discarded"] = [
+                row for row in (triage.get("discarded") or [])
+                if not (isinstance(row, dict) and self.same_issue_proposal(human, row))
+            ]
+            triage["backlog"] = [
+                row for row in (triage.get("backlog") or [])
+                if not (isinstance(row, dict) and self.same_issue_proposal(human, row))
+            ]
+
         selected_proposals = sorted(
             [p for p in (triage.get("issues") or []) if isinstance(p, dict)],
             key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
         )
         selected_proposals = diversify_selected_proposals(selected_proposals, max_items)
+        for human in human_proposals:
+            if any(self.same_issue_proposal(human, row) for row in selected_proposals):
+                continue
+            replaceable = [
+                row for row in selected_proposals
+                if not is_human_proposal(row)
+            ]
+            if replaceable:
+                displaced = max(
+                    replaceable,
+                    key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+                )
+                selected_proposals = [
+                    row for row in selected_proposals
+                    if not self.same_issue_proposal(row, displaced)
+                ]
+                triage.setdefault("backlog", []).append(displaced)
+            selected_proposals.append(human)
+            selected_proposals = sorted(
+                selected_proposals,
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
+            while len(selected_proposals) > max_items:
+                overflow_candidates = [
+                    row for row in selected_proposals
+                    if not is_human_proposal(row)
+                ]
+                if not overflow_candidates:
+                    break
+                displaced = max(
+                    overflow_candidates,
+                    key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+                )
+                selected_proposals = [
+                    row for row in selected_proposals
+                    if not self.same_issue_proposal(row, displaced)
+                ]
+                triage.setdefault("backlog", []).append(displaced)
         if not selected_proposals and triage.get("backlog"):
             backlog_candidates = [
                 row for row in (triage.get("backlog") or [])
@@ -1274,7 +1362,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
             qid = str(q.get("id") or "").strip()
             if qid not in requested_oq_ids and not self.should_add_open_question_issue(q):
                 continue
-            to_agent = (q.get("to") or q.get("to_agent") or "").strip()
+            to_agent = (q.get("to") or "").strip()
             if to_agent in registered:
                 related_agents.add(to_agent)
                 expected_actions.setdefault(to_agent, [])

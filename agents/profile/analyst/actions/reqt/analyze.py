@@ -21,9 +21,13 @@ def analyze_requirement(**context: Any) -> str:
 - stakeholder 只用於理解說話者角色與來源追蹤。
 - existing_requirements 只用於去重，不可改寫既有需求。
 - 完整 all_text 只作為理解語境的背景，不可從其他 all_text 條目產生需求。
+- review_considerations 只作為人工審查建議、遺漏檢查角度或待確認方向；不得視為 stakeholder 已提出的原始需求。
+- 不得因 review_considerations 出現某方向，就推論所有 stakeholder 都支持該方向；只有 source_text 本身明確支持時，才可新增 requirement_candidate。
+- review_considerations 若包含 target_ids，只能用於指定 target；runtime 只會提供目前 source_text 適用的 considerations，不得把它套用到其他 source、stakeholder 或 requirement。
+- 若 review_considerations 指出可能遺漏但 source_text 未支持，回傳空陣列；該內容應留待後續 open question、正式會議或人工直接編輯處理。
 
 # Input
-- source_text、stakeholder、existing_requirements 與 all_text 由 runtime context 提供。
+- source_text、stakeholder、existing_requirements、all_text 與 review_considerations 由 runtime context 提供。
 
 # Generation Rules
 {extraction_rules}

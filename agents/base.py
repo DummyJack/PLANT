@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from agents.profile.loop import AgentLoop
 from agents.meeting.issue import IssueResponseSupport
 from agents.skills.base import SkillSupport
+from server.services.run_checkpoint import record_run_checkpoint
 from storage.artifact import save_artifact as save_split_artifact
 from utils.language import current_output_language
 
@@ -533,6 +534,35 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
         self.policy = None
         self.project_config: Dict[str, Any] = dict(project_config or {})
         self.logger = logging.getLogger(f"Plant.{self.__class__.__name__}")
+        self.runtime_store = None
+        self.runtime_run_id = ""
+
+    # Defines record runtime checkpoint function for this module workflow.
+    def record_runtime_checkpoint(
+        self,
+        *,
+        stage_id: str,
+        step_id: str,
+        action: str = "",
+    ) -> None:
+        store = getattr(self, "runtime_store", None)
+        run_id = str(getattr(self, "runtime_run_id", "") or "").strip()
+        if not store or not run_id:
+            return
+        try:
+            record_run_checkpoint(
+                store,
+                run_id=run_id,
+                status="running",
+                stage_id=stage_id,
+                step_id=step_id,
+                agent=getattr(self, "name", ""),
+                action=action,
+            )
+        except Exception:
+            logger = getattr(self, "logger", None)
+            if logger:
+                logger.warning("runtime checkpoint failed", exc_info=True)
 
     # Defines parse issue response json function for this module workflow.
     def parse_issue_response_json(self, raw: str) -> Dict[str, Any]:

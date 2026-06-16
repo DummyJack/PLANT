@@ -1,7 +1,7 @@
 # Initializes package exports and module loading.
-from utils.clean import disable_pycache
+from setup import apply_runtime_setup
 
-disable_pycache()
+apply_runtime_setup()
 
 from agents.base import BaseAgent
 from agents.base import AgentRegistry

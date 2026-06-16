@@ -942,6 +942,7 @@ class MeetingRunner:
             if isinstance(row, dict)
         ]
         answered: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+        answered_by_id: Dict[str, Dict[str, Any]] = {}
         for row in question_records or []:
             key = (
                 str(row.get("from_agent") or "").strip(),
@@ -950,11 +951,32 @@ class MeetingRunner:
             )
             if key[2]:
                 answered[key] = row
+            row_id = str(row.get("id") or "").strip()
+            if row_id:
+                answered_by_id[row_id] = row
+        for row in existing:
+            row_id = str(row.get("id") or "").strip()
+            key = (
+                str(row.get("from_agent") or "").strip(),
+                str(row.get("to_agent") or row.get("to") or "").strip(),
+                str(row.get("question") or "").strip(),
+            )
+            answer = answered_by_id.get(row_id) or answered.get(key)
+            if not answer:
+                continue
+            row["status"] = "answered"
+            row["answer"] = str(answer.get("answer") or "").strip()
+            answered_by = str(answer.get("to_agent") or "").strip()
+            if answered_by:
+                row["answered_by"] = answered_by
+            answered_in = str(issue.get("meeting_id") or issue.get("id") or "").strip()
+            if answered_in:
+                row["answered_in"] = answered_in
         next_num = len(existing) + 1
         seen = {
             (
                 str(row.get("from_agent") or "").strip(),
-                str(row.get("to_agent") or row.get("owner") or "").strip(),
+                str(row.get("to_agent") or row.get("to") or "").strip(),
                 str(row.get("question") or "").strip(),
             )
             for row in existing
@@ -991,7 +1013,6 @@ class MeetingRunner:
                     "reason": str(q.get("reason") or "").strip(),
                     "from_agent": from_agent,
                     "to_agent": to_agent,
-                    "owner": to_agent,
                     "status": "open",
                     "answer": "",
                     "related_source": [
@@ -1828,6 +1849,13 @@ class MeetingRunner:
             for model in self.artifact.get("system_models", []) or []:
                 if isinstance(model, dict) and meeting_id:
                     model["source"] = meeting_id
+                    source_ids = [
+                        str(value).strip()
+                        for value in (model.get("source_ids") or [])
+                        if str(value).strip()
+                    ]
+                    source_ids.append(meeting_id)
+                    model["source_ids"] = list(dict.fromkeys(source_ids))
             self.append_requirement_review_model_record(
                 issue,
                 loop_result if isinstance(loop_result, dict) else {},
@@ -2488,17 +2516,23 @@ class MeetingRunner:
         for idx_opt, opt in enumerate(status_resolution.get("options") or [], start=1):
             if not isinstance(opt, dict):
                 continue
+            option_id = str(opt.get("option_id") or opt.get("id") or "").strip().upper()
+            if not option_id or option_id.isdigit():
+                option_id = chr(64 + idx_opt) if 1 <= idx_opt <= 26 else str(idx_opt)
             best_options.append(
                 {
-                    "id": idx_opt,
+                    "id": option_id,
+                    "option_id": option_id,
                     "title": opt.get("summary") or opt.get("title") or "",
-                    "description": opt.get("description") or opt.get("summary") or "",
+                    "description": opt.get("description") or "",
+                    "rationale": opt.get("rationale") or "",
                     "source": "judgment",
                 }
             )
         options = {
             "best_options": best_options,
             "compromise": status_resolution.get("mediator_compromise", {}) or {},
+            "recommendation": status_resolution.get("recommendation", {}) or {},
         }
 
         display_issue = dict(issue)

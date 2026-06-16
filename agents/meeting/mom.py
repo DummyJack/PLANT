@@ -151,17 +151,6 @@ def build_conflict_rows(
                     "recommended_resolution": option.get("recommended_resolution") or "",
                 }
             )
-        elif option.get("kind") == "conflict_markdown":
-            markdown = str(option.get("markdown") or "")
-            match = re.search(r"(?m)^####\s+(CR-\d+)(?:[：:]\s*(.*))?$", markdown)
-            if match:
-                rows.append(
-                    {
-                        "id": match.group(1).strip(),
-                        "title": str(match.group(2) or "").strip(),
-                        "markdown": markdown[:1800],
-                    }
-                )
     if not rows:
         affected_ids = [
             str(value).strip()
@@ -179,6 +168,64 @@ def sanitize_conflict_discussion_groups(
     if not isinstance(data, dict):
         return []
     known_ids = {str(row.get("id") or "").strip() for row in conflict_rows if str(row.get("id") or "").strip()}
+    title_by_id = {
+        str(row.get("id") or "").strip(): clean_repeated_text(row.get("title", ""))[:100].rstrip()
+        for row in conflict_rows
+        if str(row.get("id") or "").strip()
+    }
+
+    option_details: Dict[str, str] = {}
+    for conflict in conflict_rows or []:
+        if not isinstance(conflict, dict):
+            continue
+        for option_index, option in enumerate(conflict.get("options") or []):
+            if not isinstance(option, dict):
+                continue
+            option_id = str(option.get("id") or option.get("option") or "").strip()
+            label = option_display_label(option_id, option_index)
+            detail = clean_repeated_text(option.get("summary") or option.get("description") or option.get("title") or "")
+            if label and detail:
+                option_details[label] = detail
+
+    def expand_option_mentions(value: Any) -> str:
+        text = clean_repeated_text(value)
+        if not text:
+            return ""
+        for label, detail in option_details.items():
+            raw_label = label.replace("選項 ", "").strip()
+            if not raw_label:
+                continue
+            if not detail or detail in text:
+                continue
+            replacement = f"{label}：{detail}"
+            next_text = re.sub(
+                rf"(採用|選擇|建議採用|決議採用)(選項|方案)?\s*{re.escape(raw_label)}(?![A-Za-z])",
+                rf"\1{replacement}",
+                text,
+                count=1,
+            )
+            if next_text != text:
+                text = next_text
+                continue
+            next_text = re.sub(
+                rf"(選項|方案)\s*{re.escape(raw_label)}(?![A-Za-z])",
+                replacement,
+                text,
+                count=1,
+            )
+            if next_text != text:
+                text = next_text
+                continue
+            text = re.sub(
+                rf"(?<![A-Za-z]){re.escape(raw_label)}(?![A-Za-z])",
+                replacement,
+                text,
+                count=1,
+            )
+        text = re.sub(r"。{2,}", "。", text)
+        text = re.sub(r"．{2,}", "．", text)
+        return text
+
     groups: List[Dict[str, Any]] = []
     for row in data.get("discussion_groups") or []:
         if not isinstance(row, dict):
@@ -191,14 +238,15 @@ def sanitize_conflict_discussion_groups(
             if not isinstance(turn, dict):
                 continue
             speaker = str(turn.get("speaker") or "").strip()
-            text = clean_repeated_text(turn.get("text", ""))
+            text = expand_option_mentions(turn.get("text", ""))
             if speaker and text and len(text) >= 8:
                 turns.append({"speaker": speaker, "text": text[:700].rstrip()})
         if turns:
+            title = clean_repeated_text(row.get("title", ""))[:100].rstrip()
             groups.append(
                 {
                     "conflict_id": conflict_id,
-                    "title": clean_repeated_text(row.get("title", ""))[:100].rstrip(),
+                    "title": title or title_by_id.get(conflict_id, ""),
                     "turns": turns[:8],
                 }
             )
@@ -207,11 +255,11 @@ def sanitize_conflict_discussion_groups(
         if not isinstance(turn, dict):
             continue
         speaker = str(turn.get("speaker") or "").strip()
-        text = clean_repeated_text(turn.get("text", ""))
+        text = expand_option_mentions(turn.get("text", ""))
         if speaker and text and len(text) >= 8:
             overall_turns.append({"speaker": speaker, "text": text[:700].rstrip()})
     if overall_turns:
-        groups.append({"conflict_id": "整體討論", "title": "", "turns": overall_turns[:8]})
+        groups.append({"conflict_id": "總結", "title": "", "turns": overall_turns[:8]})
     return groups
 
 
@@ -220,8 +268,10 @@ def render_discussion_groups(groups: List[Dict[str, Any]]) -> str:
     for group in groups:
         conflict_id = str(group.get("conflict_id") or "").strip()
         title = str(group.get("title") or "").strip()
-        heading = conflict_id or "整體討論"
-        if title and heading != "整體討論":
+        heading = conflict_id or "總結"
+        if heading == "整體討論":
+            heading = "總結"
+        if title and heading != "總結":
             heading += f"：{title}"
         block = [f"### {heading}", ""]
         for turn in group.get("turns") or []:
@@ -230,7 +280,10 @@ def render_discussion_groups(groups: List[Dict[str, Any]]) -> str:
             speaker = str(turn.get("speaker") or "").strip() or "Agent"
             text = str(turn.get("text") or "").strip()
             if text:
-                block.extend([f"#### {speaker}", "", text, ""])
+                if heading == "總結" and speaker == "總結":
+                    block.extend([text, ""])
+                else:
+                    block.extend([f"#### {speaker}", "", text, ""])
         blocks.append("\n".join(block).rstrip())
     return "\n\n".join(blocks).strip()
 
@@ -264,7 +317,7 @@ def write_conflict_discussion_groups(
         return []
 
     prompt = """# 任務
-你要把需求衝突解決會議的原始發言，重組成以 CR 為單位的 MoM 討論紀錄。
+你要把需求衝突解決會議的原始發言，重組成以 CR 為單位的 MoM 討論紀錄；無法歸到單一 CR 的內容要改寫成「總結」。
 
 # 邊界
 - 只能拆分、摘要或改寫 context 中已有的發言，不可新增觀點。
@@ -273,6 +326,9 @@ def write_conflict_discussion_groups(
 - 如果 speaker 沒有明確談到該 CR，不要硬補。
 - 如果一段發言同時提到多個 CR，可以拆到多個 CR。
 - 如果無法判斷屬於哪個 CR，放到 overall_turns，不要亂塞。
+- overall_turns 是總結，不是逐字討論；speaker 可用「總結」，text 應像正式會議總結，摘要整體討論重點、已確認差異與決議方向。
+- 若總結提到選項 A/B/C，必須把選項內容自然寫進句子中，例如「採用選項 A：完整顯示配送費率與預估里程」，不可只寫 A/B/C。
+- 每個 discussion_groups item 的 conflict_id 必須使用 context.conflicts 中的 CR-N；若該 CR 有 title，title 必須保留。
 - 不要把 human decision 或最終裁決寫進討論紀錄；裁決留給 MoM 決議區。
 - speaker 必須沿用原始 speaker，例如 Analyst、Expert、Modeler、User。
 - 使用繁體中文。
@@ -289,7 +345,7 @@ def write_conflict_discussion_groups(
     }
   ],
   "overall_turns": [
-    {"speaker": "Analyst", "text": "無法歸到單一 CR 的整體觀點"}
+    {"speaker": "總結", "text": "整體摘要與決議方向；若提到選項 A，需寫出選項 A 的內容"}
   ]
 }"""
     context = {

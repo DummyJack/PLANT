@@ -285,6 +285,7 @@ class IssueResponseSupport:
             "requirement title repair failed",
             "non-functional field repair failed",
             "mixed requirement",
+            "需求正式化來源追蹤仍未完成",
         )
         return any(marker in error for marker in local_repair_failures)
 

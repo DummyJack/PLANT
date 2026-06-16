@@ -58,7 +58,8 @@ def requirement_context_rules() -> str:
 - current_URL 是最新 User Requirements，也是正式 REQ 的主要來源。
 - current_REQ 是既有正式需求；仍有效的 REQ 必須保留 id，只更新受來源或本議題決議影響的欄位。
 - scope 只用來判斷需求是否屬於本系統範圍，不直接轉成 REQ。
-- feedback 只作為領域背景、限制候選、風險與建議；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- feedback 只作為領域背景、限制候選、風險與建議考量；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- feedback.recommendations 是建議考量，不是已確認需求、stakeholder statement 或實作指令；只有 current_URL、明確會議決議或人工直接編輯支持時，才可反映到 REQ。
 - system_models 只作為流程、actor、資料、狀態與邊界參考；不能單獨創造 stakeholder 未支持的新需求。
 - discussion 只使用明確表態、已回答問題、已收斂或人類裁決的內容。
 - req_source_index 提供 source_id 到既有 REQ-* 的索引；請直接引用，不要逐筆 artifact_query 比對。"""
@@ -107,6 +108,8 @@ def requirement_quality_rules() -> str:
 - 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
 - 若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；不是因 URL 筆數拆分。
 - 若品質或限制只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- 若多個來源使用相同名詞、資料物件或功能名稱，但系統責任、業務目的、觸發情境、受影響角色或完成邊界不同，應拆成不同 REQ；不得只因共同名詞而合併成泛化 description。
+- 若多個來源描述的是相同系統責任、相同業務目的、相同主要角色與相同可驗收結果，即使措辭不同，也應合併或更新同一筆 REQ；不得因來源句數不同而機械式拆成多筆。
 - 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional，不要只因為它是 NFR 就留待會議。
 - NFR 只有在 metric、validation、適用範圍或 FR/NFR priority 需要決策，或會造成品質/成本/設計/模型取捨時，才放入 open_questions、risks 或正式會議處理。
 - title 是 brief description：用短詞概括需求核心，不寫完整句；title 應命名系統能力、限制、品質屬性或政策本體，不用利害關係人角色作為開頭。
@@ -116,6 +119,9 @@ def requirement_quality_rules() -> str:
 - description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
 - description 必須寫成可直接放入 SRS 的完整需求敘述；不得只寫功能名稱、短摘要、會議結論或「系統應提供...功能」這類空泛句。
 - description 應在一段文字中交代：適用情境或觸發條件、主要使用者或受影響角色、系統責任、必要資訊或處理內容，以及可驗證的完成邊界。若某項沒有來源支持，省略該項，不得臆測。
+- description 應在來源支持範圍內盡可能具體完整；不得為了增加細節而加入來源未支持的功能、流程、資料欄位、角色、權限、例外處理或驗收條件。
+- description 說明系統責任與完成結果；具體可測試條件、輸入輸出檢查、狀態驗證、錯誤處理驗收方式應放入 acceptance_criteria，不要全部塞進 description。
+- 若來源暗示某細節但不足以正式寫入 description，應將該細節寫入 assumptions、risks 或 open_questions，而不是在 description 中用模糊語氣包裝。
 - functional description 應清楚描述系統在什麼情境下為誰完成什麼業務結果；例外處理、通知內容、資料揭露、狀態更新或權限邊界若有來源支持，應寫入同一段 description 或 acceptance_criteria。
 - non-functional description 應清楚描述品質屬性、適用範圍與限制對象；可量測條件放入 metric，可執行驗證方式放入 validation，不要混在 description 中重複。
 - constraint description 應清楚描述不可違反的政策、法規、資料邊界或系統限制；不寫 priority，也不要改寫成功能需求。
@@ -201,8 +207,21 @@ def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> st
 # ========
 # Defines conflict detection base task function for this module workflow.
 # ========
+analyst_conflict_calibration_rules = """# Analyst 衝突校準
+- 同一需求槽位中，若 UI 呈現形式或輸出載體不同（例如方框、訊息、清單、通知），且會改變 SRS 寫法、驗收方式或完成邊界，標為 Conflict。
+- 同一系統責任中，若類別、集合或適用範圍不同（例如 standard / non-standard、子集 / 超集、全部 / 特定項目），且會改變必須支援的邊界，標為 Conflict。
+- 同一需求槽位中，若品質、時效或量化門檻不同（例如 real-time / general、20% / general improvement），且會改變驗收門檻，標為 Conflict。
+- 同一需求槽位中，若規範強度或允許邊界不同（例如 shall / must、allow / only allow），標為 Conflict。
+- 同一能力中，若個人化程度不同（例如 personalized / semi-personalized），且會改變系統應支援的行為邊界，標為 Conflict。
+- 同一權限或繼承關係中，若授權、繼承或適用層級範圍不同（例如 higher level / other levels），標為 Conflict。
+- 避免誤判：唯一性與非唯一性若只是互補條件分支，且可在同一規則下共存，標為 Neutral。
+- 避免誤判：pilot 與 general 若未明確落在相同部署範圍或同一驗收邊界，不要直接判 Conflict。
+- 避免誤判：階層結構與成員數量限制若不是同一模型約束，不要直接判 Conflict。
+- 避免誤判：個人化能力與最小化客製化原則可作為能力與政策並存時，標為 Neutral。"""
+
+
 def conflict_detection_base_task() -> str:
-    return """# 任務
+    return f"""# 任務
 僅根據輸入的 User Requirements 判斷 Conflict / Neutral；本步不看系統模型或其他回饋。
 
 # Action Boundary
@@ -224,7 +243,11 @@ def conflict_detection_base_task() -> str:
 - Neutral 項目只輸出 label 與 reason。
 - 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
 - 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- 先判斷是否同一需求槽位；不同槽位且可並存時標 Neutral。同一槽位內若限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界不同，且需要合併、改寫、刪除或人工裁定，標為 Conflict。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，標為 Conflict；若只是可無損合併的同義重複或不同上下文/流程階段，標為 Neutral。
 - 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
+
+{analyst_conflict_calibration_rules}
 
 # 輸出要求
 - 兩兩判斷：只需輸出 pair_index、label、reason；若 label 是 Conflict，再輸出 type。
@@ -284,10 +307,15 @@ conflict_task = (
 )
 conflict_rules = f"""{review_contract}
 - 先只根據 User Requirements（URL-*）原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
+- Analyst 是需求語意與 SRS 邊界的主責審查者：判斷是否同一需求槽位、是否能原樣共同放入 SRS、是否需要合併、改寫、刪除或人工裁定。
 - reason 必須寫成完整審查意見：說明獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
 {label_rules}
 {reason_rules}
 - 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
+- 審查時套用 Analyst 衝突校準：
+{analyst_conflict_calibration_rules}
 - 若只是語意模糊、範圍未明、角色不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
 - 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 以兩層判斷收斂理由：先說是否同一需求槽位，再說同槽位差異是否改變驗收邊界或需要裁定。
+- 不要代替 Expert 做外部法規/合規研究；不要代替 Modeler 做模型可共存性推論。
 - 不要跳到實作方案或最終決策。"""

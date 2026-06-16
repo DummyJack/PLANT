@@ -63,7 +63,8 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 只修正缺失欄位、欄位型別或 JSON 結構，不得改變 PlantUML 的需求語意、角色、流程、資料關係或狀態。
 - 每個 diagram model 必須包含 name、type、plantuml、description。
 - 若是 class_diagram，class 與 enum 顯示名稱可維持目前輸出語言；attribute 名稱、attribute type、association label 與 enum value 固定使用英文，PlantUML 語法關鍵字與型別標註必須保持可解析。
-- context_diagram 的 description 只用一段話說明此圖用來釐清的系統邊界、外部角色、外部系統、主要互動或責任邊界。
+- context_diagram 的 description 只用一段話說明此圖用來釐清的系統邊界、已選利害關係人、主要互動或責任邊界。
+- context_diagram 不得新增未被選擇為 stakeholders 的外部系統節點；若原圖有第三方服務、外部系統、監管/社區/金融/身分驗證服務，修復時不得把它們當成新節點補強。
 - use_case_diagram 的 description 只用一段話說明此圖用來釐清哪些 actor 與系統能力。
 - 其他 diagram 的 description 必須使用兩段固定格式：**用途**：...\n**反映需求**：...
 - related_requirement_ids 只能保留原輸出中已存在的需求 ID，不得新增不存在的 ID。

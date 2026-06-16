@@ -11,7 +11,7 @@ def domain_research_output_schema(*, wrapper: str, source_ref: str) -> str:
 {{
   "{wrapper}": {{
     "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
-    "sources": [{{"title": "電子支付機構管理條例", "url": "https://..."}}],
+    "sources": [{{"title": "電子支付機構管理條例", "url": "https://..."}}, {{"title": "參考文件.pdf", "url": "104431333156/參考文件.pdf", "type": "file"}}],
     "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
     "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}],
     "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}"}}]
@@ -93,6 +93,7 @@ def repair_action_output(
 - document_evidence 每筆必須包含 source、summary、related_requirement_ids。
 - source 要能追蹤到文件名稱、路徑或片段位置。
 - related_requirement_ids 只能是輸入資料中已存在的 URL-*；無法對應時用空陣列。
+- coverage 每筆必須包含 target_id、status、reason；status 只能是 document_supported、not_found_in_documents、document_conflict、needs_external_validation。
 - 若沒有相關文件證據，document_evidence 輸出空陣列，並在 gaps 說明缺口。
 
 輸出 JSON：
@@ -103,6 +104,13 @@ def repair_action_output(
       "section": "章節或片段位置",
       "summary": "文件證據摘要",
       "related_requirement_ids": ["URL-1"]
+    }}
+  ],
+  "coverage": [
+    {{
+      "target_id": "URL-1",
+      "status": "document_supported",
+      "reason": "文件支持、缺口、衝突或仍需外部驗證的簡短原因"
     }}
   ],
   "gaps": []
@@ -125,11 +133,12 @@ action：
 - 只修正格式與欄位，不新增原始內容沒有支持的結論。
 - findings、constraints、risks、recommendations 的每筆 item 只包含 text、related_requirement_ids、source；不要在 item 內放 sources。
 - related_requirement_ids 只能是輸入資料中已存在的 URL-*；無法對應時用空陣列。
-- sources 集中放在最外層，每筆使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}；沒有 URL 時輸出空陣列。
+- sources 集中放在最外層；web 來源使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}，專案引用文件使用 {{"title": "檔名", "url": "專案文件路徑", "type": "file"}}。
 - title 使用人可讀的法規、標準、官方文件、組織文章或案例名稱。
 - sources 只接受可信來源：政府/主管機關、法規資料庫、標準組織、學術/研究機構、消費者保護組織，或官方公司條款/隱私/安全/合規文件。
 - 不引用部落格、社群媒體、論壇、新聞稿、行銷文章、一般心得文或內容農場。
-- 若輸出任何外部法規、標準、官方文件、第三方條款或最佳實務，sources 必須至少包含對應完整 URL；找不到 URL 時移除該外部結論。
+- 若結論來自網路研究，外部法規、標準、官方文件、第三方條款或最佳實務必須有完整 URL sources；找不到 URL 時移除該外部結論。
+- 若結論來自 document_evidence 的專案引用文件，sources 必須列出對應文件路徑並標記 type=file，且不得新增 document_evidence 沒有支持的外部結論。
 - constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
 - 本次新增 item.source 使用：{source_ref}
 - research_issue 必須輸出 research_evidence wrapper。

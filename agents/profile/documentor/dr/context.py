@@ -1,9 +1,10 @@
 # Builds Design Rationale evidence context and trace graphs.
+from difflib import SequenceMatcher
 import html
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from storage.markdown import markdown_to_html
 from utils.topology import normalize_dr_model_path
@@ -453,6 +454,51 @@ class DocumentorDrContext:
                         statement_id=str(row.get("id") or "").strip(),
                     )
 
+        statements_by_stakeholder: Dict[str, List[Dict[str, Any]]] = {}
+        for statement in statements:
+            stakeholder_name = str(statement.get("stakeholder") or "").strip()
+            if stakeholder_name:
+                statements_by_stakeholder.setdefault(stakeholder_name, []).append(statement)
+
+        def infer_related_statement_ids(url: Dict[str, Any], source_text: str) -> List[str]:
+            explicit_source_id = str(url.get("source_id") or "").strip()
+            explicit_related = [
+                str(item).strip()
+                for item in (url.get("related_statement_ids") or [])
+                if str(item).strip()
+            ]
+            if explicit_source_id or explicit_related:
+                return explicit_related
+            if not re.fullmatch(r"R\d+-M\d+", str(source_text or "").strip(), flags=re.IGNORECASE):
+                return []
+            stakeholder_name = cls.dr_stakeholder_name(url.get("stakeholder"))
+            candidates = statements_by_stakeholder.get(stakeholder_name) or []
+            url_text = str(url.get("text") or "").strip()
+            if not stakeholder_name or not candidates or not url_text:
+                return []
+
+            def chinese_chars(value: str) -> set[str]:
+                return {
+                    char
+                    for char in str(value or "")
+                    if "\u4e00" <= char <= "\u9fff"
+                }
+
+            url_chars = chinese_chars(url_text)
+            scored: List[tuple[float, str]] = []
+            for statement in candidates:
+                statement_id = str(statement.get("id") or "").strip()
+                statement_text = str(statement.get("text") or "").strip()
+                if not statement_id or not statement_text:
+                    continue
+                overlap = len(url_chars.intersection(chinese_chars(statement_text))) / max(1, len(url_chars))
+                sequence_ratio = SequenceMatcher(None, url_text, statement_text).ratio()
+                score = max(overlap, sequence_ratio)
+                if overlap >= 0.45 or sequence_ratio >= 0.30:
+                    scored.append((score, statement_id))
+            scored.sort(reverse=True)
+            return [statement_id for _, statement_id in scored[:1]]
+
         user_requirement_rows: List[Dict[str, Any]] = []
         for url in url_rows:
             url_id = str(url.get("id") or "").strip()
@@ -472,6 +518,8 @@ class DocumentorDrContext:
                 for item in (url.get("related_statement_ids") or [])
                 if str(item).strip()
             ]
+            if not source_id and not related_statement_ids:
+                related_statement_ids = infer_related_statement_ids(url, source_text)
             user_requirement_rows.append({
                 "id": url_id,
                 "stakeholder": cls.dr_stakeholder_name(url.get("stakeholder")),
@@ -482,8 +530,12 @@ class DocumentorDrContext:
                 "text": str(url.get("text") or "").strip(),
             })
 
+        conflict_report_rows = artifact.get("conflict_report") or []
+        conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+        if not conflict_report_rows:
+            conflict_report_rows = conflict_state.get("report") or []
         conflict_rows = []
-        for row in artifact.get("conflict_report") or []:
+        for row in conflict_report_rows:
             if not isinstance(row, dict):
                 continue
             conflict_id = str(row.get("id") or "").strip()
@@ -527,11 +579,20 @@ class DocumentorDrContext:
                     for req_id in cls.dr_related_req_ids_from_sources(related_ids, source_to_req)
                     if req_id in valid_req_ids
                 ]
+                source_ids = [
+                    str(value).strip()
+                    for value in (item.get("source_ids") or [])
+                    if str(value).strip()
+                ]
+                source = str(item.get("source") or "").strip()
+                if source:
+                    source_ids.append(source)
                 feedback_rows.append({
                     "id": f"FB-{len(feedback_rows) + 1}",
                     "type": section[:-1] if section.endswith("s") else section,
                     "related_req": list(dict.fromkeys(related_req)),
                     "related_sources": related_ids,
+                    "source_ids": list(dict.fromkeys(source_ids)),
                     "source": str(item.get("source") or "").strip(),
                     "trace_confidence": str(item.get("trace_confidence") or "").strip(),
                     "trace_reason": cls.clean_repeated_text(item.get("trace_reason")),
@@ -558,18 +619,33 @@ class DocumentorDrContext:
             if not isinstance(model, dict):
                 continue
             model_id = str(model.get("id") or "").strip()
+            related_ids = [
+                str(item).strip()
+                for item in (model.get("related_requirement_ids") or [])
+                if str(item).strip()
+            ]
             related_req = [
-                str(req_id).strip()
-                for req_id in (model.get("related_requirement_ids") or [])
-                if str(req_id).strip().startswith("REQ-")
+                req_id
+                for req_id in cls.dr_related_req_ids_from_sources(related_ids, source_to_req)
+                if req_id in valid_req_ids
             ]
             if not model_id or not related_req:
                 continue
+            source_ids = [
+                str(value).strip()
+                for value in (model.get("source_ids") or [])
+                if str(value).strip()
+            ]
+            source = str(model.get("source") or "").strip()
+            if source:
+                source_ids.append(source)
             model_rows.append({
                 "id": model_id,
                 "name": str(model.get("name") or "").strip(),
                 "type": str(model.get("type") or "").strip(),
                 "related_req": list(dict.fromkeys(related_req)),
+                "related_sources": related_ids,
+                "source_ids": list(dict.fromkeys(source_ids)),
                 "description": cls.clean_repeated_text(model.get("description")),
                 "image_path": str(model.get("image_path") or "").strip(),
                 "plantuml": str(model.get("plantuml") or "").strip(),
@@ -644,6 +720,11 @@ class DocumentorDrContext:
             "feedback_sources": feedback_sources,
             "system_models": model_rows,
             "meeting_discussions": meeting_rows,
+            "trace_req": [
+                dict(row)
+                for row in (artifact.get("trace_req") or [])
+                if isinstance(row, dict)
+            ],
         }
 
     def resolve_dr_appendix_model_images(self, appendix: Dict[str, Any]) -> None:
@@ -707,10 +788,43 @@ class DocumentorDrContext:
                 if isinstance(row, dict) and req_id in (row.get("related_req") or [])
             ]
 
+        def evidence_is_key_for_req(
+            row: Dict[str, Any],
+            req_source_ids: set[str],
+            conflict_source_ids: set[str],
+            *,
+            kind: str,
+        ) -> bool:
+            related_req_ids = {
+                str(item).strip()
+                for item in (row.get("related_req") or [])
+                if str(item).strip()
+            }
+            related_source_ids = {
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip()
+            }
+            source_ids = {
+                str(item).strip()
+                for item in (row.get("source_ids") or [])
+                if str(item).strip()
+            }
+            direct_source_ids = set(req_source_ids) | set(conflict_source_ids)
+            direct_hit = bool(related_source_ids.intersection(direct_source_ids))
+            meeting_specific = any(re.fullmatch(r"R\d+-M\d+", item, flags=re.IGNORECASE) for item in source_ids)
+            broad_evidence = len(related_req_ids) > 5 or len(related_source_ids) > 8
+            if kind == "model" and broad_evidence and not meeting_specific:
+                return False
+            if kind == "feedback" and broad_evidence and not direct_hit and not meeting_specific:
+                return False
+            return direct_hit or meeting_specific or len(related_req_ids) <= 3
+
         for req in req_rows:
             req_id = str(req.get("id") or "").strip()
             if not req_id:
                 continue
+            req_source_ids = set(cls.dr_req_sources(req))
             conflict_context_rows = [
                 {
                     "id": row.get("id"),
@@ -726,16 +840,24 @@ class DocumentorDrContext:
                 }
                 for row in related_rows("conflicts", req_id)
             ]
+            conflict_source_ids = {
+                str(item).strip()
+                for row in conflict_context_rows
+                for item in (row.get("related_user_requirements") or [])
+                if str(item).strip()
+            }
             feedback_context_rows = [
                 {
                     "id": row.get("id"),
                     "type": row.get("type"),
                     "content": row.get("content"),
                     "related_sources": row.get("related_sources"),
+                    "source_ids": row.get("source_ids"),
                     "trace_confidence": row.get("trace_confidence"),
                     "trace_reason": row.get("trace_reason"),
                 }
                 for row in related_rows("feedback", req_id)
+                if evidence_is_key_for_req(row, req_source_ids, conflict_source_ids, kind="feedback")
             ]
             model_context_rows = [
                 {
@@ -745,27 +867,34 @@ class DocumentorDrContext:
                     "description": row.get("description"),
                     "image_path": row.get("image_path"),
                     "related_req": row.get("related_req"),
+                    "related_sources": row.get("related_sources"),
+                    "source_ids": row.get("source_ids"),
                 }
                 for row in related_rows("system_models", req_id)
+                if evidence_is_key_for_req(row, req_source_ids, conflict_source_ids, kind="model")
             ]
             conflict_ids_for_req = {
                 str(row.get("id") or "").strip()
                 for row in conflict_context_rows
                 if str(row.get("id") or "").strip()
             }
-            related_meeting_rows = [
-                {
+            def meeting_context_row(row: Dict[str, Any]) -> Dict[str, Any]:
+                meeting_id = str(row.get("id") or "").strip()
+                return {
                     "id": row.get("id"),
                     "category": row.get("category"),
                     "topic": row.get("topic"),
-                    "title": cls.mom_title_from_text(mom_text_by_id.get(str(row.get("id") or "").strip(), "")),
+                    "title": cls.mom_title_from_text(mom_text_by_id.get(meeting_id, "")),
                     "participants": row.get("participants"),
                     "description": row.get("description"),
                     "decision": row.get("decision"),
                     "related_conflicts": row.get("related_conflicts"),
                     "source_ids": row.get("source_ids"),
-                    "mom_text": mom_text_by_id.get(str(row.get("id") or "").strip(), ""),
+                    "mom_text": mom_text_by_id.get(meeting_id, ""),
                 }
+
+            related_meeting_rows = [
+                meeting_context_row(row)
                 for row in appendix.get("meeting_discussions") or []
                 if isinstance(row, dict)
                 and (
@@ -779,6 +908,43 @@ class DocumentorDrContext:
                     )
                 )
             ]
+            existing_meeting_ids = {
+                str(row.get("id") or "").strip()
+                for row in related_meeting_rows
+                if str(row.get("id") or "").strip()
+            }
+            for row in appendix.get("meeting_discussions") or []:
+                if not isinstance(row, dict):
+                    continue
+                meeting_id = str(row.get("id") or "").strip()
+                required_common_ids = {"R1-M2"}
+                if conflict_context_rows:
+                    required_common_ids.add("R1-M1")
+                if meeting_id in required_common_ids and meeting_id not in existing_meeting_ids:
+                    related_meeting_rows.append(meeting_context_row(row))
+                    existing_meeting_ids.add(meeting_id)
+            if conflict_context_rows:
+                conflict_round_prefixes = {
+                    str(row.get("id") or "").strip().split("-M", 1)[0]
+                    for row in related_meeting_rows
+                    if cls.is_conflict_resolution_meeting(row)
+                    and "-M" in str(row.get("id") or "").strip()
+                }
+                for row in appendix.get("meeting_discussions") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    meeting_id = str(row.get("id") or "").strip()
+                    if (
+                        not meeting_id
+                        or meeting_id in existing_meeting_ids
+                        or not cls.is_requirement_formalization_meeting(row)
+                    ):
+                        continue
+                    meeting_round = meeting_id.split("-M", 1)[0] if "-M" in meeting_id else ""
+                    if meeting_round not in conflict_round_prefixes:
+                        continue
+                    related_meeting_rows.append(meeting_context_row(row))
+                    existing_meeting_ids.add(meeting_id)
             conflict_resolution_meetings = [
                 row for row in related_meeting_rows
                 if cls.is_conflict_resolution_meeting(row)
@@ -820,6 +986,15 @@ class DocumentorDrContext:
                     or str(row.get("id") or "").strip() in visible_source_ids
                 )
             ]
+            for row in expanded_user_requirements:
+                source_id = str(row.get("source_id") or "").strip()
+                if source_id:
+                    visible_source_ids.add(source_id)
+                visible_source_ids.update(
+                    str(item).strip()
+                    for item in (row.get("related_statement_ids") or [])
+                    if str(item).strip()
+                )
             expanded_stakeholder_statements = [
                 row
                 for row in appendix.get("stakeholder_statements") or []
@@ -834,7 +1009,14 @@ class DocumentorDrContext:
                 "title": str(req.get("title") or "").strip(),
                 "type": str(req.get("type") or "").strip(),
                 "srs_id": srs_ids.get(req_id, ""),
+                "source": req.get("source"),
                 "description": str(req.get("description") or "").strip(),
+                "acceptance_criteria": [
+                    cls.clean_repeated_text(item)
+                    for item in (req.get("acceptance_criteria") or [])
+                    if cls.clean_repeated_text(item)
+                ],
+                "metric": cls.clean_repeated_text(req.get("metric")),
                 "stakeholder_statements": [
                     {
                         "id": row.get("id"),
@@ -860,7 +1042,51 @@ class DocumentorDrContext:
                 "system_models": model_context_rows,
                 "meetings": meeting_context_rows,
             }
-            req_context["trace_graph"] = cls.build_trace_graph(req_context)
+            visible_trace_node_ids = {
+                str(row.get("id") or "").strip()
+                for section in (
+                    "stakeholder_statements",
+                    "user_requirements",
+                    "conflicts",
+                    "feedback",
+                    "system_models",
+                    "meetings",
+                )
+                for row in (req_context.get(section) or [])
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            visible_trace_node_ids.update({req_id, req_context["srs_id"]})
+            raw_trace_events = [
+                dict(row)
+                for row in (appendix.get("trace_req") or [])
+                if isinstance(row, dict)
+                and str(row.get("target_requirement_id") or "").strip()
+                in {req_id, req_context["srs_id"]}
+            ]
+            trace_events = []
+            for row in raw_trace_events:
+                from_id = str(row.get("from") or "").strip()
+                to_id = str(row.get("to") or "").strip()
+                if (
+                    (from_id.startswith(("FB-", "SM-")) and from_id not in visible_trace_node_ids)
+                    or (to_id.startswith(("FB-", "SM-")) and to_id not in visible_trace_node_ids)
+                ):
+                    continue
+                trace_events.append(row)
+            req_context["trace_events"] = trace_events
+            fallback_graph = cls.build_trace_graph(req_context)
+            trace_graph = cls.build_trace_graph_from_trace_events(
+                req_context,
+                trace_events,
+                fallback_graph=fallback_graph,
+            )
+            if (
+                trace_graph
+                and any(str(node.get("type") or "").strip() == "Meeting Discussion" for node in (fallback_graph.get("nodes") or []))
+                and not any(str(node.get("type") or "").strip() == "Meeting Discussion" for node in (trace_graph.get("nodes") or []))
+            ):
+                trace_graph = fallback_graph
+            req_context["trace_graph"] = trace_graph or fallback_graph
             req_context["trace_warnings"] = cls.validate_trace_context(req_context)
             req_context["trace_repair_tasks"] = cls.build_trace_repair_tasks(req_context)
             for warning in req_context["trace_warnings"]:
@@ -871,6 +1097,473 @@ class DocumentorDrContext:
         return sorted(req_contexts, key=cls.dr_srs_order_key)
 
     @classmethod
+    def build_trace_graph_from_trace_events(
+        cls,
+        requirement: Dict[str, Any],
+        trace_events: List[Dict[str, Any]],
+        *,
+        fallback_graph: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not trace_events:
+            return {}
+        target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        all_nodes = [
+            node for node in (fallback_graph.get("all_nodes") or fallback_graph.get("nodes") or [])
+            if isinstance(node, dict)
+        ]
+        existing_node_ids = {
+            str(node.get("id") or "").strip()
+            for node in all_nodes
+            if str(node.get("id") or "").strip()
+        }
+        synthetic_meeting_ids: set[str] = set()
+        meeting_pattern = re.compile(r"^R\d+-M\d+$", flags=re.IGNORECASE)
+        for event in trace_events:
+            for key in ("from", "to"):
+                node_id = str(event.get(key) or "").strip()
+                if meeting_pattern.fullmatch(node_id) and node_id not in existing_node_ids:
+                    synthetic_meeting_ids.add(node_id)
+        for meeting_id in sorted(synthetic_meeting_ids, key=lambda value: cls.meeting_order_key({"id": value})):
+            all_nodes.append({
+                "id": meeting_id,
+                "type": "Meeting Discussion",
+                "label": f"{meeting_id} 需求正式化",
+                "title": f"{meeting_id}：需求正式化",
+                "content": f"{meeting_id}：需求正式化",
+                "content_format": "text",
+                "column": "Meeting",
+            })
+        known_node_ids = {
+            str(node.get("id") or "").strip()
+            for node in all_nodes
+            if str(node.get("id") or "").strip()
+        }
+        node_aliases: Dict[str, str] = {}
+        for node in all_nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            for alias in node.get("grouped_ids") or []:
+                alias_id = str(alias or "").strip()
+                if alias_id:
+                    node_aliases[alias_id] = node_id
+
+        def resolve_node_id(node_id: Any) -> str:
+            clean_id = str(node_id or "").strip()
+            return node_aliases.get(clean_id, clean_id)
+
+        node_type_by_id = {
+            str(node.get("id") or "").strip(): str(node.get("type") or "").strip()
+            for node in all_nodes
+            if str(node.get("id") or "").strip()
+        }
+        url_ids = [
+            str(row.get("id") or "").strip()
+            for row in (requirement.get("user_requirements") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        ]
+        requirement_req_id = str(requirement.get("id") or "").strip()
+        shared_model_ids: set[str] = set()
+        for row in requirement.get("system_models") or []:
+            if not isinstance(row, dict):
+                continue
+            row_id = resolve_node_id(row.get("id"))
+            related_sources = [
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip()
+            ]
+            related_req_ids = [
+                str(item).strip()
+                for item in (row.get("related_req") or [])
+                if str(item).strip()
+            ]
+            direct_url_hits = list(dict.fromkeys(item for item in related_sources if item in url_ids))
+            broad_url_model = len(direct_url_hits) > 1
+            if row_id and broad_url_model:
+                shared_model_ids.add(row_id)
+                for node in all_nodes:
+                    if str(node.get("id") or "").strip() == row_id:
+                        node["column"] = "Background"
+        evidence_url_ids: Dict[str, List[str]] = {}
+        for row in requirement.get("feedback") or []:
+            if not isinstance(row, dict):
+                continue
+            row_id = resolve_node_id(row.get("id"))
+            related = [
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip() in url_ids
+            ]
+            if not related and row_id not in shared_model_ids:
+                related = list(url_ids)
+            if row_id and related:
+                evidence_url_ids[row_id] = list(dict.fromkeys(related))
+        for row in requirement.get("system_models") or []:
+            if not isinstance(row, dict):
+                continue
+            row_id = resolve_node_id(row.get("id"))
+            if row_id in shared_model_ids:
+                continue
+            related = [
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip() in url_ids
+            ]
+            if not related:
+                related = list(url_ids)
+            if row_id and related:
+                evidence_url_ids[row_id] = list(dict.fromkeys(related))
+        for row in requirement.get("conflicts") or []:
+            if not isinstance(row, dict):
+                continue
+            row_id = resolve_node_id(row.get("id"))
+            related = [
+                str(item).strip()
+                for item in (row.get("related_user_requirements") or [])
+                if str(item).strip() in url_ids
+            ]
+            if not related:
+                related = list(url_ids)
+            if row_id and related:
+                evidence_url_ids[row_id] = list(dict.fromkeys(related))
+        edges: List[Dict[str, str]] = []
+        missing_edges: List[Dict[str, str]] = []
+
+        direct_formalization_meeting_ids = sorted(
+            {
+                str(event.get("from") or "").strip()
+                for event in trace_events
+                if str(event.get("to") or "").strip() == target_id
+                and meeting_pattern.fullmatch(str(event.get("from") or "").strip())
+            },
+            key=lambda value: cls.meeting_order_key({"id": value}),
+        )
+        entry_formalization_meeting_id = direct_formalization_meeting_ids[0] if direct_formalization_meeting_ids else ""
+        terminal_meeting_id = ""
+        meeting_rows = [
+            row for row in (requirement.get("meetings") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip() in known_node_ids
+        ]
+        formalization_meeting_ids = [
+            str(row.get("id") or "").strip()
+            for row in meeting_rows
+            if cls.is_requirement_formalization_meeting(row)
+        ]
+        conflict_resolution_meeting_ids = [
+            str(row.get("id") or "").strip()
+            for row in meeting_rows
+            if cls.is_conflict_resolution_meeting(row)
+        ]
+        if direct_formalization_meeting_ids:
+            terminal_meeting_id = direct_formalization_meeting_ids[-1]
+        elif formalization_meeting_ids:
+            entry_formalization_meeting_id = formalization_meeting_ids[0]
+            terminal_meeting_id = formalization_meeting_ids[-1]
+        elif target_id in known_node_ids:
+            terminal_meeting_id = target_id
+
+        def add_visible_edge(source_id: str, target_node_id: str, event: Dict[str, Any]) -> None:
+            source_id = resolve_node_id(source_id)
+            target_node_id = resolve_node_id(target_node_id)
+            if not source_id or not target_node_id or source_id == target_node_id:
+                return
+            if source_id not in known_node_ids or target_node_id not in known_node_ids:
+                missing_edges.append({
+                    "from": source_id,
+                    "to": target_node_id,
+                    "reason": "trace_req references a node not present in DR context",
+                })
+                return
+            relation = str(event.get("edge_label") or event.get("relation") or "").strip()
+            if (
+                relation == "整理"
+                and target_node_id.startswith("URL-")
+                and node_type_by_id.get(source_id) == "Stakeholder Statement"
+            ):
+                relation = "分析"
+            edge = {
+                "from": source_id,
+                "to": target_node_id,
+                "relation": relation,
+            }
+            style = str(event.get("style") or "").strip()
+            if style:
+                edge["style"] = style
+            for index, existing in enumerate(edges):
+                if (
+                    existing.get("from") == edge["from"]
+                    and existing.get("to") == edge["to"]
+                    and str(existing.get("style") or "") == str(edge.get("style") or "")
+                ):
+                    existing_relation = str(existing.get("relation") or "").strip()
+                    if relation and not existing_relation:
+                        edges[index] = edge
+                    return
+            edges.append(edge)
+
+        explicit_req_visible_inputs: Dict[str, List[str]] = {}
+        for event in trace_events:
+            source_id = resolve_node_id(event.get("from"))
+            target_node_id = resolve_node_id(event.get("to"))
+            if not source_id or not target_node_id:
+                continue
+            if target_node_id.startswith("REQ-") and source_id in known_node_ids:
+                explicit_req_visible_inputs.setdefault(target_node_id, [])
+                if source_id not in explicit_req_visible_inputs[target_node_id]:
+                    explicit_req_visible_inputs[target_node_id].append(source_id)
+
+        req_visible_inputs: Dict[str, List[str]] = {
+            req_id: list(inputs)
+            for req_id, inputs in explicit_req_visible_inputs.items()
+        }
+
+        requirement_req_id = str(requirement.get("id") or "").strip()
+        primary_url_ids = [
+            str(item).strip()
+            for item in (requirement.get("source") or [])
+            if str(item).strip() in url_ids
+        ]
+        if not primary_url_ids and url_ids:
+            primary_url_ids = [url_ids[0]]
+        if requirement_req_id:
+            fallback_sources = [url_id for url_id in primary_url_ids if url_id in known_node_ids]
+            if fallback_sources:
+                req_visible_inputs[requirement_req_id] = list(dict.fromkeys(
+                    list(req_visible_inputs.get(requirement_req_id) or []) + fallback_sources
+                ))
+
+        for event in trace_events:
+            source_id = resolve_node_id(event.get("from"))
+            target_node_id = resolve_node_id(event.get("to"))
+            if not source_id or not target_node_id:
+                continue
+            if (
+                target_node_id == target_id
+                and source_id in direct_formalization_meeting_ids
+            ):
+                continue
+            if (
+                node_type_by_id.get(source_id) == "Conflict"
+                and node_type_by_id.get(target_node_id) == "Meeting Discussion"
+                and str(event.get("edge_label") or event.get("relation") or "").strip() == "解決"
+            ):
+                add_visible_edge(source_id, target_node_id, event)
+                continue
+            if (
+                node_type_by_id.get(source_id) in {"Conflict", "Feedback", "Feedback Group", "System Model"}
+                and node_type_by_id.get(target_node_id) == "Meeting Discussion"
+            ):
+                for url_id in evidence_url_ids.get(source_id) or []:
+                    evidence_event = dict(event)
+                    evidence_event["edge_label"] = ""
+                    evidence_event["style"] = "dashed"
+                    add_visible_edge(url_id, source_id, evidence_event)
+                continue
+            if target_node_id.startswith("REQ-"):
+                continue
+            if source_id.startswith("REQ-"):
+                if target_node_id == target_id:
+                    folded_source_ids = req_visible_inputs.get(source_id) or []
+                    folded_target_id = entry_formalization_meeting_id or terminal_meeting_id or target_id
+                    folded_event = dict(event)
+                    if folded_target_id != target_id and not str(folded_event.get("edge_label") or "").strip():
+                        folded_event["edge_label"] = "正式化"
+                else:
+                    folded_source_ids = (
+                        explicit_req_visible_inputs.get(source_id)
+                        or req_visible_inputs.get(source_id)
+                        or []
+                    )
+                    folded_target_id = target_node_id
+                    folded_event = event
+                for folded_source_id in folded_source_ids:
+                    add_visible_edge(folded_source_id, folded_target_id, folded_event)
+                continue
+            add_visible_edge(source_id, target_node_id, event)
+
+        fallback_edges = [
+            edge for edge in (fallback_graph.get("edges") or [])
+            if isinstance(edge, dict)
+        ]
+        fallback_conflict_meeting_targets: Dict[str, List[str]] = {}
+        for edge in fallback_edges:
+            source_id = resolve_node_id(edge.get("from"))
+            target_node_id = resolve_node_id(edge.get("to"))
+            if (
+                source_id
+                and target_node_id
+                and node_type_by_id.get(source_id) == "Conflict"
+                and node_type_by_id.get(target_node_id) == "Meeting Discussion"
+                and str(edge.get("relation") or edge.get("edge_label") or "").strip() == "解決"
+            ):
+                fallback_conflict_meeting_targets.setdefault(source_id, [])
+                if target_node_id not in fallback_conflict_meeting_targets[source_id]:
+                    fallback_conflict_meeting_targets[source_id].append(target_node_id)
+
+        for row in requirement.get("conflicts") or []:
+            if not isinstance(row, dict):
+                continue
+            conflict_id = resolve_node_id(row.get("id"))
+            if not conflict_id or conflict_id not in known_node_ids:
+                continue
+            for url_id in evidence_url_ids.get(conflict_id) or []:
+                add_visible_edge(url_id, conflict_id, {"edge_label": "衝突"})
+            conflict_target_ids = (
+                fallback_conflict_meeting_targets.get(conflict_id)
+                or conflict_resolution_meeting_ids
+            )
+            for conflict_target_id in conflict_target_ids:
+                add_visible_edge(conflict_id, conflict_target_id, {"edge_label": "解決"})
+
+        if direct_formalization_meeting_ids:
+            for index, meeting_id in enumerate(direct_formalization_meeting_ids):
+                if index > 0:
+                    add_visible_edge(
+                        direct_formalization_meeting_ids[index - 1],
+                        meeting_id,
+                        {"edge_label": ""},
+                    )
+            add_visible_edge(
+                direct_formalization_meeting_ids[-1],
+                target_id,
+                {"edge_label": ""},
+            )
+
+        for edge in fallback_edges:
+            source_id = str(edge.get("from") or "").strip()
+            target_node_id = str(edge.get("to") or "").strip()
+            source_type = node_type_by_id.get(source_id, "")
+            target_type = node_type_by_id.get(target_node_id, "")
+            is_source_to_url_edge = (
+                target_node_id.startswith("URL-")
+                and source_type in {"Source", "Stakeholder Statement"}
+            )
+            is_url_edge = (
+                is_source_to_url_edge
+                or target_node_id.startswith("URL-")
+                or source_id.startswith("URL-")
+            )
+            is_meeting_chain_edge = (
+                source_type == "Meeting Discussion"
+                and (
+                    target_type == "Meeting Discussion"
+                    or target_node_id == target_id
+                )
+            )
+            is_conflict_resolution_edge = (
+                source_type == "Conflict"
+                and target_type == "Meeting Discussion"
+                and str(edge.get("relation") or edge.get("edge_label") or "").strip() == "解決"
+            )
+            if is_url_edge or is_meeting_chain_edge or is_conflict_resolution_edge:
+                add_visible_edge(source_id, target_node_id, edge)
+        meeting_chain_pairs = {
+            (str(edge.get("from") or "").strip(), str(edge.get("to") or "").strip())
+            for edge in edges
+            if node_type_by_id.get(str(edge.get("from") or "").strip()) == "Meeting Discussion"
+            and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+        }
+        url_to_meeting_edges = [
+            edge for edge in edges
+            if str(edge.get("from") or "").strip().startswith("URL-")
+            and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+        ]
+        shortcut_edges = {
+            (str(edge.get("from") or "").strip(), str(edge.get("to") or "").strip())
+            for edge in url_to_meeting_edges
+            for previous in url_to_meeting_edges
+            if str(edge.get("from") or "").strip() == str(previous.get("from") or "").strip()
+            and str(edge.get("to") or "").strip() != str(previous.get("to") or "").strip()
+            and (str(previous.get("to") or "").strip(), str(edge.get("to") or "").strip()) in meeting_chain_pairs
+        }
+        if shortcut_edges:
+            edges = [
+                edge for edge in edges
+                if (
+                    str(edge.get("from") or "").strip(),
+                    str(edge.get("to") or "").strip(),
+                )
+                not in shortcut_edges
+            ]
+        conflict_ids_with_meeting_targets = {
+            str(edge.get("from") or "").strip()
+            for edge in edges
+            if node_type_by_id.get(str(edge.get("from") or "").strip()) == "Conflict"
+            and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+        }
+        if conflict_ids_with_meeting_targets:
+            edges = [
+                edge for edge in edges
+                if not (
+                    str(edge.get("from") or "").strip() in conflict_ids_with_meeting_targets
+                    and str(edge.get("to") or "").strip() == target_id
+                    and node_type_by_id.get(str(edge.get("from") or "").strip()) == "Conflict"
+                )
+            ]
+        if meeting_rows:
+            meeting_order = {
+                str(row.get("id") or "").strip(): cls.meeting_order_key(row)
+                for row in meeting_rows
+                if str(row.get("id") or "").strip()
+            }
+            has_entry_meeting = bool(conflict_resolution_meeting_ids or "R1-M1" in meeting_order)
+            if requirement.get("conflicts") or has_entry_meeting:
+                edges = [
+                    edge for edge in edges
+                    if not (
+                        str(edge.get("from") or "").strip().startswith("URL-")
+                        and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+                        and str(edge.get("relation") or "").strip() == "正式化"
+                    )
+                ]
+            edges = [
+                edge for edge in edges
+                if not (
+                    node_type_by_id.get(str(edge.get("from") or "").strip()) == "Meeting Discussion"
+                    and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+                    and str(edge.get("from") or "").strip() in meeting_order
+                    and str(edge.get("to") or "").strip() in meeting_order
+                    and meeting_order[str(edge.get("from") or "").strip()]
+                    >= meeting_order[str(edge.get("to") or "").strip()]
+                )
+            ]
+            meeting_sources_with_later_meeting = {
+                str(edge.get("from") or "").strip()
+                for edge in edges
+                if node_type_by_id.get(str(edge.get("from") or "").strip()) == "Meeting Discussion"
+                and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
+            }
+            if meeting_sources_with_later_meeting:
+                edges = [
+                    edge for edge in edges
+                    if not (
+                        str(edge.get("from") or "").strip() in meeting_sources_with_later_meeting
+                        and str(edge.get("to") or "").strip() == target_id
+                    )
+                ]
+        if not edges:
+            return {}
+        graph = cls.visible_trace_graph(
+            all_nodes=all_nodes,
+            edges=edges,
+            target_id=target_id,
+        )
+        visible_ids = {
+            str(node.get("id") or "").strip()
+            for node in (graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+        if target_id not in visible_ids or len(visible_ids) <= 1:
+            return {}
+        if missing_edges:
+            requirement["trace_event_warnings"] = missing_edges
+        graph["source"] = "trace_req"
+        return graph
+
+    @classmethod
     def validate_trace_context(cls, requirement: Dict[str, Any]) -> List[str]:
         req_id = str(requirement.get("id") or "").strip()
         srs_id = str(requirement.get("srs_id") or req_id).strip()
@@ -879,10 +1572,28 @@ class DocumentorDrContext:
             raise ValueError(f"DR trace missing User Requirement for {srs_id or req_id}")
 
         warnings: List[str] = []
+        for row in requirement.get("trace_event_warnings") or []:
+            if not isinstance(row, dict):
+                continue
+            warnings.append(
+                "trace_req edge "
+                f"{str(row.get('from') or '').strip()}->{str(row.get('to') or '').strip()} "
+                "was excluded because a node was missing from DR context"
+            )
         graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
         visible_ids = {
             str(node.get("id") or "").strip()
             for node in (graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+        known_graph_ids = {
+            str(node.get("id") or "").strip()
+            for node in (graph.get("all_nodes") or graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+        node_type_by_id = {
+            str(node.get("id") or "").strip(): str(node.get("type") or "").strip()
+            for node in (graph.get("all_nodes") or graph.get("nodes") or [])
             if isinstance(node, dict) and str(node.get("id") or "").strip()
         }
         edge_pairs = {
@@ -893,16 +1604,26 @@ class DocumentorDrContext:
 
         for url in url_rows:
             url_id = str(url.get("id") or "").strip()
+            if url_id not in visible_ids:
+                continue
             source_id = str(url.get("source_id") or "").strip()
+            source_ref = str(url.get("source") or "").strip()
+            if not source_id and re.fullmatch(r"R\d+-M\d+", source_ref, flags=re.IGNORECASE):
+                source_id = source_ref
             related_statement_ids = [
                 str(item).strip()
                 for item in (url.get("related_statement_ids") or [])
                 if str(item).strip()
             ]
-            if source_id and (source_id, url_id) not in edge_pairs:
+            if (
+                source_id
+                and source_id in known_graph_ids
+                and node_type_by_id.get(source_id) != "Meeting Discussion"
+                and (source_id, url_id) not in edge_pairs
+            ):
                 warnings.append(f"{url_id} source_id {source_id} was not connected in topology")
             for statement_id in related_statement_ids:
-                if (statement_id, url_id) not in edge_pairs:
+                if statement_id in known_graph_ids and (statement_id, url_id) not in edge_pairs:
                     warnings.append(f"{url_id} related_statement_id {statement_id} was not connected in topology")
             if not source_id and not related_statement_ids:
                 warnings.append(f"{url_id} has no source_id; stakeholder statement edge was skipped")
@@ -975,7 +1696,7 @@ class DocumentorDrContext:
             candidate_to: str = "",
             edge_label: str = "",
             confidence: str = "medium",
-            evidence_ids: List[str] | None = None,
+            evidence_ids: Optional[List[str]] = None,
         ) -> None:
             task_index = len(tasks) + 1
             tasks.append({
@@ -1014,7 +1735,7 @@ class DocumentorDrContext:
                     f"{url_id} declares source_id {source_id}, but the topology did not include that source edge.",
                     candidate_from=source_id,
                     candidate_to=url_id,
-                    edge_label="整理",
+                    edge_label="分析",
                     confidence="high",
                 )
             for statement_id in related_statement_ids:
@@ -1024,7 +1745,7 @@ class DocumentorDrContext:
                         f"{url_id} declares related_statement_id {statement_id}, but the topology did not include that source edge.",
                         candidate_from=statement_id,
                         candidate_to=url_id,
-                        edge_label="整理",
+                        edge_label="分析",
                         confidence="high",
                     )
             if not source_id and not related_statement_ids:
@@ -1032,7 +1753,7 @@ class DocumentorDrContext:
                     "identify_url_source",
                     f"{url_id} has no explicit source_id or related_statement_ids; Agent may identify candidate stakeholder evidence for human review.",
                     candidate_to=url_id,
-                    edge_label="整理",
+                    edge_label="分析",
                     confidence="low",
                     evidence_ids=[url_id],
                 )
@@ -1187,11 +1908,11 @@ class DocumentorDrContext:
         repair_type = str(proposal.get("repair_type") or "").strip()
         edge_label = str(proposal.get("edge_label") or "").strip()
         allowed_labels_by_type = {
-            "connect_statement_to_url": {"整理"},
+            "connect_statement_to_url": {"分析", "整理"},
             "connect_feedback_to_formalize_meeting": {""},
             "connect_model_to_formalize_meeting": {""},
             "connect_resolve_to_formalize_meeting": {"正式化"},
-            "identify_url_source": {"整理"},
+            "identify_url_source": {"分析", "整理"},
             "identify_conflict_resolution_meeting": {"解決"},
             "identify_formalization_meeting": {""},
         }
@@ -1285,6 +2006,24 @@ class DocumentorDrContext:
                     continue
                 connected_node_ids.add(from_id)
                 stack.append(from_id)
+        node_type_by_id = {
+            str(node.get("id") or "").strip(): str(node.get("type") or "").strip()
+            for node in all_nodes
+            if str(node.get("id") or "").strip()
+        }
+        for edge in edges:
+            from_id = str(edge.get("from") or "").strip()
+            to_id = str(edge.get("to") or "").strip()
+            if (
+                from_id in connected_node_ids
+                and node_type_by_id.get(from_id) in {"User Requirement", "User Requirement Group"}
+                and node_type_by_id.get(to_id) in {"Conflict", "Feedback", "Feedback Group", "System Model"}
+            ):
+                connected_node_ids.add(to_id)
+        for node in all_nodes:
+            node_id = str(node.get("id") or "").strip()
+            if node_id and str(node.get("column") or "").strip() == "Background":
+                connected_node_ids.add(node_id)
         visible_nodes = [
             node
             for node in all_nodes
@@ -1313,11 +2052,18 @@ class DocumentorDrContext:
             *,
             content_format: str = "text",
             title: str = "",
+            metadata: Optional[Dict[str, Any]] = None,
         ) -> None:
             clean_id = str(node_id or "").strip()
-            if not clean_id or clean_id in nodes:
+            if not clean_id:
                 return
-            nodes[clean_id] = {
+            if clean_id in nodes:
+                existing_type = str(nodes[clean_id].get("type") or "").strip()
+                if existing_type == "Source" and node_type != "Source":
+                    pass
+                else:
+                    return
+            node = {
                 "id": clean_id,
                 "type": node_type,
                 "label": cls.clean_repeated_text(label) or clean_id,
@@ -1326,6 +2072,9 @@ class DocumentorDrContext:
                 "content_format": content_format,
                 "column": column,
             }
+            if metadata:
+                node.update(metadata)
+            nodes[clean_id] = node
 
         def add_edge(source: Any, target: Any, relation: str, *, style: str = "") -> None:
             from_id = str(source or "").strip()
@@ -1365,14 +2114,66 @@ class DocumentorDrContext:
             content = json.dumps(visible, ensure_ascii=False, indent=2)
             return f'<pre class="dr-trace-report">{cls.html_attr(content)}</pre>'
 
+        def clean_model_description_parts(row: Dict[str, Any]) -> Dict[str, str]:
+            raw = cls.clean_repeated_text(row.get("description"))
+            if not raw:
+                fallback = cls.clean_repeated_text(row.get("name") or row.get("id") or "System Model")
+                return {"用途": fallback}
+            text = re.sub(r"\*\*", "", raw).strip()
+            purpose = ""
+            reflected = ""
+            purpose_match = re.search(r"用途\s*[：:]\s*(.*?)(?=反映需求\s*[：:]|$)", text)
+            reflected_match = re.search(r"反映需求\s*[：:]\s*(.*)$", text)
+            if purpose_match:
+                purpose = cls.clean_repeated_text(purpose_match.group(1))
+            if reflected_match:
+                reflected = cls.clean_repeated_text(reflected_match.group(1))
+            if not purpose and not reflected:
+                return {"說明": text}
+
+            req_id = str(requirement.get("id") or "").strip()
+            srs_id = str(requirement.get("srs_id") or "").strip()
+            req_desc = cls.dr_summary(requirement.get("description"), 180)
+            related_sources = [
+                str(item).strip()
+                for item in (row.get("related_sources") or row.get("related_req") or [])
+                if str(item).strip()
+            ]
+            if req_id and (req_id in related_sources or req_id in reflected):
+                current_req = f"{req_id}"
+                if srs_id:
+                    current_req += f"／{srs_id}"
+                if req_desc:
+                    reflected = f"本圖在此處支撐 {current_req}：{req_desc}"
+                else:
+                    reflected = f"本圖在此處支撐 {current_req}。"
+            return {
+                key: value
+                for key, value in (("用途", purpose), ("反映需求", reflected))
+                if value
+            }
+
         def model_image_html(row: Dict[str, Any]) -> str:
+            def model_fallback_html(*, hidden: bool = False) -> str:
+                hidden_attr = " hidden" if hidden else ""
+                parts = clean_model_description_parts(row)
+                body = "".join(
+                    '<p class="dr-trace-model-description__item">'
+                    f'<strong>{cls.html_attr(label)}</strong>：{cls.html_attr(value)}'
+                    "</p>"
+                    for label, value in parts.items()
+                )
+                return f'<div class="dr-trace-model-description"{hidden_attr}>{body}</div>'
+
             image_path = normalize_dr_model_path(row.get("image_path"))
             if image_path:
                 return (
                     f'<img src="{cls.html_attr(image_path)}" '
-                    f'alt="{cls.html_attr(row.get("name") or row.get("id") or "System Model")}">'
+                    f'alt="{cls.html_attr(row.get("name") or row.get("id") or "System Model")}" '
+                    'onerror="this.hidden=true;this.nextElementSibling.hidden=false">'
+                    f'{model_fallback_html(hidden=True)}'
                 )
-            return content_from(row, ["name", "type", "description"])
+            return model_fallback_html()
 
         def feedback_card_html(row: Dict[str, Any]) -> str:
             feedback_type = str(row.get("type") or "Feedback").strip()
@@ -1390,16 +2191,13 @@ class DocumentorDrContext:
                 continue
             stakeholder = cls.dr_stakeholder_name(row.get("stakeholder"))
             statement_id = str(row.get("id") or "").strip()
-            display_id = re.sub(r"^(ST-\d+)-\d+$", r"\1", statement_id) or statement_id
-            if re.fullmatch(r"elicit-\d+-\d+", display_id):
-                display_id = f"ST-{statement_index}"
+            display_id = statement_id
             label = f"{display_id} {stakeholder}".strip()
             statement_text = str(row.get("text") or "").strip()
             card_html = (
                 '<div class="dr-trace-card">'
                 f'<div class="dr-trace-card__main">{cls.html_attr(f"發言：{statement_text}")}</div>'
-                f'<div class="dr-trace-card__meta">{cls.html_attr(f"來源：{statement_id}")}</div>'
-                "</div>"
+                + "</div>"
             )
             add_node(
                 row.get("id"),
@@ -1419,15 +2217,9 @@ class DocumentorDrContext:
             label = f"{url_id}: {cls.dr_summary(requirement_text, 16)}".strip()
             stakeholder = cls.dr_stakeholder_name(row.get("stakeholder"))
             source_id = str(row.get("source_id") or row.get("source") or "").strip()
-            meta_parts = []
-            if stakeholder:
-                meta_parts.append(f"利害關係人：{stakeholder}")
-            if source_id:
-                meta_parts.append(f"來源：{source_id}")
             card_html = (
                 '<div class="dr-trace-card">'
                 f'<div class="dr-trace-card__main">{cls.html_attr(f"{url_id}：{requirement_text}")}</div>'
-                f'<div class="dr-trace-card__meta">{cls.html_attr("  ".join(meta_parts))}</div>'
                 + "</div>"
             )
             add_node(
@@ -1439,6 +2231,16 @@ class DocumentorDrContext:
                 content_format="html",
                 title=url_id,
             )
+            if url_id in nodes:
+                source_values = []
+                if source_id:
+                    source_values.append(source_id)
+                source_values.extend(
+                    str(value).strip()
+                    for value in (row.get("related_statement_ids") or [])
+                    if str(value).strip()
+                )
+                nodes[url_id]["source"] = "、".join(dict.fromkeys(source_values))
 
         for row in requirement.get("user_requirements") or []:
             if not isinstance(row, dict):
@@ -1446,6 +2248,9 @@ class DocumentorDrContext:
             stakeholder = cls.dr_stakeholder_name(row.get("stakeholder"))
             source_ids = []
             source_id = str(row.get("source_id") or "").strip()
+            source_ref = str(row.get("source") or "").strip()
+            if not source_id and re.fullmatch(r"R\d+-M\d+", source_ref, flags=re.IGNORECASE):
+                source_id = source_ref
             if source_id:
                 source_ids.append(source_id)
             source_ids.extend(
@@ -1503,6 +2308,13 @@ class DocumentorDrContext:
                 "Analysis",
                 content_format="html",
                 title=title,
+                metadata={
+                    "related_sources": [
+                        str(value).strip()
+                        for value in (row.get("related_sources") or [])
+                        if str(value).strip()
+                    ],
+                },
             )
 
         for row in requirement.get("meetings") or []:
@@ -1558,19 +2370,23 @@ class DocumentorDrContext:
                     "<tr>"
                     f"<td>{cls.html_attr(row_id)}</td>"
                     f"<td>{cls.html_attr(row.get('type') or '')}</td>"
-                    f"<td>{source_chips}</td>"
                     f"<td>{cls.html_attr(cls.clean_repeated_text(row.get('content')))}</td>"
+                    f"<td>{source_chips}</td>"
                     "</tr>"
                 )
             feedback_content = (
-                '<table class="dr-trace-feedback-table"><thead><tr>'
-                "<th>ID</th><th>Type</th><th>Source</th><th>Content</th>"
+                '<table class="dr-trace-feedback-table dr-trace-feedback-group-table"><thead><tr>'
+                "<th>ID</th><th>Type</th><th>Feedback</th><th>Source</th>"
                 "</tr></thead><tbody>"
                 + "".join(table_rows)
                 + "</tbody></table>"
             )
             feedback_related_sources = []
+            feedback_grouped_ids = []
             for row in feedback_rows:
+                row_id = str(row.get("id") or "").strip()
+                if row_id:
+                    feedback_grouped_ids.append(row_id)
                 feedback_related_sources.extend(
                     str(item).strip()
                     for item in (row.get("related_sources") or [])
@@ -1582,6 +2398,7 @@ class DocumentorDrContext:
                 "count": len(table_rows),
                 "content": feedback_content,
                 "related_sources": list(dict.fromkeys(feedback_related_sources)),
+                "grouped_ids": list(dict.fromkeys(feedback_grouped_ids)),
                 "trace_confidence": "explicit",
                 "trace_reason": "Multiple feedback items are grouped for topology readability; each item remains listed in the DR trace and appendix.",
                 "content_format": "html",
@@ -1605,6 +2422,9 @@ class DocumentorDrContext:
                 content_format=str(row.get("content_format") or "html"),
                 title=title,
             )
+            feedback_id = str(row.get("id") or "").strip()
+            if feedback_id in nodes and row.get("grouped_ids"):
+                nodes[feedback_id]["grouped_ids"] = list(row.get("grouped_ids") or [])
 
         def statement_rank(row: Dict[str, Any]) -> tuple[int, int, int]:
             numbers = [int(match) for match in re.findall(r"\d+", str(row.get("id") or ""))]
@@ -1616,38 +2436,82 @@ class DocumentorDrContext:
         for url in url_rows:
             url_source_id = str(url.get("source_id") or "").strip()
             if url_source_id:
-                add_edge(url_source_id, url.get("id"), "整理")
+                add_edge(url_source_id, url.get("id"), "分析")
                 continue
             for source_id in url.get("related_statement_ids") or []:
-                add_edge(source_id, url.get("id"), "整理")
+                add_edge(source_id, url.get("id"), "分析")
 
         for conflict in conflict_rows:
             related_sources = [str(item).strip() for item in (conflict.get("related_user_requirements") or []) if str(item).strip()]
             for source_id in related_sources:
-                add_edge(source_id, conflict.get("id"), "")
-
-        for feedback in feedback_rows:
-            related_sources = [str(item).strip() for item in (feedback.get("related_sources") or []) if str(item).strip()]
-            for source_id in related_sources:
-                add_edge(source_id, feedback.get("id"), "依據")
-
-        for model in model_rows:
-            model_id = str(model.get("id") or "").strip()
-            if not model_id:
-                continue
-            source_ids = [
-                str(row.get("id") or "").strip()
-                for row in url_rows
-                if str(row.get("id") or "").strip()
-            ]
-            for source_id in source_ids:
-                add_edge(source_id, model_id, "建模")
+                add_edge(source_id, conflict.get("id"), "衝突")
 
         conflict_ids = [str(row.get("id") or "").strip() for row in conflict_rows if str(row.get("id") or "").strip()]
         feedback_ids = [str(row.get("id") or "").strip() for row in feedback_rows if str(row.get("id") or "").strip()]
         model_ids = [str(row.get("id") or "").strip() for row in model_rows if str(row.get("id") or "").strip()]
         url_ids = [str(row.get("id") or "").strip() for row in url_rows if str(row.get("id") or "").strip()]
+        primary_url_ids = [
+            str(item).strip()
+            for item in (requirement.get("source") or [])
+            if str(item).strip() in url_ids
+        ]
+        if not primary_url_ids and url_ids:
+            primary_url_ids = [url_ids[0]]
         meeting_ids = [str(row.get("id") or "").strip() for row in meeting_rows if str(row.get("id") or "").strip()]
+        requirement_req_id = str(requirement.get("id") or "").strip()
+        shared_model_ids: set[str] = set()
+        for model in model_rows:
+            model_id = str(model.get("id") or "").strip()
+            related_sources = [
+                str(item).strip()
+                for item in (model.get("related_sources") or [])
+                if str(item).strip()
+            ]
+            related_req_ids = [
+                str(item).strip()
+                for item in (model.get("related_req") or [])
+                if str(item).strip()
+            ]
+            direct_url_hits = list(dict.fromkeys(item for item in related_sources if item in url_ids))
+            broad_url_model = len(direct_url_hits) > 1
+            if model_id and broad_url_model:
+                shared_model_ids.add(model_id)
+        for model_id in shared_model_ids:
+            if model_id in nodes:
+                nodes[model_id]["column"] = "Background"
+
+        def related_url_ids(row: Dict[str, Any]) -> List[str]:
+            row_id = str(row.get("id") or "").strip()
+            if row_id in shared_model_ids:
+                return []
+            related = [
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip() in url_ids
+            ]
+            if not related:
+                related = [
+                    str(item).strip()
+                    for item in (row.get("related_user_requirements") or [])
+                    if str(item).strip() in url_ids
+                ]
+            if not related and row_id not in shared_model_ids:
+                related = list(url_ids)
+            return list(dict.fromkeys(related))
+
+        for feedback in feedback_rows:
+            feedback_id = str(feedback.get("id") or "").strip()
+            if not feedback_id:
+                continue
+            for url_id in related_url_ids(feedback):
+                add_edge(url_id, feedback_id, "", style="dashed")
+        for model in model_rows:
+            model_id = str(model.get("id") or "").strip()
+            if not model_id:
+                continue
+            for url_id in related_url_ids(model):
+                add_edge(url_id, model_id, "", style="dashed")
+
         meeting_by_id = {
             str(row.get("id") or "").strip(): row
             for row in meeting_rows
@@ -1657,6 +2521,11 @@ class DocumentorDrContext:
             meeting_id
             for meeting_id in meeting_ids
             if cls.is_requirement_formalization_meeting(meeting_by_id.get(meeting_id, {}))
+        ]
+        conflict_resolution_meeting_ids = [
+            meeting_id
+            for meeting_id in meeting_ids
+            if cls.is_conflict_resolution_meeting(meeting_by_id.get(meeting_id, {}))
         ]
         clarification_meeting_ids = [
             meeting_id
@@ -1675,14 +2544,47 @@ class DocumentorDrContext:
             }
             for feedback_id in feedback_ids:
                 if feedback_id in source_ids:
-                    add_edge(feedback_id, meeting_id, "" if is_formalization_meeting else "依據")
+                    explicit_feedback_meeting_ids.add(feedback_id)
+            for feedback in feedback_rows:
+                feedback_id = str(feedback.get("id") or "").strip()
+                if not feedback_id:
+                    continue
+                feedback_source_ids = {
+                    str(source_id).strip()
+                    for source_id in (feedback.get("source_ids") or [])
+                    if str(source_id).strip()
+                }
+                if meeting_id in feedback_source_ids:
                     explicit_feedback_meeting_ids.add(feedback_id)
             for model_id in model_ids:
                 if model_id in source_ids:
-                    add_edge(model_id, meeting_id, "" if is_formalization_meeting else "建模")
+                    explicit_model_meeting_ids.add(model_id)
+            for model in model_rows:
+                model_id = str(model.get("id") or "").strip()
+                if not model_id:
+                    continue
+                model_source_ids = {
+                    str(source_id).strip()
+                    for source_id in (model.get("source_ids") or [])
+                    if str(source_id).strip()
+                }
+                if meeting_id in model_source_ids:
                     explicit_model_meeting_ids.add(model_id)
 
         if meeting_ids:
+            first_conflict_resolution_meeting_id = (
+                conflict_resolution_meeting_ids[0] if conflict_resolution_meeting_ids else ""
+            )
+            entry_meeting_id = first_conflict_resolution_meeting_id if conflict_ids else ""
+            for conflict_id in conflict_ids:
+                has_conflict_source = any(
+                    str(edge.get("to") or "").strip() == conflict_id
+                    and str(edge.get("from") or "").strip() in url_ids
+                    for edge in edges
+                )
+                if not has_conflict_source:
+                    for url_id in url_ids:
+                        add_edge(url_id, conflict_id, "衝突")
             for index, meeting_id in enumerate(meeting_ids):
                 meeting = meeting_by_id.get(meeting_id, {})
                 is_formalization_meeting = cls.is_requirement_formalization_meeting(meeting)
@@ -1691,30 +2593,42 @@ class DocumentorDrContext:
                         add_edge(conflict_id, meeting_id, "解決")
                 if index > 0:
                     previous_meeting = meeting_by_id.get(meeting_ids[index - 1], {})
-                    if cls.is_requirement_clarification_meeting(meeting):
-                        relation = "釐清"
-                    elif is_formalization_meeting and cls.is_conflict_resolution_meeting(previous_meeting):
+                    has_prior_formalization = any(
+                        cls.is_requirement_formalization_meeting(meeting_by_id.get(prior_id, {}))
+                        for prior_id in meeting_ids[:index]
+                    )
+                    if (
+                        is_formalization_meeting
+                        and (
+                            cls.is_conflict_resolution_meeting(previous_meeting)
+                            or str(meeting_ids[index - 1]).strip() == "R1-M1"
+                        )
+                    ):
                         relation = "正式化"
+                    elif cls.is_requirement_clarification_meeting(meeting) or has_prior_formalization:
+                        relation = "精練"
                     else:
                         relation = ""
                     add_edge(meeting_ids[index - 1], meeting_id, relation)
                 if is_formalization_meeting:
-                    for source_id in ([] if conflict_ids else url_ids):
+                    formalization_sources: List[str] = []
+                    if not conflict_ids:
+                        formalization_sources = primary_url_ids
+                    for source_id in formalization_sources:
                         add_edge(source_id, meeting_id, "正式化")
 
             primary_formalization_meeting_id = formalization_meeting_ids[-1] if formalization_meeting_ids else ""
-            for feedback_id in feedback_ids:
-                if primary_formalization_meeting_id:
-                    add_edge(feedback_id, primary_formalization_meeting_id, "")
-            for model_id in model_ids:
-                if primary_formalization_meeting_id:
-                    add_edge(model_id, primary_formalization_meeting_id, "")
             for meeting_id in meeting_ids:
                 if meeting_id in formalization_meeting_ids or meeting_id in clarification_meeting_ids:
                     continue
                 if cls.is_conflict_resolution_meeting(meeting_by_id.get(meeting_id, {})):
                     continue
                 if primary_formalization_meeting_id:
+                    if (
+                        cls.meeting_order_key(meeting_by_id.get(meeting_id, {"id": meeting_id}))
+                        > cls.meeting_order_key(meeting_by_id.get(primary_formalization_meeting_id, {"id": primary_formalization_meeting_id}))
+                    ):
+                        continue
                     add_edge(meeting_id, primary_formalization_meeting_id, "")
                 else:
                     add_edge(meeting_id, target_id, "")
@@ -1723,11 +2637,11 @@ class DocumentorDrContext:
                 terminal_meeting_id = clarification_meeting_ids[-1]
                 add_edge(terminal_meeting_id, target_id, "")
             elif formalization_meeting_ids:
-                terminal_meeting_id = formalization_meeting_ids[-1]
+                terminal_meeting_id = meeting_ids[-1] if meeting_ids else formalization_meeting_ids[-1]
                 add_edge(terminal_meeting_id, target_id, "")
         else:
-            for url in url_rows:
-                add_edge(url.get("id"), target_id, "")
+            for url_id in primary_url_ids:
+                add_edge(url_id, target_id, "")
 
         return cls.visible_trace_graph(
             all_nodes=list(nodes.values()),

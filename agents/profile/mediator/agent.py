@@ -40,12 +40,16 @@ class MediatorAgentSupport:
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
             "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
-            "請先根據每個項目的 User Requirements（URL-*）原文獨立重判，"
-            "並將重判結果填入 proposed_label（Conflict 或 Neutral）。\n"
+            "請各 agent 根據自己的職責審查每個項目的 User Requirements（URL-*）原文，"
+            "並將職責內的判斷填入 proposed_label（Conflict 或 Neutral）。"
+            "若該 pair 不屬於自己的職責範圍，應維持 current_label，並在 reason 說明原因。\n"
+            "角色分工：Analyst 判斷需求槽位、SRS 邊界與是否需要合併/改寫/裁定；"
+            "Expert 只判斷外部法規、標準、合規、安全、隱私、稽核、第三方限制、領域風險或品質底線；"
+            "Modeler 只判斷流程、狀態、資料、角色互動、責任邊界與模型可共存性。\n"
             "必須同時做兩層檢視：\n"
             "1) 整體檢視：說明對整批標註品質的整體判斷（是否有系統性偏誤）。\n"
             "2) 逐筆檢視：每個 [PAIR-xxx] 或 [MULTIPLE-xxx] 都必須明確寫出：\n"
-            "   - proposed_label: 重判後建議採用的標籤（Conflict 或 Neutral）\n"
+            "   - proposed_label: 依自身職責建議採用的標籤（Conflict 或 Neutral）\n"
             "   - reason: 一句到兩句審查理由，需說明獨立判斷依據\n"
             "reason 只能填純理由文字，不要包含 id、proposed_label 或欄位名稱。\n"
             "待審清單：\n" + "\n".join(conflict_summaries)

@@ -254,7 +254,8 @@ def pair_review_response_contract(*, known_pair_ids: list, include_reason_basis:
 - text JSON 結構必須為 {{"pair_reviews":[...]}}。
 - pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。
 - 每筆 pair_reviews 都必須有 id、proposed_label、reason。
-- proposed_label 只能是 Conflict 或 Neutral。{reason_rule}
+- proposed_label 只能是 Conflict 或 Neutral；它不是最終裁決，而是該 agent 依自身職責範圍提出的審查標籤。
+- 若 pair 不屬於該 agent 的職責範圍，proposed_label 應維持 current_label；current_label 來自每筆 pair_card.current_label 或 conflict_review_contract.current_labels_by_id。{reason_rule}
 - 本輪必須涵蓋的 pair id：{known_pair_ids_text}"""
 
 
@@ -402,12 +403,12 @@ review_contract = """- 外層必須只有 text 欄位。
 - 不可用類 JSON 條列或文字摘要取代合法 JSON。"""
 
 
-label_rules = """- 只有在兩項需求無法同時成立、或一方成立會直接違反另一方時，才支持 Conflict。
-- Conflict 不只表示執行時互斥；若兩項需求不能原樣共同放入軟體需求規格書，必須先合併、改寫、刪除或人工裁定，也應支持 Conflict。
-- 只有在兩項需求可明確判定為不衝突、不重複，且沒有直接語義關係時，才支持 Neutral。
-- 若兩項需求描述同一功能範圍、同一流程、同一資料處理或同一輸出行為，即表示存在直接語義關係；不能僅因兩者可共存就判為 Neutral。
-- 若一項需求是另一項的子集、細化、補充步驟或同流程的相鄰行為，不能直接判為 Neutral。
-- 重複、近似重複、細化、範圍重疊、同一需求槽位的不同措辭、限制、觸發條件、數量或頻率，不可直接支持 Neutral；需判斷是否需要合併、改寫、刪除或人工裁定。"""
+label_rules = """- 先判斷兩項需求是否屬於同一需求槽位：同一主要功能、流程步驟、資料物件、輸出行為、角色權限、狀態、限制或驗收目標。
+- 若不是同一需求槽位，且可在 SRS 中作為不同需求並存，支持 Neutral；不要因領域相關、同屬同一系統或可能互相補充就判 Conflict。
+- 若是同一需求槽位，再檢查是否存在不同限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界。
+- 同一需求槽位內，只要上述差異會造成 SRS 需要合併、改寫、刪除或人工裁定，支持 Conflict；Conflict 不只表示執行時互斥。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，支持 Conflict。
+- 純同義重複、可無損合併的補充描述、不同上下文或不同流程階段的可並存要求，支持 Neutral；reason 必須說明為何不是同一槽位差異或為何可無衝突合併。"""
 
 
 reason_rules = """- proposed_label 可以和其他 agent 相同，但 reason 必須提供獨立判斷依據；不要只重複一般語意判斷。

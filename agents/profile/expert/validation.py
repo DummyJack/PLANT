@@ -260,6 +260,20 @@ def source_records(values: Any) -> List[Dict[str, str]]:
         if isinstance(value, dict):
             title = clean_source_text(value.get("title") or value.get("name") or value.get("label"))
             raw_url = value.get("url") or value.get("link") or value.get("href") or value.get("source")
+            source_type = clean_source_text(value.get("type"))
+            if source_type == "file":
+                url = clean_source_text(raw_url)
+                if not url:
+                    continue
+                if not title:
+                    title = source_title_from_url(url)
+                filename = url.rstrip("/").split("/")[-1].lower()
+                key = f"file:{filename or url.lower()}"
+                if key in seen:
+                    continue
+                rows.append({"title": title, "url": url, "type": "file"})
+                seen.add(key)
+                continue
             urls = source_urls(raw_url)
             url = urls[0] if urls else ""
         else:
@@ -381,6 +395,9 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
             }
             if source:
                 row["source"] = source
+            source_ids = requirement_refs(value.get("source_ids"))
+            if source_ids:
+                row["source_ids"] = source_ids
             trace_reason = clean_text(value.get("trace_reason"))
             if trace_reason:
                 row["trace_reason"] = trace_reason

@@ -37,6 +37,7 @@ class AnalystRequirements:
         previous_draft: Optional[str] = None,
         round_num: Optional[int] = None,
         artifact_dir: Optional[Any] = None,
+        review_considerations: Optional[List[Dict[str, Any]]] = None,
     ):
         allowed_actions = {
             "analyze_scenario",
@@ -58,6 +59,7 @@ class AnalystRequirements:
                 "previous_draft": previous_draft,
                 "round_num": round_num,
                 "artifact_dir": artifact_dir,
+                "review_considerations": review_considerations or [],
             },
             obs_fn=self.obs_requirements_analysis,
             decide_action=self.decide_requirements_analysis_action,
@@ -122,7 +124,10 @@ class AnalystRequirements:
                     artifact=kwargs.get("artifact") or {},
                 )
             elif action == "analyze_requirements":
-                output = self.analyze_requirements(kwargs.get("stakeholders") or [])
+                output = self.analyze_requirements(
+                    kwargs.get("stakeholders") or [],
+                    review_considerations=kwargs.get("review_considerations") or [],
+                )
             elif action == "create_draft":
                 output = self.create_draft(
                     kwargs.get("artifact") or {},
@@ -189,9 +194,36 @@ class AnalystRequirements:
             raise ValueError("scenario 分析未產生有效 name")
         return name
 
+    @staticmethod
+    def applicable_considerations(
+        rows: List[Dict[str, Any]],
+        *,
+        source_id: str,
+    ) -> List[Dict[str, Any]]:
+        current_id = str(source_id or "").strip().upper()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            targets = [
+                str(value or "").strip().upper()
+                for value in (row.get("target_ids") or [])
+                if str(value or "").strip()
+            ]
+            if targets and current_id not in targets:
+                continue
+            out.append(row)
+        return out
+
     # Defines analyze requirements function for this module workflow.
-    def analyze_requirements(self, stakeholders: List[Dict]) -> List[Dict[str, Any]]:
+    def analyze_requirements(
+        self,
+        stakeholders: List[Dict],
+        *,
+        review_considerations: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
         all_requirements = []
+        consideration_rows = [
+            row for row in (review_considerations or []) if isinstance(row, dict)
+        ]
         for idx, one_sh in enumerate(stakeholders):
             sh_label = str(one_sh.get("name") or "").strip()
             if not sh_label:
@@ -221,6 +253,10 @@ class AnalystRequirements:
             for source_idx, source_row in enumerate(source_rows, 1):
                 source_text = source_row["text"]
                 source_id = source_row["id"]
+                applicable_considerations = self.applicable_considerations(
+                    consideration_rows,
+                    source_id=source_id,
+                )
                 context = {
                     "stakeholder": {
                         "name": sh_label,
@@ -242,6 +278,7 @@ class AnalystRequirements:
                         for row in all_requirements
                         if isinstance(row, dict) and str(row.get("text") or "").strip()
                     ],
+                    "review_considerations": applicable_considerations,
                 }
                 extraction_rules = url_extraction_rules()
                 task = analyze_requirement(

@@ -79,6 +79,11 @@ def requirements_skill_guidance(content: str, mode: str) -> str:
 - priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
 - functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略，不輸出 wont，也不要預設。
 - 每筆 REQ 只保留一個核心意圖；若來源同時包含功能、品質與限制，且可獨立追蹤，請拆成多筆 REQ。
+- 若多個來源使用相同名詞、資料物件或功能名稱，但系統責任、業務目的、觸發情境、受影響角色或完成邊界不同，應拆成不同 REQ；不得只因共同名詞而合併成泛化 description。
+- 若多個來源描述的是相同系統責任、相同業務目的、相同主要角色與相同可驗收結果，即使措辭不同，也應合併或更新同一筆 REQ；不得因來源句數不同而機械式拆成多筆。
+- description 應在來源支持範圍內盡可能具體完整；不得為了增加細節而加入來源未支持的功能、流程、資料欄位、角色、權限、例外處理或驗收條件。
+- description 說明系統責任與完成結果；具體可測試條件、輸入輸出檢查、狀態驗證、錯誤處理驗收方式應放入 acceptance_criteria，不要全部塞進 description。
+- 若來源暗示某細節但不足以正式寫入 description，應將該細節寫入 assumptions、risks 或 open_questions，而不是在 description 中用模糊語氣包裝。
 - non-functional 可輸出 category、metric、validation；category 依 ISO/IEC 25010 且不用 functional suitability。
 - source 只放已存在且可追蹤的 artifact ID。
 - coverage 只作內部檢查，不是正式需求內容；Traceability 維持 Source 與 System Model。"""

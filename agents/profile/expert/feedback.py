@@ -1,4 +1,5 @@
 # Handles module workflow behavior.
+import hashlib
 import json
 import re
 
@@ -158,6 +159,11 @@ def normalize_feedback_links(feedback: dict, artifact: dict) -> dict:
         if isinstance(row, dict) and str(row.get("id") or "").strip()
     }
     issue = artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {}
+    issue_source_ids = [
+        str(value).strip()
+        for value in (issue.get("meeting_id"), issue.get("id"))
+        if str(value or "").strip()
+    ]
     trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
     issue_url_ids = {
         str(value).strip()
@@ -177,6 +183,17 @@ def normalize_feedback_links(feedback: dict, artifact: dict) -> dict:
             if not isinstance(row, dict):
                 continue
             row.pop("sources", None)
+            source_ids = [
+                str(value).strip()
+                for value in (row.get("source_ids") or [])
+                if str(value).strip()
+            ]
+            source = str(row.get("source") or "").strip()
+            if source:
+                source_ids.append(source)
+            source_ids.extend(issue_source_ids)
+            if source_ids:
+                row["source_ids"] = list(dict.fromkeys(source_ids))
             supplied_refs = [
                 str(value).strip()
                 for value in (row.get("related_requirement_ids") or [])
@@ -342,11 +359,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
 
     # Defines run research loop function for this module workflow.
     def run_research_loop(self, artifact):
+        existing_research_results = (
+            artifact.get("research_results")
+            if isinstance(artifact.get("research_results"), list)
+            else []
+        )
         result = self.run_action_loop(
             name="research_domain",
             context={
                 "artifact": artifact,
-                "research_results": [],
+                "research_results": list(existing_research_results),
             },
             obs_fn=self.obs_research,
             decide_action=self.decide_research,
@@ -363,6 +385,11 @@ class ExpertDomainResearch(ExpertResearchPlan):
         existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
         meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+        resume_checkpoint = (
+            meta.get("last_resume_checkpoint")
+            if isinstance(meta.get("last_resume_checkpoint"), dict)
+            else {}
+        )
         return {
             "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
             "scenario": str(scenario_source or "").strip(),
@@ -374,6 +401,8 @@ class ExpertDomainResearch(ExpertResearchPlan):
             "has_existing_research": bool(existing),
             "research_results_count": len(research_results),
             "document_evidence_count": len(artifact.get("document_evidence", []) or []),
+            "document_coverage": artifact.get("document_coverage", []) or [],
+            "resume_checkpoint": resume_checkpoint,
             "has_read_file": "read_file" in self.tools,
             "has_web_search": "web_search" in self.tools,
             "user_guidance": str(meta.get("domain_research_user_guidance") or "").strip(),
@@ -388,6 +417,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
         self, action, params, artifact, research_results,
     ):
         obs: dict = {"action": action, "result": None, "error": None, "summary": ""}
+        query_for_step = str(params.get("query") or params.get("topic") or "").strip()
+        step_suffix = action
+        if query_for_step:
+            query_digest = hashlib.sha1(query_for_step.encode("utf-8")).hexdigest()[:10]
+            step_suffix = f"{action}.{query_digest}"
+        self.record_runtime_checkpoint(
+            stage_id="research_domain",
+            step_id=f"research_domain.{step_suffix}",
+            action=action,
+        )
 
         if action == "read_reference_docs":
             if "read_file" not in self.tools:
@@ -430,6 +469,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     source_ref=research_source(artifact),
                 )
                 evidence = self.clean_document_evidence(data.get("document_evidence"))
+                coverage = self.clean_document_coverage(data.get("coverage"))
                 gaps = [
                     str(item).strip()
                     for item in (data.get("gaps") or [])
@@ -439,9 +479,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     artifact.get("document_evidence", []),
                     evidence,
                 )
-                obs["result"] = {"document_evidence": evidence, "gaps": gaps}
+                artifact["document_coverage"] = self.merge_document_coverage(
+                    artifact.get("document_coverage", []),
+                    coverage,
+                )
+                store = getattr(self, "runtime_store", None)
+                if store:
+                    store.save_artifact(artifact)
+                obs["result"] = {"document_evidence": evidence, "coverage": coverage, "gaps": gaps}
                 obs["context_updates"] = {"artifact": artifact}
-                obs["summary"] = f"文件證據 {len(evidence)} 筆，缺口 {len(gaps)} 筆"
+                obs["summary"] = f"文件證據 {len(evidence)} 筆，coverage {len(coverage)} 筆，缺口 {len(gaps)} 筆"
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"文件讀取失敗: {e}"
@@ -464,6 +511,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
                 "document_evidence": artifact.get("document_evidence", []) or [],
+                "document_coverage": artifact.get("document_coverage", []) or [],
             }
             web_search_evidence = ""
             web_urls = []
@@ -502,6 +550,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     source_ref=source_ref,
                     cleaner=clean_research_result,
                     url_sources=web_urls,
+                    file_sources=self.feedback_file_sources(artifact, []),
                 )
                 if result:
                     research_results.append(
@@ -511,6 +560,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
                             "research_evidence": result,
                         }
                     )
+                    artifact.setdefault("research_results", []).append(
+                        {
+                            "query": query,
+                            "value_reason": value_reason,
+                            "research_evidence": result,
+                        }
+                    )
+                    store = getattr(self, "runtime_store", None)
+                    if store:
+                        store.save_artifact(artifact)
                 obs["result"] = {"research_evidence": result} if result else {"research_evidence": {}}
                 if result:
                     obs["summary"] = (
@@ -525,16 +584,18 @@ class ExpertDomainResearch(ExpertResearchPlan):
             return obs
 
         if action == "update_feedback":
-            if not research_results:
+            document_evidence = artifact.get("document_evidence", []) or []
+            if not research_results and not document_evidence:
                 artifact["feedback"] = empty_feedback_marker("domain research completed without URL-backed findings")
                 obs["result"] = {"feedback": artifact["feedback"]}
-                obs["summary"] = "無 URL 支撐的研究結果可更新，已標記領域研究完成"
+                obs["summary"] = "無研究結果或文件證據可更新，已標記領域研究完成"
                 return obs
             existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
             context = {
                 "research_results": research_results,
                 "existing_research": existing,
-                "document_evidence": artifact.get("document_evidence", []) or [],
+                "document_evidence": document_evidence,
+                "document_coverage": artifact.get("document_coverage", []) or [],
             }
             source_ref = research_source(artifact)
             task = update_feedback(source_ref=source_ref)
@@ -547,12 +608,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     action=action,
                     source_ref=source_ref,
                     cleaner=clean_feedback,
+                    file_sources=self.feedback_file_sources(artifact, document_evidence),
                 )
                 if dr:
                     dr = normalize_feedback_links(dr, artifact)
                     merged = self.merge_feedback(existing, dr)
                     artifact["feedback"] = merged
                     append_feedback_trace_req(artifact, dr, source_ref=source_ref)
+                    store = getattr(self, "runtime_store", None)
+                    if store:
+                        store.save_artifact(artifact)
                     obs["result"] = {"feedback": dr, "merged_feedback": merged}
                     obs["summary"] = "已更新領域研究資料"
                 else:
@@ -562,6 +627,10 @@ class ExpertDomainResearch(ExpertResearchPlan):
             except Exception as e:
                 obs["error"] = str(e)
                 obs["summary"] = f"更新失敗: {e}"
+                artifact["feedback"] = existing or empty_feedback_marker(
+                    f"domain research feedback update failed: {e}"
+                )
+                obs["result"] = {"feedback": {}, "merged_feedback": artifact["feedback"]}
             return obs
 
         obs["error"] = f"未知動作: {action}"
@@ -582,15 +651,25 @@ class ExpertDomainResearch(ExpertResearchPlan):
             return parse_first_json(repaired)
 
     # Defines clean research json function for this module workflow.
-    def clean_research_json(self, raw, *, action: str, source_ref: str, cleaner, url_sources=None):
+    def clean_research_json(
+        self,
+        raw,
+        *,
+        action: str,
+        source_ref: str,
+        cleaner,
+        url_sources=None,
+        file_sources=None,
+    ):
         data = self.parse_research_json(raw, action=action, source_ref=source_ref)
         cleaned = cleaner(data, context_source=source_ref)
         cleaned = self.attach_url_sources(cleaned, url_sources)
-        if cleaned and not self.missing_url_sources(cleaned):
+        cleaned = self.attach_file_sources(cleaned, file_sources)
+        if cleaned and not self.missing_url_sources(cleaned, file_sources=file_sources):
             return cleaned
         error = "輸出缺少有效 findings / constraints / risks / recommendations"
         if cleaned:
-            error = "輸出包含外部法規、標準、官方文件或合規主張，但 sources 缺少完整 URL"
+            error = "輸出包含外部法規、標準、官方文件或合規主張，但缺少完整 URL 或專案引用文件證據"
         repair_task = repair_action_output(
             action=action,
             raw=data,
@@ -600,8 +679,9 @@ class ExpertDomainResearch(ExpertResearchPlan):
         repaired = self.model.chat(self.build_direct_messages(repair_task))
         repaired_cleaned = cleaner(parse_first_json(repaired), context_source=source_ref)
         repaired_cleaned = self.attach_url_sources(repaired_cleaned, url_sources)
-        if self.missing_url_sources(repaired_cleaned):
-            raise ValueError("Expert feedback with external claims must include URL sources")
+        repaired_cleaned = self.attach_file_sources(repaired_cleaned, file_sources)
+        if self.missing_url_sources(repaired_cleaned, file_sources=file_sources):
+            raise ValueError("Expert feedback with external claims must include URL sources or referenced project files")
         return repaired_cleaned
 
     @staticmethod
@@ -613,9 +693,38 @@ class ExpertDomainResearch(ExpertResearchPlan):
         seen = set()
         for source in source_records(list(payload.get("sources") or []) + list(urls or [])):
             url = str(source.get("url") or "").strip()
-            if url and url not in seen:
+            source_type = str(source.get("type") or "web").strip() or "web"
+            key = f"{source_type}:{url}"
+            if url and key not in seen:
                 merged.append(source)
-                seen.add(url)
+                seen.add(key)
+        payload["sources"] = merged
+        return payload
+
+    @staticmethod
+    # Defines attach file sources function for this module workflow.
+    def attach_file_sources(payload, file_sources):
+        if not isinstance(payload, dict):
+            return payload
+        source_payloads = []
+        for source in file_sources or []:
+            source_text = str(source or "").strip()
+            if not source_text:
+                continue
+            source_payloads.append({
+                "title": source_text.rstrip("/").split("/")[-1],
+                "url": source_text,
+                "type": "file",
+            })
+        merged = []
+        seen = set()
+        for source in source_records(list(payload.get("sources") or []) + source_payloads):
+            url = str(source.get("url") or "").strip()
+            source_type = str(source.get("type") or "web").strip() or "web"
+            key = f"{source_type}:{url}"
+            if url and key not in seen:
+                merged.append(source)
+                seen.add(key)
         payload["sources"] = merged
         return payload
 
@@ -650,14 +759,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     merged[section].append(dict(row))
                     seen.add(key)
 
-        seen_urls = set()
+        seen_sources = set()
         for payload in (existing, delta):
             for source in source_records((payload.get("sources") if isinstance(payload, dict) else []) or []):
                 url = str(source.get("url") or "").strip()
-                if not url or url in seen_urls:
+                source_type = str(source.get("type") or "web").strip() or "web"
+                key = f"{source_type}:{url}"
+                if not url or key in seen_sources:
                     continue
                 merged["sources"].append(source)
-                seen_urls.add(url)
+                seen_sources.add(key)
 
         return {
             key: value
@@ -667,8 +778,31 @@ class ExpertDomainResearch(ExpertResearchPlan):
 
     @staticmethod
     # Defines missing URL sources function for this module workflow.
-    def missing_url_sources(payload):
-        return bool(payload) and requires_url_sources(payload) and not payload.get("sources")
+    def missing_url_sources(payload, *, file_sources=None):
+        return (
+            bool(payload)
+            and requires_url_sources(payload)
+            and not payload.get("sources")
+            and not file_sources
+        )
+
+    @classmethod
+    # Defines feedback file sources function for this module workflow.
+    def feedback_file_sources(cls, artifact, document_evidence):
+        meta = artifact.get("meta") if isinstance(artifact, dict) and isinstance(artifact.get("meta"), dict) else {}
+        rows = []
+        seen = set()
+        for item in cls.clean_document_evidence(document_evidence):
+            source = str(item.get("source") or "").strip()
+            if source and source not in seen:
+                rows.append(source)
+                seen.add(source)
+        for source in (meta.get("domain_research_referenced_files") or meta.get("attached_references") or []):
+            source_text = str(source or "").strip()
+            if source_text and source_text not in seen:
+                rows.append(source_text)
+                seen.add(source_text)
+        return rows
 
     @staticmethod
     # Defines clean document evidence function for this module workflow.
@@ -710,6 +844,53 @@ class ExpertDomainResearch(ExpertResearchPlan):
             for row in rows
         }
         for row in cls.clean_document_evidence(new_rows):
+            key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+            if key in seen:
+                continue
+            rows.append(row)
+            seen.add(key)
+        return rows
+
+    @staticmethod
+    # Defines clean document coverage function for this module workflow.
+    def clean_document_coverage(raw):
+        valid_status = {
+            "document_supported",
+            "not_found_in_documents",
+            "document_conflict",
+            "needs_external_validation",
+        }
+        rows = []
+        seen = set()
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            target_id = str(item.get("target_id") or item.get("id") or "").strip()
+            status = str(item.get("status") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if not target_id or status not in valid_status:
+                continue
+            row = {
+                "target_id": target_id,
+                "status": status,
+                "reason": reason,
+            }
+            key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+        return rows
+
+    @classmethod
+    # Defines merge document coverage function for this module workflow.
+    def merge_document_coverage(cls, existing, new_rows):
+        rows = cls.clean_document_coverage(existing)
+        seen = {
+            json.dumps(row, ensure_ascii=False, sort_keys=True)
+            for row in rows
+        }
+        for row in cls.clean_document_coverage(new_rows):
             key = json.dumps(row, ensure_ascii=False, sort_keys=True)
             if key in seen:
                 continue
