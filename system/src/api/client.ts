@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-const LOCAL_API_BASE_URL = "http://127.0.0.1:8000/api";
+const LOCAL_API_BASE_URL = "";
 const PUBLIC_API_BASE_URL = "https://plant.dummyjack.com/api";
 
 function useLocalhost(value: string | undefined, fallback: boolean): boolean {
