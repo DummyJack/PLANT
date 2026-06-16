@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from utils import (
     Collect,
     artifact_path_non_empty,
+    force_regenerate_output,
     has_draft_payload,
     has_feedback_payload,
     has_system_models_payload,
@@ -843,6 +844,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     has_conflict_detection_output = bool(
         conflict_state.get("pairs") or conflict_state.get("multiple")
     )
+    force_elicitation = force_regenerate_output(flow.config, "elicitation")
+    force_conflict_detection = force_regenerate_output(flow.config, "conflict_detection")
+    force_research_domain = force_regenerate_output(flow.config, "research_domain")
+    force_system_model = force_regenerate_output(flow.config, "system_model")
+    force_draft = force_regenerate_output(flow.config, "draft")
 
     if skip_before_resume_stage(artifact, "elicitation"):
         flow.logger.stage_started("elicitation", "需求擷取會議")
@@ -855,7 +861,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         flow.logger.info("=== 需求擷取會議 ===")
         flow.logger.info("跳過需求擷取會議")
         flow.logger.stage_completed("elicitation", "需求擷取會議", message="需求擷取會議已跳過")
-    elif has_elicitation_output:
+    elif has_elicitation_output and not force_elicitation:
         flow.logger.stage_started("elicitation", "需求擷取會議")
         flow.logger.info("=== 需求擷取會議 ===")
         require_stage_inputs(flow, artifact, "elicitation")
@@ -909,7 +915,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         require_stage_inputs(flow, artifact, "conflict_detection")
     elif not stage_enabled(flow.config, "conflict_detection"):
         flow.logger.info("跳過需求衝突辨識")
-    elif has_conflict_detection_output and not requirements_changed:
+    elif has_conflict_detection_output and not requirements_changed and not force_conflict_detection:
         require_stage_inputs(flow, artifact, "conflict_detection")
         flow.logger.info("✓ 需求衝突辨識已完成，跳過重新執行")
     else:
@@ -1032,6 +1038,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         if (
             not feedback
             and not referenced_files
+            and not force_research_domain
             and has_feedback_payload(artifact)
             and (research_domain_completed or feedback_covers_urls)
         ):
@@ -1111,7 +1118,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     elif not stage_enabled(flow.config, "system_model"):
         flow.logger.info("跳過系統模型")
         model_data = artifact.get("system_models", [])
-    elif has_system_models_payload(artifact) and artifact_path_non_empty(flow, "system_models.json"):
+    elif (
+        has_system_models_payload(artifact)
+        and artifact_path_non_empty(flow, "system_models.json")
+        and not force_system_model
+    ):
         model_data = artifact.get("system_models", [])
         reused_system_models = True
         flow.logger.info("✓ 系統模型已存在，跳過重新生成")
@@ -1171,7 +1182,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         require_stage_inputs(flow, artifact, "draft")
     elif not stage_enabled(flow.config, "draft"):
         flow.logger.info("跳過草稿化")
-    elif has_draft_payload(flow):
+    elif has_draft_payload(flow) and not force_draft:
         flow.logger.info("✓ 需求草稿已存在，跳過重新生成")
     else:
         require_stage_inputs(flow, artifact, "draft")

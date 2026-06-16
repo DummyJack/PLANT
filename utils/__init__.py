@@ -29,6 +29,7 @@ from .config import (
     meeting_setting,
     require_stage_inputs,
     export_enabled,
+    force_regenerate_output,
     stage_enabled,
 )
 from .cost import CostTracker, model_has_token_pricing
@@ -56,6 +57,7 @@ __all__ = [
     "has_stakeholder_text",
     "has_system_models_payload",
     "export_enabled",
+    "force_regenerate_output",
     "human_setting",
     "is_likely_english",
     "json_dump_no_scientific",

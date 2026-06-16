@@ -52,6 +52,14 @@ def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bo
 
 
 # ========
+# Defines force regenerate output flag helper.
+# ========
+def force_regenerate_output(config: Dict[str, Any], key: str) -> bool:
+    flags = config.get("force_regenerate_outputs")
+    return isinstance(flags, dict) and flags.get(key) is True
+
+
+# ========
 # Defines export enabled function for this module workflow.
 # ========
 def export_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
