@@ -13,6 +13,27 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function fileName(value: string) {
+  return value.split(/[\\/]/).filter(Boolean).pop() || value;
+}
+
+function sourceDisplayName(item: Record<string, unknown>, fallback: unknown) {
+  return text(item.title) || text(item.name) || fileName(text(item.path) || text(item.url)) || String(fallback);
+}
+
+function sourceDedupeKey(item: Record<string, unknown>, fallback: unknown) {
+  const title = sourceDisplayName(item, fallback);
+  const path = text(item.path) || text(item.url);
+  const name = fileName(path || title).toLowerCase();
+  if (name.endsWith(".pdf")) return `pdf:${name}`;
+  return (path || title || String(fallback)).toLowerCase();
+}
+
+function isPdfSource(item: Record<string, unknown>, title: string) {
+  const value = `${title} ${text(item.path)} ${text(item.url)}`.toLowerCase();
+  return value.includes(".pdf");
+}
+
 function decodeHtmlEntities(value: string) {
   return value
     .replace(/&nbsp;/g, " ")
@@ -373,7 +394,7 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
   const seenSources = new Set<string>();
   const uniqueSources = sources.filter((row) => {
     const item = isRecord(row) ? row : {};
-    const key = text(item.url) || text(item.path) || text(item.title) || text(item.name) || String(row);
+    const key = sourceDedupeKey(item, row);
     if (!key || seenSources.has(key)) return false;
     seenSources.add(key);
     return true;
@@ -420,11 +441,12 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
           <div className="space-y-2">
             {uniqueSources.map((row, index) => {
               const item = isRecord(row) ? row : {};
-              const title = text(item.title) || text(item.name) || text(item.path) || text(item.url) || String(row);
+              const title = sourceDisplayName(item, row);
               const url = text(item.url);
+              const isPdf = isPdfSource(item, title);
               return (
                 <Card key={index}>
-                  {url ? (
+                  {url && !isPdf ? (
                     <a
                       href={url}
                       target="_blank"
@@ -703,7 +725,6 @@ function ConflictReportView({ data }: { data: unknown[] }) {
                         <div key={optionIndex} className="rounded-control bg-slate-50 p-2">
                           <div className="flex flex-wrap gap-1">
                             <Chip>選項 {optionLabel(text(opt.option), optionIndex)}</Chip>
-                            {text(opt.strategy) && <Chip>{text(opt.strategy)}</Chip>}
                             {opt.recommendation === true && <Chip>建議</Chip>}
                           </div>
                           <p className="mt-1 text-xs leading-relaxed text-slate-700">
@@ -861,11 +882,13 @@ async function fetchMeetingMomMeta(projectId: string, meetingId: string) {
         return {
           title: firstHtmlHeading(file.content),
           summary: htmlSectionText(file.content, "摘要"),
+          decision: htmlSectionText(file.content, "決議"),
         };
       }
       return {
         title: firstMarkdownHeading(file.content),
         summary: markdownSectionText(file.content, "摘要"),
+        decision: markdownSectionText(file.content, "決議"),
       };
     } catch {
       continue;
@@ -902,7 +925,8 @@ function MeetingHeading({
 function MeetingSummarySection({ children }: { children: ReactNode }) {
   return (
     <div className="rounded-control border border-gray-200 bg-white px-3 py-2">
-      <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+      <div className="text-xs font-semibold text-slate-500">摘要</div>
+      <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
         {children}
       </div>
     </div>
@@ -931,6 +955,13 @@ function FormalMeetingIssueCard({
     momMeta.data?.summary ||
     (isRecord(issue.resolution) ? text(issue.resolution.summary) : "") ||
     "";
+  const resolutionText = isRecord(issue.resolution)
+    ? momMeta.data?.decision ||
+      text(issue.resolution.decision) ||
+      text(issue.resolution.result) ||
+      text(issue.resolution.summary) ||
+      JSON.stringify(issue.resolution, null, 2)
+    : "";
 
   return (
     <article className="rounded-control border border-gray-200 bg-white">
@@ -967,9 +998,7 @@ function FormalMeetingIssueCard({
           <div className="rounded-control border border-emerald-100 bg-emerald-50 px-3 py-2">
             <div className="text-xs font-semibold text-emerald-800">決議</div>
             <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-emerald-900">
-              {text(issue.resolution.summary) ||
-                text(issue.resolution.decision) ||
-                JSON.stringify(issue.resolution, null, 2)}
+              {resolutionText}
             </div>
           </div>
         )}

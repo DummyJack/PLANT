@@ -164,12 +164,12 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
   const disabled = !projectId || selectableFiles.length === 0;
 
   return (
-    <div ref={rootRef} className="relative w-full min-w-0 max-w-full shrink sm:w-40">
+    <div ref={rootRef} className="relative w-full min-w-0 max-w-full shrink sm:w-44">
       <button
         type="button"
         disabled={disabled}
         className={cn(
-          "flex h-8 w-full items-center justify-between gap-2 rounded-control border border-gray-200 bg-white py-1 pl-2.5 pr-2 text-left text-sm text-slate-700 hover:border-gray-300 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-8 w-full items-center justify-between rounded-control border border-gray-200 bg-white px-2 text-left text-xs text-slate-700 hover:border-gray-300 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:opacity-50",
         )}
         onClick={() => setOpen((v) => !v)}
         title={selectedFile?.label ?? "選擇檔案"}

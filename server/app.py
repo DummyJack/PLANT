@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from utils.clean import disable_pycache
+from setup import apply_runtime_setup
 
-disable_pycache()
+apply_runtime_setup()
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request

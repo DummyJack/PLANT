@@ -78,6 +78,7 @@ export interface PendingDecision {
     | "stakeholder_statement_review"
     | "requirements_review"
     | "domain_research_review"
+    | "scope_review"
     | "meeting_issue_proposal_review";
   title: string;
   description: string;
@@ -152,6 +153,9 @@ export interface ChatMessage {
   issue?: string;
   outputPath?: string;
   timestamp?: string;
+  decisionId?: string;
+  decision?: PendingDecision;
+  decisionPayload?: Record<string, unknown>;
 }
 
 export interface SystemModel {

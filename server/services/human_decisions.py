@@ -231,6 +231,19 @@ def normalize_decision_options_payload(options: Any) -> Any:
         else {}
     )
     recommendation = dict(source_recommendation)
+    if not recommendation:
+        for option in normalized:
+            if option.get("recommendation") is True:
+                recommendation = {
+                    "option_id": option.get("id") or option.get("option_id"),
+                    "rationale": str(
+                        option.get("recommendation_rationale")
+                        or option.get("recommended_rationale")
+                        or option.get("rationale")
+                        or ""
+                    ).strip(),
+                }
+                break
     raw_recommended = (
         recommendation.get("option_id")
         or recommendation.get("id")

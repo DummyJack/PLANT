@@ -2,6 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DiscussionMode } from "@/types/api";
 
+export interface ScopeReviewDraft {
+  in_scope: string[];
+  out_of_scope: string[];
+}
+
 interface UiState {
   activeProjectId: string | null;
   selectedOutputPath: string | null;
@@ -25,6 +30,7 @@ interface UiState {
     output: boolean;
   };
   dismissedRunCheckpointKeys: Record<string, string>;
+  scopeReviewDrafts: Record<string, ScopeReviewDraft>;
   canWrite: boolean;
   setActiveProjectId: (id: string | null) => void;
   setSelectedOutputPath: (path: string | null, source?: "auto" | "manual" | "system", anchor?: string | null) => void;
@@ -45,6 +51,8 @@ interface UiState {
   toggleAgent: (agent: string) => void;
   togglePanelVisibility: (panel: "references" | "workspace" | "output") => void;
   dismissRunCheckpoint: (projectId: string, checkpointKey: string) => void;
+  setScopeReviewDraft: (decisionId: string, draft: ScopeReviewDraft) => void;
+  clearScopeReviewDraft: (decisionId: string) => void;
   setCanWrite: (canWrite: boolean) => void;
 }
 
@@ -82,6 +90,7 @@ export const useUiStore = create<UiState>()(
         output: true,
       },
       dismissedRunCheckpointKeys: {},
+      scopeReviewDrafts: {},
       canWrite: false,
       setActiveProjectId: (id) =>
         set({
@@ -143,11 +152,10 @@ export const useUiStore = create<UiState>()(
       setMeetingMaxIssues: (n) => set({ meetingMaxIssues: n, meetingMaxIssuesOverridden: true }),
       setMeetingDefaults: (rounds, maxIssues) =>
         set((s) => ({
-          meetingRounds: s.meetingRoundsOverridden || rounds == null ? s.meetingRounds : rounds,
-          meetingMaxIssues:
-            s.meetingMaxIssuesOverridden || maxIssues == null ? s.meetingMaxIssues : maxIssues,
-          meetingRoundsOverridden: s.meetingRoundsOverridden,
-          meetingMaxIssuesOverridden: s.meetingMaxIssuesOverridden,
+          meetingRounds: rounds == null ? s.meetingRounds : rounds,
+          meetingMaxIssues: maxIssues == null ? s.meetingMaxIssues : maxIssues,
+          meetingRoundsOverridden: false,
+          meetingMaxIssuesOverridden: false,
         })),
       setDiscussionMode: (m) => set({ discussionMode: m }),
       setEnabledAgents: (agents) => set({ enabledAgents: agents }),
@@ -175,6 +183,20 @@ export const useUiStore = create<UiState>()(
             [projectId]: checkpointKey,
           },
         })),
+      setScopeReviewDraft: (decisionId, draft) =>
+        set((s) => ({
+          scopeReviewDrafts: {
+            ...s.scopeReviewDrafts,
+            [decisionId]: draft,
+          },
+        })),
+      clearScopeReviewDraft: (decisionId) =>
+        set((s) => {
+          if (!s.scopeReviewDrafts[decisionId]) return s;
+          const next = { ...s.scopeReviewDrafts };
+          delete next[decisionId];
+          return { scopeReviewDrafts: next };
+        }),
       setCanWrite: (canWrite) => set({ canWrite }),
     }),
     {

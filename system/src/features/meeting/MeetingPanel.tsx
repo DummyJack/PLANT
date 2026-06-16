@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import { createProject, deleteProject, uploadReference } from "@/api/projects";
 import { fetchBootstrap } from "@/api/bootstrap";
 import { cancelRun, createRun, submitDecision } from "@/api/runs";
@@ -16,7 +17,7 @@ import { errorMessage } from "@/utils/errorMessage";
 import { buildInitialUserMessage, mergeChatMessages } from "@/utils/logParser";
 import type { RunCheckpoint } from "@/types/api";
 import { ChatFeed } from "./ChatFeed";
-import { DecisionDock, type ReviewSuggestion } from "./DecisionDock";
+import { DecisionDock, type ReviewReference, type ReviewSuggestion } from "./DecisionDock";
 import { MeetingComposer } from "./MeetingComposer";
 import { ProjectHeaderActions } from "./ProjectHeaderActions";
 import { StageToggleMenu } from "./StageToggleMenu";
@@ -31,6 +32,8 @@ const STAKEHOLDER_TYPES = [
   { value: "system_owner", label: "系統所有者與管理者" },
   { value: "external_party", label: "外部相關單位" },
 ];
+const REFERENCE_DRAG_MIME = "application/x-plant-reference";
+const REVIEW_MENTION_DRAG_MIME = "application/x-plant-review-mention";
 
 interface CustomStakeholder {
   id: string;
@@ -76,9 +79,8 @@ function completedStageOverrides(
     });
   };
   const docsComplete =
-    (paths.has("output/design_rationale.md") ||
-      paths.has("results/design_rationale.html")) &&
-    (paths.has("output/srs.md") || paths.has("results/srs.html"));
+    paths.has("results/design_rationale.html") &&
+    paths.has("results/srs.html");
   const initComplete =
     !!String(artifact?.scenario ?? "").trim() &&
     Array.isArray(artifact?.stakeholders) &&
@@ -194,7 +196,8 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const { activeRun, data: runsData } = useActiveRun(projectId);
   const clearMessages = useChatStore((s) => s.clearMessages);
   const setMessages = useChatStore((s) => s.setMessages);
-  const trimTrailingRunStatusMessages = useChatStore((s) => s.trimTrailingRunStatusMessages);
+  const setContinueReplacementStage = useChatStore((s) => s.setContinueReplacementStage);
+  const trimRunStatusMessagesForContinue = useChatStore((s) => s.trimRunStatusMessagesForContinue);
   const pushNotice = useNoticeStore((s) => s.pushNotice);
   const meetingRounds = useUiStore((s) => s.meetingRounds);
   const meetingMaxIssues = useUiStore((s) => s.meetingMaxIssues);
@@ -217,6 +220,8 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     (project.data?.project?.rough_idea as string | undefined) ?? "";
   const [input, setInput] = useState("");
   const [reviewSuggestions, setReviewSuggestions] = useState<ReviewSuggestion[]>([]);
+  const [pendingReviewReferences, setPendingReviewReferences] = useState<ReviewReference[]>([]);
+  const [reviewDockDragOver, setReviewDockDragOver] = useState(false);
   const [customStakeholderDraft, setCustomStakeholderDraft] = useState({
     name: "",
     type: "",
@@ -228,6 +233,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   useEffect(() => {
     setInput("");
     setReviewSuggestions([]);
+    setPendingReviewReferences([]);
     setCustomStakeholderDraft({ name: "", type: "", reason: "" });
     setCustomStakeholders([]);
   }, [projectId]);
@@ -254,9 +260,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       activeRun?.pending_decision?.kind !== "stakeholder_statement_review" &&
       activeRun?.pending_decision?.kind !== "requirements_review" &&
       activeRun?.pending_decision?.kind !== "domain_research_review" &&
+      activeRun?.pending_decision?.kind !== "scope_review" &&
       activeRun?.pending_decision?.kind !== "meeting_issue_proposal_review"
     ) {
       setReviewSuggestions([]);
+      setPendingReviewReferences([]);
     }
     if (activeRun?.pending_decision?.kind !== "stakeholder_selection") {
       setCustomStakeholderDraft({ name: "", type: "", reason: "" });
@@ -293,6 +301,107 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       ),
     [activeRun?.pending_decision],
   );
+  const reviewMode =
+    activeRun?.pending_decision?.kind === "stakeholder_statement_review" ||
+    activeRun?.pending_decision?.kind === "requirements_review" ||
+    activeRun?.pending_decision?.kind === "domain_research_review" ||
+    activeRun?.pending_decision?.kind === "scope_review" ||
+    activeRun?.pending_decision?.kind === "meeting_issue_proposal_review";
+  const reviewTarget =
+    activeRun?.pending_decision?.kind === "requirements_review"
+      ? "requirements"
+      : activeRun?.pending_decision?.kind === "domain_research_review"
+        ? "domain"
+        : activeRun?.pending_decision?.kind === "scope_review"
+          ? "scope"
+          : activeRun?.pending_decision?.kind === "meeting_issue_proposal_review"
+            ? "meeting_issues"
+            : "stakeholders";
+  const referenceFromDrop = useCallback((dataTransfer: DataTransfer) => {
+    const raw = dataTransfer.getData(REFERENCE_DRAG_MIME);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { type?: string; name?: string; size?: number };
+        if (parsed.type === "reference_file" && parsed.name) {
+          return { name: parsed.name, size: parsed.size };
+        }
+      } catch {
+        return null;
+      }
+    }
+    const plainName = dataTransfer.getData("text/plain").trim();
+    if (!plainName) return null;
+    return referenceMentionOptions.find((item) => item.name === plainName) ?? { name: plainName };
+  }, [referenceMentionOptions]);
+  const mentionFromDrop = useCallback((dataTransfer: DataTransfer) => {
+    const raw = dataTransfer.getData(REVIEW_MENTION_DRAG_MIME);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        type?: string;
+        target?: "stakeholders" | "requirements";
+        id?: string;
+      };
+      if (parsed.type !== "review_mention" || parsed.target !== reviewTarget) return null;
+      const id = String(parsed.id ?? "").trim().replace(/^@+/, "");
+      return id || null;
+    } catch {
+      return null;
+    }
+  }, [reviewTarget]);
+  const canAcceptReviewDockDrop = useCallback((dataTransfer: DataTransfer) => {
+    if (!reviewMode || !canWrite) return false;
+    const types = Array.from(dataTransfer.types);
+    if (reviewTarget === "domain") {
+      return types.includes(REFERENCE_DRAG_MIME);
+    }
+    if (reviewTarget === "stakeholders" || reviewTarget === "requirements") {
+      return types.includes(REVIEW_MENTION_DRAG_MIME);
+    }
+    return false;
+  }, [canWrite, reviewMode, reviewTarget]);
+  const handleReviewDockDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!canAcceptReviewDockDrop(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setReviewDockDragOver(true);
+  }, [canAcceptReviewDockDrop]);
+  const handleReviewDockDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setReviewDockDragOver(false);
+    }
+  }, []);
+  const handleReviewDockDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!canAcceptReviewDockDrop(event.dataTransfer)) return;
+    event.preventDefault();
+    setReviewDockDragOver(false);
+    if (reviewTarget === "domain") {
+      const reference = referenceFromDrop(event.dataTransfer);
+      if (!reference) return;
+      setPendingReviewReferences((items = []) =>
+        items.some((item) => item.name === reference.name)
+          ? items
+          : [...items, reference],
+      );
+      return;
+    }
+    const id = mentionFromDrop(event.dataTransfer);
+    if (!id) return;
+    const token = `@${id}`;
+    setInput((current) => {
+      const tokens = Array.from(new Set(current.match(/@[A-Za-z0-9_-]+/g) ?? []));
+      const nextTokens =
+        token === "@All"
+          ? ["@All"]
+          : [...tokens.filter((item) => item !== "@All" && item !== token), token];
+      const body = current
+        .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trimStart();
+      return [nextTokens.join(" "), body].filter(Boolean).join(" ");
+    });
+  }, [canAcceptReviewDockDrop, mentionFromDrop, referenceFromDrop, reviewTarget]);
   const addCustomStakeholder = useCallback(() => {
     const name = customStakeholderDraft.name.trim();
     const type = customStakeholderDraft.type.trim();
@@ -318,9 +427,8 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   );
   const docsComplete =
     !!projectId &&
-    (hasArtifactPath("output/design_rationale.md") ||
-      hasArtifactPath("results/design_rationale.html")) &&
-    (hasArtifactPath("output/srs.md") || hasArtifactPath("results/srs.html"));
+    hasArtifactPath("results/design_rationale.html") &&
+    hasArtifactPath("results/srs.html");
   const existingDocumentOutputs = useMemo(
     () => ({
       DR:
@@ -373,7 +481,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
 
   const startMut = useMutation({
     mutationFn: async () => {
-      if (projectId) trimTrailingRunStatusMessages();
+      const replacementStage = projectId ? rawRunCheckpoint : null;
+      setContinueReplacementStage(replacementStage);
+      if (projectId) trimRunStatusMessagesForContinue(replacementStage);
       else clearMessages();
       const trimmed = projectId ? "" : input.trim();
       const runIdea = projectId ? "" : (trimmed || roughIdea);
@@ -412,11 +522,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       }
       clearAttachedDocs();
       clearStagedReferenceFiles();
+      setActiveProjectId(run.project_id);
       await queryClient.fetchQuery({
         queryKey: ["bootstrap"],
         queryFn: fetchBootstrap,
       });
-      setActiveProjectId(run.project_id);
       queryClient.invalidateQueries({ queryKey: ["runs", run.project_id] });
       queryClient.invalidateQueries({ queryKey: ["project", run.project_id] });
       queryClient.invalidateQueries({ queryKey: ["references", run.project_id] });
@@ -536,7 +646,12 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       bodyClassName="flex flex-col"
     >
       <div ref={panelMeasureRef} className="pointer-events-none absolute inset-x-0 top-0 h-0 overflow-hidden opacity-0" />
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        onDragOver={handleReviewDockDragOver}
+        onDragLeave={handleReviewDockDragLeave}
+        onDrop={handleReviewDockDrop}
+      >
         <div className="relative min-h-0 flex-1 flex flex-col bg-slate-50/50">
           <div className="min-h-0 flex-1">
             <ChatFeed
@@ -556,6 +671,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
                 const value = reviewSuggestions[index];
                 if (!value) return;
                 setInput(value.text);
+                setPendingReviewReferences(value.references ?? []);
                 setReviewSuggestions((items) => items.filter((_, i) => i !== index));
               }}
               onRemoveReviewSuggestion={(index) => {
@@ -576,6 +692,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               onRegisterHumanDecisionConfirm={(handler) => {
                 humanDecisionConfirmRef.current = handler;
               }}
+              onReviewDragOver={handleReviewDockDragOver}
+              onReviewDragLeave={handleReviewDockDragLeave}
+              onReviewDrop={handleReviewDockDrop}
             />
           )}
         </div>
@@ -591,6 +710,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           canWrite={canWrite}
           runCheckpoint={runCheckpoint}
           stageOverrides={agentStageOverrides}
+          reviewDragOver={reviewDockDragOver}
           onDismissRunCheckpoint={() => {
             if (projectId && rawRunCheckpointKey) {
               dismissRunCheckpoint(projectId, rawRunCheckpointKey);
@@ -598,22 +718,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           }}
           submitLabel={projectId && docsComplete ? "執行" : undefined}
           submitDisabled={false}
-          reviewMode={
-            activeRun?.pending_decision?.kind === "stakeholder_statement_review" ||
-            activeRun?.pending_decision?.kind === "requirements_review" ||
-            activeRun?.pending_decision?.kind === "domain_research_review" ||
-            activeRun?.pending_decision?.kind === "meeting_issue_proposal_review"
-          }
+          reviewMode={reviewMode}
           humanDecisionMode={activeRun?.pending_decision?.kind === "human_decision"}
-          reviewTarget={
-            activeRun?.pending_decision?.kind === "requirements_review"
-              ? "requirements"
-              : activeRun?.pending_decision?.kind === "domain_research_review"
-                ? "domain"
-              : activeRun?.pending_decision?.kind === "meeting_issue_proposal_review"
-                ? "meeting_issues"
-              : "stakeholders"
-          }
+          reviewTarget={reviewTarget}
+          reviewReferences={pendingReviewReferences ?? []}
+          onReviewReferencesChange={setPendingReviewReferences}
           mentionOptions={mentionOptions}
           referenceMentionOptions={referenceMentionOptions}
           stakeholderSelectionMode={activeRun?.pending_decision?.kind === "stakeholder_selection"}
@@ -629,6 +738,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             if (!text && !references.length) return;
             setReviewSuggestions((items) => [...items, { text, references }]);
             setInput("");
+            setPendingReviewReferences([]);
           }}
           onConfirmHumanDecision={() => humanDecisionConfirmRef.current?.()}
           onSkipAllHumanInterventions={() => skipAllHumanInterventionsMut.mutate()}

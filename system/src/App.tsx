@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { fetchConfig } from "@/api/config";
 import {
   Panel,
@@ -57,25 +58,26 @@ export default function App() {
   const visiblePanels = useUiStore((s) => s.visiblePanels);
   const layoutMode = useLayoutMode();
   const bootstrap = useBootstrap();
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: async () => (await fetchConfig()).config,
+    refetchInterval: 3000,
+  });
   const { artifacts } = useProjectData(projectId);
 
   useEffect(() => {
-    void fetchConfig()
-      .then(({ config }) => {
-        if (config.enable_agents) {
-          setEnabledAgents({
-            ...useUiStore.getState().enabledAgents,
-            ...config.enable_agents,
-          });
-        }
-        const rounds = positiveConfigNumber(config.rounds);
-        const maxIssues = positiveConfigNumber(config.max_issues);
-        setMeetingDefaults(rounds, maxIssues);
-      })
-      .catch(() => {
-        /* keep uiStore defaults */
+    const config = configQuery.data;
+    if (!config) return;
+    if (config.enable_agents) {
+      setEnabledAgents({
+        ...useUiStore.getState().enabledAgents,
+        ...config.enable_agents,
       });
-  }, [setEnabledAgents, setMeetingDefaults]);
+    }
+    const rounds = positiveConfigNumber(config.rounds);
+    const maxIssues = positiveConfigNumber(config.max_issues);
+    setMeetingDefaults(rounds, maxIssues);
+  }, [configQuery.data, setEnabledAgents, setMeetingDefaults]);
 
   useEffect(() => {
     clearMessages();
@@ -84,11 +86,14 @@ export default function App() {
 
   useEffect(() => {
     if (!projectId || !bootstrap.data) return;
+    if (bootstrap.isFetching) return;
     const exists = bootstrap.data.projects.some(
       (project) => project.project_id === projectId,
     );
+    const hasActiveRun = !!bootstrap.data.active_runs?.[projectId];
+    if (hasActiveRun) return;
     if (!exists) setActiveProjectId(null);
-  }, [bootstrap.data, projectId, setActiveProjectId]);
+  }, [bootstrap.data, bootstrap.isFetching, projectId, setActiveProjectId]);
 
   const items = artifacts.data?.items ?? EMPTY_ITEMS;
   const panelCount = Object.values(visiblePanels).filter(Boolean).length;

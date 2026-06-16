@@ -1,17 +1,42 @@
 import { create } from "zustand";
-import type { ChatMessage } from "@/types/api";
+import type { ChatMessage, RunCheckpoint } from "@/types/api";
+
+type ContinueTrimTarget =
+  | string
+  | Pick<RunCheckpoint, "stage_id" | "step_id" | "round">
+  | null
+  | undefined;
 
 interface ChatState {
   messages: ChatMessage[];
+  continueReplacementStage: ContinueTrimTarget;
   appendMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
-  trimTrailingRunStatusMessages: () => void;
+  resolveHumanInterventionProgress: (
+    decision?: ChatMessage["decision"] | null,
+    payload?: Record<string, unknown> | null,
+  ) => void;
+  setContinueReplacementStage: (target?: ContinueTrimTarget) => void;
+  trimRunStatusMessagesForContinue: (target?: ContinueTrimTarget) => void;
   clearMessages: () => void;
 }
 
 function isTrailingRunStatusMessage(message: ChatMessage) {
   if (message.status === "failed") return true;
-  return message.role === "system" && message.kind === "stage";
+  if (message.role === "system" && message.kind === "stage") return true;
+  return message.kind === "decision";
+}
+
+function isGeneratedDocumentPath(path?: string) {
+  return /^(?:results|output)\/(?:srs|design_rationale)\.(?:html|md)$/i.test(path ?? "");
+}
+
+function isTrailingGeneratedDocumentMessage(message: ChatMessage) {
+  if (isGeneratedDocumentPath(message.outputPath)) return true;
+  return (
+    message.stage === "document_generation" &&
+    (message.speaker === "documentor" || message.kind === "stage" || message.kind === "action")
+  );
 }
 
 function isDuplicateStagePill(a: ChatMessage, b: ChatMessage) {
@@ -27,23 +52,173 @@ function isDuplicateStagePill(a: ChatMessage, b: ChatMessage) {
   );
 }
 
+function messageSemanticKey(message: ChatMessage) {
+  if (message.outputPath) {
+    return `output:${message.outputPath}`;
+  }
+  if (message.role === "system" && message.kind === "stage") {
+    return `stage:${message.stage || ""}:${message.text.trim()}`;
+  }
+  if (message.kind === "decision" && message.decision?.id) {
+    return `decision:${message.decision.id}:${message.role}:${message.status}:${message.action || ""}`;
+  }
+  if (message.kind === "action" || message.kind === "output") {
+    const action = String(message.action || "").trim();
+    if (action) {
+      return `action:${message.stage || ""}:${action}:${message.text.trim()}`;
+    }
+  }
+  return "";
+}
+
+function hasDuplicateMessage(messages: ChatMessage[], msg: ChatMessage) {
+  if (messages.some((m) => m.id === msg.id)) return true;
+  if (messages.some((m) => isDuplicateStagePill(m, msg))) return true;
+  const key = messageSemanticKey(msg);
+  if (!key) return false;
+  return messages.some((message) => messageSemanticKey(message) === key);
+}
+
+function resolvedProgressText(kind?: string, payload?: Record<string, unknown> | null) {
+  if (payload?.skipped === true) return "已略過本次裁決";
+  switch (kind) {
+    case "meeting_issue_proposal_review":
+      return "候選議題已確認";
+    case "scope_review":
+      return "需求範圍已確認";
+    case "domain_research_review":
+      return "領域研究已確認";
+    case "requirements_review":
+      return "初始需求已確認";
+    case "stakeholder_statement_review":
+      return "利害關係人發言已確認";
+    default:
+      return "人類介入已完成";
+  }
+}
+
+function isProgressForDecision(message: ChatMessage, decision?: ChatMessage["decision"] | null) {
+  if (message.status !== "running" || message.kind !== "action") return false;
+  const kind = decision?.kind;
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options as Record<string, unknown>
+    : {};
+  const stageId = String(options.stage_id ?? "").trim();
+  const action = String(message.action ?? "").trim();
+  if (kind === "meeting_issue_proposal_review") {
+    return (
+      /^formal_meeting\.round_\d+\.propose_issues$/i.test(action) ||
+      /候選議題/.test(message.text)
+    );
+  }
+  if (stageId && (message.stage === stageId || action.includes(stageId))) return true;
+  return false;
+}
+
+export function trimTrailingRunDisplayMessages(messages: ChatMessage[]) {
+  let end = messages.length;
+  while (
+    end > 0 &&
+    (
+      isTrailingRunStatusMessage(messages[end - 1]) ||
+      isTrailingGeneratedDocumentMessage(messages[end - 1])
+    )
+  ) {
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
+export function trimTrailingGeneratedDocumentMessages(messages: ChatMessage[]) {
+  let end = messages.length;
+  while (end > 0 && isTrailingGeneratedDocumentMessage(messages[end - 1])) {
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
+export function pruneRunDisplayMessages(messages: ChatMessage[]) {
+  return messages.filter(
+    (message) =>
+      !isTrailingRunStatusMessage(message) &&
+      !isTrailingGeneratedDocumentMessage(message),
+  );
+}
+
+export function trimRunDisplayMessagesFromStage(
+  messages: ChatMessage[],
+  target?: ContinueTrimTarget,
+) {
+  const stage = typeof target === "string"
+    ? target.trim()
+    : String(target?.stage_id ?? "").trim();
+  if (!stage) return trimTrailingRunDisplayMessages(messages);
+  const round = typeof target === "object" && target
+    ? Number(target.round ?? 0)
+    : 0;
+
+  let start = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message.role === "system" &&
+      message.kind === "stage" &&
+      message.stage === stage &&
+      (
+        stage !== "formal_meeting" ||
+        round <= 0 ||
+        new RegExp(`^第\\s*${round}\\s*輪會議$`, "u").test(message.text.trim())
+      )
+    ) {
+      start = index;
+      break;
+    }
+  }
+  if (start < 0) return trimTrailingRunDisplayMessages(messages);
+  return messages.slice(0, start + 1);
+}
+
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
+  continueReplacementStage: null,
   appendMessage: (msg) =>
     set((s) => {
-      if (s.messages.some((m) => m.id === msg.id)) return s;
-      if (s.messages.some((m) => isDuplicateStagePill(m, msg))) return s;
+      if (hasDuplicateMessage(s.messages, msg)) return s;
       return { messages: [...s.messages, msg] };
     }),
   setMessages: (messages) => set({ messages }),
-  trimTrailingRunStatusMessages: () =>
+  resolveHumanInterventionProgress: (decision, payload) =>
     set((s) => {
-      let end = s.messages.length;
-      while (end > 0 && isTrailingRunStatusMessage(s.messages[end - 1])) {
-        end -= 1;
+      let changed = false;
+      const next = [...s.messages];
+      for (let index = next.length - 1; index >= 0; index -= 1) {
+        const message = next[index];
+        if (!isProgressForDecision(message, decision)) continue;
+        if (payload?.auto_skipped === true) {
+          next.splice(index, 1);
+        } else {
+          next[index] = {
+            ...message,
+            status: "done",
+            text: resolvedProgressText(decision?.kind, payload),
+          };
+        }
+        changed = true;
+        break;
       }
-      if (end === s.messages.length) return s;
-      return { messages: s.messages.slice(0, end) };
+      return changed ? { messages: next } : s;
+    }),
+  setContinueReplacementStage: (stageId) =>
+    set({
+      continueReplacementStage: typeof stageId === "string"
+        ? String(stageId ?? "").trim() || null
+        : stageId ?? null,
+    }),
+  trimRunStatusMessagesForContinue: (stageId) =>
+    set((s) => {
+      const messages = trimRunDisplayMessagesFromStage(s.messages, stageId);
+      if (messages === s.messages) return s;
+      return { messages };
     }),
   clearMessages: () => set({ messages: [] }),
 }));

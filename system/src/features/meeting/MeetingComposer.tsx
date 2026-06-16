@@ -1,6 +1,7 @@
 import { Bot, Plus, Send, Square } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import { fetchConfig, updateConfig } from "@/api/config";
 import { fetchModelApiKeys } from "@/api/secrets";
 import { AGENT_LABELS, HEADER_AGENT_ORDER } from "@/constants/agents";
@@ -28,11 +29,14 @@ interface MeetingComposerProps {
   submitDisabled?: boolean;
   reviewMode?: boolean;
   humanDecisionMode?: boolean;
-  reviewTarget?: "stakeholders" | "requirements" | "domain" | "meeting_issues";
+  reviewTarget?: "stakeholders" | "requirements" | "domain" | "scope" | "meeting_issues";
   onAddReviewSuggestion?: (suggestion?: { text: string; references?: ReferenceMention[] }) => void;
   onConfirmHumanDecision?: () => void;
   onSkipAllHumanInterventions?: () => void;
   skipAllHumanInterventionsLoading?: boolean;
+  reviewDragOver?: boolean;
+  reviewReferences?: ReferenceMention[];
+  onReviewReferencesChange?: (references: ReferenceMention[]) => void;
   mentionOptions?: string[];
   referenceMentionOptions?: ReferenceMention[];
   stakeholderSelectionMode?: boolean;
@@ -53,6 +57,9 @@ interface ReferenceMention {
   name: string;
   size?: number;
 }
+
+const REFERENCE_DRAG_MIME = "application/x-plant-reference";
+const REVIEW_MENTION_DRAG_MIME = "application/x-plant-review-mention";
 
 const AGENT_OPTION_LABELS: Record<string, string> = {
   user: "User",
@@ -157,6 +164,9 @@ export function MeetingComposer({
   onConfirmHumanDecision,
   onSkipAllHumanInterventions,
   skipAllHumanInterventionsLoading = false,
+  reviewDragOver = false,
+  reviewReferences,
+  onReviewReferencesChange,
   mentionOptions = [],
   referenceMentionOptions = [],
   stakeholderSelectionMode = false,
@@ -179,7 +189,10 @@ export function MeetingComposer({
   const [showAgentPopover, setShowAgentPopover] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
-  const [selectedReferences, setSelectedReferences] = useState<ReferenceMention[]>([]);
+  const [internalSelectedReferences, setInternalSelectedReferences] = useState<ReferenceMention[]>([]);
+  const selectedReferences = reviewReferences ?? internalSelectedReferences;
+  const setSelectedReferences = onReviewReferencesChange ?? setInternalSelectedReferences;
+  const [referenceDragOver, setReferenceDragOver] = useState(false);
   const [compactButtons, setCompactButtons] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
@@ -198,7 +211,7 @@ export function MeetingComposer({
   });
 
   const displayAgents = HEADER_AGENT_ORDER;
-  const agentButtonDisabled = !!disabled && !readonlyAgentSettings;
+  const agentButtonDisabled = false;
   const configuredProviders = apiKeyConfiguredMap(keyQuery.data?.providers);
   const lockedAgentReasons = requiredAgentReasons(configQuery.data, stageOverrides);
   const idleSubmitLabel = submitLabel ?? (noProject ? "執行" : "繼續");
@@ -213,8 +226,15 @@ export function MeetingComposer({
       : !!disabled || continueMode;
   const mentionTokens = normalizeMentionTokens(value.match(/@[A-Za-z0-9_-]+/g) ?? []);
   const isDomainReview = reviewMode && reviewTarget === "domain";
+  const isScopeReview = reviewMode && reviewTarget === "scope";
   const isMeetingIssueReview = reviewMode && reviewTarget === "meeting_issues";
-  const reviewUsesMention = reviewMode && !isMeetingIssueReview;
+  const reviewUsesMention = reviewMode && !isMeetingIssueReview && !isScopeReview;
+  const canDropReference = isDomainReview && canWrite && !inputDisabled;
+  const canDropReviewMention =
+    reviewMode &&
+    (reviewTarget === "stakeholders" || reviewTarget === "requirements") &&
+    canWrite &&
+    !inputDisabled;
   const visibleInputValue = reviewMode && !isMeetingIssueReview
     ? value
         .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
@@ -288,6 +308,125 @@ export function MeetingComposer({
     }
   };
 
+  const saveMeetingDefaults = async (patch: { rounds?: number; max_issues?: number }) => {
+    try {
+      const { config } = await fetchConfig();
+      await updateConfig({
+        ...config,
+        ...patch,
+      });
+      pushNotice({
+        tone: "success",
+        title: "已儲存",
+        message: "會議設定已更新",
+      });
+    } catch (e) {
+      pushNotice({
+        tone: "error",
+        title: "儲存失敗",
+        message: errorMessage(e, "無法儲存會議設定"),
+      });
+    }
+  };
+
+  const addSelectedReference = (reference: ReferenceMention) => {
+    if (selectedReferences.some((item) => item.name === reference.name)) return;
+    setSelectedReferences([...selectedReferences, reference]);
+  };
+
+  const referenceFromDrop = (dataTransfer: DataTransfer): ReferenceMention | null => {
+    const raw = dataTransfer.getData(REFERENCE_DRAG_MIME);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Partial<ReferenceMention> & { type?: string };
+        if (parsed.type === "reference_file" && parsed.name) {
+          return { name: parsed.name, size: parsed.size };
+        }
+      } catch {
+        return null;
+      }
+    }
+    const plainName = dataTransfer.getData("text/plain").trim();
+    if (!plainName) return null;
+    return referenceMentionOptions.find((item) => item.name === plainName) ?? { name: plainName };
+  };
+
+  const handleReferenceDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!canDropReference) return;
+    const types = Array.from(event.dataTransfer.types);
+    if (!types.includes(REFERENCE_DRAG_MIME)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setReferenceDragOver(true);
+  };
+
+  const handleReferenceDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setReferenceDragOver(false);
+    }
+  };
+
+  const handleReferenceDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!canDropReference) return;
+    const reference = referenceFromDrop(event.dataTransfer);
+    if (!reference) return;
+    event.preventDefault();
+    setReferenceDragOver(false);
+    addSelectedReference(reference);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const mentionFromDrop = (dataTransfer: DataTransfer): string | null => {
+    const raw = dataTransfer.getData(REVIEW_MENTION_DRAG_MIME);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        type?: string;
+        target?: "stakeholders" | "requirements";
+        id?: string;
+      };
+      if (parsed.type !== "review_mention" || parsed.target !== reviewTarget) return null;
+      const id = String(parsed.id ?? "").trim().replace(/^@+/, "");
+      return id || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleReviewMentionDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!canDropReviewMention) return;
+    if (!Array.from(event.dataTransfer.types).includes(REVIEW_MENTION_DRAG_MIME)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setReferenceDragOver(true);
+  };
+
+  const handleReviewMentionDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!canDropReviewMention) return;
+    const id = mentionFromDrop(event.dataTransfer);
+    if (!id) return;
+    event.preventDefault();
+    setReferenceDragOver(false);
+    const token = `@${id}`;
+    const nextTokens =
+      token === "@All"
+        ? ["@All"]
+        : [...mentionTokens.filter((item) => item !== "@All" && item !== token), token];
+    onChange(composeReviewValue(visibleInputValue, nextTokens));
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const handleComposerDragOver = (event: DragEvent<HTMLDivElement>) => {
+    handleReferenceDragOver(event);
+    handleReviewMentionDragOver(event);
+  };
+
+  const handleComposerDrop = (event: DragEvent<HTMLDivElement>) => {
+    handleReferenceDrop(event);
+    handleReviewMentionDrop(event);
+  };
+
   const insertMention = (id: string) => {
     const target = textareaRef.current;
     const raw = visibleInputValue;
@@ -299,9 +438,7 @@ export function MeetingComposer({
     if (isDomainReview) {
       const reference = referenceMentionOptions.find((item) => item.name === id);
       if (reference) {
-        setSelectedReferences((items) =>
-          items.some((item) => item.name === reference.name) ? items : [...items, reference],
-        );
+        addSelectedReference(reference);
       }
       onChange(`${before}${after}`.trimStart());
       setMentionOpen(false);
@@ -329,6 +466,16 @@ export function MeetingComposer({
     const cursor = target?.selectionStart ?? visibleInputValue.length;
     const before = visibleInputValue.slice(0, cursor);
     const after = visibleInputValue.slice(cursor);
+    if (mentionOpen) {
+      const nextBefore = before.replace(isDomainReview ? /@([^\s]*)$/ : /@([A-Za-z0-9_-]*)$/, "");
+      onChange(isDomainReview ? `${nextBefore}${after}` : composeReviewValue(`${nextBefore}${after}`));
+      setMentionOpen(false);
+      window.requestAnimationFrame(() => {
+        target?.focus();
+        target?.setSelectionRange(nextBefore.length, nextBefore.length);
+      });
+      return;
+    }
     const needsPrefix = before.endsWith("@") ? "" : before && !/\s$/.test(before) ? " @" : "@";
     const nextBefore = `${before}${needsPrefix}`;
     onChange(isDomainReview ? `${nextBefore}${after}` : composeReviewValue(`${nextBefore}${after}`));
@@ -367,7 +514,13 @@ export function MeetingComposer({
   };
 
   return (
-    <div ref={composerRef} className="shrink-0 px-3 pb-4 pt-3">
+    <div
+      ref={composerRef}
+      className="shrink-0 px-3 pb-4 pt-3"
+      onDragOver={handleComposerDragOver}
+      onDragLeave={handleReferenceDragLeave}
+      onDrop={handleComposerDrop}
+    >
       <RunCheckpointNotice
         checkpoint={runCheckpoint}
         compact={compactButtons}
@@ -417,6 +570,7 @@ export function MeetingComposer({
                       onChange={(e) => {
                         const next = Math.max(1, Number(e.target.value || 1));
                         setMeetingRounds(next);
+                        void saveMeetingDefaults({ rounds: next });
                       }}
                     />
                   </div>
@@ -436,6 +590,7 @@ export function MeetingComposer({
                       onChange={(e) => {
                         const next = Math.max(1, Number(e.target.value || 1));
                         setMeetingMaxIssues(next);
+                        void saveMeetingDefaults({ max_issues: next });
                       }}
                     />
                   </div>
@@ -496,7 +651,12 @@ export function MeetingComposer({
           )}
         </div>
 
-        <div className="relative flex min-h-[54px] min-w-0 flex-1 items-start gap-2 rounded-bubble border border-gray-100 bg-transparent p-2">
+        <div
+          className={cn(
+            "relative flex min-h-[54px] min-w-0 flex-1 items-start gap-2 rounded-bubble border border-gray-100 bg-transparent p-2 transition-colors",
+            (referenceDragOver || reviewDragOver) && "border-slate-300 bg-slate-50",
+          )}
+        >
           <div
             className={cn(
               "flex min-w-0 flex-1 gap-2",
@@ -518,6 +678,8 @@ export function MeetingComposer({
                       ? "引用文件"
                       : reviewTarget === "requirements"
                         ? "引用需求 ID"
+                        : reviewTarget === "scope"
+                          ? "引用需求範圍"
                         : "引用利害關係人發言 ID"
                   }
                 >
@@ -544,8 +706,8 @@ export function MeetingComposer({
                         type="button"
                         className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] leading-none text-white hover:bg-slate-700"
                         onClick={() =>
-                          setSelectedReferences((items) =>
-                            items.filter((item) => item.name !== reference.name),
+                          setSelectedReferences(
+                            selectedReferences.filter((item) => item.name !== reference.name),
                           )
                         }
                         aria-label={`移除 ${reference.name}`}
@@ -593,6 +755,8 @@ export function MeetingComposer({
                   : reviewMode
                   ? reviewTarget === "requirements"
                     ? "輸入建議(@：可以引用需求)"
+                    : isScopeReview
+                      ? "輸入需求範圍建議"
                     : isDomainReview
                       ? "輸入建議(@：可以引用文件)"
                     : isMeetingIssueReview
@@ -619,17 +783,17 @@ export function MeetingComposer({
                   return;
                 }
                 const inlineTokens =
-                  isDomainReview || isMeetingIssueReview
+                  isDomainReview || isMeetingIssueReview || isScopeReview
                     ? null
                     : e.target.value.match(/@[A-Za-z0-9_-]+/g);
-                const inlineText = isDomainReview || isMeetingIssueReview
+                const inlineText = isDomainReview || isMeetingIssueReview || isScopeReview
                   ? e.target.value
                   : e.target.value
                       .replace(/(^|\s)@[A-Za-z0-9_-]+/g, " ")
                       .replace(/\s{2,}/g, " ")
                       .trimStart();
                 const next = reviewMode
-                  ? isDomainReview || isMeetingIssueReview
+                  ? isDomainReview || isMeetingIssueReview || isScopeReview
                     ? inlineText
                     : composeReviewValue(inlineText, inlineTokens ?? mentionTokens)
                   : e.target.value;

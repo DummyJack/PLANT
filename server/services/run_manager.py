@@ -135,9 +135,10 @@ class RunManager:
         stage_overrides: Optional[Dict[str, bool]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        store = Store(self.base_dir, project_id)
-        if not store.project_dir.exists():
+        project_dir = self.base_dir / "projects" / project_id
+        if not project_dir.exists() or not project_dir.is_dir():
             raise ValueError("Project not found")
+        store = Store(self.base_dir, project_id)
 
         base_config = copy.deepcopy(config) if config else Store(self.base_dir).load_config()
         resolved_config = apply_run_stage_overrides(base_config, stage_overrides)
@@ -205,6 +206,7 @@ class RunManager:
             pending = run.get("pending_decision") or {}
             if pending and pending.get("id") != decision_id:
                 raise ValueError("decision_id does not match pending decision")
+            decision_snapshot = copy.deepcopy(pending) if isinstance(pending, dict) else {}
             if payload.get("skip_all_human_interventions") is True:
                 run["skip_all_human_interventions"] = True
                 payload = {
@@ -221,6 +223,7 @@ class RunManager:
                 {
                     "type": "human_decision_submitted",
                     "decision_id": decision_id,
+                    "decision": decision_snapshot,
                     "payload": payload,
                     "message": "Human decision submitted",
                 },
@@ -286,6 +289,7 @@ class RunManager:
             original_human_decision = Collect.human_decision_on_issue
             original_stakeholder_statement_review = Collect.stakeholder_statement_review
             original_requirements_review = Collect.requirements_review
+            original_scope_review = Collect.scope_review
             original_domain_research_review = Collect.domain_research_review
             original_meeting_issue_proposal_review = Collect.meeting_issue_proposal_review
             Collect.user_selection = staticmethod(
@@ -303,6 +307,9 @@ class RunManager:
             )
             Collect.requirements_review = staticmethod(
                 lambda requirements: self._request_requirements_review(run_id, requirements)
+            )
+            Collect.scope_review = staticmethod(
+                lambda scope: self._request_scope_review(run_id, scope)
             )
             Collect.domain_research_review = staticmethod(
                 lambda references: self._request_domain_research_review(run_id, references)
@@ -346,6 +353,7 @@ class RunManager:
                 Collect.human_decision_on_issue = original_human_decision
                 Collect.stakeholder_statement_review = original_stakeholder_statement_review
                 Collect.requirements_review = original_requirements_review
+                Collect.scope_review = original_scope_review
                 Collect.domain_research_review = original_domain_research_review
                 Collect.meeting_issue_proposal_review = original_meeting_issue_proposal_review
                 clear_cancel_checker(project_id)
@@ -724,10 +732,9 @@ class RunManager:
                 "stakeholders": stakeholders,
             },
             "response_schema": {
-                "action": "approve|direct_edit|human_decision|selection_comment|agent_refinement",
+                "action": "approve|direct_edit|submit_suggestions|agent_refinement",
                 "stakeholders": [{"name": "string", "text": [{"id": "string", "text": "string"}]}],
-                "human_decision": "string",
-                "selection_comment": {"selected_text": "string", "comment": "string"},
+                "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
             },
         }
         response = self._wait_for_decision(run_id, payload)
@@ -749,9 +756,39 @@ class RunManager:
                 "requirements": requirements,
             },
             "response_schema": {
-                "action": "approve|human_decision|selection_comment|agent_refinement",
-                "human_decision": "string",
-                "selection_comment": {"selected_text": "string", "comment": "string"},
+                "action": "approve|submit_suggestions|agent_refinement",
+                "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
+            },
+        }
+        response = self._wait_for_decision(run_id, payload)
+        return response if isinstance(response, dict) else {"action": "approve"}
+
+    def _request_scope_review(
+        self,
+        run_id: str,
+        scope: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        source = scope if isinstance(scope, dict) else {}
+        payload = {
+            "id": f"scope_review_{uuid.uuid4().hex[:8]}",
+            "kind": "scope_review",
+            "title": "需求範圍",
+            "description": "請確認、直接編輯，或留下 Human Decision。",
+            "options": {
+                "stage_id": "scope_review",
+                "status": "waiting_for_human_decision",
+                "scope": {
+                    "in_scope": source.get("in_scope", []) or [],
+                    "out_of_scope": source.get("out_of_scope", []) or [],
+                },
+            },
+            "response_schema": {
+                "action": "approve|direct_edit|submit_suggestions|agent_refinement",
+                "scope": {
+                    "in_scope": ["string"],
+                    "out_of_scope": ["string"],
+                },
+                "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
             },
         }
         response = self._wait_for_decision(run_id, payload)
@@ -773,9 +810,14 @@ class RunManager:
                 "references": references,
             },
             "response_schema": {
-                "action": "approve|human_decision",
-                "human_decision": "string",
-                "referenced_files": [{"name": "string", "path": "string", "type": "string"}],
+                "action": "approve|submit_suggestions",
+                "suggestions": [
+                    {
+                        "text": "string",
+                        "target_ids": ["string"],
+                        "references": [{"name": "string"}],
+                    }
+                ],
             },
         }
         response = self._wait_for_decision(run_id, payload)

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Check, ChevronDown, MoreHorizontal, Plus, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchArtifacts, manualIndexUrl } from "@/api/projects";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useActiveRun } from "@/hooks/useActiveRun";
@@ -18,6 +18,27 @@ function projectOptionLabel(project: {
   const snippet =
     label.length > max ? `${label.slice(0, max)}…` : label;
   return snippet;
+}
+
+function isVisibleProject(project: {
+  project_id: string;
+  has_results?: boolean;
+  active_run?: unknown;
+  status_hint?: string;
+}) {
+  if (project.has_results) return true;
+  if (project.active_run) return true;
+  const status = String(project.status_hint ?? "").trim();
+  return !!status && status !== "idle";
+}
+
+function uniqueProjectsById<T extends { project_id: string }>(projects: T[]): T[] {
+  const seen = new Set<string>();
+  return projects.filter((project) => {
+    if (seen.has(project.project_id)) return false;
+    seen.add(project.project_id);
+    return true;
+  });
 }
 
 interface ProjectHeaderActionsProps {
@@ -47,8 +68,18 @@ export function ProjectHeaderActions({
       activeRun.status,
     );
 
-  const projects = bootstrap.data?.projects ?? [];
-  const hasProjects = projects.length > 0;
+  const projects = useMemo(
+    () => uniqueProjectsById(bootstrap.data?.projects ?? []),
+    [bootstrap.data?.projects],
+  );
+  const visibleProjects = useMemo(
+    () =>
+      projects.filter((project) =>
+        project.project_id === projectId || isVisibleProject(project),
+      ),
+    [projectId, projects],
+  );
+  const hasProjects = visibleProjects.length > 0;
   const current = projects.find((p) => p.project_id === projectId);
   const artifactsQuery = useQuery({
     queryKey: ["artifacts", projectId],
@@ -126,11 +157,11 @@ export function ProjectHeaderActions({
         </button>
         {projectMenuOpen && (
           <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-52 overflow-y-auto rounded-control border border-gray-200 bg-white py-1 shadow-lg">
-            {projects.map((p) => (
+            {visibleProjects.map((p) => (
               <button
                 key={p.project_id}
                 type="button"
-                className={`flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left text-xs hover:bg-gray-50 ${
+                className={`flex w-full items-center justify-between gap-2 px-2 py-2 text-left text-xs hover:bg-gray-50 ${
                   p.project_id === projectId
                     ? "bg-slate-50 font-semibold text-slate-900"
                     : "text-slate-700"

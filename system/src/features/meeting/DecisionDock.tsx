@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Edit3, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import type { DragEvent } from "react";
 import { submitDecision } from "@/api/runs";
-import { ReferenceFileIcon, referenceExt, referenceLabel } from "@/features/documents/ReferenceFileIcon";
+import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
 import { useUiStore } from "@/stores/uiStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
@@ -20,6 +21,9 @@ interface DecisionDockProps {
   customDecisionText?: string;
   onClearCustomDecisionText?: () => void;
   onRegisterHumanDecisionConfirm?: (handler: (() => void) | null) => void;
+  onReviewDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onReviewDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
+  onReviewDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
 
 const STAKEHOLDER_TYPES = [
@@ -52,6 +56,83 @@ export interface ReviewReference {
 export interface ReviewSuggestion {
   text: string;
   references?: ReviewReference[];
+  target_ids?: string[];
+}
+
+interface ScopeReviewDraft {
+  in_scope: string[];
+  out_of_scope: string[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+const TARGET_MENTION_RE = /(^|\s)@((?:URL|REQ|SM|CR|ST)-[A-Za-z0-9_.:-]+|R\d+-M\d+)/gi;
+
+function reviewTargetIds(text: string) {
+  const ids: string[] = [];
+  String(text || "").replace(TARGET_MENTION_RE, (_match, _prefix, id) => {
+    ids.push(String(id || "").trim().toUpperCase());
+    return "";
+  });
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function stripTargetMentions(text: string) {
+  return String(text || "")
+    .replace(TARGET_MENTION_RE, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function suggestionPayload(suggestion: ReviewSuggestion) {
+  const target_ids = Array.from(
+    new Set([...(suggestion.target_ids ?? []), ...reviewTargetIds(suggestion.text)]),
+  );
+  return {
+    text: stripTargetMentions(suggestion.text) || suggestion.text.trim(),
+    target_ids,
+    references: (suggestion.references ?? []).map((ref) => ({ name: ref.name })),
+  };
+}
+
+function suggestionPayloads(suggestions: ReviewSuggestion[]) {
+  return suggestions.map(suggestionPayload);
+}
+
+function cleanScopeList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function scopeDraftFromDecision(decision: RunState["pending_decision"]): ScopeReviewDraft {
+  const options = isRecord(decision?.options) ? decision.options : {};
+  const rawScope = isRecord(options.scope) ? options.scope : {};
+  return {
+    in_scope: cleanScopeList(rawScope.in_scope),
+    out_of_scope: cleanScopeList(rawScope.out_of_scope),
+  };
+}
+
+function normalizeScopeDraft(draft: ScopeReviewDraft): ScopeReviewDraft {
+  return {
+    in_scope: cleanScopeList(draft.in_scope),
+    out_of_scope: cleanScopeList(draft.out_of_scope),
+  };
+}
+
+function sameScopeDraft(a: ScopeReviewDraft, b: ScopeReviewDraft) {
+  const left = normalizeScopeDraft(a);
+  const right = normalizeScopeDraft(b);
+  return (
+    left.in_scope.length === right.in_scope.length &&
+    left.out_of_scope.length === right.out_of_scope.length &&
+    left.in_scope.every((item, index) => item === right.in_scope[index]) &&
+    left.out_of_scope.every((item, index) => item === right.out_of_scope[index])
+  );
 }
 
 function ReferenceChip({ reference }: { reference: ReviewReference }) {
@@ -83,10 +164,15 @@ export function DecisionDock({
   customDecisionText = "",
   onClearCustomDecisionText,
   onRegisterHumanDecisionConfirm,
+  onReviewDragOver,
+  onReviewDragLeave,
+  onReviewDrop,
 }: DecisionDockProps) {
   const decision = run.pending_decision;
   const queryClient = useQueryClient();
   const canWrite = useUiStore((s) => s.canWrite);
+  const scopeReviewDrafts = useUiStore((s) => s.scopeReviewDrafts);
+  const clearScopeReviewDraft = useUiStore((s) => s.clearScopeReviewDraft);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [stakeholders, setStakeholders] = useState<
     Record<string, boolean>
@@ -133,11 +219,27 @@ export function DecisionDock({
     decision.kind === "stakeholder_statement_review" ||
     decision.kind === "requirements_review" ||
     decision.kind === "domain_research_review" ||
+    decision.kind === "scope_review" ||
     decision.kind === "meeting_issue_proposal_review"
   ) {
     const isRequirementsReview = decision.kind === "requirements_review";
     const isDomainReview = decision.kind === "domain_research_review";
+    const isScopeReview = decision.kind === "scope_review";
     const isMeetingIssueReview = decision.kind === "meeting_issue_proposal_review";
+    const originalScopeDraft = scopeDraftFromDecision(decision);
+    const editedScopeDraft = normalizeScopeDraft(
+      scopeReviewDrafts[decision.id] ?? originalScopeDraft,
+    );
+    const scopeChanged = isScopeReview && !sameScopeDraft(originalScopeDraft, editedScopeDraft);
+    const reviewHelpText = isDomainReview
+      ? "右側可查看領域研究文件，支援拖移引用，按確定送出"
+      : isRequirementsReview
+        ? "右側可查看使用者需求，支援拖移引用，按確定送出"
+        : isScopeReview
+          ? "右側可逐條編輯需求範圍；下方可加入建議，按確定送出"
+        : isMeetingIssueReview
+          ? "右側可查看候選議題，按確定送出"
+          : "右側可查看利害關係人發言，支援拖移引用與編輯，按確定送出";
     const renderSuggestion = (suggestion: ReviewSuggestion) => {
       const value = suggestion.text;
       const tokens = Array.from(new Set(value.match(/@[A-Za-z0-9_-]+/g) ?? []));
@@ -174,6 +276,31 @@ export function DecisionDock({
       const suggestions = reviewSuggestions
         .map((item) => ({ ...item, text: item.text.trim() }))
         .filter((item) => item.text || item.references?.length);
+      if (isScopeReview) {
+        const structuredSuggestions = suggestionPayloads(suggestions);
+        if (scopeChanged) {
+          submitMut.mutate({
+            action: "direct_edit",
+            scope: editedScopeDraft,
+            ...(structuredSuggestions.length ? { suggestions: structuredSuggestions } : {}),
+          });
+          onClearReviewSuggestions?.();
+          clearScopeReviewDraft(decision.id);
+          return;
+        }
+        if (structuredSuggestions.length) {
+          submitMut.mutate({
+            action: "submit_suggestions",
+            suggestions: structuredSuggestions,
+          });
+          onClearReviewSuggestions?.();
+          clearScopeReviewDraft(decision.id);
+          return;
+        }
+        submitMut.mutate({ action: "approve" });
+        clearScopeReviewDraft(decision.id);
+        return;
+      }
       if (!suggestions.length) {
         submitMut.mutate({ action: "approve" });
         return;
@@ -186,29 +313,27 @@ export function DecisionDock({
         onClearReviewSuggestions?.();
         return;
       }
-      const feedback = suggestions
-        .map((item, index) => {
-          const refs = (item.references ?? []).map((ref) => `@${ref.name}`).join(" ");
-          return `建議 ${index + 1}：${[refs, item.text].filter(Boolean).join(" ")}`;
-        })
-        .join("\n\n");
-      const referencedFiles = suggestions
-        .flatMap((item) => item.references ?? [])
-        .filter((ref, index, rows) => rows.findIndex((row) => row.name === ref.name) === index)
-        .map((ref) => ({
-          name: ref.name,
-          path: `${run.project_id}/${ref.name}`,
-          type: referenceExt(ref.name).slice(1),
-        }));
+      if (isDomainReview) {
+        submitMut.mutate({
+          action: "submit_suggestions",
+          suggestions: suggestionPayloads(suggestions),
+        });
+        onClearReviewSuggestions?.();
+        return;
+      }
       submitMut.mutate({
-        action: "human_decision",
-        human_decision: feedback,
-        referenced_files: isDomainReview ? referencedFiles : undefined,
+        action: "submit_suggestions",
+        suggestions: suggestionPayloads(suggestions),
       });
       onClearReviewSuggestions?.();
     };
     return (
-      <div className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-3 py-2.5">
+      <div
+        className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-3 py-2.5"
+        onDragOver={onReviewDragOver}
+        onDragLeave={onReviewDragLeave}
+        onDrop={onReviewDrop}
+      >
         <div className="mb-2 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -217,6 +342,8 @@ export function DecisionDock({
                   ? "建議（領域研究）"
                   : isRequirementsReview
                     ? "建議（使用者需求）"
+                    : isScopeReview
+                      ? "建議（需求範圍）"
                     : isMeetingIssueReview
                       ? "候選議題"
                     : "建議（利害關係人發言）"}
@@ -226,9 +353,7 @@ export function DecisionDock({
               </span>
             </div>
             <p className="mt-0.5 text-[11px] leading-5 text-slate-500">
-              {isDomainReview || isRequirementsReview || isMeetingIssueReview
-                ? "按確定送出"
-                : "右側可編輯發言，按確定送出"}
+              {reviewHelpText}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -570,7 +695,8 @@ export function DecisionDock({
                 recommendedId.toUpperCase() === (OPTION_LETTERS[i] ?? "").toUpperCase());
             const optionLabel = optionDisplayLabel(optionValue, i);
             const title = opt.title || opt.summary || optionLabel;
-            const description = opt.description || (opt.summary !== title ? opt.summary : "");
+            const rawDescription = opt.description || (opt.summary && opt.summary !== title ? opt.summary : "") || "";
+            const description = rawDescription.trim() === title.trim() ? "" : rawDescription;
             return (
               <button
                 key={opt.id ?? i}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -138,6 +139,34 @@ def _latest_mom_paths(store: Store) -> List[Path]:
     return result
 
 
+def _mom_paths_for_round(store: Store, round_num: int | None) -> List[Path]:
+    try:
+        round_value = int(round_num or 0)
+    except (TypeError, ValueError):
+        round_value = 0
+    if round_value <= 0:
+        return []
+    mom_dir = store.artifact_dir / "MoM"
+    rows = list(mom_dir.glob(f"R{round_value}-M*.md")) if mom_dir.exists() else []
+    result: List[Path] = []
+    for path in rows:
+        if not path.is_file():
+            continue
+        result.append(path)
+        result.append(store.project_dir / "results" / "MoM" / path.with_suffix(".html").name)
+    return result
+
+
+def _mom_path_round(path: Path) -> int:
+    match = re.match(r"^R(\d+)-M\d+\.(?:md|html)$", path.name)
+    if not match:
+        return 0
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return 0
+
+
 def stage_dirty_outputs(store: Store, stage_id: str) -> List[Path]:
     stage = str(stage_id or "").strip()
     if stage in {"formal_meeting", "meeting_issue_proposal_review"}:
@@ -199,9 +228,16 @@ def record_run_checkpoint(
         last_round = int(meta.get("last_round") or artifact.get("last_round") or 0)
     except (TypeError, ValueError):
         last_round = 0
-    paths = stage_dirty_outputs(store, stage_id)
     step_id = str(step_id or stage_id or "").strip()
     resolved_round = round_num if round_num is not None else last_round
+    if str(stage_id or "").strip() in {"formal_meeting", "meeting_issue_proposal_review"}:
+        paths = _mom_paths_for_round(store, resolved_round)
+        try:
+            last_round = max(0, int(resolved_round or 0) - 1)
+        except (TypeError, ValueError):
+            last_round = 0
+    else:
+        paths = stage_dirty_outputs(store, stage_id)
     checkpoint = {
         "status": status,
         "stage_id": stage_id,
@@ -263,7 +299,26 @@ def clear_run_checkpoint_for_continue(store: Store, artifact: Dict[str, Any]) ->
         return artifact
     stage_id = str(checkpoint.get("stage_id") or "").strip()
     cleaned: List[str] = []
-    for path in stage_dirty_outputs(store, stage_id):
+    dirty_outputs = [
+        store.project_dir / str(value)
+        for value in (checkpoint.get("dirty_outputs") or [])
+        if str(value or "").strip()
+    ]
+    if stage_id in {"formal_meeting", "meeting_issue_proposal_review"}:
+        try:
+            checkpoint_round = int(checkpoint.get("round") or 0)
+        except (TypeError, ValueError):
+            checkpoint_round = 0
+        if checkpoint_round > 0:
+            dirty_outputs = [
+                path for path in dirty_outputs
+                if _mom_path_round(path) in {0, checkpoint_round}
+            ]
+        if not dirty_outputs:
+            dirty_outputs = _mom_paths_for_round(store, checkpoint_round)
+    if not dirty_outputs and stage_id not in {"formal_meeting", "meeting_issue_proposal_review"}:
+        dirty_outputs = stage_dirty_outputs(store, stage_id)
+    for path in dirty_outputs:
         removed = _safe_rmtree(store, path) if path.is_dir() else _safe_unlink(store, path)
         if removed:
             cleaned.append(_project_relative(store, path))
@@ -282,10 +337,11 @@ def clear_run_checkpoint_for_continue(store: Store, artifact: Dict[str, Any]) ->
         pass
     if stage_id in {"formal_meeting", "meeting_issue_proposal_review"}:
         try:
-            last_round = int(checkpoint.get("last_round") or meta.get("last_round") or 0)
+            current_round = int(checkpoint.get("round") or 0)
         except (TypeError, ValueError):
-            last_round = 0
-        meta["last_round"] = max(0, last_round - 1)
+            current_round = 0
+        if current_round > 0:
+            meta["last_round"] = current_round - 1
     if stage_id == "research_domain":
         artifact.pop("feedback", None)
         artifact.pop("domain_research_review", None)

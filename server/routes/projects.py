@@ -183,9 +183,10 @@ def delete_project(project_id: str, request: Request):
 
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, request: Request):
-    store = Store(base_dir(request), project_id)
-    if not store.project_dir.exists():
+    project_dir = base_dir(request) / "projects" / project_id
+    if not project_dir.exists() or not project_dir.is_dir():
         raise HTTPException(status_code=404, detail="Project not found")
+    store = Store(base_dir(request), project_id)
     return {
         "project_id": project_id,
         "project": store.load_artifact(),

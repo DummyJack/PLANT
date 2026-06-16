@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowDown,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock3,
   User,
   UsersRound,
+  X,
 } from "lucide-react";
 import { fetchFile } from "@/api/projects";
 import { agentLabel } from "@/constants/agents";
@@ -519,6 +522,48 @@ function titleFromFileContent(content: string, type?: string, outputPath?: strin
   return "";
 }
 
+function markdownSectionText(content: string, heading: string) {
+  const lines = cleanMarkdownForPreview(content).split(/\r?\n/);
+  const headingPattern = new RegExp(`^\\s*#{1,6}\\s+${heading}\\s*$`);
+  const nextHeadingPattern = /^\s*#{1,6}\s+\S+/;
+  const start = lines.findIndex((line) => headingPattern.test(line.trim()));
+  if (start < 0) return "";
+  const section: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (nextHeadingPattern.test(line)) break;
+    if (line) section.push(line.replace(/^\s*[-*+]\s+/, ""));
+  }
+  return compactPreview(section.join("\n"));
+}
+
+function htmlSectionText(content: string, heading: string) {
+  if (typeof DOMParser === "undefined") return "";
+  const doc = new DOMParser().parseFromString(cleanHtmlForPreview(content), "text/html");
+  doc.querySelectorAll("script, style, .dr-trace-modal").forEach((node) => node.remove());
+  const headings = Array.from(doc.querySelectorAll("h1,h2,h3,h4,h5,h6"));
+  const target = headings.find((node) => compactPreview(node.textContent ?? "") === heading);
+  if (!target) return "";
+  const section: string[] = [];
+  let node = target.nextElementSibling;
+  while (node) {
+    if (/^H[1-6]$/.test(node.tagName)) break;
+    const text = compactPreview(node.textContent ?? "");
+    if (text) section.push(text);
+    node = node.nextElementSibling;
+  }
+  return compactPreview(section.join("\n"));
+}
+
+function momPreviewMeta(content: string, type?: string, outputPath?: string) {
+  const markdown = isMarkdownPreview(type, outputPath);
+  return {
+    title: titleFromFileContent(content, type, outputPath),
+    summary: markdown ? markdownSectionText(content, "摘要") : htmlSectionText(content, "摘要"),
+    decision: markdown ? markdownSectionText(content, "決議") : htmlSectionText(content, "決議"),
+  };
+}
+
 function isModelImagePath(path?: string) {
   return !!path && /^artifact\/models\/.+\.(png|svg)$/i.test(path);
 }
@@ -527,8 +572,37 @@ function isSystemModelsPath(path?: string) {
   return !!path && /^artifact\/system_models\.json$/i.test(path);
 }
 
+function normalizeModelName(value: string) {
+  return value
+    .replace(/\.(?:png|svg|plantuml)$/i, "")
+    .replace(/^artifact\/models\//i, "")
+    .replace(/\s+/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function modelNamesFromMessage(text: string) {
+  return text
+    .split(/[、,，\n]/)
+    .map((item) => normalizeModelName(item))
+    .filter(Boolean)
+    .filter((item) => !/^(?:系統模型|系統模型完成|系統模型已更新|完成|生成中|載入中)$/.test(item));
+}
+
+function modelImagesForMessage(msg: ChatMessage, modelImages: OutputFile[]) {
+  if (!isSystemModelsPath(msg.outputPath)) return modelImages;
+  const names = modelNamesFromMessage(msg.text);
+  if (!names.length) return modelImages;
+  const filtered = modelImages.filter((file) => {
+    const label = normalizeModelName(file.label);
+    const path = normalizeModelName(file.path.split("/").pop() ?? file.path);
+    return names.some((name) => label.includes(name) || path.includes(name) || name.includes(label));
+  });
+  return filtered.length ? filtered : modelImages;
+}
+
 function isMomPath(path?: string) {
-  return !!path && /^(?:results\/MoM\/.+\.html|artifact\/MoM\/R\d+-M\d+\.md)$/i.test(path);
+  return !!path && /^(?:results\/MoM\/R\d+-M\d+\.html|artifact\/MoM\/R\d+-M\d+\.md)$/i.test(path);
 }
 
 function momRoundFromPath(path?: string) {
@@ -540,14 +614,147 @@ function momMeetingIdFromPath(path?: string) {
 }
 
 function momFilesForMessage(msg: ChatMessage, momFiles: OutputFile[]) {
+  const meetingId = momMeetingIdFromPath(msg.outputPath);
+  if (meetingId) {
+    return momFiles.filter((file) => momMeetingIdFromPath(file.path) === meetingId);
+  }
   const round = momRoundFromPath(msg.outputPath);
   if (!round) return [];
   return momFiles.filter((file) => momRoundFromPath(file.path) === round);
 }
 
-function formalMeetingPathForMom(path?: string) {
-  const round = /^R(\d+)$/i.exec(momRoundFromPath(path) ?? "")?.[1];
-  return round ? `artifact/meeting/formal_meeting_r${round}.json` : null;
+function formalMeetingRoundFromStage(msg?: ChatMessage) {
+  if (!msg || msg.role !== "system" || msg.kind !== "stage" || msg.stage !== "formal_meeting") return null;
+  const round = /^第\s*(\d+)\s*輪會議/u.exec(msg.text.trim())?.[1];
+  return round ? `R${round}` : null;
+}
+
+function meetingNumberFromId(id?: string | null) {
+  const number = /^M-(\d+)$/i.exec(String(id ?? "").trim())?.[1];
+  return number ? Number(number) : null;
+}
+
+function taskNumberFromMeetingPath(path?: string) {
+  const number = /(?:results\/MoM\/|artifact\/MoM\/)R\d+-M(\d+)\.(?:html|md)$/i.exec(path ?? "")?.[1];
+  return number ? Number(number) : null;
+}
+
+function taskNumberFromDecision(msg: ChatMessage) {
+  const values = [
+    msg.decision?.issue?.meeting_id,
+    msg.decision?.issue?.id,
+    (msg.decision?.options as Record<string, unknown> | undefined)?.meeting_id,
+    (msg.decision?.options as Record<string, unknown> | undefined)?.issue_id,
+  ];
+  for (const value of values) {
+    const number = /R\d+-M(\d+)/i.exec(String(value ?? ""))?.[1];
+    if (number) return Number(number);
+  }
+  return null;
+}
+
+function fallbackTaskNumberFromPosition(
+  messageIndex: number,
+  firstPlanIndex: number,
+  momEntries: Array<{ message: ChatMessage; index: number }>,
+) {
+  if (messageIndex < firstPlanIndex) return null;
+  const nextMom = momEntries
+    .filter((entry) => entry.index > messageIndex)
+    .sort((a, b) => a.index - b.index)[0];
+  return nextMom ? taskNumberFromMeetingPath(nextMom.message.outputPath) : null;
+}
+
+function isFormalMeetingPlanMessage(msg: ChatMessage) {
+  if (msg.stage !== "formal_meeting") return false;
+  const task = parseMeetingTask(msg.text);
+  return !!task && /^M-\d+$/i.test(task.id);
+}
+
+function isFormalMeetingMomMessage(msg: ChatMessage) {
+  return msg.stage === "formal_meeting" && isMomPath(msg.outputPath);
+}
+
+function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
+  const round = formalMeetingRoundFromStage(segment[0]);
+  if (!round) return segment;
+  const rest = segment.slice(1);
+  const planEntries = rest
+    .map((message, index) => ({ message, index, task: parseMeetingTask(message.text) }))
+    .filter((entry): entry is { message: ChatMessage; index: number; task: NonNullable<ReturnType<typeof parseMeetingTask>> } =>
+      isFormalMeetingPlanMessage(entry.message),
+    );
+  if (planEntries.length === 0) return segment;
+
+  const matchingMomEntries = rest
+    .map((message, index) => ({ message, index }))
+    .filter((entry) => isFormalMeetingMomMessage(entry.message) && momRoundFromPath(entry.message.outputPath) === round);
+  if (matchingMomEntries.length === 0) return segment;
+
+  const consumed = new Set<string>();
+  const arranged: ChatMessage[] = [segment[0]];
+  const firstPlanIndex = Math.min(...planEntries.map((entry) => entry.index));
+
+  rest.slice(0, firstPlanIndex).forEach((message) => {
+    arranged.push(message);
+    consumed.add(message.id);
+  });
+
+  for (const entry of planEntries) {
+    const taskNumber = meetingNumberFromId(entry.task.id);
+    if (!consumed.has(entry.message.id)) {
+      arranged.push(entry.message);
+      consumed.add(entry.message.id);
+    }
+
+    rest.forEach((message) => {
+      if (consumed.has(message.id)) return;
+      if (message.kind !== "decision") return;
+      const explicitTaskNumber = taskNumberFromDecision(message);
+      const fallbackTaskNumber = explicitTaskNumber ?? fallbackTaskNumberFromPosition(
+        rest.findIndex((item) => item.id === message.id),
+        firstPlanIndex,
+        matchingMomEntries,
+      );
+      if (fallbackTaskNumber !== taskNumber) return;
+      arranged.push(message);
+      consumed.add(message.id);
+    });
+
+    matchingMomEntries.forEach(({ message }) => {
+      if (consumed.has(message.id)) return;
+      if (taskNumberFromMeetingPath(message.outputPath) !== taskNumber) return;
+      arranged.push(message);
+      consumed.add(message.id);
+    });
+  }
+
+  rest.forEach((message) => {
+    if (consumed.has(message.id)) return;
+    arranged.push(message);
+  });
+  return arranged;
+}
+
+function arrangeMeetingPlanMomMessages(messages: ChatMessage[]) {
+  const arranged: ChatMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!formalMeetingRoundFromStage(message)) {
+      arranged.push(message);
+      continue;
+    }
+
+    const segment: ChatMessage[] = [message];
+    let cursor = index + 1;
+    while (cursor < messages.length && !formalMeetingRoundFromStage(messages[cursor])) {
+      segment.push(messages[cursor]);
+      cursor += 1;
+    }
+    arranged.push(...arrangeMeetingPlanMomSegment(segment));
+    index = cursor - 1;
+  }
+  return arranged;
 }
 
 function isFeedbackPath(path?: string) {
@@ -568,6 +775,10 @@ function isScopePath(path?: string) {
 
 function isDraftPath(path?: string) {
   return !!path && /^(?:artifact\/drafts\/draft_v\d+\.md|results\/drafts\/draft_v\d+\.html)$/i.test(path);
+}
+
+function draftVersionFromPath(path?: string) {
+  return Number(/draft_v(\d+)/i.exec(path ?? "")?.[1] ?? 0);
 }
 
 function isSrsOrDesignRationalePath(path?: string) {
@@ -591,6 +802,257 @@ function isHumanDecisionRequestMessage(msg?: ChatMessage) {
     msg?.action === "human_decision_request" ||
     msg?.action === "stakeholder_selection_request"
   );
+}
+
+function optionLetter(index: number) {
+  return String.fromCharCode(65 + index);
+}
+
+function decisionKindLabel(kind?: string) {
+  switch (kind) {
+    case "stakeholder_selection":
+      return "利害關係人選擇";
+    case "requirements_review":
+      return "初始需求分析";
+    case "domain_research_review":
+      return "領域研究";
+    case "scope_review":
+      return "需求範圍";
+    case "meeting_issue_proposal_review":
+      return "候選議題";
+    case "stakeholder_statement_review":
+      return "利害關係人發言";
+    case "human_decision":
+      return "人類裁決";
+    default:
+      return "人類介入";
+  }
+}
+
+function decisionViewLabel() {
+  return "查看內容";
+}
+
+function humanInterventionBadge(kind?: string) {
+  if (kind === "stakeholder_selection") return "選擇";
+  if (kind === "human_decision") return "決策";
+  return "建議";
+}
+
+function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<string, unknown>) {
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options
+    : {};
+  const bestOptions = jsonList((options as Record<string, unknown>).best_options)
+    .map((row, index) => {
+      const item = jsonRecord(row);
+      const id = jsonText(item.option_id) || jsonText(item.id) || optionLetter(index);
+      return {
+        id,
+        label: `選項 ${id || optionLetter(index)}`,
+        title: jsonText(item.title) || jsonText(item.summary) || jsonText(item.description),
+      };
+    });
+  const byId = new Map(bestOptions.map((row) => [row.id, row]));
+
+  const chosenOptions = jsonList(payload.chosen_options)
+    .map((row, index) => {
+      const item = jsonRecord(row);
+      const id = jsonText(item.option_id) || jsonText(item.id) || optionLetter(index);
+      const matched = byId.get(id);
+      const title = jsonText(item.title) || jsonText(item.summary) || jsonText(item.description) || matched?.title || "";
+      return `${matched?.label || `選項 ${id}`}：${title}`.replace(/：$/, "");
+    })
+    .filter(Boolean);
+  if (chosenOptions.length) return chosenOptions;
+
+  const choices = jsonList(payload.choices)
+    .map((choice, index) => {
+      const id = jsonText(choice) || optionLetter(index);
+      const matched = byId.get(id);
+      return `${matched?.label || `選項 ${id}`}：${matched?.title || ""}`.replace(/：$/, "");
+    })
+    .filter(Boolean);
+  if (choices.length) return choices;
+
+  const decisionText = jsonText(payload.decision) || jsonText(payload.custom_decision);
+  if (decisionText) return decisionText.split("\n").map((line) => line.trim()).filter(Boolean);
+  return [];
+}
+
+function payloadRows(payload?: Record<string, unknown>, decision?: ChatMessage["decision"]) {
+  if (!payload) return [];
+  const stakeholders = jsonList(payload.stakeholders)
+    .map((row) => jsonRecord(row).name)
+    .map((value) => jsonText(value))
+    .filter(Boolean)
+    .map((value) => `選擇：${value}`);
+  if (stakeholders.length) return stakeholders;
+
+  const suggestions = jsonList(payload.suggestions)
+    .map((row, index) => {
+      const item = jsonRecord(row);
+      const text = jsonText(item.text);
+      const refs = jsonList(item.references)
+        .map((ref) => jsonText(jsonRecord(ref).name))
+        .filter(Boolean)
+        .map((name) => `@${name}`)
+        .join(" ");
+      return [`建議 ${index + 1}：`, refs, text].filter(Boolean).join(" ");
+    })
+    .filter(Boolean);
+  if (suggestions.length) return suggestions;
+
+  const customIssues = jsonList(payload.custom_issues)
+    .map((row, index) => {
+      const title = jsonText(jsonRecord(row).title);
+      return `議題 ${index + 1}：${title}`;
+    })
+    .filter((row) => !/：\s*$/.test(row));
+  if (customIssues.length) return customIssues;
+
+  const decisionRows = decisionOptionRows(decision, payload);
+  if (decisionRows.length) return decisionRows;
+  const humanDecision = jsonText(payload.human_decision);
+  if (humanDecision) return humanDecision.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (payload.skip_all_human_interventions === true) return ["後續人類介入將自動跳過"];
+  if (payload.skipped === true) return ["已略過本次裁決"];
+  if (payload.action === "approve") return ["無補充建議"];
+  return [];
+}
+
+function isSkipAllHumanInterventionsPayload(payload?: Record<string, unknown>) {
+  return payload?.skip_all_human_interventions === true;
+}
+
+function mentionTokensFromRows(rows: string[]) {
+  return Array.from(
+    new Set(
+      rows.flatMap((row) =>
+        Array.from(row.matchAll(/@([A-Za-z0-9_-]+)/g)).map((match) => match[1].trim()),
+      ),
+    ),
+  ).filter(Boolean);
+}
+
+function stakeholderStatementReferences(decision?: ChatMessage["decision"]) {
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options
+    : {};
+  return jsonList(options.stakeholders).flatMap((row, stakeholderIndex) => {
+    const item = jsonRecord(row);
+    const name = jsonText(item.name) || `利害關係人 ${stakeholderIndex + 1}`;
+    const lines = Array.isArray(item.text)
+      ? item.text
+      : jsonText(item.text)
+        ? [item.text]
+        : [];
+    return lines.map((line, lineIndex) => {
+      const lineRecord = jsonRecord(line);
+      const id = jsonText(lineRecord.id) || `ST-${stakeholderIndex + 1}-${lineIndex + 1}`;
+      const text = jsonText(lineRecord.text) || jsonText(line);
+      return {
+        id,
+        title: name,
+        text,
+      };
+    });
+  });
+}
+
+function requirementReferences(decision?: ChatMessage["decision"]) {
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options
+    : {};
+  return jsonList(options.requirements).map((row, index) => {
+    const item = jsonRecord(row);
+    return {
+      id: jsonText(item.id) || `URL-${index + 1}`,
+      title: jsonText(item.source_id) || jsonText(item.source),
+      text: jsonText(item.text) || jsonText(item.description),
+    };
+  });
+}
+
+function domainResearchReferences(decision?: ChatMessage["decision"]) {
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options
+    : {};
+  return jsonList(options.references).map((row, index) => {
+    const item = jsonRecord(row);
+    const name = jsonText(item.name) || `reference-${index + 1}`;
+    return {
+      id: name,
+      title: "參考文件",
+      text: "",
+    };
+  });
+}
+
+function suggestionMentionTokenSets(payload: Record<string, unknown> | undefined, rows: string[]) {
+  const suggestions = jsonList(payload?.suggestions);
+  if (suggestions.length) {
+    return suggestions.map((row, index) => {
+      const item = jsonRecord(row);
+      const textTokens = mentionTokensFromRows([jsonText(item.text)]);
+      const referenceTokens = jsonList(item.references)
+        .map((ref) => jsonText(jsonRecord(ref).name))
+        .filter(Boolean);
+      return {
+        index: index + 1,
+        tokens: Array.from(new Set([...textTokens, ...referenceTokens])),
+      };
+    });
+  }
+  return rows.map((row, index) => ({
+    index: index + 1,
+    tokens: mentionTokensFromRows([row]),
+  }));
+}
+
+function referencedMentionRows(
+  decision: ChatMessage["decision"],
+  rows: string[],
+  payload?: Record<string, unknown>,
+) {
+  const tokens = mentionTokensFromRows(rows);
+  if (!tokens.length) return [];
+  const references = [
+    ...stakeholderStatementReferences(decision),
+    ...requirementReferences(decision),
+    ...domainResearchReferences(decision),
+  ];
+  const uniqueReferences = Array.from(
+    references.reduce((items, item) => {
+      if (item.id && !items.has(item.id)) items.set(item.id, item);
+      return items;
+    }, new Map<string, { id: string; title: string; text: string }>()),
+  ).map(([, item]) => item);
+  const usage = new Map<string, number[]>();
+  const suggestionTokenSets = suggestionMentionTokenSets(payload, rows);
+  suggestionTokenSets.forEach(({ index, tokens: rowTokens }) => {
+    const usesAll = rowTokens.some((token) => token.toLowerCase() === "all");
+    const usedIds = usesAll ? uniqueReferences.map((item) => item.id) : rowTokens;
+    usedIds.forEach((id) => {
+      const current = usage.get(id) ?? [];
+      if (!current.includes(index)) usage.set(id, [...current, index]);
+    });
+  });
+  if (tokens.some((token) => token.toLowerCase() === "all")) {
+    return uniqueReferences.map((item) => ({
+      ...item,
+      usedIn: usage.get(item.id) ?? [],
+    }));
+  }
+  return tokens.map((token) => {
+    const found = uniqueReferences.find((item) => item.id === token);
+    return {
+      id: token,
+      title: found?.title ?? "",
+      text: found?.text ?? "",
+      usedIn: usage.get(token) ?? [],
+    };
+  });
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {
@@ -884,78 +1346,6 @@ function ConflictCompactPreview({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-function parseMeetingRecords(content?: string): Record<string, unknown>[] {
-  if (!content) return [];
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    if (Array.isArray(parsed)) return parsed.map(jsonRecord).filter((item) => Object.keys(item).length > 0);
-    const record = jsonRecord(parsed);
-    const rows = jsonList(record.issues);
-    if (rows.length) return rows.map(jsonRecord).filter((item) => Object.keys(item).length > 0);
-  } catch {
-    return [];
-  }
-  return [];
-}
-
-type MeetingArtifactUpdates = {
-  requirements: boolean;
-  models: boolean;
-  feedback: boolean;
-};
-
-function updateFlagsFromMeetingRecords(records: Record<string, unknown>[]): MeetingArtifactUpdates {
-  const flags: MeetingArtifactUpdates = {
-    requirements: false,
-    models: false,
-    feedback: false,
-  };
-
-  for (const record of records) {
-    const resolution = jsonRecord(record.resolution);
-    const artifactUpdates = jsonRecord(resolution.artifact_updates);
-    if (Object.keys(jsonRecord(artifactUpdates.REQ)).length || Object.keys(jsonRecord(artifactUpdates.URL)).length) {
-      flags.requirements = true;
-    }
-    if (Object.keys(jsonRecord(artifactUpdates.system_models)).length) {
-      flags.models = true;
-    }
-    if (Object.keys(jsonRecord(artifactUpdates.feedback)).length) {
-      flags.feedback = true;
-    }
-
-    for (const entry of jsonList(record.conversation).map(jsonRecord)) {
-      const actions = jsonList(entry.actions).map((item) => String(item));
-      const results = jsonList(jsonRecord(entry.response).issue_action_results).map(jsonRecord);
-      for (const action of actions) {
-        if (["update_requirement", "refine_requirement", "analyze_requirements"].includes(action)) {
-          flags.requirements = true;
-        }
-        if (["system_modeling", "create_model", "update_model"].includes(action)) {
-          flags.models = true;
-        }
-        if (["research_domain", "update_feedback"].includes(action)) {
-          flags.feedback = true;
-        }
-      }
-      for (const result of results) {
-        const action = jsonText(result.action);
-        if (["update_requirement", "refine_requirement", "analyze_requirements"].includes(action) || jsonList(result.REQ).length > 0) {
-          flags.requirements = true;
-        }
-        if (["system_modeling", "create_model", "update_model"].includes(action) || jsonList(result.system_models).length > 0) {
-          flags.models = true;
-        }
-        if (["research_domain", "update_feedback"].includes(action) || Object.keys(jsonRecord(result.feedback)).length > 0) {
-          flags.feedback = true;
-        }
-      }
-    }
-  }
-
-  return flags;
-}
-
 function ElicitationMeetingCompactPreview({ data }: { data: Record<string, unknown> }) {
   const plan = jsonRecord(data.plan);
   const participants = jsonList(plan.participants).map((item) => agentLabel(String(item)));
@@ -1122,191 +1512,37 @@ function ModelImagesPreview({
   );
 }
 
-function JsonUpdatePreview({
-  projectId,
-  path,
-  title,
-  anchor,
-  children,
-}: {
-  projectId: string | null;
-  path: string;
-  title: string;
-  anchor?: string;
-  children: (data: Record<string, unknown>) => ReactNode;
-}) {
-  const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
-  const file = useQuery({
-    queryKey: ["chat-update-preview", projectId, path],
-    queryFn: () => fetchFile(projectId!, path),
-    enabled: !!projectId,
-    retry: false,
-  });
-  const data = useMemo(() => {
-    if (file.isLoading || file.isError) return null;
-    return parseJsonRecord(file.data?.content ?? "");
-  }, [file.data?.content, file.isError, file.isLoading]);
-
-  return (
-    <button
-      type="button"
-      className="block w-full rounded-control px-0 py-0 text-left hover:bg-slate-50"
-      onClick={(event) => {
-        event.stopPropagation();
-        setSelectedOutputPath(path, "manual", anchor ?? null);
-      }}
-    >
-      <div className="mb-2 text-sm font-semibold text-slate-800">{title}</div>
-      {data ? (
-        children(data)
-      ) : (
-        <div className="text-sm text-slate-500">{file.isLoading ? "載入內容預覽..." : "無法預覽"}</div>
-      )}
-      <div className="mt-2 text-xs font-medium text-slate-500 underline decoration-dotted underline-offset-2">
-        查看完整內容
-      </div>
-    </button>
-  );
-}
-
-function ArtifactUpdateBubble({
-  speaker,
-  children,
-}: {
-  speaker: "analyst" | "modeler" | "expert";
-  children: ReactNode;
-}) {
-  return (
-    <div className="mb-4 flex w-full gap-2.5 justify-start">
-      <div className="flex w-20 shrink-0 flex-col items-center gap-1">
-        <div className="w-full whitespace-nowrap text-center text-xs font-semibold leading-tight text-slate-600">
-          {agentLabel(speaker)}
-        </div>
-        <div className={cn("flex h-9 w-9 items-center justify-center rounded-full", ROLE_STYLES.agent.avatar)}>
-          <Bot className="h-4.5 w-4.5" />
-        </div>
-      </div>
-      <div className="min-w-0 max-w-[85%] pt-6">
-        <div className={cn("block rounded-control border px-3.5 py-2.5 text-left text-sm leading-relaxed", ROLE_STYLES.agent.bubble)}>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MeetingArtifactUpdateBubbles({
-  projectId,
-  msg,
-  momFiles,
-  modelImages,
-  outputFiles,
-}: {
-  projectId: string | null;
-  msg: ChatMessage;
-  momFiles: OutputFile[];
-  modelImages: OutputFile[];
-  outputFiles: OutputFile[];
-}) {
-  const meetingPath = formalMeetingPathForMom(msg.outputPath);
-  const visibleMeetingIds = useMemo(
-    () =>
-      new Set(
-        momFilesForMessage(msg, momFiles)
-          .map((file) => momMeetingIdFromPath(file.path))
-          .filter((id): id is string => !!id),
-      ),
-    [momFiles, msg],
-  );
-  const meeting = useQuery({
-    queryKey: ["chat-mom-updates", projectId, meetingPath],
-    queryFn: () => fetchFile(projectId!, meetingPath!),
-    enabled: !!projectId && !!meetingPath,
-    retry: false,
-  });
-  const updates = useMemo(() => {
-    const records = parseMeetingRecords(meeting.data?.content).filter((record) => {
-      const id = jsonText(record.meeting_id).toUpperCase();
-      return !visibleMeetingIds.size || visibleMeetingIds.has(id);
-    });
-    return updateFlagsFromMeetingRecords(records);
-  }, [meeting.data?.content, visibleMeetingIds]);
-
-  if (!isMomPath(msg.outputPath) || (!updates.requirements && !updates.models && !updates.feedback)) return null;
-
-  return (
-    <>
-      {updates.requirements && (
-        <ArtifactUpdateBubble speaker="analyst">
-          <JsonUpdatePreview
-            projectId={projectId}
-            path="artifact/requirements.json"
-            title="需求更新"
-            anchor="requirements-req"
-          >
-            {(data) => <RequirementsCompactPreview data={data} sectionTitle="正式需求" />}
-          </JsonUpdatePreview>
-        </ArtifactUpdateBubble>
-      )}
-      {updates.models && projectId && modelImages.length > 0 && (
-        <ArtifactUpdateBubble speaker="modeler">
-          <ModelImagesPreview
-            projectId={projectId}
-            modelImages={modelImages}
-            outputFiles={outputFiles}
-            title="系統模型更新"
-          />
-        </ArtifactUpdateBubble>
-      )}
-      {updates.feedback && (
-        <ArtifactUpdateBubble speaker="expert">
-          <JsonUpdatePreview
-            projectId={projectId}
-            path="artifact/feedback.json"
-            title="領域研究更新"
-            anchor="feedback-top"
-          >
-            {(data) => <FeedbackCompactPreview data={data} />}
-          </JsonUpdatePreview>
-        </ArtifactUpdateBubble>
-      )}
-    </>
-  );
-}
-
 function MomFileTile({ projectId, file }: { projectId: string | null; file: OutputFile }) {
-  const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
   const mom = useQuery({
-    queryKey: ["chat-mom-title", projectId, file.path],
+    queryKey: ["chat-mom-preview", projectId, file.path],
     queryFn: () => fetchFile(projectId!, file.path),
     enabled: !!projectId,
     retry: false,
   });
 
-  const title =
-    mom.data?.type === "html"
-      ? firstHtmlHeading(mom.data.content)
-      : isMarkdownPreview(mom.data?.type, file.path)
-        ? firstMarkdownHeading(mom.data?.content ?? "")
-        : "";
+  const meta = mom.data
+    ? momPreviewMeta(mom.data.content, mom.data.type, file.path)
+    : { title: "", summary: "", decision: "" };
 
   return (
-    <button
-      type="button"
-      className="w-fit min-w-48 max-w-80 rounded-control border border-gray-200 bg-slate-50 px-3 py-2 text-left hover:border-slate-300 hover:bg-white"
-      onClick={(event) => {
-        event.stopPropagation();
-        setSelectedOutputPath(file.path);
-      }}
-      title={file.label}
-    >
-      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <div className="w-fit min-w-72 max-w-xl space-y-3 text-left" title={file.label}>
+      <div className="text-lg font-bold leading-tight text-slate-900">
         {file.label}
-      </span>
-      <span className="block whitespace-normal break-words text-sm font-semibold leading-snug text-slate-700">
-        {title || (mom.isLoading ? "載入標題..." : "未命名會議")}
-      </span>
-    </button>
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-xs font-semibold text-slate-500">摘要</div>
+        <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+          {meta.summary || (mom.isLoading ? "載入中..." : "")}
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-xs font-semibold text-emerald-700">決議</div>
+        <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+          {meta.decision || (mom.isLoading ? "載入中..." : "")}
+        </div>
+      </div>
+      <div className="text-xs font-semibold text-slate-500">查看完整內容</div>
+    </div>
   );
 }
 
@@ -1323,16 +1559,225 @@ function MomFilesPreview({
 
   return (
     <div className="space-y-2">
-      <div className="text-sm font-semibold text-slate-800">{titleFromMessage(msg)}</div>
       <div className={cn("inline-grid gap-2", visibleMomFiles.length > 1 && "grid-cols-2")}>
         {visibleMomFiles.map((file) => (
           <MomFileTile key={file.path} projectId={projectId} file={file} />
         ))}
       </div>
-      <div className="text-xs font-medium text-slate-500">
-        點選 MoM 查看完整內容
+    </div>
+  );
+}
+
+type DraftUpdateLink = {
+  speaker: string;
+  label: string;
+  path: string;
+  anchor: string | null;
+};
+
+function DraftUpdateBubbleContent({
+  projectId,
+  item,
+  modelImages,
+  outputFiles,
+}: {
+  projectId: string | null;
+  item: DraftUpdateLink;
+  modelImages: OutputFile[];
+  outputFiles: OutputFile[];
+}) {
+  const file = useQuery({
+    queryKey: ["draft-update-preview", projectId, item.path],
+    queryFn: () => fetchFile(projectId!, item.path),
+    enabled: !!projectId && item.path !== "artifact/system_models.json",
+    retry: false,
+  });
+  const data = useMemo(() => {
+    if (file.isLoading || file.isError) return null;
+    return parseJsonRecord(file.data?.content ?? "");
+  }, [file.data?.content, file.isError, file.isLoading]);
+
+  if (item.path === "artifact/system_models.json" && projectId && modelImages.length > 0) {
+    return (
+      <ModelImagesPreview
+        projectId={projectId}
+        modelImages={modelImages}
+        outputFiles={outputFiles}
+        title={item.label}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-semibold text-slate-800">{item.label}</div>
+      {data ? (
+        item.path === "artifact/feedback.json" ? (
+          <FeedbackCompactPreview data={data} />
+        ) : (
+          <RequirementsCompactPreview data={data} sectionTitle="正式需求" />
+        )
+      ) : (
+        <div className="text-sm text-slate-500">{file.isLoading ? "載入內容預覽..." : "無法預覽"}</div>
+      )}
+      <div className="text-xs font-medium text-slate-500 underline decoration-dotted underline-offset-2">
+        查看完整內容
       </div>
     </div>
+  );
+}
+
+function parseMeetingRecords(content?: string): Record<string, unknown>[] {
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (Array.isArray(parsed)) return parsed.map(jsonRecord).filter((item) => Object.keys(item).length > 0);
+    const record = jsonRecord(parsed);
+    const rows = jsonList(record.issues);
+    if (rows.length) return rows.map(jsonRecord).filter((item) => Object.keys(item).length > 0);
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+function updateFlagsFromMeetingRecords(records: Record<string, unknown>[]) {
+  const flags = {
+    requirements: false,
+    feedback: false,
+    models: false,
+  };
+
+  for (const record of records) {
+    const resolution = jsonRecord(record.resolution);
+    const artifactUpdates = jsonRecord(resolution.artifact_updates);
+    if (Object.keys(jsonRecord(artifactUpdates.REQ)).length || Object.keys(jsonRecord(artifactUpdates.URL)).length) {
+      flags.requirements = true;
+    }
+    if (Object.keys(jsonRecord(artifactUpdates.feedback)).length) {
+      flags.feedback = true;
+    }
+    if (Object.keys(jsonRecord(artifactUpdates.system_models)).length) {
+      flags.models = true;
+    }
+
+    for (const entry of jsonList(record.conversation).map(jsonRecord)) {
+      const actions = jsonList(entry.actions).map((item) => String(item));
+      const results = jsonList(jsonRecord(entry.response).issue_action_results).map(jsonRecord);
+      for (const action of actions) {
+        if (["update_requirement", "refine_requirement", "analyze_requirements"].includes(action)) {
+          flags.requirements = true;
+        }
+        if (["research_domain", "update_feedback"].includes(action)) {
+          flags.feedback = true;
+        }
+        if (["system_modeling", "create_model", "update_model"].includes(action)) {
+          flags.models = true;
+        }
+      }
+      for (const result of results) {
+        const action = jsonText(result.action);
+        if (["update_requirement", "refine_requirement", "analyze_requirements"].includes(action) || jsonList(result.REQ).length > 0) {
+          flags.requirements = true;
+        }
+        if (["research_domain", "update_feedback"].includes(action) || Object.keys(jsonRecord(result.feedback)).length > 0) {
+          flags.feedback = true;
+        }
+        if (["system_modeling", "create_model", "update_model"].includes(action) || jsonList(result.system_models).length > 0) {
+          flags.models = true;
+        }
+      }
+    }
+  }
+  return flags;
+}
+
+function DraftUpdateBubbles({
+  projectId,
+  path,
+  modelImages,
+  outputFiles,
+}: {
+  projectId: string | null;
+  path?: string;
+  modelImages: OutputFile[];
+  outputFiles: OutputFile[];
+}) {
+  const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
+  const draftVersion = draftVersionFromPath(path);
+  const meetingPath = draftVersion > 0 ? `artifact/meeting/formal_meeting_r${draftVersion}.json` : "";
+  const meeting = useQuery({
+    queryKey: ["draft-update-meeting", projectId, meetingPath],
+    queryFn: () => fetchFile(projectId!, meetingPath),
+    enabled: !!projectId && !!meetingPath,
+    retry: false,
+  });
+  const links = useMemo(() => {
+    if (!meeting.data?.content) return [];
+    const records = parseMeetingRecords(meeting.data.content);
+    const flags = updateFlagsFromMeetingRecords(records);
+    const items: DraftUpdateLink[] = [];
+    if (flags.requirements) {
+      items.push({
+        speaker: "analyst",
+        label: "需求更新",
+        path: "artifact/requirements.json",
+        anchor: "requirements-req",
+      });
+    }
+    if (flags.feedback) {
+      items.push({
+        speaker: "expert",
+        label: "領域研究更新",
+        path: "artifact/feedback.json",
+        anchor: "feedback-top",
+      });
+    }
+    if (flags.models) {
+      items.push({
+        speaker: "modeler",
+        label: "系統模型更新",
+        path: "artifact/system_models.json",
+        anchor: null,
+      });
+    }
+    return items;
+  }, [meeting.data?.content]);
+  if (!links.length) return null;
+
+  return (
+    <>
+      {links.map((item) => (
+        <div key={item.label} className="mb-4 flex w-full gap-2.5 justify-start">
+          <div className="flex w-20 shrink-0 flex-col items-center gap-1">
+            <div className="w-full whitespace-nowrap text-center text-xs font-semibold leading-tight text-slate-600">
+              {agentLabel(item.speaker)}
+            </div>
+            <div className={cn("flex h-9 w-9 items-center justify-center rounded-full", ROLE_STYLES.agent.avatar)}>
+              <Bot className="h-4.5 w-4.5" />
+            </div>
+          </div>
+          <div className="min-w-0 max-w-[85%] pt-6">
+            <button
+              type="button"
+              className={cn(
+                "block rounded-control border px-3.5 py-2.5 text-left text-sm leading-relaxed",
+                ROLE_STYLES.agent.bubble,
+                "cursor-pointer hover:border-slate-300 hover:shadow",
+              )}
+              onClick={() => setSelectedOutputPath(item.path, "manual", item.anchor)}
+            >
+              <DraftUpdateBubbleContent
+                projectId={projectId}
+                item={item}
+                modelImages={modelImages}
+                outputFiles={outputFiles}
+              />
+            </button>
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -1434,7 +1879,7 @@ function OutputPreview({
     const draftVersion = /draft_v(\d+)/i.exec(previewPath ?? "")?.[1];
     if (draftVersion) return `Draft v${draftVersion}`;
     const conflictReportVersion = /conflict_report_v(\d+)/i.exec(previewPath ?? "")?.[1];
-    if (conflictReportVersion) return `Conflict Report v${conflictReportVersion}`;
+    if (conflictReportVersion) return `Report v${conflictReportVersion}`;
     if (file.isLoading || file.isError) return titleFromMessage(msg);
     const fileTitle = titleFromFileContent(
       file.data?.content ?? "",
@@ -1458,7 +1903,7 @@ function OutputPreview({
       : file.data?.type === "html"
         ? htmlPreviewBlocks(file.data.content ?? "", previewPath)
         : [];
-    if (/^results\/report\/conflict_report_v\d+\.html$/i.test(previewPath ?? "")) {
+    if (/^(?:results\/report\/conflict_report_v\d+\.html|artifact\/report\/conflict_report_v\d+\.md)$/i.test(previewPath ?? "")) {
       return blocks.filter((block) => block.type !== "text" || block.text.trim() !== "完成");
     }
     return blocks;
@@ -1478,7 +1923,13 @@ function OutputPreview({
     (isModelImagePath(msg.outputPath) || isSystemModelsPath(msg.outputPath)) &&
     modelImages.length > 0
   ) {
-    return <ModelImagesPreview projectId={projectId} modelImages={modelImages} outputFiles={outputFiles} />;
+    return (
+      <ModelImagesPreview
+        projectId={projectId}
+        modelImages={modelImagesForMessage(msg, modelImages)}
+        outputFiles={outputFiles}
+      />
+    );
   }
   if (isMomPath(msg.outputPath) && momFilesForMessage(msg, momFiles).length > 0) {
     return (
@@ -1515,7 +1966,12 @@ function OutputPreview({
 
 function parseMeetingTask(text: string) {
   const cleaned = text.replace(/^Mediator\s*[:：]\s*/i, "").trim();
-  const schedule = /^\s*((?:M|T)-\d+)\s*[｜|]\s*([^｜|]+)\s*[｜|]\s*([^｜|]+)\s*[｜|]\s*([^，｜|]+)，(\d+)\s*輪\s*[｜|]\s*(.+)$/.exec(cleaned);
+  const taskIdPattern = "((?:R\\d+-)?[MT]-?\\d+)";
+  const participantSplitter = /[、,，`｀]+/;
+  const schedule = new RegExp(
+    `^\\s*${taskIdPattern}\\s*[｜|]\\s*([^｜|]+)\\s*[｜|]\\s*([^｜|]+)\\s*[｜|]\\s*([^，｜|]+)，(\\d+)\\s*輪\\s*[｜|]\\s*(.+)$`,
+    "i",
+  ).exec(cleaned);
   if (schedule) {
     return {
       id: schedule[1],
@@ -1523,10 +1979,13 @@ function parseMeetingTask(text: string) {
       action: schedule[3].trim(),
       mode: schedule[4].trim(),
       rounds: schedule[5].trim(),
-      participants: schedule[6].split(/[、,，]/).map((item) => item.trim()).filter(Boolean),
+      participants: schedule[6].split(participantSplitter).map((item) => item.trim()).filter(Boolean),
     };
   }
-  const start = /^\s*\[((?:M|T)-\d+)\]\s*開始[:：]\s*([^（]+)（([^，）]+)，([^，）]+)，預計\s*(\d+)\s*輪；參與[:：]\s*([^）]+)）/.exec(cleaned);
+  const start = new RegExp(
+    `^\\s*\\[${taskIdPattern}\\]\\s*開始[:：]\\s*([^（]+)（([^，）]+)，([^，）]+)，預計\\s*(\\d+)\\s*輪；參與[:：]\\s*([^）]+)）`,
+    "i",
+  ).exec(cleaned);
   if (!start) return null;
   return {
     id: start[1],
@@ -1534,7 +1993,7 @@ function parseMeetingTask(text: string) {
     action: start[3].trim(),
     mode: start[4].trim(),
     rounds: start[5].trim(),
-    participants: start[6].split(/[、,，]/).map((item) => item.trim()).filter(Boolean),
+    participants: start[6].split(participantSplitter).map((item) => item.trim()).filter(Boolean),
   };
 }
 
@@ -1560,7 +2019,7 @@ function parseMeetingResult(text: string) {
 function parseElicitPlan(text: string) {
   const mode = /(?:^|\|)\s*mode\s*[=:：]\s*([^|]+)/i.exec(text.trim())?.[1]?.trim();
   const match =
-    /^elicit\s*plan\s*[:：]\s*(?:mode\s*[=:：]\s*[^|]+\|\s*)?participants\s*[:：]\s*([^|]+)\|\s*participants_order\s*[:：]\s*([^|]+)\|\s*goal\s*[:：]\s*([\s\S]+)$/i.exec(
+    /^elicit\s*plan\s*[:：]\s*(?:mode\s*[=:：]\s*[^|]+\|\s*)?participants\s*[=:：]\s*([^|]+)\|\s*participants[_\s]+order\s*[=:：]\s*([^|]+)\|\s*goal\s*[=:：]\s*([\s\S]+)$/i.exec(
       text.trim(),
     );
   if (!match) return null;
@@ -1574,7 +2033,7 @@ function parseElicitPlan(text: string) {
 
 function parseConflictPlan(text: string) {
   const match =
-    /^需求衝突再審查\s*[:：]\s*mode\s*=\s*([^|]+)\|\s*participants\s*=\s*([^|]+)\|\s*participants_order\s*[:=]\s*([\s\S]+)$/i.exec(
+    /^需求衝突再審查\s*[:：]\s*mode\s*[=:：]\s*([^|]+)\|\s*participants\s*[=:：]\s*([^|]+)\|\s*participants[_\s]+order\s*[=:：]\s*([\s\S]+)$/i.exec(
       text.trim(),
     );
   if (!match) return null;
@@ -1583,6 +2042,13 @@ function parseConflictPlan(text: string) {
     participants: match[2].split(/[,，、]/).map((item) => item.trim()).filter(Boolean),
     order: match[3].split(/[;；]/).map((item) => item.trim()).filter(Boolean),
   };
+}
+
+function formatParticipantOrder(item: string) {
+  return item
+    .split(/\s*(?:→|->)\s*/)
+    .map((part) => agentLabel(part.trim()))
+    .join(" → ");
 }
 
 function PlanCard({
@@ -1657,7 +2123,7 @@ function PlanCard({
                 "text-xs font-medium text-slate-600",
                 !plainOrder && "rounded-control border border-slate-100 bg-slate-50 px-2.5 py-1.5",
               )}>
-                {item}
+                {formatParticipantOrder(item)}
               </div>
             ))}
           </div>
@@ -1918,8 +2384,280 @@ function SubmittedDecisionCard({ msg }: { msg: ChatMessage }) {
   );
 }
 
+function HumanInterventionReplayModal({
+  message,
+  payload,
+  onClose,
+}: {
+  message: ChatMessage;
+  payload?: Record<string, unknown>;
+  onClose: () => void;
+}) {
+  const decision = message.decision;
+  const options = decision?.options && typeof decision.options === "object"
+    ? decision.options
+    : {};
+  const bestOptions = jsonList(options.best_options);
+  const proposals = jsonList(options.proposals);
+  const submittedScope = jsonRecord((payload ?? message.decisionPayload)?.scope);
+  const originalScope = jsonRecord(options.scope);
+  const scopeReviewScope = decision?.kind === "scope_review"
+    ? Object.keys(submittedScope).length
+      ? submittedScope
+      : originalScope
+    : {};
+  const scopeSections = ([
+    ["範圍內", jsonList(scopeReviewScope.in_scope)],
+    ["範圍外", jsonList(scopeReviewScope.out_of_scope)],
+  ] as Array<[string, unknown[]]>);
+  const responseRows = payloadRows(payload ?? message.decisionPayload, decision);
+  const referencedMentions = referencedMentionRows(decision, responseRows, payload ?? message.decisionPayload);
+  const completed = responseRows.length > 0;
+  const title = decision?.title || parseHumanDecisionRequest(message.text)?.title || decisionKindLabel(decision?.kind);
+  const description =
+    decision?.kind === "stakeholder_statement_review"
+      ? "右側可查看利害關係人發言，支援拖移引用與編輯，按確定送出"
+      : decision?.kind === "scope_review"
+        ? "右側可逐條編輯需求範圍；下方可加入建議，按確定送出"
+      : decision?.description || "";
+  const badgeLabel = humanInterventionBadge(decision?.kind);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4 py-6"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-card border border-gray-200 bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                {badgeLabel}
+              </span>
+              <span className={cn(
+                "inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold",
+                completed
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-slate-100 text-slate-500",
+              )}>
+                {completed ? "已完成" : "等待中"}
+              </span>
+            </div>
+            <h2 className="text-lg font-semibold leading-snug text-slate-950">{title}</h2>
+            {description && (
+              <p className="mt-1 text-sm leading-relaxed text-slate-500">{description}</p>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-control text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+              onClick={onClose}
+              aria-label="關閉"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 overflow-y-auto px-5 py-4">
+          {decision?.kind === "stakeholder_selection" && decision.proposed?.length ? (
+            <section className="mb-4">
+              <h3 className="mb-2 text-xs font-semibold text-slate-500">候選利害關係人</h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {decision.proposed.map((row, index) => (
+                  <div key={`${row.name}-${index}`} className="rounded-control border border-gray-200 bg-slate-50 px-3 py-2">
+                    <div className="text-sm font-semibold text-slate-900">{row.name}</div>
+                    <div className="mt-1 text-xs leading-relaxed text-slate-500">{row.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {decision?.kind === "scope_review" ? (
+            <section className="mb-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {scopeSections.map(([sectionTitle, rows]) => (
+                  <div key={sectionTitle} className="rounded-control border border-gray-200 bg-white px-3 py-2">
+                    <div className="mb-2 text-xs font-semibold text-slate-500">{sectionTitle}</div>
+                    {rows.length ? (
+                      <div className="space-y-1.5">
+                        {rows.map((row, index) => (
+                          <div key={index} className="rounded-control bg-slate-50 px-2.5 py-2 text-sm leading-relaxed text-slate-700">
+                            {String(row)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-control bg-slate-50 px-2.5 py-2 text-sm text-slate-400">
+                        尚無項目
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {bestOptions.length ? (
+            <section className="mb-4">
+              <h3 className="mb-2 text-xs font-semibold text-slate-500">決策選項</h3>
+              <div className="grid gap-2">
+                {bestOptions.map((row, index) => {
+                  const item = jsonRecord(row);
+                  const recommended = item.recommendation === true;
+                  const optionTitle = jsonText(item.title) || jsonText(item.summary) || `選項 ${optionLetter(index)}`;
+                  const optionDescription = jsonText(item.description);
+                  return (
+                    <div key={index} className="rounded-control border border-gray-200 bg-white px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                          選項 {optionLetter(index)}
+                        </span>
+                        {recommended && (
+                          <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                            推薦
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 text-sm font-semibold leading-relaxed text-slate-900">{optionTitle}</div>
+                      {optionDescription && (
+                        <div className="mt-1 text-sm leading-relaxed text-slate-600">{optionDescription}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {proposals.length ? (
+            <section className="mb-4">
+              <h3 className="mb-2 text-xs font-semibold text-slate-500">候選議題</h3>
+              <div className="grid gap-2">
+                {proposals.map((row, index) => {
+                  const item = jsonRecord(row);
+                  const proposalTitle = jsonText(item.title) || jsonText(item.summary) || `議題 ${index + 1}`;
+                  return (
+                    <div key={index} className="rounded-control border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                      {proposalTitle}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {referencedMentions.length ? (
+            <section className="mb-4">
+              <h3 className="mb-2 text-xs font-semibold text-slate-500">引用資訊</h3>
+              <div className="grid gap-2">
+                {referencedMentions.map((reference) => (
+                  <div key={reference.id} className="rounded-control border border-gray-200 bg-white px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          @{reference.id}
+                        </span>
+                        {reference.title && (
+                          <span className="text-xs font-semibold text-slate-500">{reference.title}</span>
+                        )}
+                      </div>
+                      {reference.usedIn?.length ? (
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                          {reference.usedIn.map((index) => (
+                            <span
+                              key={index}
+                              className="rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                            >
+                              建議 {index}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    {reference.text && (
+                      <div className="mt-1 text-sm leading-relaxed text-slate-700">
+                        {reference.text}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold text-slate-500">送出內容</h3>
+            <div className="rounded-control border border-gray-200 bg-slate-50 px-3 py-2">
+              {responseRows.length ? (
+                <div className="space-y-1 text-sm leading-relaxed text-slate-800">
+                  {responseRows.map((row, index) => (
+                    <div key={`${row}-${index}`} className="whitespace-pre-wrap break-words">
+                      {row}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-400">尚未送出</div>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function shouldHideChatMessage(msg: ChatMessage) {
+  if (
+    msg.kind === "decision" &&
+    msg.role === "user" &&
+    isSkipAllHumanInterventionsPayload(msg.decisionPayload)
+  ) {
+    return true;
+  }
+  if (isModelNoChangeMessage(msg)) return true;
   return /^已提出\s*\d+\s*筆候選議題\s*$/u.test(msg.text.trim());
+}
+
+function isModelNoChangeMessage(msg: ChatMessage) {
+  return (
+    msg.role === "agent" &&
+    (msg.speaker ?? "").toLowerCase() === "modeler" &&
+    /^\s*系統模型無需改動\s*$/u.test(msg.text.trim())
+  );
+}
+
+function isStagePillMessage(msg: ChatMessage) {
+  return msg.role === "system" && msg.kind === "stage";
+}
+
+function applyCollapsedStagePills(
+  messages: ChatMessage[],
+  collapsedIds: Set<string>,
+) {
+  const visible: ChatMessage[] = [];
+  const hiddenCounts = new Map<string, number>();
+  let activeCollapsedId: string | null = null;
+
+  for (const message of messages) {
+    if (isStagePillMessage(message)) {
+      activeCollapsedId = collapsedIds.has(message.id) ? message.id : null;
+      visible.push(message);
+      continue;
+    }
+    if (activeCollapsedId) {
+      hiddenCounts.set(activeCollapsedId, (hiddenCounts.get(activeCollapsedId) ?? 0) + 1);
+      continue;
+    }
+    visible.push(message);
+  }
+
+  return { visible, hiddenCounts };
 }
 
 function Bubble({
@@ -1928,14 +2666,23 @@ function Bubble({
   outputFiles,
   modelImages,
   momFiles,
+  submittedDecisionPayload,
+  collapsed = false,
+  collapsedCount = 0,
+  onToggleCollapse,
 }: {
   msg: ChatMessage;
   projectId: string | null;
   outputFiles: OutputFile[];
   modelImages: OutputFile[];
   momFiles: OutputFile[];
+  submittedDecisionPayload?: Record<string, unknown>;
+  collapsed?: boolean;
+  collapsedCount?: number;
+  onToggleCollapse?: () => void;
 }) {
   const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
+  const [replayOpen, setReplayOpen] = useState(false);
   const openOutput = () => {
     if (!msg.outputPath) return;
     setSelectedOutputPath(resolvePreferredOutputPath(msg.outputPath, outputFiles) ?? msg.outputPath);
@@ -1945,15 +2692,18 @@ function Bubble({
     const failed = msg.status === "failed";
     const waiting = msg.status === "waiting";
     const running = msg.status === "running";
+    const collapsible = isStagePillMessage(msg);
     return (
       <div className="my-4 flex items-center gap-2 text-xs text-slate-500">
         <div className="h-px flex-1 bg-gray-100" />
         <button
           type="button"
-          disabled={!msg.outputPath}
+          disabled={!collapsible && !msg.outputPath}
+          title={collapsible ? (collapsed ? "展開此段內容" : "收起此段內容") : undefined}
+          aria-expanded={collapsible ? !collapsed : undefined}
           className={cn(
             "inline-flex max-w-full items-center gap-1.5 rounded-full border bg-white px-2.5 py-1",
-            msg.outputPath && "cursor-pointer hover:border-slate-300 hover:text-slate-700",
+            (collapsible || msg.outputPath) && "cursor-pointer hover:border-slate-300 hover:text-slate-700",
             failed
               ? "border-red-200 text-red-700"
               : waiting
@@ -1962,8 +2712,15 @@ function Bubble({
                   ? "border-emerald-200 text-emerald-800"
                 : "border-gray-200 text-slate-500",
           )}
-          onClick={openOutput}
+          onClick={collapsible ? onToggleCollapse : openOutput}
         >
+          {collapsible && (
+            collapsed ? (
+              <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            )
+          )}
           {failed ? (
             <AlertCircle className="h-3.5 w-3.5 text-red-500" />
           ) : waiting || running ? (
@@ -1979,6 +2736,11 @@ function Bubble({
           <span className="whitespace-normal break-words text-center leading-snug">
             {displayText(msg.text)}
           </span>
+          {collapsible && collapsed && collapsedCount > 0 && (
+            <span className="ml-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+              {collapsedCount}
+            </span>
+          )}
         </button>
         <div className="h-px flex-1 bg-gray-100" />
       </div>
@@ -1997,7 +2759,7 @@ function Bubble({
   const isAction = msg.kind === "action";
   const isDecision = msg.kind === "decision";
   const styles = isStakeholderAgent ? ROLE_STYLES.agent : ROLE_STYLES[msg.role] ?? ROLE_STYLES.agent;
-  const label = msg.label ?? (isHumanUser ? agentLabel("user") : agentLabel("analyst"));
+  const label = isHumanUser ? "您" : (msg.label ?? agentLabel("analyst"));
   const action =
     msg.action === "human_decision_request" || msg.action === "stakeholder_selection_request"
       ? ""
@@ -2005,7 +2767,7 @@ function Bubble({
   const modelPreviewGrid =
     !!projectId &&
     (isModelImagePath(msg.outputPath) || isSystemModelsPath(msg.outputPath)) &&
-    modelImages.length > 0;
+    modelImagesForMessage(msg, modelImages).length > 0;
   const meetingTask = parseMeetingTask(msg.text);
   const meetingResult = parseMeetingResult(msg.text);
   const elicitPlan = parseElicitPlan(msg.text);
@@ -2016,16 +2778,48 @@ function Bubble({
   const humanDecision = !isHumanUser ? parseHumanDecision(msg.text) : null;
   const submittedDecision = isHumanUser && isDecision ? <SubmittedDecisionCard msg={msg} /> : null;
   if (isDecision && humanDecisionRequest) {
+    const viewLabel = decisionViewLabel();
+    const badgeLabel = humanInterventionBadge(msg.decision?.kind);
+    if (isSkipAllHumanInterventionsPayload(submittedDecisionPayload)) return null;
+    const replayAvailable = !!submittedDecisionPayload;
     return (
       <div className="mb-5 mt-8 flex w-full justify-center">
-        <div className="w-full max-w-xs rounded-control border border-gray-200 bg-white px-4 py-3 text-left shadow-sm">
-          <div className="mb-2 inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-            您負責決議
+        <button
+          type="button"
+          className={cn(
+            "w-full max-w-xs rounded-control border border-gray-200 bg-white px-4 py-3 text-left shadow-sm",
+            replayAvailable && "transition hover:border-slate-300 hover:shadow",
+            !replayAvailable && "cursor-default",
+          )}
+          disabled={!replayAvailable}
+          onClick={() => {
+            if (replayAvailable) setReplayOpen(true);
+          }}
+        >
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+              {badgeLabel}
+            </div>
+            {replayAvailable && (
+              <div className="shrink-0 text-[11px] font-semibold text-slate-400">
+                {viewLabel}
+              </div>
+            )}
           </div>
           <div className="text-sm font-semibold leading-snug text-slate-900">
             {humanDecisionRequest.title}
           </div>
-        </div>
+          {replayAvailable && (
+            <div className="mt-2 text-xs font-medium text-emerald-600">已完成</div>
+          )}
+        </button>
+        {replayOpen && replayAvailable && (
+          <HumanInterventionReplayModal
+            message={msg}
+            payload={submittedDecisionPayload}
+            onClose={() => setReplayOpen(false)}
+          />
+        )}
       </div>
     );
   }
@@ -2034,7 +2828,7 @@ function Bubble({
     momFilesForMessage(msg, momFiles).length > 0 &&
     !meetingTask &&
     !meetingResult;
-  const bubbleSelectable = !!msg.outputPath && !modelPreviewGrid && !momPreviewGrid;
+  const bubbleSelectable = !!msg.outputPath && !modelPreviewGrid;
   const bubbleContent = elicitPlan ? (
     <ElicitPlanCard msg={msg} />
   ) : conflictPlan ? (
@@ -2166,6 +2960,7 @@ export function ChatFeed({
   });
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [hasNewBelow, setHasNewBelow] = useState(false);
+  const [collapsedStagePills, setCollapsedStagePills] = useState<Set<string>>(() => new Set());
   latestHydrationStateRef.current = {
     historyLoading,
     messageCount: messages.length,
@@ -2201,6 +2996,7 @@ export function ChatFeed({
     didInitialScrollRef.current = false;
     didRestoreScrollRef.current = false;
     forcedDecisionScrollMessageIdRef.current = null;
+    setCollapsedStagePills(new Set());
     setHasNewBelow(false);
     setIsNearBottom(true);
     return () => {
@@ -2278,10 +3074,41 @@ export function ChatFeed({
     setScrollTargetMessageId(null);
   }, [scrollTargetMessageId, setScrollTargetMessageId, updateScrollPosition]);
 
-  const visibleMessages = useMemo(
-    () => messages.filter((message) => !shouldHideChatMessage(message)),
+  const arrangedMessages = useMemo(
+    () => arrangeMeetingPlanMomMessages(messages.filter((message) => !shouldHideChatMessage(message))),
     [messages],
   );
+  const collapsedView = useMemo(
+    () => applyCollapsedStagePills(arrangedMessages, collapsedStagePills),
+    [arrangedMessages, collapsedStagePills],
+  );
+  const visibleMessages = collapsedView.visible;
+  const collapsedHiddenCounts = collapsedView.hiddenCounts;
+  const toggleStagePillCollapse = useCallback((id: string) => {
+    setCollapsedStagePills((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+  const submittedDecisionPayloads = useMemo(() => {
+    const rows = new Map<string, Record<string, unknown>>();
+    messages.forEach((message) => {
+      if (
+        message.kind === "decision" &&
+        message.role === "user" &&
+        message.decisionId &&
+        message.decisionPayload
+      ) {
+        rows.set(message.decisionId, message.decisionPayload);
+      }
+    });
+    return rows;
+  }, [messages]);
 
   useEffect(() => {
     const root = scrollRef.current;
@@ -2372,10 +3199,9 @@ export function ChatFeed({
               messageRefs.current[m.id] = node;
             }}
           >
-            <MeetingArtifactUpdateBubbles
+            <DraftUpdateBubbles
               projectId={projectId}
-              msg={m}
-              momFiles={momFiles}
+              path={m.outputPath}
               modelImages={modelImages}
               outputFiles={outputFiles}
             />
@@ -2385,6 +3211,14 @@ export function ChatFeed({
               outputFiles={outputFiles}
               modelImages={modelImages}
               momFiles={momFiles}
+              submittedDecisionPayload={
+                m.decisionId ? submittedDecisionPayloads.get(m.decisionId) : undefined
+              }
+              collapsed={collapsedStagePills.has(m.id)}
+              collapsedCount={collapsedHiddenCounts.get(m.id) ?? 0}
+              onToggleCollapse={
+                isStagePillMessage(m) ? () => toggleStagePillCollapse(m.id) : undefined
+              }
             />
           </div>
         ))}

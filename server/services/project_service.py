@@ -90,10 +90,10 @@ class ProjectService:
         return mapping
 
     def ensure_project(self, project_id: str) -> Store:
-        store = self.store(project_id)
-        if not store.project_dir.exists():
+        project_dir = self.base_dir / "projects" / project_id
+        if not project_dir.exists() or not project_dir.is_dir():
             raise HTTPException(status_code=404, detail="Project not found")
-        return store
+        return self.store(project_id)
 
     def assert_no_active_run(self, project_id: str) -> None:
         if self.run_manager and self.run_manager.get_active_run(project_id):

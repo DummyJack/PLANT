@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchRuns } from "@/api/runs";
-import { useChatStore } from "@/stores/chatStore";
-import type { ChatMessage, RunState } from "@/types/api";
+import {
+  trimRunDisplayMessagesFromStage,
+  trimTrailingGeneratedDocumentMessages,
+  trimTrailingRunDisplayMessages,
+  useChatStore,
+} from "@/stores/chatStore";
+import type { ChatMessage, RunCheckpoint, RunState } from "@/types/api";
 import {
   buildInitialUserMessage,
   logEventToChat,
@@ -16,37 +21,21 @@ const ACTIVE = new Set([
   "cancelling",
 ]);
 
-function attachMomLinks(messages: ChatMessage[]): ChatMessage[] {
-  let currentRound = 0;
-  return messages.map((message) => {
-    const round =
-      /^Round\s+(\d+)\s*:\s*開會/i.exec(message.text) ??
-      /^第\s*(\d+)\s*輪/.exec(message.text);
-    if (round) {
-      currentRound = Number(round[1]);
-      return message;
-    }
-
-    const task =
-      /^\s*(?:Mediator\s*[:：]\s*)?(?:M|T)-(\d+)\s*[｜|]/.exec(message.text) ??
-      /^\s*\[(?:M|T)-(\d+)\]\s*開始/.exec(message.text);
-    if (task && currentRound > 0) {
-      return {
-        ...message,
-        outputPath: `artifact/meeting/formal_meeting_r${currentRound}.json`,
-      };
-    }
-    return {
-      ...message,
-    };
-  });
-}
-
 function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
   const seen = new Set<string>();
   return messages.filter((message) => {
-    if (seen.has(message.id)) return false;
-    seen.add(message.id);
+    const semanticKey = message.outputPath
+      ? `output:${message.outputPath}`
+      : message.role === "system" && message.kind === "stage"
+        ? `stage:${message.stage || ""}:${message.text.trim()}`
+        : message.kind === "decision" && message.decision?.id
+          ? `decision:${message.decision.id}:${message.role}:${message.status}:${message.action || ""}`
+          : (message.kind === "action" || message.kind === "output") && message.action
+            ? `action:${message.stage || ""}:${message.action}:${message.text.trim()}`
+            : "";
+    const key = semanticKey || message.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -73,56 +62,122 @@ function historicalEventMessages(event: Parameters<typeof logEventToChat>[0]): C
 }
 
 function historicalLogMessages(events: unknown[]): ChatMessage[] {
-  return attachMomLinks(events.flatMap((event) => {
+  return events.flatMap((event) => {
     const row = event as Parameters<typeof logEventToChat>[0];
     return historicalEventMessages(row);
-  }));
+  });
 }
 
-async function loadRunLogMessages(projectId: string): Promise<ChatMessage[]> {
+function checkpointFromEvents(events: unknown[]): Pick<RunCheckpoint, "stage_id" | "step_id" | "round"> | null {
+  for (const event of [...events].reverse()) {
+    const row = event as {
+      type?: string;
+      checkpoint?: Pick<RunCheckpoint, "stage_id" | "step_id" | "round">;
+      stage_id?: string;
+      step_id?: string;
+      round?: number;
+    };
+    if (row.type !== "run_checkpoint_recorded") continue;
+    const stageId = String(row.checkpoint?.stage_id || row.stage_id || "").trim();
+    if (!stageId) return null;
+    return {
+      stage_id: stageId,
+      step_id: String(row.checkpoint?.step_id || row.step_id || "").trim() || undefined,
+      round: Number(row.checkpoint?.round ?? row.round ?? 0) || undefined,
+    };
+  }
+  return null;
+}
+
+function trimEventsFromCheckpoint(
+  events: unknown[],
+  checkpoint?: Pick<RunCheckpoint, "stage_id" | "step_id" | "round"> | null,
+): unknown[] {
+  const stage = String(checkpoint?.stage_id ?? "").trim();
+  if (!stage) return events;
+  const round = Number(checkpoint?.round ?? 0);
+  const index = events.findIndex((event) => {
+    const row = event as { stage_id?: string; step_id?: string; message?: string; title?: string };
+    if (String(row.stage_id || "").trim() !== stage) return false;
+    if (stage !== "formal_meeting" || round <= 0) return true;
+    const text = String(row.message || row.title || "").trim();
+    return (
+      new RegExp(`第\\s*${round}\\s*輪正式會議開始`, "u").test(text) ||
+      String(row.step_id || "").startsWith(`formal_meeting.round_${round}.`)
+    );
+  });
+  return index < 0 ? events : events.slice(0, index);
+}
+
+function historicalRunEvents(run: RunState, events: unknown[]): unknown[] {
+  if (!["failed", "cancelled", "interrupted"].includes(run.status)) {
+    return events;
+  }
+  const checkpoint = run.run_checkpoint || checkpointFromEvents(events);
+  return checkpoint ? trimEventsFromCheckpoint(events, checkpoint) : events;
+}
+
+function historicalRunMessages(run: RunState, events: unknown[]): ChatMessage[] {
+  const messages = historicalLogMessages(historicalRunEvents(run, events));
+  if (run.mode === "continue") {
+    return trimTrailingGeneratedDocumentMessages(messages);
+  }
+  return messages;
+}
+
+async function loadRunEvents(runId: string): Promise<unknown[]> {
+  const res = await fetch(
+    `/api/runs/${runId}/events?since=0`,
+    { headers: { Accept: "application/json" } },
+  );
+  if (!res.ok) return [];
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const body = (await res.json()) as { events?: unknown[] } | unknown[];
+    return Array.isArray(body)
+      ? body
+      : Array.isArray(body.events)
+        ? body.events
+        : [];
+  }
+
+  const rows: unknown[] = [];
+  const text = await res.text();
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    try {
+      rows.push(JSON.parse(trimmed.slice(5).trim()));
+    } catch {
+      /* skip malformed SSE chunks */
+    }
+  }
+  return rows;
+}
+
+async function loadRunLogMessages(projectId: string, activeRunId?: string | null): Promise<ChatMessage[]> {
   try {
     const { runs } = await fetchRuns(projectId);
-    const last = runs
+    const historyRuns = runs
       .filter((r) =>
         ["completed", "failed", "cancelled", "interrupted"].includes(r.status),
       )
       .sort(
         (a, b) =>
-          new Date(b.finished_at ?? b.started_at).getTime() -
-          new Date(a.finished_at ?? a.started_at).getTime(),
-      )[0];
-    if (!last) return [];
-
-    const res = await fetch(
-      `/api/runs/${last.run_id}/events?since=0`,
-      { headers: { Accept: "application/json" } },
-    );
-    if (!res.ok) return [];
-
-    const contentType = res.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      const body = (await res.json()) as { events?: unknown[] } | unknown[];
-      const rows = Array.isArray(body)
-        ? body
-        : Array.isArray(body.events)
-          ? body.events
-          : [];
-      return historicalLogMessages(rows);
+          new Date(a.started_at).getTime() -
+          new Date(b.started_at).getTime(),
+      );
+    const rows: ChatMessage[] = [];
+    for (const run of historyRuns) {
+      const events = await loadRunEvents(run.run_id);
+      rows.push(...historicalRunMessages(run, events));
     }
-
-    const text = await res.text();
-    const messages = [];
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      try {
-        const event = JSON.parse(trimmed.slice(5).trim());
-        messages.push(...historicalEventMessages(event));
-      } catch {
-        /* skip malformed SSE chunks */
-      }
+    if (activeRunId && !historyRuns.some((run) => run.run_id === activeRunId)) {
+      rows.push(...historicalLogMessages(await loadRunEvents(activeRunId)));
     }
-    return attachMomLinks(messages);
+    if (!rows.length) return [];
+    return rows;
   } catch {
     return [];
   }
@@ -136,6 +191,7 @@ export function useProjectChatHydration(
   artifactsReady: boolean,
 ) {
   const setMessages = useChatStore((s) => s.setMessages);
+  const continueReplacementStage = useChatStore((s) => s.continueReplacementStage);
   const hydratedKeyRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasHistory, setHasHistory] = useState(false);
@@ -171,7 +227,7 @@ export function useProjectChatHydration(
     setLoading(true);
 
     const hydrate = async () => {
-      const logMsgs = await loadRunLogMessages(projectId);
+      const logMsgs = await loadRunLogMessages(projectId, active ? activeRun?.run_id : null);
 
       if (cancelled) return;
 
@@ -203,7 +259,14 @@ export function useProjectChatHydration(
         return;
       }
 
-      const historyMessages = mergeChatMessages([...seed, ...logMsgs]);
+      const mergedHistoryMessages = mergeChatMessages([...seed, ...logMsgs]);
+      const trimStage = continueReplacementStage || activeRun?.run_checkpoint;
+      const historyMessages = active && trimStage
+        ? trimRunDisplayMessagesFromStage(
+            trimTrailingRunDisplayMessages(mergedHistoryMessages),
+            trimStage,
+          )
+        : mergedHistoryMessages;
       setMessages(
         mergeChatMessages(
           uniqueChatMessages(
@@ -227,6 +290,7 @@ export function useProjectChatHydration(
     roughIdea,
     activeRun?.run_id,
     activeRun?.status,
+    continueReplacementStage,
     artifactsReady,
     setMessages,
   ]);

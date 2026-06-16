@@ -11,6 +11,7 @@ import {
 import { PanelChrome } from "@/components/PanelChrome";
 import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
 import { ReferenceFileIcon } from "@/features/documents/ReferenceFileIcon";
+import { useActiveRun } from "@/hooks/useActiveRun";
 import { useProjectData } from "@/hooks/useProjectData";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
@@ -71,6 +72,8 @@ const SUPPORTED_REFERENCE_EXTS = [
 ];
 const REFERENCE_ACCEPT = SUPPORTED_REFERENCE_EXTS.join(",");
 const REFERENCE_EXTS_LABEL = SUPPORTED_REFERENCE_EXTS.join(", ");
+const REFERENCE_DRAG_MIME = "application/x-plant-reference";
+const REVIEW_MENTION_DRAG_MIME = "application/x-plant-review-mention";
 
 function extensionLabel(name: string): string {
   const ext = name.split(".").pop()?.trim();
@@ -85,6 +88,61 @@ function basename(name: string): string {
 function referenceExt(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function referenceIconMeta(name: string): { label: string; fill: string; fold: string } {
+  const ext = referenceExt(name);
+  if (ext === ".pdf") return { label: "PDF", fill: "#ef4444", fold: "#fecaca" };
+  if (ext === ".pptx") return { label: "PPT", fill: "#f97316", fold: "#fed7aa" };
+  if (ext === ".xlsx" || ext === ".csv")
+    return { label: ext === ".csv" ? "CSV" : "XLS", fill: "#16a34a", fold: "#bbf7d0" };
+  if (ext === ".docx") return { label: "DOC", fill: "#2563eb", fold: "#bfdbfe" };
+  if (ext === ".md") return { label: "MD", fill: "#475569", fold: "#cbd5e1" };
+  if (ext === ".txt") return { label: "TXT", fill: "#64748b", fold: "#cbd5e1" };
+  if (ext === ".json") return { label: "JSN", fill: "#7c3aed", fold: "#ddd6fe" };
+  return { label: "FILE", fill: "#64748b", fold: "#cbd5e1" };
+}
+
+function createReferenceDragIcon(name: string): SVGSVGElement {
+  const meta = referenceIconMeta(name);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 28 32");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "21");
+
+  const body = document.createElementNS(ns, "path");
+  body.setAttribute("d", "M4 1.5h13.5L24 8v22.5H4z");
+  body.setAttribute("fill", meta.fill);
+  svg.appendChild(body);
+
+  const fold = document.createElementNS(ns, "path");
+  fold.setAttribute("d", "M17.5 1.5V8H24z");
+  fold.setAttribute("fill", meta.fold);
+  svg.appendChild(fold);
+
+  const foldLine = document.createElementNS(ns, "path");
+  foldLine.setAttribute("d", "M17.5 1.5V8H24");
+  foldLine.setAttribute("fill", "none");
+  foldLine.setAttribute("stroke", "rgba(15,23,42,.22)");
+  foldLine.setAttribute("stroke-width", "1");
+  svg.appendChild(foldLine);
+
+  const text = document.createElementNS(ns, "text");
+  text.setAttribute("x", "14");
+  text.setAttribute("y", "22");
+  text.setAttribute("text-anchor", "middle");
+  text.setAttribute("font-size", meta.label.length > 3 ? "5.2" : "6.2");
+  text.setAttribute("font-weight", "700");
+  text.setAttribute("fill", "white");
+  text.setAttribute(
+    "font-family",
+    "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+  );
+  text.textContent = meta.label;
+  svg.appendChild(text);
+
+  return svg;
 }
 
 function isTextReference(name: string): boolean {
@@ -109,6 +167,11 @@ function hasSupportedDragFile(items: DataTransferItemList): boolean {
     const name = item.getAsFile()?.name;
     return !name || isSupportedReferenceName(name);
   });
+}
+
+function isInternalAppDrag(dataTransfer: DataTransfer): boolean {
+  const types = Array.from(dataTransfer.types);
+  return types.includes(REFERENCE_DRAG_MIME) || types.includes(REVIEW_MENTION_DRAG_MIME);
 }
 
 function readFileEntry(entry: FileSystemFileEntry): Promise<File> {
@@ -172,6 +235,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const panelMeasureRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const { references } = useProjectData(projectId);
+  const { activeRun } = useActiveRun(projectId);
   const [dragOver, setDragOver] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
@@ -190,6 +254,9 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const rows = projectId
     ? buildReferenceRows(references.data?.references ?? [])
     : buildReferenceRows(stagedReferenceFiles.map((file) => ({ name: file.name })));
+  const canDragReferenceToReview =
+    activeRun?.status === "waiting_for_human" &&
+    activeRun.pending_decision?.kind === "domain_research_review";
   const filteredRows = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return rows;
@@ -203,6 +270,47 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const someVisibleSelected = selectedVisibleNames.length > 0;
   const uploadDisabled = !canWrite;
   const writeDisabled = !canWrite;
+
+  const handleReferenceDragStart = (event: DragEvent<HTMLElement>, row: { name: string }) => {
+    if (uploadDisabled) {
+      event.preventDefault();
+      return;
+    }
+    const dragLabel = document.createElement("div");
+    dragLabel.textContent = row.name;
+    dragLabel.style.position = "fixed";
+    dragLabel.style.top = "-1000px";
+    dragLabel.style.left = "-1000px";
+    dragLabel.style.display = "flex";
+    dragLabel.style.alignItems = "center";
+    dragLabel.style.gap = "8px";
+    dragLabel.style.border = "1px solid rgb(203 213 225)";
+    dragLabel.style.borderRadius = "8px";
+    dragLabel.style.background = "white";
+    dragLabel.style.padding = "6px 10px";
+    dragLabel.style.fontSize = "12px";
+    dragLabel.style.fontWeight = "600";
+    dragLabel.style.color = "rgb(51 65 85)";
+    dragLabel.style.boxShadow = "0 8px 18px rgb(15 23 42 / 0.12)";
+    const iconWrap = document.createElement("span");
+    iconWrap.style.display = "inline-flex";
+    iconWrap.style.flexShrink = "0";
+    iconWrap.appendChild(createReferenceDragIcon(row.name));
+    const nameWrap = document.createElement("span");
+    nameWrap.textContent = row.name;
+    nameWrap.style.whiteSpace = "nowrap";
+    dragLabel.textContent = "";
+    dragLabel.append(iconWrap, nameWrap);
+    document.body.appendChild(dragLabel);
+    event.dataTransfer.setDragImage(dragLabel, 12, 12);
+    window.setTimeout(() => dragLabel.remove(), 0);
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      REFERENCE_DRAG_MIME,
+      JSON.stringify({ type: "reference_file", name: row.name }),
+    );
+    event.dataTransfer.setData("text/plain", row.name);
+  };
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -293,6 +401,11 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
 
   const updateDragState = (event: DragEvent<HTMLElement>) => {
     if (uploadDisabled) return;
+    if (isInternalAppDrag(event.dataTransfer)) {
+      setDragOver(false);
+      setDragRejected(false);
+      return;
+    }
     event.preventDefault();
     const supported = hasSupportedDragFile(event.dataTransfer.items);
     event.dataTransfer.dropEffect = supported ? "copy" : "none";
@@ -465,6 +578,11 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         }}
         onDrop={async (e) => {
           if (uploadDisabled) return;
+          if (isInternalAppDrag(e.dataTransfer)) {
+            setDragOver(false);
+            setDragRejected(false);
+            return;
+          }
           e.preventDefault();
           setDragOver(false);
           setDragRejected(false);
@@ -563,8 +681,13 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     return (
                       <li
                         key={row.id}
+                        draggable={!uploadDisabled && canDragReferenceToReview}
+                        onDragStart={(event) => handleReferenceDragStart(event, row)}
                         className={cn(
                           "group grid items-center gap-2 border-b border-gray-100 px-1 py-2 text-xs hover:bg-gray-50",
+                          !uploadDisabled &&
+                            canDragReferenceToReview &&
+                            "cursor-grab active:cursor-grabbing",
                           controlsStacked
                             ? "grid-cols-[24px_minmax(0,1fr)_28px]"
                             : "grid-cols-[24px_minmax(0,1fr)_64px_28px]",

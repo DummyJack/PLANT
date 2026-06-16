@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Edit3, Loader2, MoreHorizontal } from "lucide-react";
+import { Download, Edit3, Loader2, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { DragEvent, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchFile } from "@/api/projects";
@@ -13,6 +13,7 @@ import { OutputFilePicker } from "@/features/output/OutputFilePicker";
 import { useActiveRun } from "@/hooks/useActiveRun";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
+import type { ScopeReviewDraft } from "@/stores/uiStore";
 import {
   buildOutputFiles,
   filenameFromPath,
@@ -55,6 +56,52 @@ interface AgentIssueProposalRow {
   agent: string;
   title: string;
   detail: string;
+}
+
+const emptyScopeDraft: ScopeReviewDraft = {
+  in_scope: [],
+  out_of_scope: [],
+};
+
+const REVIEW_MENTION_DRAG_MIME = "application/x-plant-review-mention";
+
+function createMentionDragLabel(id: string): HTMLDivElement {
+  const label = document.createElement("div");
+  label.textContent = `@${id}`;
+  label.style.position = "fixed";
+  label.style.top = "-1000px";
+  label.style.left = "-1000px";
+  label.style.border = "1px solid rgb(203 213 225)";
+  label.style.borderRadius = "8px";
+  label.style.background = "white";
+  label.style.padding = "6px 10px";
+  label.style.fontSize = "12px";
+  label.style.fontWeight = "700";
+  label.style.color = "rgb(51 65 85)";
+  label.style.boxShadow = "0 8px 18px rgb(15 23 42 / 0.12)";
+  return label;
+}
+
+function handleMentionDragStart(
+  event: DragEvent<HTMLElement>,
+  target: "stakeholders" | "requirements",
+  id: string,
+) {
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    event.preventDefault();
+    return;
+  }
+  const dragLabel = createMentionDragLabel(normalizedId);
+  document.body.appendChild(dragLabel);
+  event.dataTransfer.setDragImage(dragLabel, 12, 12);
+  window.setTimeout(() => dragLabel.remove(), 0);
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData(
+    REVIEW_MENTION_DRAG_MIME,
+    JSON.stringify({ type: "review_mention", target, id: normalizedId }),
+  );
+  event.dataTransfer.setData("text/plain", `@${normalizedId}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,6 +224,25 @@ function parseMeetingIssueProposalRows(
       };
     })
     .filter((row) => row.title);
+}
+
+function cleanScopeList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function scopeReviewDraftFromDecision(
+  decision: NonNullable<ReturnType<typeof useActiveRun>["activeRun"]>["pending_decision"],
+): ScopeReviewDraft {
+  if (decision?.kind !== "scope_review") return emptyScopeDraft;
+  const options = isRecord(decision.options) ? decision.options : {};
+  const rawScope = isRecord(options.scope) ? options.scope : {};
+  return {
+    in_scope: cleanScopeList(rawScope.in_scope),
+    out_of_scope: cleanScopeList(rawScope.out_of_scope),
+  };
 }
 
 function downloadBlob(content: FileContent, filename: string) {
@@ -414,7 +480,12 @@ function StakeholderStatementPreview({
                 {stakeholder.text.map((line) => (
                   <div
                     key={line.id}
-                    className="rounded-control bg-slate-50 px-3 py-2"
+                    draggable
+                    className="rounded-control bg-slate-50 px-3 py-2 cursor-grab active:cursor-grabbing"
+                    onDragStart={(event) =>
+                      handleMentionDragStart(event, "stakeholders", line.id)
+                    }
+                    title={`拖曳引用 @${line.id}`}
                   >
                     <div className="mb-1 text-xs font-semibold text-slate-400">
                       {line.id}
@@ -433,6 +504,152 @@ function StakeholderStatementPreview({
   );
 }
 
+function ScopeReviewEditor({
+  draft,
+  onChange,
+}: {
+  draft: ScopeReviewDraft;
+  onChange: (draft: ScopeReviewDraft) => void;
+}) {
+  const [editingItems, setEditingItems] = useState<Record<string, boolean>>({});
+  const itemKey = (key: keyof ScopeReviewDraft, index: number) => `${key}-${index}`;
+  const updateItem = (key: keyof ScopeReviewDraft, index: number, value: string) => {
+    onChange({
+      ...draft,
+      [key]: draft[key].map((item, currentIndex) =>
+        currentIndex === index ? value : item,
+      ),
+    });
+  };
+  const addItem = (key: keyof ScopeReviewDraft) => {
+    if (draft[key].some((item) => !item.trim())) return;
+    const nextIndex = draft[key].length;
+    onChange({
+      ...draft,
+      [key]: [...draft[key], ""],
+    });
+    setEditingItems((current) => ({ ...current, [itemKey(key, nextIndex)]: true }));
+  };
+  const removeItem = (key: keyof ScopeReviewDraft, index: number) => {
+    onChange({
+      ...draft,
+      [key]: draft[key].filter((_, currentIndex) => currentIndex !== index),
+    });
+    setEditingItems((current) => {
+      const next = { ...current };
+      delete next[itemKey(key, index)];
+      return next;
+    });
+  };
+  const renderSection = (
+    key: keyof ScopeReviewDraft,
+    title: string,
+    emptyText: string,
+  ) => {
+    const canAdd = !draft[key].some((item) => !item.trim());
+    const placeholder =
+      key === "in_scope"
+        ? "輸入需求範圍內"
+        : "輸入需求範圍外";
+    return (
+      <section className="rounded-control border border-gray-200 bg-white p-3">
+      <div className="relative mb-3 flex items-center justify-end gap-3">
+        <h3 className="absolute left-1/2 -translate-x-1/2 text-sm font-semibold text-slate-900">
+          {title}
+        </h3>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border",
+            canAdd
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              : "cursor-not-allowed border-gray-200 bg-slate-50 text-slate-300",
+          )}
+          disabled={!canAdd}
+          onClick={() => addItem(key)}
+          aria-label={`新增${title}`}
+          title={canAdd ? "新增" : "請先填寫新增項目"}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="space-y-2">
+        {draft[key].length === 0 ? (
+          <div className="rounded-control border border-dashed border-gray-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+            {emptyText}
+          </div>
+        ) : (
+          draft[key].map((item, index) => (
+            <div
+              key={`${key}-${index}`}
+              className="rounded-control border border-gray-200 bg-white p-2"
+            >
+              <div className="flex min-h-14 items-center gap-2 rounded-control bg-slate-50 px-3 py-2">
+                {editingItems[itemKey(key, index)] ? (
+                  <textarea
+                    className="min-h-10 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0"
+                    value={item}
+                    placeholder={placeholder}
+                    autoFocus
+                    onBlur={() =>
+                      setEditingItems((current) => ({
+                        ...current,
+                        [itemKey(key, index)]: false,
+                      }))
+                    }
+                    onChange={(event) => updateItem(key, index, event.target.value)}
+                  />
+                ) : (
+                  <div className="min-w-0 flex-1 text-left text-sm leading-relaxed text-slate-700">
+                    {item.trim() || (
+                      <span className="text-slate-400">{placeholder}</span>
+                    )}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-slate-500 hover:bg-white hover:text-slate-700"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    setEditingItems((current) => ({
+                      ...current,
+                      [itemKey(key, index)]: true,
+                    }))
+                  }
+                  aria-label="編輯此項"
+                  title="編輯"
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-red-100 bg-white text-red-500 hover:bg-red-50 hover:text-red-600"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => removeItem(key, index)}
+                  aria-label="移除此項"
+                  title="移除"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+    );
+  };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="space-y-3">
+        {renderSection("in_scope", "範圍內", "尚無範圍內項目")}
+        {renderSection("out_of_scope", "範圍外", "尚無範圍外項目")}
+      </div>
+    </div>
+  );
+}
+
 function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -445,7 +662,12 @@ function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
           {rows.map((row) => (
             <div
               key={row.id}
-              className="rounded-control border border-gray-200 bg-white p-3"
+              draggable
+              className="rounded-control border border-gray-200 bg-white p-3 cursor-grab active:cursor-grabbing"
+              onDragStart={(event) =>
+                handleMentionDragStart(event, "requirements", row.id)
+              }
+              title={`拖曳引用 @${row.id}`}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold text-slate-400">
@@ -855,6 +1077,9 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const selectedOutputPath = useUiStore((s) => s.selectedOutputPath);
   const selectedOutputAnchor = useUiStore((s) => s.selectedOutputAnchor);
   const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
+  const scopeReviewDrafts = useUiStore((s) => s.scopeReviewDrafts);
+  const setScopeReviewDraft = useUiStore((s) => s.setScopeReviewDraft);
+  const clearScopeReviewDraft = useUiStore((s) => s.clearScopeReviewDraft);
   const autoFollowOutput = useUiStore((s) => s.autoFollowOutput);
   const manualOutputLock = useUiStore((s) => s.manualOutputLock);
   const currentAutoOutputPath = useUiStore((s) => s.currentAutoOutputPath);
@@ -898,6 +1123,19 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     activeRun.pending_decision?.kind === "meeting_issue_proposal_review"
       ? activeRun.pending_decision
       : null;
+  const scopeReviewDecision =
+    activeRun?.status === "waiting_for_human" &&
+    activeRun.pending_decision?.kind === "scope_review"
+      ? activeRun.pending_decision
+      : null;
+  const originalScopeDraft = useMemo(
+    () => scopeReviewDraftFromDecision(scopeReviewDecision),
+    [scopeReviewDecision],
+  );
+  const scopeDraft =
+    scopeReviewDecision
+      ? scopeReviewDrafts[scopeReviewDecision.id] ?? originalScopeDraft
+      : emptyScopeDraft;
   const requirementRows = useMemo(
     () => requirementReviewRows(requirementsReviewDecision),
     [requirementsReviewDecision],
@@ -955,7 +1193,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     queryKey: ["file", projectId, selectedOutputPath],
     queryFn: () => fetchFile(projectId!, selectedOutputPath!),
     enabled:
-      !!projectId && !!selectedOutputPath && !isModelArtifact && !isHtmlArtifact,
+      !!projectId && !!selectedOutputPath && !!fileMeta && !isModelArtifact && !isHtmlArtifact,
+    placeholderData: (previous) => previous,
     retry: false,
   });
   const statementEditMut = useMutation({
@@ -983,7 +1222,9 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     },
   });
 
-  const content = file.data?.content ?? "";
+  const fileData = file.data?.path === selectedOutputPath ? file.data : undefined;
+  const content = fileData?.content ?? "";
+  const fileLoading = !isHtmlArtifact && !isModelArtifact && !fileData && file.isFetching;
   const htmlPreviewUrl =
     projectId && selectedOutputPath?.startsWith("results/")
       ? `/api/projects/${encodeURIComponent(projectId)}/results/${selectedOutputPath
@@ -1104,6 +1345,26 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   }, [stakeholderReviewDecision?.id]);
 
   useEffect(() => {
+    if (!scopeReviewDecision) return;
+    if (!scopeReviewDrafts[scopeReviewDecision.id]) {
+      setScopeReviewDraft(scopeReviewDecision.id, originalScopeDraft);
+    }
+  }, [
+    originalScopeDraft,
+    scopeReviewDecision,
+    scopeReviewDrafts,
+    setScopeReviewDraft,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (scopeReviewDecision?.id) {
+        clearScopeReviewDraft(scopeReviewDecision.id);
+      }
+    };
+  }, [clearScopeReviewDraft, scopeReviewDecision?.id]);
+
+  useEffect(() => {
     setPendingHtmlHash(null);
   }, [projectId]);
 
@@ -1114,6 +1375,13 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       setSelectedOutputPath(preferred, "system");
     }
   }, [files, selectedOutputPath, setSelectedOutputPath]);
+
+  useEffect(() => {
+    if (!projectId || !selectedOutputPath || files.length === 0) return;
+    if (files.some((file) => file.path === selectedOutputPath)) return;
+    const preferred = resolvePreferredOutputPath(selectedOutputPath, files);
+    setSelectedOutputPath(preferred ?? files[0].path, "system");
+  }, [files, projectId, selectedOutputPath, setSelectedOutputPath]);
 
   useEffect(() => {
     if (!autoFollowOutput || manualOutputLock || !currentAutoOutputPath) return;
@@ -1377,7 +1645,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     <div
       className={cn(
         controlsStacked
-          ? "mx-auto w-full max-w-40"
+          ? "mx-auto w-full max-w-44"
           : controlsNarrow && "w-full",
       )}
     >
@@ -1568,6 +1836,25 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     );
   }
 
+  if (scopeReviewDecision) {
+    return (
+      <PanelChrome
+        title="需求範圍"
+        centerTitle
+        headerClassName="min-h-10 py-2"
+        titleClassName="text-base"
+        bodyClassName="flex min-h-0 flex-col"
+      >
+        <ScopeReviewEditor
+          draft={scopeDraft}
+          onChange={(nextDraft) =>
+            setScopeReviewDraft(scopeReviewDecision.id, nextDraft)
+          }
+        />
+      </PanelChrome>
+    );
+  }
+
   if (requirementsReviewDecision) {
     return (
       <PanelChrome
@@ -1644,32 +1931,13 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
             (fileMeta?.kind === "image" ? fileMeta.path : undefined)
           }
         />
-      ) : file.isLoading ? (
+      ) : fileLoading ? (
         <div className="grid min-h-0 flex-1 place-items-center p-4 text-center text-sm text-slate-500">
           載入中…
         </div>
-      ) : file.isError ? (
+      ) : !fileData && file.isError ? (
         <p className="p-4 text-sm text-slate-500">無法載入檔案</p>
-      ) : fileMeta?.kind === "json" || file.data?.type === "json" ? (
-        <JsonArtifactView
-          projectId={projectId}
-          path={selectedOutputPath ?? ""}
-          content={content}
-          anchor={selectedOutputAnchor}
-        />
-      ) : fileMeta?.kind === "image" || file.data?.type === "image" ? (
-        <div className="flex flex-1 items-center justify-center overflow-auto p-4">
-          {file.data?.content ? (
-            <img
-              src={`data:${file.data.mime ?? "image/png"};base64,${file.data.content}`}
-              alt={title}
-              className="max-h-full max-w-full rounded-control object-contain"
-            />
-          ) : (
-            <p className="text-sm text-slate-500">圖形尚無法預覽</p>
-          )}
-        </div>
-      ) : isHtmlArtifact || file.data?.type === "html" ? (
+      ) : isHtmlArtifact || fileData?.type === "html" ? (
         <iframe
           ref={iframeRef}
           title={title || "產出物"}
@@ -1678,7 +1946,26 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           onLoad={collectHtmlToc}
           className="min-h-0 flex-1 border-0 bg-slate-50/50"
         />
-      ) : isMarkdownArtifact || file.data?.type === "md" ? (
+      ) : fileMeta?.kind === "json" || fileData?.type === "json" ? (
+        <JsonArtifactView
+          projectId={projectId}
+          path={selectedOutputPath ?? ""}
+          content={content}
+          anchor={selectedOutputAnchor}
+        />
+      ) : fileMeta?.kind === "image" || fileData?.type === "image" ? (
+        <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+          {fileData?.content ? (
+            <img
+              src={`data:${fileData.mime ?? "image/png"};base64,${fileData.content}`}
+              alt={title}
+              className="max-h-full max-w-full rounded-control object-contain"
+            />
+          ) : (
+            <p className="text-sm text-slate-500">圖形尚無法預覽</p>
+          )}
+        </div>
+      ) : isMarkdownArtifact || fileData?.type === "md" ? (
         <MarkdownPreview
           projectId={projectId}
           selectedPath={selectedOutputPath}

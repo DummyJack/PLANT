@@ -7,9 +7,6 @@ from typing import List
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request, Response
 
-from storage import Store
-
-
 ACTIVATION_COOKIE = "plant_activation"
 WRITE_FORBIDDEN_MESSAGE = "需要啟動碼才能執行此操作"
 
@@ -42,8 +39,8 @@ def require_project_read_access(request: Request, project_id: str) -> None:
     # Current deployment model has shared read access and activation-gated writes.
     # Keep this hook centralized so project ownership checks can be added without
     # touching every route.
-    store = Store(request.app.state.base_dir, project_id)
-    if not store.project_dir.exists():
+    project_dir = request.app.state.base_dir / "projects" / project_id
+    if not project_dir.exists() or not project_dir.is_dir():
         raise HTTPException(status_code=404, detail="Project not found")
 
 

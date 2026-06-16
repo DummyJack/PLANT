@@ -18,14 +18,19 @@ function formalMeetingRoundPath(event: RunEvent): string | null {
 }
 
 export function outputPathFromRunEvent(event: RunEvent): string | null {
-  const directPath = text(event.output_path) || pathFromContent(event.content);
-  if (directPath) return directPath;
-
   const stage = text(event.stage_id);
   const step = text(event.step_id);
   const action = text(event.action);
   const message = text(event.message);
   const title = text(event.title);
+
+  if (/document_generation/i.test(stage) && /design_rationale/i.test(step)) {
+    return "results/design_rationale.html";
+  }
+  if (/document_generation/i.test(stage) && /srs/i.test(step)) return "results/srs.html";
+
+  const directPath = text(event.output_path) || pathFromContent(event.content);
+  if (directPath) return directPath;
 
   if (stage === "init") {
     const value = `${step} ${action} ${message} ${title}`;
@@ -52,10 +57,5 @@ export function outputPathFromRunEvent(event: RunEvent): string | null {
   if (stage === "SRS") return "results/srs.html";
 
   if (/draft/i.test(stage)) return null;
-  if (/document_generation/i.test(stage) && /design_rationale/i.test(step)) {
-    return "results/design_rationale.html";
-  }
-  if (/document_generation/i.test(stage) && /srs/i.test(step)) return "results/srs.html";
-
   return null;
 }

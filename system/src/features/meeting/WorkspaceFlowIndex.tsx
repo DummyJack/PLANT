@@ -11,6 +11,7 @@ interface FlowItem {
   title: string;
   detail: string;
   dedupeKey: string;
+  orderHint?: number;
   outputPath?: string;
   scrollTargetId?: string;
   rawTitle?: string;
@@ -39,7 +40,6 @@ function stageTitle(stage?: string) {
   const value = stage.toLowerCase();
   if (value === "init") return "初始分析";
   if (value === "elicitation") return "需求擷取會議";
-  if (value === "conflict_detection") return "需求衝突報告";
   if (value === "conflict_review") return "衝突辨識";
   if (value === "research_domain") return "領域研究";
   if (value === "system_model") return "系統模型生成";
@@ -91,11 +91,6 @@ function actionDisplay(msg: ChatMessage): { title: string; detail: string } {
       title: "整併需求",
       running: "正在整併需求",
       done: "已更新 Requirements",
-    },
-    write_report: {
-      title: "需求衝突報告",
-      running: "正在產生 Conflict Report",
-      done: "已產生 Conflict Report",
     },
     run_review: {
       title: "衝突辨識",
@@ -192,10 +187,6 @@ function outputLabel(path?: string, text?: string) {
   if (/result\.json$/i.test(path)) return "Conflict";
   const draft = /draft_v(\d+)/i.exec(path)?.[1];
   if (draft) return `Draft v${draft}`;
-  const report = /conflict_report_v(\d+)/i.exec(path)?.[1];
-  if (report) return `Conflict Report v${report}`;
-  const mom = /(R\d+-M\d+)/i.exec(path)?.[1];
-  if (mom) return `MoM ${mom}`;
   if (/srs\.(html|md)$/i.test(path)) return "SRS";
   if (/design_rationale\.(html|md)$/i.test(path)) return "Design Rationale";
   if (/models\/.+\.(png|svg|plantuml|puml)$/i.test(path)) return "系統模型生成";
@@ -213,13 +204,9 @@ function isPrimaryOutput(path?: string) {
   return (
     /scope\.json$/i.test(path) ||
     /meeting\/elicitation_meeting\.json$/i.test(path) ||
-    /requirements\.json$/i.test(path) ||
     /feedback\.json$/i.test(path) ||
     /system_models\.json$/i.test(path) ||
-    /result\.json$/i.test(path) ||
     /draft_v\d+\.(?:md|html)$/i.test(path) ||
-    /conflict_report_v\d+\.(?:html|md|json)$/i.test(path) ||
-    /MoM\/R\d+-M\d+\.(?:html|md)$/i.test(path) ||
     /srs\.(?:html|md)$/i.test(path) ||
     /design_rationale\.(?:html|md)$/i.test(path) ||
     /models\/.+\.(?:png|svg|plantuml|puml)$/i.test(path)
@@ -235,7 +222,6 @@ function isPrimaryAction(msg: ChatMessage) {
     key === "analyze_requirements" ||
     key === "generate_scope" ||
     key === "extract_requirements" ||
-    key === "write_report" ||
     key === "run_review" ||
     key === "research_domain" ||
     key === "read_reference_docs" ||
@@ -272,11 +258,13 @@ function decisionDetail(msg: ChatMessage) {
 }
 
 function decisionTitle(msg: ChatMessage) {
+  if (msg.action === "human_decision_request" || msg.decision?.kind === "human_decision") return "人類決策";
   if (/建議|候選議題|議題/i.test(msg.text)) return "人類介入";
   return "人類選擇";
 }
 
 function decisionDedupeKey(msg: ChatMessage) {
+  if (msg.decisionId) return `decision:${msg.decisionId}`;
   if (msg.action === "stakeholder_selection_request") return "decision:stakeholder_selection";
   if (/@資料來源|資料來源_|\.pdf|法令|法規/i.test(msg.text)) return "decision:feedback";
   if (/利害關係人/.test(msg.text)) return "decision:stakeholder_selection";
@@ -285,6 +273,22 @@ function decisionDedupeKey(msg: ChatMessage) {
   if (/領域|研究|Feedback/i.test(msg.text)) return "decision:feedback";
   if (/衝突|Conflict|CR-/i.test(msg.text)) return "decision:conflict";
   return "decision:general";
+}
+
+function decisionRound(msg: ChatMessage) {
+  const rawRound = msg.decision?.issue?.round;
+  if (typeof rawRound === "number" && Number.isFinite(rawRound)) return rawRound;
+  if (typeof rawRound === "string") {
+    const parsed = Number(rawRound);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function decisionOrderHint(msg: ChatMessage) {
+  const round = decisionRound(msg);
+  if (!round) return undefined;
+  return 70 + (round - 1) * 2 + 0.5;
 }
 
 function actionDedupeKey(msg: ChatMessage) {
@@ -308,6 +312,7 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
         title: decisionTitle(msg),
         detail: decisionDetail(msg),
         dedupeKey: decisionDedupeKey(msg),
+        orderHint: decisionOrderHint(msg),
         rawTitle: msg.action,
         tone: "decision",
       };
@@ -336,12 +341,12 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
   }
 
   if (msg.kind === "decision") {
-    if (msg.status === "waiting") return null;
     return {
       id: msg.id,
       title: decisionTitle(msg),
       detail: decisionDetail(msg),
       dedupeKey: decisionDedupeKey(msg),
+      orderHint: decisionOrderHint(msg),
       rawTitle: msg.action,
       tone: "decision",
     };
@@ -361,15 +366,18 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
         tone: "action",
       };
     }
-    return {
-      id: msg.id,
-      title: "產出物更新",
-      detail: `已更新：${label}`,
-      dedupeKey: msg.outputPath ? `output:${msg.outputPath}` : `message:${msg.id}`,
-      outputPath: msg.outputPath,
-      rawTitle: msg.action,
-      tone: outputTone(label),
-    };
+    if (label === "Scope" || label === "需求擷取會議" || /^Draft v\d+$/i.test(label) || label === "Design Rationale" || label === "SRS") {
+      return {
+        id: msg.id,
+        title: label,
+        detail: "已更新",
+        dedupeKey: msg.outputPath ? `output:${msg.outputPath}` : `message:${msg.id}`,
+        outputPath: msg.outputPath,
+        rawTitle: msg.action,
+        tone: outputTone(label),
+      };
+    }
+    return null;
   }
 
   if (msg.status === "waiting" || msg.status === "failed") {
@@ -449,13 +457,13 @@ function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): Flow
       tone: "action",
     });
   }
-
   return flowItems;
 }
 
 function flowItemOrder(item: FlowItem) {
+  if (item.orderHint !== undefined) return item.orderHint;
   const value = `${item.title} ${item.detail}`;
-  const isHumanDecision = item.title === "人類選擇" || item.title === "人類介入";
+  const isHumanDecision = item.title === "人類選擇" || item.title === "人類介入" || item.title === "人類決策";
   const meetingRound = /第\s*(\d+)\s*輪會議/.exec(item.title)?.[1];
   if (meetingRound) return 70 + (Number(meetingRound) - 1) * 2;
   if (item.title === "人類輸入") return 0;
@@ -473,13 +481,11 @@ function flowItemOrder(item: FlowItem) {
   if (isHumanDecision) return 21;
   if (/範圍|Scope/.test(value)) return 25;
   if (/需求擷取會議/.test(value)) return 30;
-  if (/Requirements/.test(value)) return 35;
-  if (/衝突報告|Conflict Report/.test(value)) return 40;
   if (/衝突辨識|衝突解決/.test(value)) return 45;
   if (/領域研究|Feedback/.test(value)) return 47;
   if (/系統模型生成|模型生成|系統模型|System Models/.test(value)) return 50;
   if (/Draft|草稿/.test(value)) return 60;
-  if (/正式會議|MoM/.test(value)) return 70;
+  if (/正式會議/.test(value)) return 70;
   if (/Design Rationale/.test(value)) return 80;
   if (/\bSRS\b/.test(value)) return 85;
   return 100;
@@ -514,7 +520,7 @@ function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
   if (/人類輸入|選擇利害關係人|利害關係人發言/.test(value)) {
     return firstExistingPath(paths, ["artifact/project.json"]);
   }
-  if (/需求分析|需求候選|Requirements|decision:requirements/.test(value)) {
+  if (/需求分析|需求候選|decision:requirements/.test(value)) {
     return firstExistingPath(paths, ["artifact/requirements.json"]);
   }
   if (/範圍|Scope/.test(value)) {

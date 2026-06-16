@@ -1,8 +1,35 @@
 import { agentLabel } from "@/constants/agents";
 import type { ChatMessage, RunEvent } from "@/types/api";
 
+function displayText(value: string): string {
+  return value.replace(
+    /\b([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*[A-Za-z0-9])\b/g,
+    (match) => {
+      if (/\.(?:json|md|html|png|svg|plantuml|txt|csv|pdf|docx|xlsx|pptx)$/i.test(match)) {
+        return match;
+      }
+      return match.replace(/_/g, " ");
+    },
+  );
+}
+
 function decisionPayloadText(event: RunEvent): string {
   const payload = event.payload ?? {};
+  const options = event.decision?.options && typeof event.decision.options === "object"
+    ? (event.decision.options as Record<string, unknown>)
+    : {};
+  const bestOptions = Array.isArray(options.best_options)
+    ? options.best_options
+        .map((row, index) => {
+          if (!row || typeof row !== "object") return null;
+          const item = row as Record<string, unknown>;
+          const id = String(item.option_id ?? item.id ?? String.fromCharCode(65 + index)).trim();
+          const title = String(item.title ?? item.summary ?? item.description ?? "").trim();
+          return { id, label: `選項 ${id}`, title };
+        })
+        .filter((row): row is { id: string; label: string; title: string } => Boolean(row))
+    : [];
+  const optionById = new Map(bestOptions.map((row) => [row.id, row]));
   const stakeholders = Array.isArray(payload.stakeholders)
     ? payload.stakeholders
         .map((row) => {
@@ -34,15 +61,42 @@ function decisionPayloadText(event: RunEvent): string {
     return `已提交決策\n建議：\n${humanDecision}`;
   }
 
-  const customIssues = Array.isArray(payload.custom_issues)
-    ? payload.custom_issues
+  const choices = Array.isArray(payload.choices)
+    ? payload.choices
+        .map((choice, index) => {
+          const id = String(choice ?? String.fromCharCode(65 + index)).trim();
+          const matched = optionById.get(id);
+          return `${matched?.label ?? `選項 ${id}`}：${matched?.title ?? ""}`.replace(/：$/, "");
+        })
+        .filter(Boolean)
+    : [];
+  if (choices.length) {
+    return `已提交決策\n選擇：\n${choices.join("\n")}`;
+  }
+
+  const chosenOptions = Array.isArray(payload.chosen_options)
+    ? payload.chosen_options
+        .map((row, index) => {
+          if (!row || typeof row !== "object") return "";
+          const item = row as Record<string, unknown>;
+          const id = String(item.option_id ?? item.id ?? String.fromCharCode(65 + index)).trim();
+          const matched = optionById.get(id);
+          const title = String(item.title ?? item.summary ?? item.description ?? matched?.title ?? "").trim();
+          return `${matched?.label ?? `選項 ${id}`}：${title}`.replace(/：$/, "");
+        })
+        .filter(Boolean)
+    : [];
+  if (chosenOptions.length) {
+    return `已提交決策\n選擇：\n${chosenOptions.join("\n")}`;
+  }
+
+  const customIssues = (Array.isArray(payload.custom_issues) ? payload.custom_issues : [])
         .map((row) => {
           if (!row || typeof row !== "object") return "";
           const item = row as Record<string, unknown>;
           return String(item.title ?? "").trim();
         })
-        .filter(Boolean)
-    : [];
+        .filter(Boolean);
   if (customIssues.length) {
     return `已提交決策\n議題：\n${customIssues
       .map((issue, index) => `議題 ${index + 1}：${issue}`)
@@ -86,7 +140,7 @@ function humanDecisionRequestText(decision?: RunEvent["decision"]): string {
 }
 
 function workspaceEventText(event: RunEvent, fallback: string) {
-  return event.message?.trim() || event.title?.trim() || fallback;
+  return displayText(event.message?.trim() || event.title?.trim() || fallback);
 }
 
 function logMessageToAgent(text: string): { speaker: string; text: string } | null {
@@ -102,7 +156,7 @@ function logMessageToAgent(text: string): { speaker: string; text: string } | nu
     const rawSpeaker = direct[1].toLowerCase();
     return {
       speaker: rawSpeaker === "documenter" ? "documentor" : rawSpeaker,
-      text: direct[2].trim(),
+      text: displayText(direct[2].trim()),
     };
   }
 
@@ -115,20 +169,20 @@ function logMessageToAgent(text: string): { speaker: string; text: string } | nu
     const body = arrow[3].trim();
     return {
       speaker: rawSpeaker === "documenter" ? "documentor" : rawSpeaker,
-      text: target ? `${target}：${body}` : body,
+      text: displayText(target ? `${target}：${body}` : body),
     };
   }
 
   const humanDecision = /^\s*人類裁決[：:]\s*([\s\S]+)$/i.exec(value);
   if (humanDecision) {
-    return { speaker: "user", text: humanDecision[1].trim() };
+    return { speaker: "user", text: displayText(humanDecision[1].trim()) };
   }
 
   return null;
 }
 
 function deltaContentText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
+  if (typeof content === "string") return displayText(content.trim());
   if (content == null) return "";
   if (typeof content === "number" || typeof content === "boolean") {
     return String(content);
@@ -137,16 +191,16 @@ function deltaContentText(content: unknown): string {
     const item = content as Record<string, unknown>;
     const title = String(item.title ?? item.heading ?? item.id ?? "").trim();
     const body = String(item.body ?? item.text ?? item.markdown ?? item.content ?? "").trim();
-    if (title && body) return `${title}\n${body}`;
-    if (title) return title;
-    if (body) return body;
+    if (title && body) return displayText(`${title}\n${body}`);
+    if (title) return displayText(title);
+    if (body) return displayText(body);
     try {
-      return JSON.stringify(content, null, 2);
+      return displayText(JSON.stringify(content, null, 2));
     } catch {
-      return String(content);
+      return displayText(String(content));
     }
   }
-  return String(content).trim();
+  return displayText(String(content).trim());
 }
 
 function deltaContentLabel(content: unknown): string {
@@ -158,7 +212,7 @@ function deltaContentLabel(content: unknown): string {
 function elicitationSpeechText(content: unknown): string {
   if (!content || typeof content !== "object") return deltaContentText(content);
   const item = content as Record<string, unknown>;
-  return String(item.body ?? item.text ?? item.markdown ?? item.content ?? "").trim();
+  return displayText(String(item.body ?? item.text ?? item.markdown ?? item.content ?? "").trim());
 }
 
 export function logEventToChat(event: RunEvent): ChatMessage | null {
@@ -183,6 +237,12 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   }
 
   if (event.type === "step_started") {
+    if (
+      event.step_id === "elicitation.run_meeting" ||
+      /^formal_meeting\.round_\d+\.run_meeting$/i.test(event.step_id ?? "")
+    ) {
+      return null;
+    }
     if (event.step_id === "conflict_detection.write_report") {
       const speaker = event.agent || "analyst";
       return {
@@ -251,8 +311,15 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       return null;
     }
     if (
+      event.stage_id === "system_model" &&
+      (event.step_id === "system_model.review_models" ||
+        (event.step_id === "system_model.modeling" && !event.output_path))
+    ) {
+      return null;
+    }
+    if (
       event.step_id === "conflict_detection.write_report" &&
-      /^results\/report\/conflict_report_v\d+\.html$/i.test(event.output_path ?? "")
+      /^(?:results\/report\/conflict_report_v\d+\.html|artifact\/report\/conflict_report_v\d+\.md)$/i.test(event.output_path ?? "")
     ) {
       const speaker = event.agent || "analyst";
       return {
@@ -264,7 +331,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
         action: event.step_id ?? event.action,
         stage: event.stage_id,
         status: "done",
-        text: "產生衝突報告",
+        text: "衝突報告",
         outputPath: event.output_path,
         timestamp: event.timestamp,
       };
@@ -282,6 +349,10 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       return null;
     }
     const speaker = event.agent || "mediator";
+    const momTitle =
+      event.step_id === "formal_meeting.write_minutes"
+        ? /artifact\/MoM\/(.+?)\.md$/i.exec(event.output_path ?? "")?.[1]
+        : "";
     return {
       id: `workspace-step-${event.id}`,
       role: "agent",
@@ -291,10 +362,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       action: event.step_id ?? event.action,
       stage: event.stage_id,
       status: "done",
-      text: workspaceEventText(
-        event,
-        "步驟完成",
-      ),
+      text: momTitle || workspaceEventText(event, "步驟完成"),
       outputPath: event.output_path,
       timestamp: event.timestamp,
     };
@@ -351,6 +419,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   if (event.type === "log") {
     const rawText = workspaceEventText(event, "");
     if (/^\s*(討論完成|收斂結果)[:：]/.test(rawText)) return null;
+    if (/^\s*modeler\s*[:：]\s*系統模型已更新/i.test(rawText)) return null;
     const parsed = logMessageToAgent(rawText);
     if (!parsed) return null;
     return {
@@ -366,19 +435,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   }
 
   if (event.type === "references_attached") {
-    const paths = Array.isArray(event.attached_reference_paths)
-      ? event.attached_reference_paths.map((path) => String(path).split("/").pop() ?? String(path))
-      : [];
-    return {
-      id: `refs-${event.id}`,
-      role: "system",
-      kind: "output",
-      status: "done",
-      text: paths.length
-        ? `已使用參考文件：${paths.join("、")}`
-        : "已使用參考文件",
-      timestamp: event.timestamp,
-    };
+    return null;
   }
   if (event.type === "waiting_for_human") {
     const stakeholderSelection = event.decision?.kind === "stakeholder_selection";
@@ -393,6 +450,8 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       action: stakeholderSelection ? "stakeholder_selection_request" : "human_decision_request",
       text: humanDecisionRequestText(event.decision),
       timestamp: event.timestamp,
+      decisionId: event.decision_id,
+      decision: event.decision,
     };
   }
   if (event.type === "human_decision_submitted") {
@@ -401,9 +460,12 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       role: "user",
       kind: "decision",
       status: "done",
-      label: "你",
+      label: "您",
       text: decisionPayloadText(event),
       timestamp: event.timestamp,
+      decisionId: event.decision_id,
+      decision: event.decision,
+      decisionPayload: event.payload,
     };
   }
   if (event.type === "cancel_requested") {
@@ -466,7 +528,13 @@ export function logEventToChats(event: RunEvent): ChatMessage[] {
 export function mergeChatMessages(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   const seenSpeech = new Set<string>();
+  const seenStagePills = new Set<string>();
   for (const msg of messages) {
+    if (msg.role === "system" && msg.kind === "stage") {
+      const key = `${msg.stage ?? ""}|${msg.text.trim()}`;
+      if (seenStagePills.has(key)) continue;
+      seenStagePills.add(key);
+    }
     if (msg.role === "agent" && msg.kind === "speech") {
       const key = `${msg.speaker ?? ""}|${msg.text.trim()}`;
       if (seenSpeech.has(key)) continue;
@@ -479,7 +547,8 @@ export function mergeChatMessages(messages: ChatMessage[]): ChatMessage[] {
       prev.role === "agent" &&
       prev.speaker === msg.speaker &&
       prev.text.trim() === msg.text.trim() &&
-      msg.kind === prev.kind
+      msg.kind === prev.kind &&
+      (msg.outputPath ?? "") === (prev.outputPath ?? "")
     ) {
       continue;
     }
