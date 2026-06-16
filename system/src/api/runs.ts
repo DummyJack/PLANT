@@ -1,5 +1,5 @@
 import type { RunEvent, RunState } from "@/types/api";
-import { apiFetch } from "./client";
+import { apiFetch, apiUrl } from "./client";
 
 export function fetchRuns(projectId?: string) {
   const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
@@ -45,7 +45,7 @@ export function submitDecision(
 }
 
 export function runEventsUrl(runId: string, since = 0) {
-  return `/api/runs/${runId}/events?since=${since}`;
+  return apiUrl(`/api/runs/${runId}/events?since=${since}`);
 }
 
 export type { RunEvent };

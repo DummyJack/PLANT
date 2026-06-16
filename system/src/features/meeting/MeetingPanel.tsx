@@ -1,8 +1,9 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { createProject, deleteProject, uploadReference } from "@/api/projects";
 import { fetchBootstrap } from "@/api/bootstrap";
+import { fetchConfig } from "@/api/config";
 import { cancelRun, createRun, submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
 import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
@@ -99,6 +100,9 @@ function completedStageOverrides(
   ) {
     close(["conflict_detection"]);
   }
+  if (paths.has("artifact/feedback.json")) {
+    close(["research_domain"]);
+  }
   if (paths.has("artifact/system_models.json") || has(/^artifact\/models\/.+/i)) {
     close(["system_model"]);
   }
@@ -190,8 +194,32 @@ function stageOverridesForCheckpoint(
   return next;
 }
 
+function forceRegenerateFlags(config: Record<string, unknown> | undefined) {
+  const raw = config?.force_regenerate_outputs;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, boolean>)
+    : {};
+}
+
+function stageOverridesWithForce(
+  overrides: Record<string, boolean> | undefined,
+  config: Record<string, unknown> | undefined,
+) {
+  const flags = forceRegenerateFlags(config);
+  const next = { ...(overrides ?? {}) };
+  Object.entries(flags).forEach(([key, enabled]) => {
+    if (enabled === true) next[key] = true;
+  });
+  return Object.keys(next).length ? next : undefined;
+}
+
 export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const queryClient = useQueryClient();
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: async () => (await fetchConfig()).config,
+    enabled: !!projectId,
+  });
   const { project, references, artifacts } = useProjectData(projectId);
   const { activeRun, data: runsData } = useActiveRun(projectId);
   const clearMessages = useChatStore((s) => s.clearMessages);
@@ -429,8 +457,30 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     !!projectId &&
     hasArtifactPath("results/design_rationale.html") &&
     hasArtifactPath("results/srs.html");
-  const existingDocumentOutputs = useMemo(
+  const existingStageOutputs = useMemo(
     () => ({
+      elicitation: hasArtifactPath("artifact/meeting/elicitation_meeting.json"),
+      conflict_detection:
+        hasArtifactPath("artifact/result.json") ||
+        (artifactItems ?? []).some(
+          (item) =>
+            item.kind === "file" &&
+            (/^artifact\/report\/conflict_report_v\d+\.(?:json|md)$/i.test(item.path) ||
+              /^results\/report\/conflict_report_v\d+\.html$/i.test(item.path)),
+        ),
+      research_domain: hasArtifactPath("artifact/feedback.json"),
+      system_model:
+        hasArtifactPath("artifact/system_models.json") ||
+        (artifactItems ?? []).some((item) => item.kind === "file" && /^artifact\/models\/.+/i.test(item.path)),
+      draft: (artifactItems ?? []).some(
+        (item) =>
+          item.kind === "file" &&
+          (/^artifact\/drafts\/draft_v\d+\.md$/i.test(item.path) ||
+            /^results\/drafts\/draft_v\d+\.html$/i.test(item.path)),
+      ),
+      default_formal_meeting:
+        hasArtifactPath("artifact/meeting/formal_meeting_r1.json") ||
+        (artifactItems ?? []).some((item) => item.kind === "file" && /^results\/MoM\/R1-M\d+\.html$/i.test(item.path)),
       DR:
         hasArtifactPath("output/design_rationale.md") ||
         hasArtifactPath("results/design_rationale.html"),
@@ -438,13 +488,17 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         hasArtifactPath("output/srs.md") ||
         hasArtifactPath("results/srs.html"),
     }),
-    [hasArtifactPath],
+    [artifactItems, hasArtifactPath],
   );
   const stageOverrides = useMemo(
     () => completedStageOverrides(projectId, artifactItems, project.data?.project),
     [projectId, artifactItems, project.data?.project],
   );
-  const agentStageOverrides = projectId ? stageOverrides : INITIAL_AGENT_STAGE_OVERRIDES;
+  const effectiveStageOverrides = useMemo(
+    () => stageOverridesWithForce(stageOverrides, configQuery.data),
+    [configQuery.data, stageOverrides],
+  );
+  const agentStageOverrides = projectId ? effectiveStageOverrides : INITIAL_AGENT_STAGE_OVERRIDES;
   const { loading: historyLoading } = useProjectChatHydration(
     projectId,
     artifactItems,
@@ -474,11 +528,6 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     rawRunCheckpoint && !runActive && rawRunCheckpointKey !== dismissedRunCheckpointKey
       ? rawRunCheckpoint
       : null;
-  const runStageOverrides = useMemo(
-    () => stageOverridesForCheckpoint(stageOverrides, runCheckpoint),
-    [stageOverrides, runCheckpoint],
-  );
-
   const startMut = useMutation({
     mutationFn: async () => {
       const replacementStage = projectId ? rawRunCheckpoint : null;
@@ -489,6 +538,18 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       const runIdea = projectId ? "" : (trimmed || roughIdea);
       if (!canWrite) throw new Error("需要啟動碼才能執行此操作");
       if (!projectId && !runIdea) throw new Error("請先輸入初步想法");
+      const runConfig = projectId
+        ? (await queryClient.fetchQuery({
+            queryKey: ["config"],
+            queryFn: async () => (await fetchConfig()).config,
+          }))
+        : undefined;
+      const stageOverridesForRun = projectId
+        ? stageOverridesForCheckpoint(
+            stageOverridesWithForce(stageOverrides, runConfig),
+            rawRunCheckpoint,
+          )
+        : undefined;
       const targetProjectId = projectId ?? (await createProject(runIdea)).project_id;
       if (!projectId && stagedReferenceFiles.length) {
         for (const file of stagedReferenceFiles) {
@@ -511,7 +572,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           ? [...attachedPaths, ...stagedPaths]
           : undefined,
         enable_agents: enabledAgents,
-        stage_overrides: projectId ? runStageOverrides : undefined,
+        stage_overrides: stageOverridesForRun,
       });
       return { run, initialIdea: runIdea };
     },
@@ -629,7 +690,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             disabled={stageDisabled}
             disabledReason={stageDisabledReason}
             stageOverrides={stageOverrides}
-            existingOutputs={existingDocumentOutputs}
+            existingOutputs={existingStageOutputs}
             compact={headerCompact}
           />
         </>

@@ -9,6 +9,33 @@ export class ApiError extends Error {
   }
 }
 
+const LOCAL_API_BASE_URL = "http://127.0.0.1:8000/api";
+const PUBLIC_API_BASE_URL = "https://plant.dummyjack.com/api";
+
+function useLocalhost(value: string | undefined, fallback: boolean): boolean {
+  if (value == null || value.trim() === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+const API_BASE_URL = (
+  useLocalhost(import.meta.env.develop_backend, true)
+    ? LOCAL_API_BASE_URL
+    : PUBLIC_API_BASE_URL
+).replace(/\/+$/, "");
+
+export function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!API_BASE_URL) return path;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (API_BASE_URL.endsWith("/api") && normalizedPath === "/api") {
+    return API_BASE_URL;
+  }
+  if (API_BASE_URL.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE_URL}${normalizedPath.slice("/api".length)}`;
+  }
+  return `${API_BASE_URL}${normalizedPath}`;
+}
+
 function apiErrorMessage(detail: unknown): string {
   if (typeof detail === "string") return detail;
   const fromDetail = detailText(detail);
@@ -50,7 +77,7 @@ export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: {
       ...(init?.body instanceof FormData

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from setup import apply_runtime_setup
@@ -25,14 +26,29 @@ app = FastAPI(title="System API")
 app.state.base_dir = BASE_DIR
 app.state.run_manager = run_manager
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+
+def use_localhost(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def frontend_origins() -> list[str]:
+    if use_localhost("devlop_frontend", True):
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    return [
         "https://plant.dummyjack.com",
         "http://plant.dummyjack.com",
-    ],
+    ]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=frontend_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

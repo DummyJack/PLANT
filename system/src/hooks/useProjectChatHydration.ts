@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchRuns } from "@/api/runs";
+import { fetchRuns, runEventsUrl } from "@/api/runs";
 import {
   trimRunDisplayMessagesFromStage,
   trimTrailingGeneratedDocumentMessages,
@@ -127,7 +127,7 @@ function historicalRunMessages(run: RunState, events: unknown[]): ChatMessage[] 
 
 async function loadRunEvents(runId: string): Promise<unknown[]> {
   const res = await fetch(
-    `/api/runs/${runId}/events?since=0`,
+    runEventsUrl(runId, 0),
     { headers: { Accept: "application/json" } },
   );
   if (!res.ok) return [];

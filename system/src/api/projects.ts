@@ -1,5 +1,5 @@
 import type { FileContent, FileTreeNode } from "@/types/api";
-import { apiFetch } from "./client";
+import { apiFetch, apiUrl } from "./client";
 
 export function fetchProjects() {
   return apiFetch<{ projects: import("@/types/api").ProjectSummary[] }>(
@@ -62,15 +62,15 @@ export function deleteReference(projectId: string, name: string) {
 }
 
 export function referenceDownloadUrl(projectId: string, name: string) {
-  return `/api/projects/${projectId}/references/${encodeURIComponent(name)}`;
+  return apiUrl(`/api/projects/${projectId}/references/${encodeURIComponent(name)}`);
 }
 
 export function referencePreviewUrl(projectId: string, name: string) {
-  return `/api/projects/${projectId}/references/${encodeURIComponent(name)}?inline=true`;
+  return apiUrl(`/api/projects/${projectId}/references/${encodeURIComponent(name)}?inline=true`);
 }
 
 export function manualIndexUrl(projectId: string) {
-  return `/api/projects/${projectId}/manual/index.html`;
+  return apiUrl(`/api/projects/${projectId}/manual/index.html`);
 }
 
 export function fetchArtifacts(projectId: string) {

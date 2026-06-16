@@ -24,13 +24,25 @@ const STAGE_ROWS: Array<{
   { id: "SRS", label: "SRS", keys: ["SRS"] },
 ];
 
+const FORCE_REGENERATE_KEYS = new Set([
+  "elicitation",
+  "conflict_detection",
+  "research_domain",
+  "system_model",
+  "draft",
+  "DR",
+  "SRS",
+]);
+
 function stageEnabled(
   config: PlantConfig | undefined,
   keys: string[],
   stageOverrides?: Record<string, boolean>,
 ) {
   const stage = config?.stage ?? {};
+  const force = (config?.force_regenerate_outputs as Record<string, boolean> | undefined) ?? {};
   return keys.every((key) => {
+    if (force[key] === true) return true;
     if (stage[key] === false) return false;
     return (stageOverrides?.[key] ?? stage[key]) === true;
   });
@@ -48,14 +60,19 @@ function setForceRegenerateOutputs(
   config: PlantConfig,
   keys: string[],
   enabled: boolean,
-  existingOutputs?: { DR?: boolean; SRS?: boolean },
+  existingOutputs?: Record<string, boolean | undefined>,
+  stageOverrides?: Record<string, boolean>,
 ): PlantConfig {
   const force = { ...((config.force_regenerate_outputs as Record<string, boolean> | undefined) ?? {}) };
   for (const key of keys) {
-    if ((key === "DR" || key === "SRS") && enabled && existingOutputs?.[key]) {
+    if (
+      enabled &&
+      FORCE_REGENERATE_KEYS.has(key) &&
+      (existingOutputs?.[key] || stageOverrides?.[key] === false)
+    ) {
       force[key] = true;
     }
-    if ((key === "DR" || key === "SRS") && !enabled) {
+    if (!enabled) {
       delete force[key];
     }
   }
@@ -71,8 +88,7 @@ interface StageToggleMenuProps {
   disabledReason?: string;
   stageOverrides?: Record<string, boolean>;
   existingOutputs?: {
-    DR?: boolean;
-    SRS?: boolean;
+    [key: string]: boolean | undefined;
   };
   compact?: boolean;
 }
@@ -135,6 +151,7 @@ export function StageToggleMenu({
       keys,
       nextEnabled,
       existingOutputs,
+      stageOverrides,
     );
     saveMut.mutate(nextConfig);
   };
@@ -173,21 +190,19 @@ export function StageToggleMenu({
           ) : (
             <div className="space-y-1">
               {STAGE_ROWS.map((row) => {
-                const overrideLocksClosed = row.keys.some(
-                  (key) => (stageOverrides ?? {})[key] === false,
-                );
                 const enabled = stageEnabled(configQuery.data, row.keys, stageOverrides);
-                const locked = overrideLocksClosed;
+                const completed = row.keys.some((key) => (stageOverrides ?? {})[key] === false);
+                const forceSupported = row.keys.some((key) => FORCE_REGENERATE_KEYS.has(key));
                 return (
                   <button
                     key={row.id}
                     type="button"
-                    disabled={disabled || saveMut.isPending || !configQuery.data || locked}
+                    disabled={disabled || saveMut.isPending || !configQuery.data}
                     title={
                       disabled
                         ? (disabledReason ?? "執行中不可調整階段")
-                        : locked
-                          ? "既有檔案已完成，此階段繼續專案時會跳過"
+                        : completed && !enabled && forceSupported
+                          ? "已完成；開啟後下次執行會重新產生"
                           : undefined
                     }
                     className="flex w-full items-center justify-between rounded-control px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"

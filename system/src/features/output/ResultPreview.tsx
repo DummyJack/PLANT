@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { apiUrl } from "@/api/client";
 import { fetchFile } from "@/api/projects";
 import { submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
@@ -1227,19 +1228,23 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const fileLoading = !isHtmlArtifact && !isModelArtifact && !fileData && file.isFetching;
   const htmlPreviewUrl =
     projectId && selectedOutputPath?.startsWith("results/")
-      ? `/api/projects/${encodeURIComponent(projectId)}/results/${selectedOutputPath
-          .slice("results/".length)
-          .split("/")
-          .map(encodeURIComponent)
-          .join("/")}`
+      ? apiUrl(
+          `/api/projects/${encodeURIComponent(projectId)}/results/${selectedOutputPath
+            .slice("results/".length)
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`,
+        )
       : null;
   const fileDownloadUrl = (path: string) =>
     projectId && path.startsWith("results/")
-      ? `/api/projects/${encodeURIComponent(projectId)}/results/${path
-          .slice("results/".length)
-          .split("/")
-          .map(encodeURIComponent)
-          .join("/")}`
+      ? apiUrl(
+          `/api/projects/${encodeURIComponent(projectId)}/results/${path
+            .slice("results/".length)
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`,
+        )
       : null;
   const downloadArtifactPath = async (path: string) => {
     if (!projectId) return;
@@ -1464,13 +1469,21 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     } catch {
       return null;
     }
-    if (url.origin !== window.location.origin) return null;
     const prefix = projectId
-      ? `/api/projects/${encodeURIComponent(projectId)}/results/`
-      : "";
+      ? new URL(
+          apiUrl(`/api/projects/${encodeURIComponent(projectId)}/results/`),
+          window.location.origin,
+        )
+      : null;
     let targetPath = "";
-    if (prefix && url.pathname.startsWith(prefix)) {
-      targetPath = `results/${decodeURIComponent(url.pathname.slice(prefix.length))}`;
+    if (
+      prefix &&
+      url.origin === prefix.origin &&
+      url.pathname.startsWith(prefix.pathname)
+    ) {
+      targetPath = `results/${decodeURIComponent(url.pathname.slice(prefix.pathname.length))}`;
+    } else if (url.origin !== window.location.origin) {
+      return null;
     } else if (!url.pathname || url.pathname === window.location.pathname) {
       targetPath = selectedOutputPath;
     } else {

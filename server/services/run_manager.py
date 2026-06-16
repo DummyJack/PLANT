@@ -447,7 +447,15 @@ class RunManager:
             current = config.get("force_regenerate_outputs")
             if not isinstance(current, dict):
                 return
-            for key in ("DR", "SRS"):
+            for key in (
+                "elicitation",
+                "conflict_detection",
+                "research_domain",
+                "system_model",
+                "draft",
+                "DR",
+                "SRS",
+            ):
                 if flags.get(key) is True:
                     current.pop(key, None)
             if current:
