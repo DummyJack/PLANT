@@ -1,4 +1,0 @@
-# User agent_action 可用 action
-
-- answer_question：使用時機：議題是 OQ（待回答 open question）或 expected_actions 指定 user 回答特定問題。不要使用：一般議題發言。寫回或影響：只回覆問題文字，補 `reply_to_question`、`reply_to_agent` 與 `speaking_as`，不主動更新需求。
-- respond_issue：使用時機：在一般正式會議中代表被指定或最相關利害關係人給出立場、顧慮、底線與可接受條件。不要使用：回答 open question。寫回或影響：只回應發言內容，不直接更新需求。

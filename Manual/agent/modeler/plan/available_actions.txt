@@ -1,5 +1,0 @@
-# Modeler agent_action 可用 action
-
-- answer_question：使用時機：有人在 open_questions 中指定 modeler 回答。不要使用：一般議題發言或建模流程。寫回或影響：只回答問題，不更新專案資料。
-- respond_issue：使用時機：只需要根據 issue、前文與現有資料表達建模觀點。不要使用：需要建立、更新或驗證 UML/system model 時。寫回或影響：只產生會議發言，不更新系統模型。
-- system_modeling：流程 action。使用時機：議題涉及系統邊界、actor/use case、流程、資料、狀態、互動順序、責任分工或模型追蹤性，且建立/更新 UML/system model 能讓討論更清楚或檢查一致性。不要使用：只是需求文字、業務偏好或衝突取捨，且沒有流程、資料、狀態、角色互動、責任邊界或視覺化價值。寫回或影響：內部只規劃一次 plan_models，之後依 plan 逐一執行 create_model/update_model、必要時 write_use_case_text，並由 validate_model 驗證；驗證失敗時由 validate_model 內部修復一次。正式產物只更新 system_models，不從模型反推需求。
