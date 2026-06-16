@@ -4,6 +4,7 @@
 - research_domain 是流程 action，不是單一產物 action。
 - 本流程只規劃一次，之後依 action_plan 逐一執行 read_reference_docs、research_issue、update_feedback。
 - read_reference_docs 與 research_issue 只取得證據；只有 update_feedback 會寫回正式 feedback artifact。
+- 若有 referenced_files 並執行 read_reference_docs，最後必須 update_feedback，把文件證據整理成 feedback。
 - 不得把 feedback 直接定案成需求；需求正式化由 Analyst action 處理。
 
 # 目前專案狀態
@@ -41,19 +42,23 @@
 - high-value 指會影響需求是否成立、系統邊界、法規/合規/安全、責任歸屬、驗收標準、多個 URL/REQ，或目前 artifact 沒有清楚答案。
 - 不研究低價值內容：一般功能偏好、已清楚的 UI 操作、不影響需求條文的背景知識、與 scope 無關的產業介紹。
 - 若既有 artifact / feedback 已足夠涵蓋目前高價值問題，選 done，不重複研究。
-- 如果 has_existing_research=false 且 research_results_count=0，且內容涉及支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償或申訴，必須至少規劃 1 個 research_issue。
+- 若 resume_checkpoint 存在且 stage_id=research_domain，表示本輪是失敗後繼續；已存在的 document_evidence、document_coverage、research_results 或 feedback 不要重做，只針對 checkpoint.step_id / action 之後尚未完成的缺口繼續。
+- referenced_files 或使用者上傳文件存在時，採「文件優先、外部補證」：必須先規劃 read_reference_docs，不能直接用 research_issue 取代文件查證。
+- read_reference_docs 必須對相關 URL / REQ / open_questions 做 coverage 分類：document_supported、not_found_in_documents、document_conflict、needs_external_validation。
+- 只有文件 coverage 顯示 not_found_in_documents、document_conflict、needs_external_validation，或議題本身涉及可能變動的外部法規/標準/第三方條款/官方政策時，才規劃 research_issue。
+- 如果 has_existing_research=false 且 research_results_count=0，且內容涉及支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償或申訴，必須至少取得 1 個外部證據；但若 referenced_files 存在，必須先 read_reference_docs，再針對文件缺口或高風險外部議題規劃 research_issue。
 - 如果沒有上述外部研究觸發條件、沒有高價值且可取得可靠來源的研究問題，可以選 done，但 reasoning 必須明確說明未觸發外部研究條件。
-- 只有存在 high-value research_issue 時，才規劃 research_issue，最後執行 update_feedback。
+- 只有存在 high-value research_issue 時，才規劃 research_issue；若已讀取引用文件或取得研究結果，最後執行 update_feedback。
 - 需要專案文件證據時先用 read_reference_docs。
 - 若目前專案狀態包含 referenced_files，必須先規劃 read_reference_docs，且 query 應聚焦使用者建議與這些文件。
 - 若 referenced_files 為空，不要因為文件庫有檔案就自動規劃 read_reference_docs；只有研究問題明確需要專案文件證據時才使用。
-- 需要外部證據時用 research_issue；每個 research_issue 只處理一個明確高價值問題。
+- 需要外部證據時用 research_issue；每個 research_issue 只處理一個明確高價值問題，且 query / value_reason 必須說明它是文件缺口、文件衝突、外部高風險或時效性驗證。
 - 若多個高價值問題分屬不同面向，可以拆成多個 research_issue；最多 4 個。
 - 不要把法規、安全、責任歸屬、營運限制與驗收標準全部塞進同一個過大的 query。
 - 每個 research_issue.params 必須包含 query 與 value_reason。
-- 只要有 research_issue 或已有 research_results，最後必須 update_feedback。
+- 只要有 read_reference_docs、research_issue 或已有 research_results，最後必須 update_feedback。
 - update_feedback 只允許放在 action_plan 最後一次。
-- feedback.sources 每筆使用 {"title": "可讀來源名稱", "url": "完整 URL"}；title 使用法規、標準、官方文件、組織文章或案例名稱。
+- feedback.sources 集中列出來源；web 來源使用 {"title": "可讀來源名稱", "url": "完整 URL"}，專案引用文件使用 {"title": "檔名", "url": "專案文件路徑", "type": "file"}。
 
 # Output JSON
 {

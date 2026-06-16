@@ -90,6 +90,7 @@ For early requirements modeling:
 - skipped_targets 可列出本輪考慮過但跳過的圖型與原因，特別是 context/use case overview 圖不該被重畫時。
 - 只規劃 high-value model target，不為了湊數建模。
 - high-value 指模型能釐清需求文字無法清楚表達的結構：系統邊界、actor/use case 能力範圍、主要流程/例外流程、跨角色互動順序、狀態生命週期、資料概念/紀錄保存/責任資料/追蹤關係，或能支撐多個 REQ / 高風險 REQ。
+- context_diagram 的 actor 範圍以 context.stakeholders 已選利害關係人為準；不得因需求提到外部服務、第三方系統、監管/社區/金融/身分驗證服務，就新增未選擇的外部系統節點。
 - 不建低價值模型：只補 related_requirement_ids、只改描述文字、一般功能偏好、既有模型已足夠、建圖後不會讓需求更清楚。
 - 沒有 high-value model target 時，model_targets 輸出空陣列，說明不需要新建或更新模型。
 - 每次最多 4 個 model target；超過時只保留最能釐清需求的目標。
@@ -102,6 +103,7 @@ For early requirements modeling:
 - 若 context.requirement_source 是 REQ，請以 REQ-* 作為主要建模依據，URL-* 只作為來源追蹤背景。
 - 若 context.requirement_source 是 URL，代表尚未產生正式 REQ-*，才以 User Requirements（URL-*）作為主要建模依據。
 - 若既有模型已存在，這是帶有修訂脈絡的模型迭代；只標記受本次修訂脈絡或主要需求輸入影響的模型。
+- 若 context.resume_checkpoint 存在且 stage_id=system_model，表示本輪是失敗後繼續；不得為了恢復而重畫已存在且仍符合本輪目標的模型，應聚焦 checkpoint.step_id / action 指向的失敗或未完成小步驟。
 - 既有模型的 source 只用於追蹤來源，不可改寫成新需求。
 - 未受影響的既有模型不得列入 model_targets。
 - feedback 只作為領域背景、限制、風險、建議與未決事項參考；不得轉成新的模型元素。
@@ -111,7 +113,7 @@ For early requirements modeling:
 - 不要因為已有同 type 模型就強行 update；同一 type 可以有多張圖，每張圖應有可區分的 name 與 purpose。
 - 若新內容只是某張既有 overview 圖中的局部節點，但細節已多到會讓 overview 圖過大或混亂，應 create 較聚焦的 activity_diagram、sequence_diagram 或 state_machine，而不是把 overview 圖越改越大。
 - 若只是 related_requirement_ids、來源追蹤或文字描述變化，且圖中元素/流程/狀態/邊界不需要變動，不要列入 model_targets。
-- context_diagram 在本專案就是情境圖；只有角色/外部系統/主要資料流/責任邊界變動時才列入，不得因一般功能、流程或驗收條件更新就重畫。
+- context_diagram 在本專案就是情境圖；只有已選利害關係人、主要資料流或責任邊界變動時才列入，不得因一般功能、流程、外部服務細節或驗收條件更新就重畫。
 - use_case_diagram 只處理 actor 與用例能力；activity_diagram 只處理流程；sequence_diagram 只處理互動順序；class_diagram 只處理需求層級資料概念；state_machine 只處理狀態生命週期。
 - context_diagram 與 use_case_diagram 屬於 overview 圖；它們應保持可掃描，不應承擔流程分支、狀態規則、資料結構或例外責任。
 - activity_diagram、sequence_diagram、state_machine、class_diagram 屬於 detail 圖；可以較複雜，但必須聚焦單一流程、互動情境、業務物件生命週期或資料概念群。
@@ -123,10 +125,10 @@ For early requirements modeling:
   3. 若需求重點是資料物件、欄位、紀錄保存、查詢權限、關聯、責任資料或需求層級 domain concept，優先選 class_diagram，不要用 activity_diagram 取代。
   4. 若需求重點是某角色可執行哪些系統能力，才選 use_case_diagram。
   5. 若需求重點是單一角色或系統內流程步驟、分支、例外流程與責任交接，才選 activity_diagram。
-  6. 若需求重點是本系統與外部角色/外部系統/主要資料流/責任邊界，才選 context_diagram。
+  6. 若需求重點是本系統與已選利害關係人、主要資料流或責任邊界，才選 context_diagram；若重點只是外部服務介接或第三方系統細節，改選 detail 圖或列為 scope/assumption，不要擴張情境圖。
 - 如果同一議題同時包含流程、狀態與資料概念，應依最需要釐清的需求缺口選一到兩張最有解釋力的圖；不要一律產生 use_case_diagram、activity_diagram、context_diagram。
 - initial_system_model：優先建立 overview 模型；通常只選 context_diagram/use_case_diagram，只有明確主要流程缺口時才選 activity_diagram；最多 2 張。
-- post_requirement_formalization：以最新 REQ-* 為主，優先建立或更新能支撐正式需求的 detail 圖；只有 actor、外部系統、主要資料流或責任邊界變動時才更新 overview 圖。
+- post_requirement_formalization：以最新 REQ-* 為主，優先建立或更新能支撐正式需求的 detail 圖；只有已選利害關係人、主要資料流或責任邊界變動時才更新 overview 圖。
 - align_model_issue：只處理當前議題直接影響的模型；避免重畫無關 overview 圖；通常最多 2 張。
 - 每個 model_targets.reason 必須明確說明為什麼是 create 或 update。
 - 每個 model_targets.value_reason 必須明確說明該圖能釐清的需求價值；若無法說明，該 target 不應列入。

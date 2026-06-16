@@ -176,6 +176,11 @@ Quality Attributes:
 - priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，也不要輸出 priority。
 - functional / non-functional 的 priority 只使用 must、should、could；沒有足夠依據就省略，不輸出 wont，也不要預設。
 - 每筆 REQ 只保留一個核心意圖；若來源同時包含功能、品質與限制，且可獨立追蹤，請拆成多筆 REQ。
+- 若多個來源使用相同名詞、資料物件或功能名稱，但系統責任、業務目的、觸發情境、受影響角色或完成邊界不同，應拆成不同 REQ；不得只因共同名詞而合併成泛化 description。
+- 若多個來源描述的是相同系統責任、相同業務目的、相同主要角色與相同可驗收結果，即使措辭不同，也應合併或更新同一筆 REQ；不得因來源句數不同而機械式拆成多筆。
+- description 應在來源支持範圍內盡可能具體完整；不得為了增加細節而加入來源未支持的功能、流程、資料欄位、角色、權限、例外處理或驗收條件。
+- description 說明系統責任與完成結果；具體可測試條件、輸入輸出檢查、狀態驗證、錯誤處理驗收方式應放入 acceptance_criteria，不要全部塞進 description。
+- 若來源暗示某細節但不足以正式寫入 description，應將該細節寫入 assumptions、risks 或 open_questions，而不是在 description 中用模糊語氣包裝。
 - non-functional 可輸出 category、metric、validation；category 依 ISO/IEC 25010 且不用 functional suitability。
 - source 只放已存在且可追蹤的 artifact ID。
 - coverage 只作內部檢查，不是正式需求內容；Traceability 維持 Source 與 System Model。
@@ -244,7 +249,8 @@ Quality Attributes:
 - current_URL 是最新 User Requirements，也是正式 REQ 的主要來源。
 - current_REQ 是既有正式需求；仍有效的 REQ 必須保留 id，只更新受來源或本議題決議影響的欄位。
 - scope 只用來判斷需求是否屬於本系統範圍，不直接轉成 REQ。
-- feedback 只作為領域背景、限制候選、風險與建議；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- feedback 只作為領域背景、限制候選、風險與建議考量；可補充 rationale、risks、assumptions、constraint 判斷或 open question，不能單獨創造功能需求。
+- feedback.recommendations 是建議考量，不是已確認需求、stakeholder statement 或實作指令；只有 current_URL、明確會議決議或人工直接編輯支持時，才可反映到 REQ。
 - system_models 只作為流程、actor、資料、狀態與邊界參考；不能單獨創造 stakeholder 未支持的新需求。
 - discussion 只使用明確表態、已回答問題、已收斂或人類裁決的內容。
 - req_source_index 提供 source_id 到既有 REQ-* 的索引；請直接引用，不要逐筆 artifact_query 比對。
@@ -268,6 +274,8 @@ Quality Attributes:
 - 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
 - 若來源同時包含系統能力、品質要求與限制，且各自可獨立驗收或追蹤，請拆成多筆 REQ；不是因 URL 筆數拆分。
 - 若品質或限制只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
+- 若多個來源使用相同名詞、資料物件或功能名稱，但系統責任、業務目的、觸發情境、受影響角色或完成邊界不同，應拆成不同 REQ；不得只因共同名詞而合併成泛化 description。
+- 若多個來源描述的是相同系統責任、相同業務目的、相同主要角色與相同可驗收結果，即使措辭不同，也應合併或更新同一筆 REQ；不得因來源句數不同而機械式拆成多筆。
 - 明確且有來源支持的 non-functional 需求應直接寫入 type=non-functional，不要只因為它是 NFR 就留待會議。
 - NFR 只有在 metric、validation、適用範圍或 FR/NFR priority 需要決策，或會造成品質/成本/設計/模型取捨時，才放入 open_questions、risks 或正式會議處理。
 - title 是 brief description：用短詞概括需求核心，不寫完整句；title 應命名系統能力、限制、品質屬性或政策本體，不用利害關係人角色作為開頭。
@@ -277,6 +285,9 @@ Quality Attributes:
 - description 是正式需求敘述，應以系統可履行的行為、限制或品質要求撰寫。
 - description 必須寫成可直接放入 SRS 的完整需求敘述；不得只寫功能名稱、短摘要、會議結論或「系統應提供...功能」這類空泛句。
 - description 應在一段文字中交代：適用情境或觸發條件、主要使用者或受影響角色、系統責任、必要資訊或處理內容，以及可驗證的完成邊界。若某項沒有來源支持，省略該項，不得臆測。
+- description 應在來源支持範圍內盡可能具體完整；不得為了增加細節而加入來源未支持的功能、流程、資料欄位、角色、權限、例外處理或驗收條件。
+- description 說明系統責任與完成結果；具體可測試條件、輸入輸出檢查、狀態驗證、錯誤處理驗收方式應放入 acceptance_criteria，不要全部塞進 description。
+- 若來源暗示某細節但不足以正式寫入 description，應將該細節寫入 assumptions、risks 或 open_questions，而不是在 description 中用模糊語氣包裝。
 - functional description 應清楚描述系統在什麼情境下為誰完成什麼業務結果；例外處理、通知內容、資料揭露、狀態更新或權限邊界若有來源支持，應寫入同一段 description 或 acceptance_criteria。
 - non-functional description 應清楚描述品質屬性、適用範圍與限制對象；可量測條件放入 metric，可執行驗證方式放入 validation，不要混在 description 中重複。
 - constraint description 應清楚描述不可違反的政策、法規、資料邊界或系統限制；不寫 priority，也不要改寫成功能需求。

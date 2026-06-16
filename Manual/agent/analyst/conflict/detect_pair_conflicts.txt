@@ -121,7 +121,21 @@ Use `references/conflict_patterns.md` to scan for 8 conflict types:
 - Neutral 項目只輸出 label 與 reason。
 - 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
 - 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- 先判斷是否同一需求槽位；不同槽位且可並存時標 Neutral。同一槽位內若限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界不同，且需要合併、改寫、刪除或人工裁定，標為 Conflict。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，標為 Conflict；若只是可無損合併的同義重複或不同上下文/流程階段，標為 Neutral。
 - 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
+
+# Analyst 衝突校準
+- 同一需求槽位中，若 UI 呈現形式或輸出載體不同（例如方框、訊息、清單、通知），且會改變 SRS 寫法、驗收方式或完成邊界，標為 Conflict。
+- 同一系統責任中，若類別、集合或適用範圍不同（例如 standard / non-standard、子集 / 超集、全部 / 特定項目），且會改變必須支援的邊界，標為 Conflict。
+- 同一需求槽位中，若品質、時效或量化門檻不同（例如 real-time / general、20% / general improvement），且會改變驗收門檻，標為 Conflict。
+- 同一需求槽位中，若規範強度或允許邊界不同（例如 shall / must、allow / only allow），標為 Conflict。
+- 同一能力中，若個人化程度不同（例如 personalized / semi-personalized），且會改變系統應支援的行為邊界，標為 Conflict。
+- 同一權限或繼承關係中，若授權、繼承或適用層級範圍不同（例如 higher level / other levels），標為 Conflict。
+- 避免誤判：唯一性與非唯一性若只是互補條件分支，且可在同一規則下共存，標為 Neutral。
+- 避免誤判：pilot 與 general 若未明確落在相同部署範圍或同一驗收邊界，不要直接判 Conflict。
+- 避免誤判：階層結構與成員數量限制若不是同一模型約束，不要直接判 Conflict。
+- 避免誤判：個人化能力與最小化客製化原則可作為能力與政策並存時，標為 Neutral。
 
 # 輸出要求
 - 兩兩判斷：只需輸出 pair_index、label、reason；若 label 是 Conflict，再輸出 type。

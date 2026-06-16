@@ -90,6 +90,8 @@ Option C: Compromise - Offline-First with Sync
 - type 只作為策略候選方向；實際解法必須根據需求內容與衝突描述決定。
 - 若 type 是 other，不要硬套特定衝突類型；請根據需求內容與衝突描述產生可行解法。
 - 若本任務沒有提供 resolution strategy guidance，代表此 Conflict 無對應類型策略；請只根據需求內容與衝突描述產生解法。
+- strategy 必須使用繁體中文策略名稱，不要輸出英文策略名稱；可使用「條件邏輯」、「利害關係人協商」、「優先順序決策」、「技術方案」、「需求拆解」、「折衷方案」、「範圍調整」、「分階段處理」、「並行處理」等名稱。
+- recommended_resolution 不要顯示 strategy 或策略名稱；請用「建議採用選項 A」或具體處理方式描述建議理由。
 - id 必須使用輸入 Conflict 項目的 id，不可自行產生 CONF-* 或 CR-*。
 - 需求 id 與 text 只作為判斷依據，不可改寫。
 - 輸出只包含下方 JSON 欄位。

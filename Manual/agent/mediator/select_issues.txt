@@ -25,7 +25,8 @@
 - 本輪 round=1，is_last_round=false，max_issues=5，already_discussed_artifact_ids=["URL-1"]。
 - 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。
 - proposal 是候選訊號；Mediator 負責合併、淘汰、排序與定題。
-- proposed_by="human" 是人工加入議題，最高優先；只要未超過 max_issues，不得被 agent 議題擠掉。
+- proposed_by="human" 是人工加入議題；只要格式有效且數量未超過 max_issues，必須納入本輪 issues，不得直接 discarded、不得只放 backlog，也不得被一般 agent 議題擠掉。
+- human 議題不必固定排第一；Mediator 應依 blocking 程度、依賴順序、衝突風險、SRS 定稿影響安排討論順序。若 human 議題依賴其他議題的結論，可排在相關前置議題之後。
 - proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
 - proposal.issue_level 分為 blocking / improvement：
   - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或合規底線，優先進 issues。
