@@ -1,10 +1,10 @@
-# Initializes the utils package and disables runtime bytecode cache output.
-import os
+# Initializes the utils package and ensures the repo root is importable.
 import sys
 from pathlib import Path
 
-sys.dont_write_bytecode = True
-os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+from setup import apply_runtime_setup
+
+apply_runtime_setup()
 
 _repo_root = Path(__file__).resolve().parent.parent
 _repo_root_str = str(_repo_root)

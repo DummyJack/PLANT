@@ -15,7 +15,7 @@ class Logger:
     # Defines __init__ function for this module workflow.
     # ========
     def __init__(self, log_dir: str = "log", write_file: bool = True):
-        timestamp = datetime.now().strftime("%H%M%S")
+        timestamp = datetime.now().strftime("%H%M%S%f")
         handlers = [logging.StreamHandler()]
         if write_file:
             self.log_dir = Path(log_dir)

@@ -14,16 +14,17 @@ def load_one_project(project_path: Path) -> Optional[Dict[str, Any]]:
     if not project_path.is_dir():
         return None
     project_file = project_path / "artifact" / "project.json"
-    rough_idea = "未知"
+    if not project_file.exists():
+        return None
+    rough_idea = ""
     scenario = ""
-    if project_file.exists():
-        try:
-            with open(project_file, "r", encoding="utf-8") as f:
-                project = json.load(f)
-                rough_idea = project.get("rough_idea", "未知")
-                scenario = project.get("scenario", "")
-        except Exception:
-            pass
+    try:
+        with open(project_file, "r", encoding="utf-8") as f:
+            project = json.load(f)
+            rough_idea = str(project.get("rough_idea") or "").strip()
+            scenario = str(project.get("scenario") or "").strip()
+    except Exception:
+        return None
     return {
         "project_id": project_path.name,
         "created_at": datetime.fromtimestamp(
@@ -66,6 +67,12 @@ def list_projects(projects_dir: Path) -> List[Dict[str, Any]]:
 # Defines create project function for this module workflow.
 # ========
 def create_project(projects_dir: Path) -> str:
-    project_id = datetime.now().strftime("%H%M%S")
-    (projects_dir / project_id).mkdir(parents=True, exist_ok=True)
-    return project_id
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(10):
+        project_id = datetime.now().strftime("%H%M%S%f")
+        try:
+            (projects_dir / project_id).mkdir(parents=True, exist_ok=False)
+            return project_id
+        except FileExistsError:
+            continue
+    raise RuntimeError("Unable to create unique project id")

@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 STAKEHOLDER_CATEGORY_LABELS = {
@@ -11,6 +11,10 @@ STAKEHOLDER_CATEGORY_LABELS = {
     "external_party": "外部相關單位",
 }
 STAKEHOLDER_CATEGORY_VALUES = set(STAKEHOLDER_CATEGORY_LABELS.keys())
+TARGET_MENTION_RE = re.compile(
+    r"(?<!\S)@((?:URL|REQ|SM|CR|ST)-[A-Za-z0-9_.:-]+|R\d+-M\d+)",
+    re.IGNORECASE,
+)
 
 
 def cli_skip_all_interventions() -> bool:
@@ -28,6 +32,35 @@ def cli_skip_all_interventions() -> bool:
 def reference_type(name: str) -> str:
     suffix = Path(name).suffix.lower().lstrip(".")
     return suffix or "file"
+
+
+def suggestion_target_ids(text: str) -> List[str]:
+    ids = [
+        match.group(1).strip().upper()
+        for match in TARGET_MENTION_RE.finditer(str(text or ""))
+    ]
+    return list(dict.fromkeys(value for value in ids if value))
+
+
+def strip_suggestion_targets(text: str) -> str:
+    stripped = TARGET_MENTION_RE.sub(" ", str(text or ""))
+    return re.sub(r"\s{2,}", " ", stripped).strip()
+
+
+def cli_suggestion_response(raw: str, references: Optional[List[Dict]] = None) -> Dict:
+    text = str(raw or "").strip()
+    if not text and not references:
+        return {"action": "approve"}
+    return {
+        "action": "submit_suggestions",
+        "suggestions": [
+            {
+                "text": strip_suggestion_targets(text) or text,
+                "target_ids": suggestion_target_ids(text),
+                "references": references or [],
+            }
+        ],
+    }
 
 
 def referenced_files_from_cli_text(raw: str, references: List[Dict]) -> tuple[str, List[Dict]]:
@@ -372,7 +405,7 @@ class Collect:
         raw = input("\n按 Enter 確認，或輸入修正意見：").strip()
         if not raw:
             return {"action": "approve"}
-        return {"action": "human_decision", "human_decision": raw}
+        return cli_suggestion_response(raw)
 
     @staticmethod
     def requirements_review(requirements: List[Dict]) -> Dict:
@@ -390,7 +423,29 @@ class Collect:
         raw = input("\n按 Enter 確認，或輸入整體/局部建議：").strip()
         if not raw:
             return {"action": "approve"}
-        return {"action": "human_decision", "human_decision": raw}
+        return cli_suggestion_response(raw)
+
+    @staticmethod
+    def scope_review(scope: Dict) -> Dict:
+        if cli_skip_all_interventions():
+            return {"action": "approve", "skipped": True, "auto_skipped": True}
+
+        print("\n需求範圍已產生：")
+        source = scope if isinstance(scope, dict) else {}
+        for key, title in (("in_scope", "範圍內"), ("out_of_scope", "範圍外")):
+            print(f"\n{title}:")
+            values = source.get(key) or []
+            if not values:
+                print("  - 無")
+                continue
+            for item in values:
+                text = str(item or "").strip()
+                if text:
+                    print(f"  - {text}")
+        raw = input("\n按 Enter 確認，或輸入需求範圍修正建議：").strip()
+        if not raw:
+            return {"action": "approve"}
+        return cli_suggestion_response(raw)
 
     @staticmethod
     def domain_research_review(references: List[Dict]) -> Dict:
@@ -409,11 +464,7 @@ class Collect:
         if not raw:
             return {"action": "approve"}
         feedback, referenced_files = referenced_files_from_cli_text(raw, references)
-        return {
-            "action": "human_decision",
-            "human_decision": feedback,
-            "referenced_files": referenced_files,
-        }
+        return cli_suggestion_response(feedback, referenced_files)
 
     @staticmethod
     def meeting_issue_proposal_review(
