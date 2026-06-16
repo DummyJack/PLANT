@@ -79,6 +79,7 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const res = await fetch(apiUrl(path), {
     ...init,
+    credentials: "include",
     headers: {
       ...(init?.body instanceof FormData
         ? {}

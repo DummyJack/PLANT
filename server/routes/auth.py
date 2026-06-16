@@ -3,6 +3,7 @@ import hmac
 import os
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request, Response
@@ -44,16 +45,30 @@ def require_project_read_access(request: Request, project_id: str) -> None:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
+def _cross_site_cookie(request: Request) -> bool:
+    origin = request.headers.get("origin", "").strip()
+    if not origin:
+        return False
+    origin_host = urlparse(origin).hostname
+    request_host = request.url.hostname
+    return bool(origin_host and request_host and origin_host != request_host)
+
+
+def _cookie_options(request: Request) -> dict[str, object]:
+    if _cross_site_cookie(request):
+        return {"samesite": "none", "secure": True}
+    return {"samesite": "lax", "secure": False}
+
+
 def set_activation_cookie(response: Response, request: Request, code: str) -> None:
     response.set_cookie(
         ACTIVATION_COOKIE,
         _token(request.app.state.base_dir, code),
         max_age=60 * 60 * 24 * 30,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        **_cookie_options(request),
     )
 
 
-def clear_activation_cookie(response: Response) -> None:
-    response.delete_cookie(ACTIVATION_COOKIE, httponly=True, samesite="lax", secure=False)
+def clear_activation_cookie(response: Response, request: Request) -> None:
+    response.delete_cookie(ACTIVATION_COOKIE, httponly=True, **_cookie_options(request))

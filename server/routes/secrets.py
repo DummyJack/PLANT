@@ -153,6 +153,6 @@ def activate_code(payload: ActivationCodePayload, request: Request, response: Re
 
 
 @router.delete("/activation-code")
-def deactivate_code(response: Response):
-    clear_activation_cookie(response)
+def deactivate_code(request: Request, response: Response):
+    clear_activation_cookie(response, request)
     return {"activated": False}
