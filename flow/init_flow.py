@@ -1,6 +1,6 @@
 # Handles init flow logic for project flow orchestration and stage execution.
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from utils import (
     Collect,
@@ -17,6 +17,7 @@ from agents.profile.user.stakeholder import (
     normalize_stakeholder_text,
     parse_selection,
 )
+from agents.profile.analyst.validation import scope_payload
 from storage.requirements import (
     attach_initial_source_ids,
     build_initial_requirement_candidates_from_stakeholders,
@@ -37,6 +38,46 @@ SUPPORTED_REFERENCE_EXTS = {
     ".json",
     ".csv",
 }
+
+TARGET_MENTION_RE = re.compile(
+    r"(?<!\S)@((?:URL|REQ|SM|CR|ST)-[A-Za-z0-9_.:-]+|R\d+-M\d+)",
+    re.IGNORECASE,
+)
+
+INIT_RESUME_STAGE_ORDER = [
+    "init",
+    "elicitation",
+    "conflict_detection",
+    "research_domain",
+    "system_model",
+    "draft",
+]
+
+
+def init_resume_stage(artifact: Dict[str, Any]) -> str:
+    meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+    checkpoint = (
+        meta.get("last_resume_checkpoint")
+        if isinstance(meta.get("last_resume_checkpoint"), dict)
+        else {}
+    )
+    stage_id = str(checkpoint.get("stage_id") or "").strip()
+    return stage_id if stage_id in INIT_RESUME_STAGE_ORDER else ""
+
+
+def skip_before_resume_stage(artifact: Dict[str, Any], stage_id: str) -> bool:
+    resume_stage = init_resume_stage(artifact)
+    if not resume_stage:
+        return False
+    try:
+        return INIT_RESUME_STAGE_ORDER.index(stage_id) < INIT_RESUME_STAGE_ORDER.index(resume_stage)
+    except ValueError:
+        return False
+
+
+def has_domain_research_completion_marker(artifact: Dict[str, Any]) -> bool:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    return str(feedback.get("status") or "").strip() == "no_applicable_feedback"
 
 
 def _checkpoint_step(
@@ -101,6 +142,106 @@ def emit_scope_delta(flow, scope: Dict[str, Any]) -> None:
         )
 
 
+def review_target_ids(text: str) -> list[str]:
+    ids = [match.group(1).strip().upper() for match in TARGET_MENTION_RE.finditer(str(text or ""))]
+    return list(dict.fromkeys(value for value in ids if value))
+
+
+def strip_review_target_mentions(text: str) -> str:
+    stripped = TARGET_MENTION_RE.sub(" ", str(text or ""))
+    return re.sub(r"\s{2,}", " ", stripped).strip()
+
+
+def clean_review_references(value: Any) -> list[Dict[str, str]]:
+    rows: list[Dict[str, str]] = []
+    seen: set[str] = set()
+    if not isinstance(value, list):
+        return rows
+    for row in value:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            raw_path = str(row.get("path") or "").strip()
+            name = raw_path.rsplit("/", 1)[-1]
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        rows.append({"name": name})
+    return rows
+
+
+def normalize_review_considerations(
+    review: Dict[str, Any],
+    *,
+    stage: str,
+) -> list[Dict[str, Any]]:
+    if not isinstance(review, dict):
+        return []
+    rows: list[Dict[str, Any]] = []
+    suggestions = review.get("suggestions")
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            if not isinstance(item, dict):
+                continue
+            raw_text = str(item.get("text") or "").strip()
+            explicit_targets = item.get("target_ids")
+            target_ids = [
+                str(value or "").strip().upper()
+                for value in (explicit_targets if isinstance(explicit_targets, list) else [])
+                if str(value or "").strip()
+            ]
+            target_ids.extend(review_target_ids(raw_text))
+            text = strip_review_target_mentions(raw_text)
+            references = clean_review_references(item.get("references"))
+            if not text and not references and not target_ids:
+                continue
+            rows.append(
+                {
+                    "stage": stage,
+                    "text": text or raw_text,
+                    "target_ids": list(dict.fromkeys(target_ids)),
+                    "references": references,
+                }
+            )
+    if rows:
+        return rows
+    return rows
+
+
+def append_review_considerations(
+    artifact: Dict[str, Any],
+    rows: list[Dict[str, Any]],
+) -> None:
+    if not rows:
+        return
+    artifact.setdefault("review_considerations", []).extend(rows)
+
+
+def render_considerations_text(rows: list[Dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        targets = [
+            str(value or "").strip()
+            for value in (row.get("target_ids") or [])
+            if str(value or "").strip()
+        ]
+        target_label = f"targets: {', '.join(targets)}\n" if targets else ""
+        chunks.append(f"{target_label}{text}".strip())
+    return "\n\n".join(chunks)
+
+
+def scope_from_review(review: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(review, dict):
+        return {"in_scope": [], "out_of_scope": []}
+    return scope_payload(review.get("scope", {}))
+
+
 def emit_model_deltas(flow, rows: list[Dict[str, Any]]) -> None:
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
@@ -109,7 +250,7 @@ def emit_model_deltas(flow, rows: list[Dict[str, Any]]) -> None:
         body = str(row.get("description") or row.get("plantuml") or "").strip()
         flow.logger.step_delta(
             "system_model",
-            "system_model.generate_models",
+            "system_model.modeling",
             {"title": title, "text": body or title},
             delta_type="model",
             agent="modeler",
@@ -192,39 +333,52 @@ def apply_stakeholder_statement_review(
     return normalize_stakeholder_text(revised)
 
 
-def requirements_review_feedback(review: Dict[str, Any]) -> str:
-    if not isinstance(review, dict):
-        return ""
-    feedback = str(review.get("human_decision") or "").strip()
-    selection_comment = review.get("selection_comment")
-    if isinstance(selection_comment, dict):
-        selected_text = str(selection_comment.get("selected_text") or "").strip()
-        comment = str(selection_comment.get("comment") or "").strip()
-        if selected_text or comment:
-            feedback = "\n".join(
-                part
-                for part in [
-                    feedback,
-                    f"選取內容：{selected_text}" if selected_text else "",
-                    f"局部看法：{comment}" if comment else "",
-                ]
-                if part
-            )
-    return feedback.strip()
-
-
 def domain_research_review_feedback(review: Dict[str, Any]) -> str:
     if not isinstance(review, dict):
         return ""
-    return str(review.get("human_decision") or "").strip()
+    suggestions = review.get("suggestions")
+    if not isinstance(suggestions, list):
+        return ""
+    rows: list[str] = []
+    for index, item in enumerate(suggestions, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        references = item.get("references")
+        ref_names: list[str] = []
+        if isinstance(references, list):
+            for ref in references:
+                if not isinstance(ref, dict):
+                    continue
+                name = str(ref.get("name") or "").strip()
+                if name:
+                    ref_names.append(f"@{name}")
+        target_ids = [
+            str(value or "").strip().upper()
+            for value in (item.get("target_ids") or [])
+            if str(value or "").strip()
+        ]
+        target_ids.extend(review_target_ids(text))
+        target_label = f"[targets: {', '.join(list(dict.fromkeys(target_ids)))}]" if target_ids else ""
+        clean_text = strip_review_target_mentions(text)
+        body = " ".join(part for part in [target_label, " ".join(ref_names), clean_text] if part).strip()
+        if body:
+            rows.append(f"建議 {index}：{body}")
+    return "\n\n".join(rows)
 
 
 def domain_research_review_references(review: Dict[str, Any], project_id: str) -> list[str]:
     if not isinstance(review, dict):
         return []
-    rows = review.get("referenced_files")
-    if not isinstance(rows, list):
-        return []
+    rows: list[Dict[str, Any]] = []
+    suggestions = review.get("suggestions")
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            if not isinstance(item, dict):
+                continue
+            references = item.get("references")
+            if isinstance(references, list):
+                rows.extend(ref for ref in references if isinstance(ref, dict))
     out: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -245,34 +399,12 @@ def requirements_from_analysis(
     flow,
     stakeholders: list[Dict[str, Any]],
     *,
-    feedback: str = "",
+    considerations: Optional[List[Dict[str, Any]]] = None,
 ) -> list[Dict[str, Any]]:
-    analysis_stakeholders = stakeholders
-    if feedback:
-        analysis_stakeholders = [
-            {
-                **row,
-                "text": [
-                    {
-                        "id": str(item.get("id") or "").strip(),
-                        "text": (
-                            f"{str(item.get('text') or '').strip()}\n\n"
-                            f"使用者對初始需求分析的建議：\n{feedback}"
-                        ).strip(),
-                    }
-                    if isinstance(item, dict)
-                    else {
-                        "id": "",
-                        "text": f"{str(item or '').strip()}\n\n使用者對初始需求分析的建議：\n{feedback}".strip(),
-                    }
-                    for item in (row.get("text") or [])
-                ],
-            }
-            for row in stakeholders
-            if isinstance(row, dict)
-        ]
     analysis = flow.analyst_agent.run_requirements_analyst(
-        "analyze_requirements", stakeholders=analysis_stakeholders,
+        "analyze_requirements",
+        stakeholders=stakeholders,
+        review_considerations=considerations or [],
     )
     raw_initial_requirements = analysis if isinstance(analysis, list) else []
     initial_candidates = build_requirement_candidates_from_requirements(raw_initial_requirements or [])
@@ -280,6 +412,21 @@ def requirements_from_analysis(
         flow.logger.warning("Analyst 初步抽取未產生 User Requirements，改用 stakeholder 原始表述建立初始 URL。")
         initial_candidates = build_initial_requirement_candidates_from_stakeholders(stakeholders)
     return attach_initial_source_ids(initial_candidates, stakeholders)
+
+
+def review_considerations(
+    artifact: Dict[str, Any],
+    *,
+    stage: str = "",
+) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    for row in artifact.get("review_considerations") or []:
+        if not isinstance(row, dict):
+            continue
+        if stage and str(row.get("stage") or "").strip() != stage:
+            continue
+        rows.append(row)
+    return rows
 
 
 def feedback_covered_url_ids(artifact: Dict[str, Any]) -> set[str]:
@@ -349,7 +496,13 @@ def merge_elicited_requirements(flow, artifact: Dict[str, Any]) -> bool:
 
 def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     run_init = stage_enabled(flow.config, "init")
-    if not run_init:
+    resume_stage = init_resume_stage(artifact)
+    if resume_stage:
+        flow.logger.info("依 checkpoint 從 %s 繼續初始化流程", resume_stage)
+    if skip_before_resume_stage(artifact, "init"):
+        flow.logger.info("依 checkpoint 略過初始化前置")
+        require_stage_inputs(flow, artifact, "init")
+    elif not run_init:
         flow.logger.info("跳過初始化前置")
         require_stage_inputs(flow, artifact, "init")
     else:
@@ -429,38 +582,24 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 break
             if action == "direct_edit":
                 stakeholders = apply_stakeholder_statement_review(stakeholders, review)
+                consideration_rows = normalize_review_considerations(
+                    review or {},
+                    stage="stakeholder_statement_review",
+                )
+                append_review_considerations(artifact, consideration_rows)
                 break
 
-            feedback = str((review or {}).get("human_decision") or "").strip()
-            selection_comment = (review or {}).get("selection_comment")
-            if isinstance(selection_comment, dict):
-                selected_text = str(selection_comment.get("selected_text") or "").strip()
-                comment = str(selection_comment.get("comment") or "").strip()
-                if selected_text or comment:
-                    feedback = "\n".join(
-                        part
-                        for part in [
-                            feedback,
-                            f"選取內容：{selected_text}" if selected_text else "",
-                            f"局部看法：{comment}" if comment else "",
-                        ]
-                        if part
-                    )
-            if not feedback:
+            consideration_rows = normalize_review_considerations(
+                review or {},
+                stage="stakeholder_statement_review",
+            )
+            if not consideration_rows:
                 break
 
-            flow.logger.step_started(
-                "init",
-                "init.write_stakeholder_text",
-                "根據 Human Decision 修正利害關係人需求",
-                agent="user",
-                message="已收到回饋，更新中 ...",
+            append_review_considerations(
+                artifact,
+                consideration_rows,
             )
-            generated_stakeholders = flow.user_agent.write_stakeholder_text(
-                f"{rough_idea}\n\nHuman Decision:\n{feedback}",
-                [row["name"] for row in stakeholders],
-            )
-            stakeholders = merge_stakeholder_text(stakeholders, generated_stakeholders)
             break
 
         artifact["stakeholders"] = stakeholders
@@ -510,7 +649,15 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             agent="analyst",
             message="正在從利害關係人描述中整理候選需求",
         )
-        initial_candidates = requirements_from_analysis(flow, stakeholders)
+        stakeholder_considerations = review_considerations(
+            artifact,
+            stage="stakeholder_statement_review",
+        )
+        initial_candidates = requirements_from_analysis(
+            flow,
+            stakeholders,
+            considerations=stakeholder_considerations,
+        )
         if not initial_candidates:
             raise RuntimeError("Analyst 需求分析在 agent loop 後仍未產生結構化 requirements")
         artifact["URL"] = list(initial_candidates)
@@ -535,19 +682,31 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         artifact.setdefault("requirements_reviews", []).append(review)
         artifact["requirements_review"] = review
         if action != "approve":
-            feedback = requirements_review_feedback(review)
-            if feedback:
+            consideration_rows = normalize_review_considerations(
+                review or {},
+                stage="requirements_review",
+            )
+            if consideration_rows:
+                append_review_considerations(
+                    artifact,
+                    consideration_rows,
+                )
+                flow.store.save_artifact(artifact)
+                combined_considerations = (
+                    stakeholder_considerations
+                    + consideration_rows
+                )
                 flow.logger.step_started(
                     "init",
                     "init.analyze_requirements_review",
-                    "根據使用者建議修正初始需求",
+                    "考量使用者建議檢查初始需求",
                     agent="analyst",
                     message="已收到回饋，更新中 ...",
                 )
                 revised_candidates = requirements_from_analysis(
                     flow,
                     stakeholders,
-                    feedback=feedback,
+                    considerations=combined_considerations,
                 )
                 if revised_candidates:
                     artifact["URL"] = list(revised_candidates)
@@ -600,6 +759,81 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             "artifact/scope.json",
         )
 
+        review = Collect.scope_review(artifact.get("scope", {}))
+        action = str((review or {}).get("action") or "approve").strip()
+        artifact.setdefault("scope_reviews", []).append(review)
+        artifact["scope_review"] = review
+        flow.store.save_artifact(artifact)
+        if action == "direct_edit":
+            edited_scope = scope_from_review(review)
+            artifact["scope"] = edited_scope
+            consideration_rows = normalize_review_considerations(
+                review or {},
+                stage="scope_review",
+            )
+            append_review_considerations(artifact, consideration_rows)
+            flow.store.save_artifact(artifact)
+            emit_scope_delta(flow, edited_scope)
+            flow.logger.step_completed(
+                "init",
+                "init.generate_scope_review",
+                "需求範圍確認",
+                agent="user",
+                output_path="artifact/scope.json",
+            )
+            flow.logger.artifact_created(
+                "init",
+                "init.generate_scope_review",
+                "需求範圍已更新",
+                "artifact/scope.json",
+            )
+        elif action != "approve":
+            consideration_rows = normalize_review_considerations(
+                review or {},
+                stage="scope_review",
+            )
+            if consideration_rows:
+                append_review_considerations(
+                    artifact,
+                    consideration_rows,
+                )
+                flow.store.save_artifact(artifact)
+                flow.logger.step_started(
+                    "init",
+                    "init.generate_scope_review",
+                    "考量使用者建議檢查需求範圍",
+                    agent="analyst",
+                    message="已收到回饋，更新中 ...",
+                )
+                artifact["scope_review_feedback"] = render_considerations_text(consideration_rows)
+                revised_scope = flow.analyst_agent.run_requirements_analyst(
+                    "generate_scope",
+                    artifact=artifact,
+                )
+                artifact.pop("scope_review_feedback", None)
+                if isinstance(revised_scope, dict):
+                    artifact["scope"] = {
+                        "in_scope": revised_scope.get("in_scope", []) or [],
+                        "out_of_scope": revised_scope.get("out_of_scope", []) or [],
+                    }
+                    flow.store.save_artifact(artifact)
+                    emit_scope_delta(flow, artifact.get("scope", {}))
+                    flow.logger.step_completed(
+                        "init",
+                        "init.generate_scope_review",
+                        "需求範圍修正",
+                        agent="analyst",
+                        output_path="artifact/scope.json",
+                    )
+                    flow.logger.artifact_created(
+                        "init",
+                        "init.generate_scope_review",
+                        "需求範圍已更新",
+                        "artifact/scope.json",
+                    )
+                else:
+                    flow.store.save_artifact(artifact)
+
     elicitation_payload = artifact.get("elicitation") if isinstance(artifact.get("elicitation"), dict) else {}
     has_elicitation_output = bool(elicitation_payload.get("elicited_reqts")) or any(
         isinstance(row, dict) and str(row.get("source") or "").startswith("elicitation")
@@ -610,7 +844,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         conflict_state.get("pairs") or conflict_state.get("multiple")
     )
 
-    if not stage_enabled(flow.config, "elicitation"):
+    if skip_before_resume_stage(artifact, "elicitation"):
+        flow.logger.stage_started("elicitation", "需求擷取會議")
+        flow.logger.info("=== 需求擷取會議 ===")
+        flow.logger.info("依 checkpoint 略過需求擷取會議")
+        require_stage_inputs(flow, artifact, "elicitation")
+        flow.logger.stage_completed("elicitation", "需求擷取會議", message="依 checkpoint 略過需求擷取會議")
+    elif not stage_enabled(flow.config, "elicitation"):
         flow.logger.stage_started("elicitation", "需求擷取會議")
         flow.logger.info("=== 需求擷取會議 ===")
         flow.logger.info("跳過需求擷取會議")
@@ -664,7 +904,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.logger.info("=== 需求衝突辨識 ===")
     meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
     requirements_changed = bool(meta.get("requirements_changed"))
-    if not stage_enabled(flow.config, "conflict_detection"):
+    if skip_before_resume_stage(artifact, "conflict_detection"):
+        flow.logger.info("依 checkpoint 略過需求衝突辨識")
+        require_stage_inputs(flow, artifact, "conflict_detection")
+    elif not stage_enabled(flow.config, "conflict_detection"):
         flow.logger.info("跳過需求衝突辨識")
     elif has_conflict_detection_output and not requirements_changed:
         require_stage_inputs(flow, artifact, "conflict_detection")
@@ -707,6 +950,8 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
     conflict_items = list(conflict_state.get("pairs") or []) + list(conflict_state.get("multiple") or [])
     if (
+        not skip_before_resume_stage(artifact, "conflict_detection")
+        and
         conflict_items
         and meeting_setting(flow.config, "conflict_review", True)
         and stage_enabled(flow.config, "conflict_detection")
@@ -736,7 +981,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     meta = artifact.setdefault("meta", {})
     research_domain_completed = bool(meta.get("research_domain_completed"))
     feedback_covers_urls = feedback_covers_current_urls(artifact)
-    if not stage_enabled(flow.config, "research_domain"):
+    if skip_before_resume_stage(artifact, "research_domain"):
+        flow.logger.info("依 checkpoint 略過領域研究")
+        require_stage_inputs(flow, artifact, "research_domain")
+    elif not stage_enabled(flow.config, "research_domain"):
         flow.logger.info("跳過領域研究")
     else:
         references = []
@@ -767,6 +1015,13 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
             if feedback:
                 meta["domain_research_user_guidance"] = feedback
+                append_review_considerations(
+                    artifact,
+                    normalize_review_considerations(
+                        review,
+                        stage="domain_research_review",
+                    ),
+                )
             if referenced_files:
                 meta["attached_references"] = referenced_files
                 meta["domain_research_referenced_files"] = referenced_files
@@ -794,16 +1049,9 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             flow.store.save_artifact(artifact)
         require_stage_inputs(flow, artifact, "research_domain")
         if not reused_research_domain:
-            _checkpoint_step(
-                flow,
-                stage_id="research_domain",
-                step_id="research_domain.research",
-                agent="expert",
-                action="run_research_loop",
-            )
             flow.logger.step_started(
                 "research_domain",
-                "research_domain.research",
+                "research_domain.workflow",
                 "執行領域研究",
                 agent="expert",
                 message="尋找中 ...",
@@ -812,23 +1060,40 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 artifact,
             )
             ran_research_domain = True
-            if has_feedback_payload(artifact):
+            if has_feedback_payload(artifact) or has_domain_research_completion_marker(artifact):
                 artifact.setdefault("meta", {})["research_domain_completed"] = True
     flow.store.save_artifact(artifact)
     dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     if ran_research_domain and not has_feedback_payload(artifact):
-        raise RuntimeError("Expert domain research 在 agent loop 後仍未產生有效 feedback")
+        if has_domain_research_completion_marker(artifact):
+            flow.logger.info("Expert domain research：無新增有效 feedback，已記錄為完成狀態")
+            artifact.setdefault("meta", {})["research_domain_completed"] = True
+            flow.store.save_artifact(artifact)
+        else:
+            artifact["feedback"] = {
+                "findings": [],
+                "sources": [],
+                "constraints": [],
+                "risks": [],
+                "recommendations": [],
+                "status": "no_applicable_feedback",
+                "reason": "domain research completed without valid feedback rows",
+            }
+            artifact.setdefault("meta", {})["research_domain_completed"] = True
+            flow.store.save_artifact(artifact)
+            flow.logger.info("Expert domain research：未產生有效 feedback rows，已記錄為完成狀態")
+            dr = artifact["feedback"]
     if (ran_research_domain or reused_research_domain) and dr and isinstance(dr, dict) and dr:
         flow.logger.step_completed(
             "research_domain",
-            "research_domain.generate_feedback",
+            "research_domain.update_feedback",
             "領域研究",
             agent="expert",
             output_path="artifact/feedback.json",
         )
         flow.logger.artifact_created(
             "research_domain",
-            "research_domain.generate_feedback",
+            "research_domain.update_feedback",
             "領域研究結果已產生",
             "artifact/feedback.json",
         )
@@ -837,24 +1102,24 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.logger.stage_started("system_model", "系統模型")
     flow.logger.info("=== Modeler: 系統模型 ===")
     generated_system_models = False
-    if not stage_enabled(flow.config, "system_model"):
+    reused_system_models = False
+    if skip_before_resume_stage(artifact, "system_model"):
+        flow.logger.info("依 checkpoint 略過系統模型")
+        require_stage_inputs(flow, artifact, "system_model")
+        model_data = artifact.get("system_models", [])
+        reused_system_models = True
+    elif not stage_enabled(flow.config, "system_model"):
         flow.logger.info("跳過系統模型")
         model_data = artifact.get("system_models", [])
     elif has_system_models_payload(artifact) and artifact_path_non_empty(flow, "system_models.json"):
         model_data = artifact.get("system_models", [])
+        reused_system_models = True
         flow.logger.info("✓ 系統模型已存在，跳過重新生成")
     else:
         require_stage_inputs(flow, artifact, "system_model")
-        _checkpoint_step(
-            flow,
-            stage_id="system_model",
-            step_id="system_model.generate_models",
-            agent="modeler",
-            action="generate_system_models",
-        )
         flow.logger.step_started(
             "system_model",
-            "system_model.generate_models",
+            "system_model.modeling",
             "產生系統模型",
             agent="modeler",
             message="生成中 ...",
@@ -873,19 +1138,27 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     ]
     flow.logger.step_completed(
         "system_model",
-        "system_model.generate_models",
+        "system_model.modeling",
         "系統模型",
         agent="modeler",
-        message="、".join(model_names) if model_names else "系統模型",
-        output_path="artifact/system_models.json",
-    )
-    flow.logger.artifact_created(
-        "system_model",
-        "system_model.generate_models",
-        "系統模型已產生",
-        "artifact/system_models.json",
+        message=(
+            "沿用既有系統模型：" + "、".join(model_names)
+            if reused_system_models and model_names
+            else "沿用既有系統模型"
+            if reused_system_models
+            else "、".join(model_names)
+            if model_names
+            else "系統模型"
+        ),
+        output_path="artifact/system_models.json" if generated_system_models else None,
     )
     if generated_system_models:
+        flow.logger.artifact_created(
+            "system_model",
+            "system_model.modeling",
+            "系統模型已產生",
+            "artifact/system_models.json",
+        )
         flow.store.save_plantuml_files(model_data)
         artifact["system_models"] = model_data
         flow.store.save_artifact(artifact)
@@ -893,7 +1166,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
 
     flow.logger.stage_started("draft", "草稿化")
     flow.logger.info("=== Analyst: 草稿化 ===")
-    if not stage_enabled(flow.config, "draft"):
+    if skip_before_resume_stage(artifact, "draft"):
+        flow.logger.info("依 checkpoint 略過草稿化")
+        require_stage_inputs(flow, artifact, "draft")
+    elif not stage_enabled(flow.config, "draft"):
         flow.logger.info("跳過草稿化")
     elif has_draft_payload(flow):
         flow.logger.info("✓ 需求草稿已存在，跳過重新生成")

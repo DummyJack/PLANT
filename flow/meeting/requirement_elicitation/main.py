@@ -28,7 +28,6 @@ from .support import (
     without_finish_proposals,
 )
 
-
 # ========
 # Defines meeting rows function for this module workflow.
 # ========
@@ -685,8 +684,7 @@ def run_elicitation(
                 ).strip().lower()
             except Exception as e:
                 raise RuntimeError("Requirement elicitation action type 判定失敗") from e
-        if stop_phrase in judged_text:
-            interviewer_finish = True
+        if interviewer_finish and stop_phrase in judged_text:
             judge_action_type = "finish"
 
         conversation = list(effective_conversation)
@@ -843,19 +841,10 @@ def run_elicitation(
                 pending_targets_for_row = []
             conversation_rows.append(row)
 
-        previous_new_count = 0
-        if isinstance(previous_turn_summary, dict):
-            try:
-                previous_new_count = int(previous_turn_summary.get("new_candidates_count") or 0)
-            except (TypeError, ValueError):
-                previous_new_count = 0
-        no_new_candidate_convergence = turn >= 2 and previous_new_count == 0 and len(new_candidates) == 0
-        should_stop_after_this_turn = bool(interviewer_finish) or no_new_candidate_convergence
+        should_stop_after_this_turn = bool(interviewer_finish)
         stop_reason_after_this_turn = (
             "judge_finish"
             if interviewer_finish
-            else "no_new_info"
-            if no_new_candidate_convergence
             else "judge_continue"
         )
 
@@ -919,8 +908,6 @@ def run_elicitation(
             termination_reason = stop_reason_after_this_turn
             if stop_reason_after_this_turn == "max_turn":
                 coordinator.flow.logger.info("  停止：本輪完成後已達最後一輪，以 finish action 收斂")
-            elif stop_reason_after_this_turn == "no_new_info":
-                coordinator.flow.logger.info("  停止：連續兩輪未產生新候選需求，判定需求擷取已足夠")
             else:
                 coordinator.flow.logger.info(
                     "  停止：本輪完成後，judge 判定為 finish（reason=%s）",

@@ -24,6 +24,8 @@ from .support import (
     normalize_review_text,
 )
 
+CONFLICT_REVIEW_BATCH_SIZE = 20
+
 # ========
 # Defines save conflict report function for this module workflow.
 # ========
@@ -44,16 +46,6 @@ def save_conflict_report(
     conflict_rows = unresolved_conflict_report_rows(conflict_rows)
     if not conflict_rows:
         return False
-    previous_report = ""
-    if round_num > 0 and hasattr(coordinator.flow.store, "load_markdown"):
-        report_dir = coordinator.flow.store.artifact_dir / "report"
-        latest_version = -1
-        for path in report_dir.glob("conflict_report_v*.md"):
-            raw_version = path.stem.removeprefix("conflict_report_v")
-            if raw_version.isdigit():
-                latest_version = max(latest_version, int(raw_version))
-        if latest_version >= 0:
-            previous_report = coordinator.flow.store.load_markdown(f"conflict_report_v{latest_version}.md")
     report_artifact = {
         **artifact,
         "conflict": {
@@ -99,7 +91,6 @@ def save_conflict_report(
             "conflict_report": report_rows,
         },
         round_num=round_num,
-        previous_report=previous_report,
     )
     coordinator.flow.store.save_markdown(conflict_md, f"conflict_report_v{round_num}.md")
     coordinator.flow.logger.step_completed(
@@ -214,7 +205,9 @@ def conflict_review(
     }
 
     conflict_summaries = []
+    summary_by_id: Dict[str, str] = {}
     pair_cards = []
+    pair_card_by_id: Dict[str, Dict[str, Any]] = {}
     for cid, conflict in conflicts_by_id.items():
         label = str(conflict.get("label") or "").strip()
         req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
@@ -227,7 +220,9 @@ def conflict_review(
         )
         focus_line = f"  判斷焦點: {review_focus}" if review_focus else ""
         reason_line = f"  初判理由: {initial_reason}" if initial_reason else ""
-        conflict_summaries.append(f"- [{cid}] 初判={label}{focus_line}{reason_line}")
+        summary = f"- [{cid}] 初判={label}{focus_line}{reason_line}"
+        conflict_summaries.append(summary)
+        summary_by_id[cid] = summary
         req_rows = [
             {
                 "id": rid,
@@ -235,15 +230,17 @@ def conflict_review(
             }
             for rid in req_ids
         ]
-        pair_cards.append({
+        pair_card = {
             "id": cid,
             "requirements": req_rows,
             "current_label": label,
-        })
+        }
+        pair_cards.append(pair_card)
+        pair_card_by_id[cid] = pair_card
         if initial_reason:
-            pair_cards[-1]["initial_reason"] = initial_reason
+            pair_card["initial_reason"] = initial_reason
         if review_focus:
-            pair_cards[-1]["review_focus"] = review_focus
+            pair_card["review_focus"] = review_focus
         conflict["requirements"] = req_rows
         if review_focus:
             conflict["review_focus"] = review_focus
@@ -264,27 +261,6 @@ def conflict_review(
     if discussion_mode not in {"sequential", "simultaneous"}:
         raise RuntimeError(f"需求衝突再審查 plan discussion_mode 不合法: {discussion_mode}")
 
-    issue = {
-        "id": "R1-conflict",
-        "title": "需求衝突再審查（R1）",
-        "description": coordinator.flow.mediator_agent.conflict_review_description(
-            conflict_summaries
-        ),
-        "category": "resolve_conflict",
-        "participants": participants,
-        "discussion_mode": discussion_mode,
-        "trace": {"artifact_ids": list(conflicts_by_id.keys()), "proposal_ids": []},
-        "pair_cards": pair_cards,
-        "conflict_review_contract": {
-            "type": "pair_reviews",
-            "known_pair_ids": list(conflicts_by_id.keys()),
-            "current_labels_by_id": {
-                cid: str(conflict.get("label") or "").strip()
-                for cid, conflict in conflicts_by_id.items()
-                if isinstance(conflict, dict)
-            },
-        },
-    }
     coordinator.flow.logger.step_completed(
         "conflict_review",
         "conflict_review.plan",
@@ -297,124 +273,178 @@ def conflict_review(
         ),
     )
 
-    conversation, conversation_rows, conversation_agents = run_conflict_review_round(
-        coordinator,
-        issue,
-        artifact,
-        participants,
-        discussion_mode,
-        conflicts_by_id,
-    )
-    _, first_round_pair_reviews = collect_reviews(
-        conversation,
-        known_pair_ids=list(conflicts_by_id.keys()),
-        current_labels_by_id={
-            cid: str(conflict.get("label") or "").strip()
-            for cid, conflict in conflicts_by_id.items()
-            if isinstance(conflict, dict)
-        },
-    )
-    for review in first_round_pair_reviews:
-        if isinstance(review, dict):
-            review["review_round"] = 1
-    analyst_changed_ids = analyst_changed_label_ids(first_round_pair_reviews, conflicts_by_id)
-    if analyst_changed_ids:
-        pair_card_by_id = {str(card.get("id") or ""): card for card in pair_cards}
-        second_conflicts_by_id = {
-            cid: conflicts_by_id[cid]
-            for cid in analyst_changed_ids
-            if cid in conflicts_by_id
-        }
-        second_pair_cards = [
-            {
-                **pair_card_by_id.get(cid, {}),
-                "first_round_pair_reviews": [
-                    review for review in first_round_pair_reviews
-                    if str(review.get("id") or "") == cid
-                ],
-            }
-            for cid in second_conflicts_by_id.keys()
-        ]
-        second_summaries = [
-            f"- [{cid}] 原標籤={conflicts_by_id[cid].get('label')}  Analyst 第一輪改判，需要第二輪 proposed_label 共識"
-            for cid in second_conflicts_by_id.keys()
-        ]
-        second_issue = {
-            "id": "R2-conflict",
-            "title": "需求衝突再審查（R2）",
+    decisions: List[Dict[str, Any]] = []
+    extracted_pair_reviews: List[Dict[str, Any]] = []
+    final_reason_conversation: List[Dict[str, Any]] = []
+    conversation_rows: List[str] = []
+    conversation_agents: List[str] = []
+    conflict_items = list(conflicts_by_id.items())
+    total_batches = max(1, (len(conflict_items) + CONFLICT_REVIEW_BATCH_SIZE - 1) // CONFLICT_REVIEW_BATCH_SIZE)
+
+    for batch_index, start in enumerate(range(0, len(conflict_items), CONFLICT_REVIEW_BATCH_SIZE), start=1):
+        batch_items = conflict_items[start : start + CONFLICT_REVIEW_BATCH_SIZE]
+        batch_conflicts_by_id = {cid: conflict for cid, conflict in batch_items}
+        batch_ids = list(batch_conflicts_by_id.keys())
+        batch_pair_cards = [pair_card_by_id[cid] for cid in batch_ids if cid in pair_card_by_id]
+        batch_summaries = [summary_by_id[cid] for cid in batch_ids if cid in summary_by_id]
+        batch_label = f"{batch_index}/{total_batches}"
+
+        coordinator.flow.logger.info(
+            "需求衝突再審查：批次 %s，pairs=%s",
+            batch_label,
+            ", ".join(batch_ids[:3]) + ("..." if len(batch_ids) > 3 else ""),
+        )
+        issue = {
+            "id": f"R1-conflict-b{batch_index}",
+            "title": f"需求衝突再審查（R1 批次 {batch_label}）",
             "description": (
-                coordinator.flow.mediator_agent.conflict_review_description(second_summaries)
-                + "\n\n第二輪目標：只針對 Analyst 第一輪 proposed_label 與原標籤不同的 pair 再審查。"
-                + "請各 agent 根據 requirement 原文與第一輪 pair_reviews 重新輸出 proposed_label；"
-                + "本輪結束後只看 proposed_label 是否一致。"
+                coordinator.flow.mediator_agent.conflict_review_description(batch_summaries)
+                + f"\n\n本批次只審查 {len(batch_ids)} 筆；請勿輸出本批次以外的 pair。"
             ),
             "category": "resolve_conflict",
             "participants": participants,
             "discussion_mode": discussion_mode,
-            "trace": {"artifact_ids": list(second_conflicts_by_id.keys()), "proposal_ids": []},
-            "pair_cards": second_pair_cards,
-            "review_round": 2,
+            "trace": {"artifact_ids": batch_ids, "proposal_ids": []},
+            "pair_cards": batch_pair_cards,
             "conflict_review_contract": {
                 "type": "pair_reviews",
-                "known_pair_ids": list(second_conflicts_by_id.keys()),
+                "known_pair_ids": batch_ids,
                 "current_labels_by_id": {
                     cid: str(conflict.get("label") or "").strip()
-                    for cid, conflict in second_conflicts_by_id.items()
+                    for cid, conflict in batch_conflicts_by_id.items()
                     if isinstance(conflict, dict)
                 },
             },
         }
-        second_conversation, second_conversation_rows, second_agents = run_conflict_review_round(
+        conversation, batch_conversation_rows, batch_conversation_agents = run_conflict_review_round(
             coordinator,
-            second_issue,
+            issue,
             artifact,
             participants,
             discussion_mode,
-            second_conflicts_by_id,
+            batch_conflicts_by_id,
         )
-        _, second_round_pair_reviews = collect_reviews(
-            second_conversation,
-            known_pair_ids=list(second_conflicts_by_id.keys()),
+        _, first_round_pair_reviews = collect_reviews(
+            conversation,
+            known_pair_ids=batch_ids,
             current_labels_by_id={
                 cid: str(conflict.get("label") or "").strip()
-                for cid, conflict in second_conflicts_by_id.items()
+                for cid, conflict in batch_conflicts_by_id.items()
                 if isinstance(conflict, dict)
             },
         )
-        for review in second_round_pair_reviews:
+        for review in first_round_pair_reviews:
             if isinstance(review, dict):
-                review["review_round"] = 2
-        consensus_rows, unresolved_second_conflicts, _ = (
-            consensus_decisions(
+                review["review_round"] = 1
+        analyst_changed_ids = analyst_changed_label_ids(first_round_pair_reviews, batch_conflicts_by_id)
+        if analyst_changed_ids:
+            second_conflicts_by_id = {
+                cid: batch_conflicts_by_id[cid]
+                for cid in analyst_changed_ids
+                if cid in batch_conflicts_by_id
+            }
+            second_pair_cards = [
+                {
+                    **pair_card_by_id.get(cid, {}),
+                    "first_round_pair_reviews": [
+                        review for review in first_round_pair_reviews
+                        if str(review.get("id") or "") == cid
+                    ],
+                }
+                for cid in second_conflicts_by_id.keys()
+            ]
+            second_summaries = [
+                f"- [{cid}] 原標籤={batch_conflicts_by_id[cid].get('label')}  Analyst 第一輪改判，需要第二輪 proposed_label 共識"
+                for cid in second_conflicts_by_id.keys()
+            ]
+            second_issue = {
+                "id": f"R2-conflict-b{batch_index}",
+                "title": f"需求衝突再審查（R2 批次 {batch_label}）",
+                "description": (
+                    coordinator.flow.mediator_agent.conflict_review_description(second_summaries)
+                    + "\n\n第二輪目標：只針對 Analyst 第一輪 proposed_label 與原標籤不同的 pair 再審查。"
+                    + "請各 agent 根據 requirement 原文與第一輪 pair_reviews 重新輸出 proposed_label；"
+                    + "本輪結束後只看 proposed_label 是否一致。"
+                ),
+                "category": "resolve_conflict",
+                "participants": participants,
+                "discussion_mode": discussion_mode,
+                "trace": {"artifact_ids": list(second_conflicts_by_id.keys()), "proposal_ids": []},
+                "pair_cards": second_pair_cards,
+                "review_round": 2,
+                "conflict_review_contract": {
+                    "type": "pair_reviews",
+                    "known_pair_ids": list(second_conflicts_by_id.keys()),
+                    "current_labels_by_id": {
+                        cid: str(conflict.get("label") or "").strip()
+                        for cid, conflict in second_conflicts_by_id.items()
+                        if isinstance(conflict, dict)
+                    },
+                },
+            }
+            second_conversation, second_conversation_rows, second_agents = run_conflict_review_round(
+                coordinator,
+                second_issue,
+                artifact,
+                participants,
+                discussion_mode,
                 second_conflicts_by_id,
-                second_round_pair_reviews,
             )
-        )
-        remaining_conflicts_by_id = {
-            cid: conflict for cid, conflict in conflicts_by_id.items()
-            if cid not in second_conflicts_by_id
-        }
-        remaining_decisions, _ = analyst_signoff(
-            coordinator,
-            conversation,
-            remaining_conflicts_by_id,
-        ) if remaining_conflicts_by_id else ([], {"signoff_status": "skipped_no_remaining_pairs"})
-        unresolved_decisions, _ = analyst_signoff(
-            coordinator,
-            second_conversation,
-            unresolved_second_conflicts,
-        ) if unresolved_second_conflicts else ([], {"signoff_status": "skipped_consensus"})
-        decisions = remaining_decisions + consensus_rows + unresolved_decisions
-        extracted_pair_reviews = first_round_pair_reviews + second_round_pair_reviews
-        final_reason_conversation = conversation + second_conversation
-        conversation_rows.extend(second_conversation_rows)
-        conversation_agents.extend(second_agents)
-    else:
-        decisions, signoff_info = analyst_signoff(
-            coordinator, conversation, conflicts_by_id
-        )
-        extracted_pair_reviews = signoff_info.get("extracted_pair_reviews", [])
-        final_reason_conversation = conversation
+            _, second_round_pair_reviews = collect_reviews(
+                second_conversation,
+                known_pair_ids=list(second_conflicts_by_id.keys()),
+                current_labels_by_id={
+                    cid: str(conflict.get("label") or "").strip()
+                    for cid, conflict in second_conflicts_by_id.items()
+                    if isinstance(conflict, dict)
+                },
+            )
+            for review in second_round_pair_reviews:
+                if isinstance(review, dict):
+                    review["review_round"] = 2
+            consensus_rows, unresolved_second_conflicts, _ = (
+                consensus_decisions(
+                    second_conflicts_by_id,
+                    second_round_pair_reviews,
+                    expected_agents=set(participants),
+                )
+            )
+            remaining_conflicts_by_id = {
+                cid: conflict for cid, conflict in batch_conflicts_by_id.items()
+                if cid not in second_conflicts_by_id
+            }
+            remaining_decisions, _ = analyst_signoff(
+                coordinator,
+                conversation,
+                remaining_conflicts_by_id,
+                expected_agents=set(participants),
+            ) if remaining_conflicts_by_id else ([], {"signoff_status": "skipped_no_remaining_pairs"})
+            unresolved_decisions, _ = analyst_signoff(
+                coordinator,
+                second_conversation,
+                unresolved_second_conflicts,
+                expected_agents=set(participants),
+            ) if unresolved_second_conflicts else ([], {"signoff_status": "skipped_consensus"})
+            batch_decisions = remaining_decisions + consensus_rows + unresolved_decisions
+            batch_reviews = first_round_pair_reviews + second_round_pair_reviews
+            batch_final_conversation = conversation + second_conversation
+            batch_conversation_rows.extend(second_conversation_rows)
+            batch_conversation_agents.extend(second_agents)
+        else:
+            batch_decisions, signoff_info = analyst_signoff(
+                coordinator,
+                conversation,
+                batch_conflicts_by_id,
+                expected_agents=set(participants),
+            )
+            batch_reviews = signoff_info.get("extracted_pair_reviews", [])
+            batch_final_conversation = conversation
+
+        decisions.extend(batch_decisions)
+        extracted_pair_reviews.extend(batch_reviews if isinstance(batch_reviews, list) else [])
+        final_reason_conversation.extend(batch_final_conversation)
+        conversation_rows.extend(batch_conversation_rows)
+        conversation_agents.extend(batch_conversation_agents)
 
     decisions, _ = complete_missing_review_decisions(
         coordinator,

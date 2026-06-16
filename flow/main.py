@@ -25,6 +25,23 @@ def _check_flow_cancelled(flow) -> None:
     raise_if_cancelled(_project_id_from_flow(flow))
 
 
+def sync_agent_runtime(flow) -> None:
+    run_id = str(getattr(flow, "run_id", "") or "")
+    for attr in (
+        "user_agent",
+        "analyst_agent",
+        "expert_agent",
+        "mediator_agent",
+        "modeler_agent",
+        "documentor_agent",
+    ):
+        agent = getattr(flow, attr, None)
+        if agent is None:
+            continue
+        agent.runtime_store = flow.store
+        agent.runtime_run_id = run_id
+
+
 def _checkpoint_step(
     flow,
     *,
@@ -202,6 +219,26 @@ def formal_meeting_end_round(config: Dict[str, Any], *, start_round: int = 1) ->
 def next_meeting_round_from_mom(flow) -> int:
     completed_rounds = completed_meeting_rounds_from_mom(flow)
     return max(completed_rounds) + 1 if completed_rounds else 1
+
+
+# ========
+# Defines checkpoint meeting round function for this module workflow.
+# ========
+def checkpoint_meeting_round(meta: Dict[str, Any]) -> Optional[int]:
+    for key in ("run_checkpoint", "last_resume_checkpoint"):
+        checkpoint = meta.get(key)
+        if not isinstance(checkpoint, dict):
+            continue
+        stage_id = str(checkpoint.get("stage_id") or "").strip()
+        if stage_id not in {"formal_meeting", "meeting_issue_proposal_review"}:
+            continue
+        try:
+            round_num = int(checkpoint.get("round") or 0)
+        except (TypeError, ValueError):
+            round_num = 0
+        if round_num > 0:
+            return round_num
+    return None
 
 
 # ========
@@ -568,11 +605,13 @@ def run_output_stage(flow) -> None:
 # Defines run project function for this module workflow.
 # ========
 def run_project(flow, rough_idea: str) -> Dict[str, Any]:
+    sync_agent_runtime(flow)
     run_formal = formal_meeting_stage_enabled(flow.config)
     general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
     default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
     end_round = formal_meeting_end_round(flow.config) if run_formal else 0
     ran_general_meeting_this_run = False
+    draft_version_before_formal = flow.store.get_draft_version()
     artifact = {
         "rough_idea": rough_idea,
         "stakeholders": [],
@@ -620,13 +659,15 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
-    if ran_general_meeting_this_run:
+    draft_version_after_formal = flow.store.get_draft_version()
+    generated_new_draft_this_run = draft_version_after_formal > draft_version_before_formal
+    if ran_general_meeting_this_run and generated_new_draft_this_run:
         artifact.setdefault("meta", {})["general_meeting_ran_this_run"] = True
         flow.store.save_artifact(artifact)
     run_specification_stage(
         flow,
         artifact,
-        force_regenerate=ran_general_meeting_this_run,
+        force_regenerate=ran_general_meeting_this_run and generated_new_draft_this_run,
     )
     _check_flow_cancelled(flow)
     run_output_stage(flow)
@@ -638,6 +679,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
 # Defines run continue project function for this module workflow.
 # ========
 def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
+    sync_agent_runtime(flow)
     artifact = existing_artifact
     artifact.setdefault(
         "scope", {"in_scope": [], "out_of_scope": []}
@@ -648,20 +690,41 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     sync_project_output_language(artifact)
 
     flow.user_agent.stakeholders = artifact.get("stakeholders", [])
+    meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+    resume_checkpoint = (
+        meta.get("last_resume_checkpoint")
+        if isinstance(meta.get("last_resume_checkpoint"), dict)
+        else {}
+    )
+    resume_stage = str(resume_checkpoint.get("stage_id") or "").strip()
+    skip_init_for_resume = resume_stage in {
+        "formal_meeting",
+        "meeting_issue_proposal_review",
+        "document_generation",
+        "export",
+    }
 
-    flow.logger.stage_started("init", "初始階段")
-    flow.logger.info("=== 初始階段 ===")
-    _check_flow_cancelled(flow)
-    artifact = flow.run_init_phase(artifact)
-    flow.store.save_artifact(artifact)
-    flow.logger.stage_completed("init", "初始階段")
+    if skip_init_for_resume:
+        flow.logger.stage_started("init", "初始階段")
+        flow.logger.info("=== 初始階段 ===")
+        flow.logger.info("依 checkpoint 從 %s 繼續，略過初始化階段", resume_stage)
+        flow.logger.stage_completed("init", "初始階段", message="依 checkpoint 略過初始化階段")
+    else:
+        flow.logger.stage_started("init", "初始階段")
+        flow.logger.info("=== 初始階段 ===")
+        _check_flow_cancelled(flow)
+        artifact = flow.run_init_phase(artifact)
+        flow.store.save_artifact(artifact)
+        flow.logger.stage_completed("init", "初始階段")
 
     run_formal = formal_meeting_stage_enabled(flow.config)
     general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
     default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
-    start_round = next_meeting_round_from_mom(flow)
+    checkpoint_round = checkpoint_meeting_round(meta)
+    start_round = checkpoint_round if checkpoint_round is not None else next_meeting_round_from_mom(flow)
     end_round = formal_meeting_end_round(flow.config, start_round=start_round) if run_formal else 0
     ran_general_meeting_this_run = False
+    draft_version_before_formal = flow.store.get_draft_version()
     if run_formal:
         artifact.setdefault("meta", {})["meeting_end_round"] = end_round
         if start_round > end_round:
@@ -696,13 +759,15 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
-    if ran_general_meeting_this_run:
+    draft_version_after_formal = flow.store.get_draft_version()
+    generated_new_draft_this_run = draft_version_after_formal > draft_version_before_formal
+    if ran_general_meeting_this_run and generated_new_draft_this_run:
         artifact.setdefault("meta", {})["general_meeting_ran_this_run"] = True
         flow.store.save_artifact(artifact)
     run_specification_stage(
         flow,
         artifact,
-        force_regenerate=ran_general_meeting_this_run,
+        force_regenerate=ran_general_meeting_this_run and generated_new_draft_this_run,
     )
     _check_flow_cancelled(flow)
     run_output_stage(flow)

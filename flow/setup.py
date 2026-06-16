@@ -141,6 +141,8 @@ class Flow:
         ]:
             agent.logger = self.logger
             agent.policy = self.policy
+            agent.runtime_store = self.store
+            agent.runtime_run_id = getattr(self, "run_id", "")
             if enable_agents.get(name, True):
                 self.registry.register(name, agent)
 

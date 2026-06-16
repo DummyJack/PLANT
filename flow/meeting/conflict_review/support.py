@@ -682,6 +682,8 @@ def analyst_signoff(
     coordinator: Any,
     conversation: List[Dict[str, Any]],
     conflicts_by_id: Dict[str, Dict[str, Any]],
+    *,
+    expected_agents: Optional[set[str]] = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     discussion_rows, extracted_pair_reviews = collect_reviews(
         conversation,
@@ -712,6 +714,7 @@ def analyst_signoff(
     auto_decisions, proposal_list, merge_info = merge_review_decisions(
         conflicts_by_id,
         extracted_pair_reviews,
+        expected_agents=expected_agents,
     )
     signoff_info.update(merge_info)
     signoff_info["auto_decisions_preview"] = auto_decisions[:3]

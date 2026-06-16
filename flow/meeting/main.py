@@ -336,12 +336,16 @@ def default_issues(
                 "evidence": [
                     "User Requirements 需先整體整理，再正式化為初步 REQ-* 需求條目；此會議只做需求整理，不做業務裁決。"
                 ],
-                "expect_outcome": "Analyst 先整理全部 User Requirements，產生初步 REQ-* 需求條目與可推得的欄位；User 再檢查是否漏掉重要使用情境、業務規則、例外條件、驗收條件、品質限制、優先級、風險或假設。若有關鍵補充，下一輪由 Analyst 再更新 REQ。",
+                "expect_outcome": "Analyst 先整理全部 User Requirements，產生初步 REQ-* 需求條目與可推得的欄位；Modeler 接著依正式化後的 REQ-* 建立或更新高價值 system model；User 再檢查是否漏掉重要使用情境、業務規則、例外條件、驗收條件、品質限制、優先級、風險或假設。若有關鍵補充，下一輪由 Analyst 再更新 REQ。",
                 "sources": [{"artifact": "URL", "ids": url_ids, "evidence": "全部 User Requirements 需整理為初步 REQ-* 需求條目。"}],
-                "expected_actions": {"analyst": ["update_requirement"]},
-                "participants": ["analyst", "user"],
+                "expected_actions": {
+                    "analyst": ["update_requirement"],
+                    "modeler": ["system_modeling"],
+                },
+                "participants": ["analyst", "modeler", "user"],
                 "participant_reasoning": {
                     "analyst": "將全部 User Requirements 正式化為 REQ-*",
+                    "modeler": "依正式化後的 REQ-* 建立或更新能釐清流程、互動、狀態、資料或邊界的 system model",
                     "user": "依指定利害關係人角度檢查遺漏情境與可接受條件",
                 },
                 "discussion_mode": "sequential",
@@ -430,13 +434,6 @@ def renumber_issue_proposals(
         except (TypeError, ValueError):
             round_num = 1
         old_id = clean_text(new_row.get("issue_id") or new_row.get("id"))
-        if (
-            str(new_row.get("proposed_by") or "").strip().lower() == "human"
-            and re.fullmatch(rf"R{round_num}-H\d+", old_id)
-        ):
-            new_row["issue_id"] = old_id
-            rows.append(new_row)
-            continue
         counters[round_num] = counters.get(round_num, 0) + 1
         new_id = f"R{round_num}-I{counters[round_num]}"
         if old_id:
@@ -450,10 +447,6 @@ def human_issue_titles(response: Any, *, max_issues: int) -> List[str]:
     if not isinstance(response, dict):
         return []
     values = response.get("custom_issues")
-    if values is None:
-        values = response.get("issues")
-    if values is None:
-        values = response.get("titles")
     titles: List[str] = []
     if isinstance(values, list):
         for item in values:
@@ -482,7 +475,7 @@ def apply_human_issue_proposals(
     used = {
         int(match.group(1))
         for row in rows
-        for match in [re.fullmatch(rf"R{round_num}-H(\d+)", clean_text(row.get("issue_id")))]
+        for match in [re.fullmatch(rf"R{round_num}-I(\d+)", clean_text(row.get("issue_id")))]
         if match
     }
     next_num = 1
@@ -490,7 +483,7 @@ def apply_human_issue_proposals(
     for title in titles:
         while next_num in used:
             next_num += 1
-        issue_id = f"R{round_num}-H{next_num}"
+        issue_id = f"R{round_num}-I{next_num}"
         used.add(next_num)
         next_num += 1
         human_rows.append({
@@ -512,7 +505,7 @@ def apply_human_issue_proposals(
                 }
             ],
         })
-    return [*human_rows, *rows]
+    return [*rows, *human_rows]
 
 
 def update_trace_proposal_ids(trace: Any, id_map: Dict[str, str]) -> Any:
@@ -1078,7 +1071,7 @@ def open_question_proposals(
     for index, row in enumerate(rows, 1):
         qid = str(row.get("id") or f"OQ-{index}").strip()
         question = str(row.get("question") or "").strip()
-        to_agent = str(row.get("to") or row.get("to_agent") or "").strip()
+        to_agent = str(row.get("to") or "").strip()
         if qid:
             source_ids.append(qid)
         if question:

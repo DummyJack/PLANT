@@ -912,7 +912,7 @@ class MeetingCoordinator:
                     {
                         "id": clean_id(row.get("id")),
                         "question": clean_id(row.get("question")),
-                        "to": clean_id(row.get("to") or row.get("to_agent")),
+                        "to": clean_id(row.get("to")),
                         "status": clean_id(row.get("status")),
                     }
                     for row in open_questions
