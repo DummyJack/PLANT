@@ -351,6 +351,50 @@ def scalar_metrics_for_summary(result: dict) -> dict[str, float]:
         for k, v in conflict.items():
             if isinstance(v, (int, float)):
                 out[f"conflict_{k}"] = float(v)
+    metrics_by_type = (
+        result.get("metrics_by_type")
+        if isinstance(result.get("metrics_by_type"), dict)
+        else {}
+    )
+    for scenario, scenario_metrics in metrics_by_type.items():
+        if not isinstance(scenario_metrics, dict):
+            continue
+        prefix = f"by_type.{scenario}"
+        overall_by_type = scenario_metrics.get("overall")
+        if isinstance(overall_by_type, dict):
+            for k, v in overall_by_type.items():
+                if isinstance(v, (int, float)):
+                    out[f"{prefix}.overall_{k}"] = float(v)
+        conflict_by_type = scenario_metrics.get("conflict")
+        if isinstance(conflict_by_type, dict):
+            for k, v in conflict_by_type.items():
+                if isinstance(v, (int, float)):
+                    out[f"{prefix}.conflict_{k}"] = float(v)
+    return out
+
+
+# ========
+# Defines metrics by type function for this experiment module.
+# ========
+def metrics_by_type(data: list[dict], y_true: list[str], y_pred: list[str]) -> dict:
+    grouped: dict[str, list[int]] = {}
+    for idx, row in enumerate(data):
+        scenario = str(row.get("types") or "Unknown").strip() or "Unknown"
+        grouped.setdefault(scenario, []).append(idx)
+
+    out: dict[str, dict] = {}
+    for scenario, idxs in grouped.items():
+        yt = [y_true[i] for i in idxs]
+        yp = [y_pred[i] for i in idxs]
+        out[scenario] = {
+            "total": len(idxs),
+            "count": {
+                "conflict": yt.count("Conflict"),
+                "neutral": yt.count("Neutral"),
+            },
+            "overall": Metric.macro(yt, yp, labels=["Conflict", "Neutral"])["macro"],
+            "conflict": Metric.binary(yt, yp, positive_label="Conflict"),
+        }
     return out
 
 # ========
@@ -403,17 +447,25 @@ def run_conflict(
     overall = Metric.macro(y_true, y_pred, labels=["Conflict", "Neutral"])["macro"]
     conflict_metrics = Metric.binary(y_true, y_pred, positive_label="Conflict")
     metrics = {"overall": overall, "conflict": conflict_metrics}
+    per_type_metrics = metrics_by_type(data, y_true, y_pred)
 
     result = {
         "model": str(model.model_name),
         "total": total,
-        "scenarios": scenarios or [],
         "count": {
             "conflict": n_conflict,
             "neutral": n_neutral,
         },
         "metrics": metrics,
+        "metrics_by_type": per_type_metrics,
     }
+    selected_scenarios = [
+        str(s).strip()
+        for s in (scenarios or [])
+        if str(s).strip()
+    ]
+    if selected_scenarios:
+        result["selected_types"] = selected_scenarios
 
     with paths["result"].open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -498,48 +550,45 @@ if __name__ == "__main__":
         ordered_keys = [k for k in preferred_order if k in all_keys]
         ordered_keys.extend(sorted(k for k in all_keys if k not in set(ordered_keys)))
         summary_metrics: dict[str, Any] = {}
+        summary_metrics_by_type: dict[str, dict[str, Any]] = {}
         for key in ordered_keys:
             vals = [float(m[key]) for m in run_scalar_metrics if key in m]
             if not vals:
                 continue
             mu = mean(vals)
             sd = float(np.std(vals))
-            summary_metrics[key] = {
+            summary_item = {
                 "mean": mu,
                 "std": sd,
                 "per_round_values": vals,
             }
+            if key.startswith("by_type."):
+                parts = key.split(".", 2)
+                if len(parts) == 3:
+                    _, scenario, metric_key = parts
+                    summary_metrics_by_type.setdefault(scenario, {})[metric_key] = summary_item
+                else:
+                    summary_metrics[key] = summary_item
+            else:
+                summary_metrics[key] = summary_item
             print(f"  {key}：{mu:.4f} ± {sd:.4f}")
 
         summary_payload: dict[str, Any] = {"runs": runs}
         if summary_metrics:
             summary_payload["metrics"] = summary_metrics
+        if summary_metrics_by_type:
+            summary_payload["metrics_by_type"] = summary_metrics_by_type
         if run_costs_usd:
             cost_mu = float(np.mean(run_costs_usd))
-            cost_sd = float(np.std(run_costs_usd))
             token_mu = float(np.mean(run_total_tokens))
-            token_sd = float(np.std(run_total_tokens))
             rt_mu = float(np.mean(run_total_runtime_s))
-            rt_sd = float(np.std(run_total_runtime_s))
-            print(f"  平均 token：{token_mu:.1f} ± {token_sd:.1f}")
-            print(f"  平均成本(USD)：{cost_mu:.8f} ± {cost_sd:.8f}")
-            print(f"  平均執行時間(s)：{rt_mu:.3f} ± {rt_sd:.3f}")
+            print(f"  平均 token：{token_mu:.1f}")
+            print(f"  平均成本(USD)：{cost_mu:.8f}")
+            print(f"  平均執行時間(s)：{rt_mu:.3f}")
             summary_payload["cost"] = {
-                "average_token": {
-                    "mean": token_mu,
-                    "std": token_sd,
-                    "per_round_values": [int(x) for x in run_total_tokens],
-                },
-                "average_cost(USD)": {
-                    "mean": cost_mu,
-                    "std": cost_sd,
-                    "per_round_values": [float(x) for x in run_costs_usd],
-                },
-                "average_run_time(s)": {
-                    "mean": rt_mu,
-                    "std": rt_sd,
-                    "per_round_values": [float(x) for x in run_total_runtime_s],
-                },
+                "average_token": token_mu,
+                "average_cost(USD)": cost_mu,
+                "average_run_time(s)": rt_mu,
             }
         else:
             print("  平均成本(USD)：N/A")

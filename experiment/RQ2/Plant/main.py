@@ -324,6 +324,7 @@ def run_conflict(
         y_true=y_true,
         y_pred=y_pred,
         grouped=grouped,
+        selected_types=selected_scenarios,
     )
     metrics = result.get("metrics", {}) if isinstance(result.get("metrics"), dict) else {}
     overall = metrics.get("overall", {}) if isinstance(metrics.get("overall"), dict) else {}
@@ -350,8 +351,6 @@ def run_conflict(
         result=result,
         record=record_by_type,
         cost=cost_payload,
-        conflict=conflict_artifact,
-        requirements=requirements_artifact,
     )
 
     print("\n=== 執行結果 ===")
@@ -397,8 +396,6 @@ def run_conflict(
     print(f"- result: {paths['result']}")
     print(f"- record: {paths['record']}")
     print(f"- cost:   {paths['cost']}")
-    print(f"- conflict: {paths['conflict']}")
-    print(f"- requirements: {paths['requirements']}")
     return {
         "result": result,
         "cost": cost_payload,

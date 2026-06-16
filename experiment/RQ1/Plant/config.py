@@ -44,6 +44,12 @@ class ExperimentLogger:
             print(self.fmt(args))
 
     # ========
+    # Defines debug function for this experiment module.
+    # ========
+    def debug(self, *args, **kwargs):
+        return None
+
+    # ========
     # Defines warning function for this experiment module.
     # ========
     def warning(self, *args, **kwargs):
@@ -54,6 +60,98 @@ class ExperimentLogger:
     # ========
     def error(self, *args, **kwargs):
         print(f"[Flow][ERROR] {self.fmt(args)}")
+
+    # ========
+    # Defines stage started function for this experiment module.
+    # ========
+    def stage_started(self, stage_id: str, title: str, *, message: str | None = None):
+        self.info(message or title)
+
+    # ========
+    # Defines stage completed function for this experiment module.
+    # ========
+    def stage_completed(self, stage_id: str, title: str, *, message: str | None = None):
+        self.info(message or title)
+
+    # ========
+    # Defines step started function for this experiment module.
+    # ========
+    def step_started(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        *,
+        agent: str | None = None,
+        message: str | None = None,
+    ):
+        if agent:
+            self.info("%s: %s", agent, message or title)
+        else:
+            self.info("%s", message or title)
+
+    # ========
+    # Defines step delta function for this experiment module.
+    # ========
+    def step_delta(
+        self,
+        stage_id: str,
+        step_id: str,
+        content,
+        *,
+        delta_type: str = "text",
+        agent: str | None = None,
+        title: str | None = None,
+    ):
+        return None
+
+    # ========
+    # Defines step completed function for this experiment module.
+    # ========
+    def step_completed(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        *,
+        agent: str | None = None,
+        message: str | None = None,
+        output_path: str | None = None,
+        summary: dict | None = None,
+    ):
+        text = message or title
+        if output_path:
+            text = f"{text} ({output_path})"
+        if agent:
+            self.info("%s: %s", agent, text)
+        else:
+            self.info("%s", text)
+
+    # ========
+    # Defines artifact created function for this experiment module.
+    # ========
+    def artifact_created(
+        self,
+        stage_id: str,
+        step_id: str,
+        title: str,
+        output_path: str,
+        *,
+        message: str | None = None,
+    ):
+        self.info("%s: %s (%s)", step_id, message or title, output_path)
+
+    # ========
+    # Defines heartbeat function for this experiment module.
+    # ========
+    def heartbeat(
+        self,
+        stage_id: str | None = None,
+        step_id: str | None = None,
+        *,
+        message: str = "仍在處理中",
+    ):
+        self.info("%s", message)
 
 # ========
 # Defines ExperimentStore class for this experiment module.

@@ -45,48 +45,45 @@ def print_multi_run_summary(
 
     print("\n多次執行結果統計（平均值 ± 標準差）：")
     summary_metrics: Dict[str, Any] = {}
+    summary_metrics_by_type: Dict[str, Dict[str, Any]] = {}
     for key in ordered_keys:
         vals = [float(row[key]) for row in run_scalar_metrics if key in row]
         if not vals:
             continue
         mu = mean(vals)
         sd = float(np.std(vals))
-        summary_metrics[key] = {
+        summary_item = {
             "mean": mu,
             "std": sd,
             "per_round_values": vals,
         }
+        if key.startswith("by_type."):
+            parts = key.split(".", 2)
+            if len(parts) == 3:
+                _, scenario, metric_key = parts
+                summary_metrics_by_type.setdefault(scenario, {})[metric_key] = summary_item
+            else:
+                summary_metrics[key] = summary_item
+        else:
+            summary_metrics[key] = summary_item
         print(f"  {key}：{mu:.4f} ± {sd:.4f}")
 
     summary_payload: Dict[str, Any] = {"runs": runs}
     if summary_metrics:
         summary_payload["metrics"] = summary_metrics
+    if summary_metrics_by_type:
+        summary_payload["metrics_by_type"] = summary_metrics_by_type
     if run_costs_usd:
         cost_mu = float(np.mean(run_costs_usd))
-        cost_sd = float(np.std(run_costs_usd))
         token_mu = float(np.mean(run_total_tokens))
-        token_sd = float(np.std(run_total_tokens))
         rt_mu = float(np.mean(run_total_runtime_s))
-        rt_sd = float(np.std(run_total_runtime_s))
-        print(f"  平均 token：{token_mu:.1f} ± {token_sd:.1f}")
-        print(f"  平均成本(USD)：{cost_mu:.8f} ± {cost_sd:.8f}")
-        print(f"  平均執行時間(s)：{rt_mu:.3f} ± {rt_sd:.3f}")
+        print(f"  平均 token：{token_mu:.1f}")
+        print(f"  平均成本(USD)：{cost_mu:.8f}")
+        print(f"  平均執行時間(s)：{rt_mu:.3f}")
         summary_payload["cost"] = {
-            "average_token": {
-                "mean": token_mu,
-                "std": token_sd,
-                "per_round_values": [int(x) for x in run_total_tokens],
-            },
-            "average_cost(USD)": {
-                "mean": cost_mu,
-                "std": cost_sd,
-                "per_round_values": [float(x) for x in run_costs_usd],
-            },
-            "average_run_time(s)": {
-                "mean": rt_mu,
-                "std": rt_sd,
-                "per_round_values": [float(x) for x in run_total_runtime_s],
-            },
+            "average_token": token_mu,
+            "average_cost(USD)": cost_mu,
+            "average_run_time(s)": rt_mu,
         }
     else:
         print("  平均成本(USD)：N/A")

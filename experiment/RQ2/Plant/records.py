@@ -170,6 +170,7 @@ def build_rq2_result_payload(
     y_true: List[str],
     y_pred: List[str],
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
+    selected_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     n_conflict = y_true.count("Conflict")
     n_neutral = y_true.count("Neutral")
@@ -192,7 +193,7 @@ def build_rq2_result_payload(
             "conflict": Metric.binary(yt, yp, positive_label="Conflict"),
         }
 
-    return {
+    result = {
         "model": str(model_name),
         "total": len(y_true),
         "count": {
@@ -205,6 +206,14 @@ def build_rq2_result_payload(
         },
         "metrics_by_type": by_type,
     }
+    normalized_selected = [
+        str(item).strip()
+        for item in (selected_types or [])
+        if str(item or "").strip()
+    ]
+    if normalized_selected:
+        result["selected_types"] = normalized_selected
+    return result
 
 # ========
 # Defines write rq2 outputs function for this experiment module.
@@ -216,16 +225,12 @@ def write_rq2_outputs(
     result: Dict[str, Any],
     record: Dict[str, Any],
     cost: Dict[str, Any],
-    conflict: Optional[Dict[str, Any]] = None,
-    requirements: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Path]:
     results_dir.mkdir(parents=True, exist_ok=True)
     run_idx = next_result_index(prefix, results_dir)
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
     record_path = results_dir / f"record_{prefix}_{run_idx}.json"
     cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"
-    conflict_path = results_dir / f"conflict_{run_idx}.json"
-    requirements_path = results_dir / f"requirements_{run_idx}.json"
 
     with result_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -233,17 +238,11 @@ def write_rq2_outputs(
         json_dump_no_scientific(record, f, indent=2, ensure_ascii=False)
     with cost_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(cost, f, indent=2, ensure_ascii=False)
-    with conflict_path.open("w", encoding="utf-8") as f:
-        json_dump_no_scientific(conflict or {}, f, indent=2, ensure_ascii=False)
-    with requirements_path.open("w", encoding="utf-8") as f:
-        json_dump_no_scientific(requirements or {}, f, indent=2, ensure_ascii=False)
 
     return {
         "result": result_path,
         "record": record_path,
         "cost": cost_path,
-        "conflict": conflict_path,
-        "requirements": requirements_path,
     }
 
 # ========
@@ -261,4 +260,23 @@ def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:
         for k, v in conflict.items():
             if isinstance(v, (int, float)):
                 out[f"conflict_{k}"] = float(v)
+    metrics_by_type = (
+        result.get("metrics_by_type")
+        if isinstance(result.get("metrics_by_type"), dict)
+        else {}
+    )
+    for scenario, scenario_metrics in metrics_by_type.items():
+        if not isinstance(scenario_metrics, dict):
+            continue
+        prefix = f"by_type.{scenario}"
+        overall_by_type = scenario_metrics.get("overall")
+        if isinstance(overall_by_type, dict):
+            for k, v in overall_by_type.items():
+                if isinstance(v, (int, float)):
+                    out[f"{prefix}.overall_{k}"] = float(v)
+        conflict_by_type = scenario_metrics.get("conflict")
+        if isinstance(conflict_by_type, dict):
+            for k, v in conflict_by_type.items():
+                if isinstance(v, (int, float)):
+                    out[f"{prefix}.conflict_{k}"] = float(v)
     return out

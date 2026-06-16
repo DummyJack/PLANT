@@ -144,8 +144,6 @@ def main() -> None:
 
         records: List[Dict[str, Any]] = []
         task_result_rows: List[Dict[str, Any]] = []
-        elicitation_meeting_payload: Dict[str, Any] = {}
-        project_payload: Dict[str, Any] = {}
         t0 = time.perf_counter()
         for i, task in enumerate(tasks, start=1):
             print()
@@ -160,8 +158,6 @@ def main() -> None:
                 if hasattr(m, "costTracker"):
                     token_before += int(m.costTracker.export_summary_dict().get("total_tokens", 0) or 0)
             one = run_one_task(flow, oracle_user, task)
-            elicitation_meeting_payload = one.get("elicitation", {}) or {}
-            project_payload = one.get("project", {}) or {}
             token_after = 0
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):
@@ -194,8 +190,6 @@ def main() -> None:
         result_path = RESULTS_DIR / f"result_{prefix}_{run_id}.json"
         record_path = RESULTS_DIR / f"record_{prefix}_{run_id}.json"
         cost_path = RESULTS_DIR / f"cost_{prefix}_{run_id}.json"
-        elicitation_meeting_path = RESULTS_DIR / f"elicitation_meeting_{run_id}.json"
-        project_path = RESULTS_DIR / f"project_{run_id}.json"
 
         with result_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -220,10 +214,6 @@ def main() -> None:
         cost_payload = build_cost_payload(flow, oracle_user)
         with cost_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
-        with elicitation_meeting_path.open("w", encoding="utf-8") as f:
-            json_dump_no_scientific(elicitation_meeting_payload, f, indent=2, ensure_ascii=False)
-        with project_path.open("w", encoding="utf-8") as f:
-            json_dump_no_scientific(project_payload, f, indent=2, ensure_ascii=False)
 
         print_final_summary(result, task_result_rows)
 
@@ -266,30 +256,15 @@ def main() -> None:
         summary_cost: Optional[Dict[str, Any]] = None
         if run_costs_usd:
             cost_mu = float(np.mean(run_costs_usd))
-            cost_sd = float(np.std(run_costs_usd))
             token_mu = float(np.mean(run_total_tokens))
-            token_sd = float(np.std(run_total_tokens))
             rt_mu = float(np.mean(run_total_runtime_s))
-            rt_sd = float(np.std(run_total_runtime_s))
-            print(f"  平均 token：{token_mu:.1f} ± {token_sd:.1f}")
-            print(f"  平均成本(USD)：{cost_mu:.8f} ± {cost_sd:.8f}")
-            print(f"  平均執行時間(s)：{rt_mu:.3f} ± {rt_sd:.3f}")
+            print(f"  平均 token：{token_mu:.1f}")
+            print(f"  平均成本(USD)：{cost_mu:.8f}")
+            print(f"  平均執行時間(s)：{rt_mu:.3f}")
             summary_cost = {
-                "average_token": {
-                    "mean": token_mu,
-                    "std": token_sd,
-                    "per_round_values": [int(x) for x in run_total_tokens],
-                },
-                "average_cost(USD)": {
-                    "mean": cost_mu,
-                    "std": cost_sd,
-                    "per_round_values": [float(x) for x in run_costs_usd],
-                },
-                "average_run_time(s)": {
-                    "mean": rt_mu,
-                    "std": rt_sd,
-                    "per_round_values": [float(x) for x in run_total_runtime_s],
-                },
+                "average_token": token_mu,
+                "average_cost(USD)": cost_mu,
+                "average_run_time(s)": rt_mu,
             }
         else:
             print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")

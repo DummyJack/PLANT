@@ -45,39 +45,39 @@
         "RequirementText": "I prefer the website components to use a navy color."
       },
       {
-        "Aspect": "Data Quality",
+        "Aspect": "Content",
         "RequirementText": "I expect stock prices, market trends, and financial data in the report to be based on current data."
       },
       {
-        "Aspect": "Data Quality",
+        "Aspect": "Content",
         "RequirementText": "I expect the report to show when the stock data was last updated."
       },
       {
-        "Aspect": "Data Quality",
+        "Aspect": "Reliability",
         "RequirementText": "I expect the system to warn me when stock data is missing, delayed, or inconsistent."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect the system to retrieve stock information from external market data APIs."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Flexibility",
         "RequirementText": "I expect the system to use a configurable external market data provider for retrieving stock information."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect the system to show the connection status of the external market data provider before generating a report."
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "I expect stock analysis reports to be generated within an acceptable amount of time after I submit my choices."
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "I expect the system to remain responsive while generating stock analysis reports."
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "I expect the system to support multiple users generating stock reports without noticeable slowdown."
       }
     ],
@@ -178,27 +178,27 @@
         "RequirementText": "I expect sensitive patient and financial information to be protected from unauthorized access."
       },
       {
-        "Aspect": "Auditability",
+        "Aspect": "Security",
         "RequirementText": "I expect changes to patient records, financial records, and claims to be logged for audit purposes."
       },
       {
-        "Aspect": "Auditability",
+        "Aspect": "Security",
         "RequirementText": "I expect audit logs to include the user, time, and action performed."
       },
       {
-        "Aspect": "Auditability",
+        "Aspect": "Security",
         "RequirementText": "I expect exports of sensitive patient or financial data to be recorded for audit review."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect patient, pharmacy, financial, claim, laboratory, and theater information to be synchronized across modules."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect claim formulation to exchange relevant data with financial and patient record modules."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect laboratory and theater records to be linked to relevant patient electronic files."
       }
     ],
@@ -330,15 +330,15 @@
         "RequirementText": "I expect booking status to remain consistent if payment fails or the network connection is interrupted."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect the platform to integrate with payment gateways for ticket purchases."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect the platform to integrate with email and SMS services for booking confirmations."
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "I expect bus and railway ticket availability to be synchronized with the relevant transport operators."
       }
     ],
@@ -444,39 +444,39 @@
         "RequirementText": "I prefer the main interface components to use a dark red color."
       },
       {
-        "Aspect": "Adaptivity",
+        "Aspect": "Flexibility",
         "RequirementText": "I expect the system to adjust vocabulary difficulty based on my learning progress."
       },
       {
-        "Aspect": "Adaptivity",
+        "Aspect": "Flexibility",
         "RequirementText": "I expect the system to recommend review activities based on words I struggle with."
       },
       {
-        "Aspect": "Adaptivity",
+        "Aspect": "Flexibility",
         "RequirementText": "I expect the weekly learning pace to be adjustable when my performance suggests it is too easy or too difficult."
       },
       {
-        "Aspect": "Assessment",
+        "Aspect": "Content",
         "RequirementText": "I expect the system to show correct answers and brief explanations after I answer incorrectly."
       },
       {
-        "Aspect": "Assessment",
+        "Aspect": "Content",
         "RequirementText": "I expect the system to identify vocabulary words that I have mastered and words that still need practice."
       },
       {
-        "Aspect": "Assessment",
+        "Aspect": "Content",
         "RequirementText": "I expect progress summaries to include accuracy, practice frequency, and weak vocabulary areas."
       },
       {
-        "Aspect": "Security",
+        "Aspect": "Safety",
         "RequirementText": "I expect AI-generated vocabulary examples and exercises to be screened for inappropriate or harmful content before being shown to learners."
       },
       {
-        "Aspect": "Security",
+        "Aspect": "Safety",
         "RequirementText": "I expect AI-generated learning content to avoid offensive, misleading, or unsafe language usage."
       },
       {
-        "Aspect": "Security",
+        "Aspect": "Safety",
         "RequirementText": "I expect users to be able to report unsafe or inappropriate AI-generated content for review."
       }
     ],
@@ -559,15 +559,15 @@
         "RequirementText": "我偏好主要操作元件使用橘色或暖色系，以符合餐飲外送平台的視覺風格。"
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "我期望下單、付款和查詢操作能快速完成，不會讓顧客在流程中等待太久。"
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "我期望用餐尖峰時段仍能順利完成搜尋、下單與付款，不會因流量變大而明顯變慢。"
       },
       {
-        "Aspect": "Performance",
+        "Aspect": "Performance Efficiency",
         "RequirementText": "我期望外送員位置更新足夠即時，讓顧客能大致掌握外送進度與預估到達時間。"
       },
       {
@@ -595,15 +595,11 @@
         "RequirementText": "我期望退款、帳號修改與權限變更這類高風險操作只有授權人員能執行。"
       },
       {
-        "Aspect": "Integration",
-        "RequirementText": "我期望平台能支援常見付款服務，並在付款完成後正確更新訂單狀態。"
-      },
-      {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "我期望訂單的重要狀態能透過應用程式推播、簡訊或電子郵件通知相關使用者。"
       },
       {
-        "Aspect": "Integration",
+        "Aspect": "Compatibility",
         "RequirementText": "我期望外送導航與顧客追蹤能連接地圖與定位服務。"
       }
     ],
