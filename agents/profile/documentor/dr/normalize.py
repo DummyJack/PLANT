@@ -74,7 +74,7 @@ class DocumentorDrNormalize:
     @staticmethod
     def collapse_design_rationale_separators(markdown: str) -> str:
         text = str(markdown or "")
-        text = re.sub(r"(?m)^\s*---\s*$\n*", "\n", text)
+        text = re.sub(r"(?m)^\s*---\s*$", "---", text)
         text = re.sub(
             r"(?m)(^#{1,6}\s*(?:FR|NFR|CON)-\d+\s*[:：])",
             lambda match: "\n\n" + match.group(1),
@@ -446,15 +446,6 @@ class DocumentorDrNormalize:
                 lambda match: match.group(0) + "\n" + "\n".join(bullets),
                 text,
                 count=1,
-            )
-        formation_match = re.search(r"(?m)^Requirement Formation\s*$", text)
-        if formation_match:
-            return (
-                text[: formation_match.start()].rstrip()
-                + "\n\n"
-                + section
-                + "\n\n"
-                + text[formation_match.start() :].lstrip()
             )
         return text.rstrip() + "\n\n" + section
 
@@ -887,9 +878,6 @@ class DocumentorDrNormalize:
         meeting_match = re.search(r"(?m)^Meeting Discussion\s*$", text)
         if meeting_match:
             return text[: meeting_match.start()].rstrip() + "\n\n" + section + "\n\n" + text[meeting_match.start() :].lstrip()
-        formation_match = re.search(r"(?m)^Requirement Formation\s*$", text)
-        if formation_match:
-            return text[: formation_match.start()].rstrip() + "\n\n" + section + "\n\n" + text[formation_match.start() :].lstrip()
         return text.rstrip() + "\n\n" + section
 
     @staticmethod
@@ -1600,6 +1588,7 @@ class DocumentorDrNormalize:
                 trace = cls.ensure_trace_explanation_topology_coverage(trace, req)
             trace = cls.remove_trace_explanation_topology_artifacts(trace)
             trace = cls.merge_trace_explanation_sections(trace)
+            trace = re.sub(r"(?m)^Stakeholder User Requirement\s*$\n?", "", trace).strip()
             header = [
                 f"### {srs_id}: {title}".rstrip(),
                 "",
@@ -1608,7 +1597,7 @@ class DocumentorDrNormalize:
                 "#### Trace Explanation",
             ]
             normalized.append("\n".join(header).strip() + ("\n\n" + trace if trace else ""))
-        return cls.collapse_design_rationale_separators("\n\n".join(normalized))
+        return cls.collapse_design_rationale_separators("\n\n---\n\n".join(normalized))
 
     @staticmethod
     def normalize_design_rationale_links(markdown: str) -> str:

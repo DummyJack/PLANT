@@ -2344,7 +2344,7 @@ class DocumentorDrContext:
         add_node(
             target_id,
             "Requirement",
-            target_id,
+            f"{target_id}: {str(requirement.get('title') or '').strip()}".strip(": "),
             str(requirement.get("description") or "").strip(),
             "Requirement",
         )

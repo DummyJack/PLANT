@@ -29,7 +29,7 @@ Requirement Context:
 - Trace Explanation 是用來解釋 runtime 插入的 Trace Topology；文字要說明圖中的節點與連線如何形成正式需求。
 - Trace Explanation 不要重述 Description 的需求內容；只說明來源整理、會議決策與正式化的形成脈絡。
 - Trace Explanation 必須能對照 Topology 路徑閱讀；每個 bullet 第一句必須用該段 evidence ID 開頭，並說明該 ID 做了什麼、如何影響下一個節點或正式需求。
-- Trace Explanation 本身必須是一條可讀的形成軌跡，不要只列 evidence 清單；讀者從 Stakeholder / User Requirement / Conflict / Feedback / System Model / Meeting Discussion / Requirement Formation 依序讀下來，就要能知道 FR/NFR/CON 是怎麼產生的。
+- Trace Explanation 本身必須是一條可讀的形成軌跡，不要只列 evidence 清單；讀者從 Stakeholder / User Requirement / Conflict / System Model / Meeting Discussion / Requirement Formation 依序讀下來，就要能知道 FR/NFR/CON 是怎麼產生的。
 - 每個 section 的第一句要承接前一段，說明「因此下一步發生什麼」；不要每段都獨立描述。
 - 若 topology 中有 CR、Feedback、System Model 或 Meeting，需說明它們如何由 URL 觸發、如何在會議中提供依據、建模或被解決。
 - Trace Explanation 必須優先依 trace_graph.edges 的可達路徑順序敘述：Source → User Requirement → Analysis → Meeting → Requirement。
@@ -58,6 +58,7 @@ Requirement Context:
 - 不輸出 JSON。
 - 不要包在程式碼區塊中。
 - 不要解釋。
+- 每個 FR/NFR/CON block 之間必須使用單獨一行 `---` 作為分割線。
 
 ### FR-N | NFR-N | CON-N: title
 **Description**: description
@@ -77,9 +78,6 @@ User Requirement
 
 Conflict
 - 只有有相關 CR-* 時輸出。CR-* 指出 URL-* 與 URL-* 在「...」上衝突，後續需要透過會議或正式化決策收斂。
-
-Feedback
-- 只有有相關 FB-* 時輸出。FB-* 補充「...」，作為需求正式化時的限制、風險或外部依據。
 
 System Model
 - 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到「...」流程、狀態或互動，建模此需求的系統設計。

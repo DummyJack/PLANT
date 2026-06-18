@@ -562,9 +562,13 @@ class MediatorRecords:
 
             return conflict_blocks
 
-        if not options:
-            options = conflict_report_decision_options()
         if str((issue or {}).get("category") or "").strip() == "resolve_conflict":
+            has_conflict_options = any(
+                isinstance(option, dict) and option.get("kind") == "conflict_decision"
+                for option in options
+            )
+            if not has_conflict_options:
+                options = conflict_report_decision_options() or options
             recommendation = {}
 
         def option_detail_map(option_rows: List[Dict[str, Any]]) -> Dict[str, str]:

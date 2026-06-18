@@ -438,8 +438,6 @@ class MeetingCoordinator:
             return False
         if int(state_summary.get("backlog_count") or 0) != 0 and state_summary.get("can_add_issues"):
             return False
-        if human_decision_status.get("has_pending_human_decisions"):
-            return False
         return any(
             isinstance(issue, dict) and not runner.is_default_issue(issue)
             for issue in runner.current_meeting_issues()
@@ -962,8 +960,6 @@ class MeetingCoordinator:
         if not state_summary.get("all_current_issues_saved"):
             return False
         if int(state_summary.get("backlog_count") or 0) != 0 and state_summary.get("can_add_issues"):
-            return False
-        if human_decision_status.get("has_pending_human_decisions"):
             return False
         general_issues = [
             issue

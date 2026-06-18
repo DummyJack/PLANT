@@ -13,7 +13,7 @@ from agents.profile.mediator.validation import (
     trace_artifact_ids,
     trace_proposal_ids,
 )
-from utils import Collect
+from utils import Collect, stage_enabled
 
 
 # ========
@@ -304,6 +304,7 @@ def execute_human_decision_queue(
         resolution_raw = Collect.human_decision_on_issue(issue, options)
         decision_text = str(resolution_raw.get("decision", "")).strip()
         decision_id = f"DEC-HQ-{round_num}-{idx}" if decision_text else ""
+        has_decision = bool(decision_text)
         resolution = coordinator.flow.mediator_agent.build_issue_result(
             status="human_decision" if decision_text else "",
             summary=decision_text,
@@ -315,7 +316,7 @@ def execute_human_decision_queue(
                 sid for sid in (issue_artifact_ids(issue))
                 if isinstance(sid, str) and sid.startswith(("CR-", "PAIR-", "MULTIPLE-"))
             ],
-            needs_human=True,
+            needs_human=not has_decision,
         )
         if decision_id:
             resolution["decision_id"] = decision_id
@@ -391,6 +392,29 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
             decision.get("reasoning", ""),
         )
         if action == "finish_round":
+            draft_decision = None
+            can_update_general_draft = (
+                stage_enabled(coordinator.flow.config, "general_update_draft", True)
+                and hasattr(coordinator, "general_meeting_round_enabled")
+                and coordinator.general_meeting_round_enabled(runner.round_num)
+            )
+            if can_update_general_draft and hasattr(coordinator, "general_draft_decision"):
+                state_summary = observation.get("state_summary") or {}
+                draft_decision = coordinator.general_draft_decision(
+                    runner,
+                    state_summary,
+                    state_summary.get("human_decision_status") or {},
+                )
+            if draft_decision:
+                result = coordinator.act_round_step(
+                    runner=runner,
+                    decision=draft_decision,
+                    observation=observation,
+                )
+                if result.get("error"):
+                    raise RuntimeError(f"會議步驟執行失敗: {result['error']}")
+                last_action_result = result
+                continue
             break
         result = coordinator.act_round_step(
             runner=runner,
@@ -2631,7 +2655,8 @@ class MeetingRunner:
                 pending,
             )
             return pending
-        decision_text = str(resolution.get("decision", ""))
+        decision_text = str(resolution.get("decision", "")).strip()
+        has_decision = bool(decision_text)
 
         wrapped = self.mediator.build_issue_result(
             status="human_decision",
@@ -2642,7 +2667,7 @@ class MeetingRunner:
             unresolved_points=[],
             affected_conflict_ids=affected_conflict_ids,
             url_updates=url_updates,
-            needs_human=True,
+            needs_human=not has_decision,
         )
         wrapped["human_choice"] = {
             "chosen_option_id": resolution.get("chosen_option_id", ""),

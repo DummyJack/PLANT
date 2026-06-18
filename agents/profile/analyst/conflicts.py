@@ -42,6 +42,8 @@ def clean_conflict_report_markdown(markdown: Any) -> str:
         r"\1",
         text,
     )
+    text = re.sub(r"(?m)^(選項\s+[A-Z]：)", r"- \1", text)
+    text = re.sub(r"(?m)^-\s*-\s*(選項\s+[A-Z]：)", r"- \1", text)
     text = re.sub(r"建議採用[「『][^」』]+[」』]策略", "建議採用選項 A", text)
     text = re.sub(r"建議採用[^，。\s]{2,12}策略", "建議採用選項 A", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -94,7 +96,7 @@ def conflict_report_markdown_from_rows(rows: List[Dict[str, Any]]) -> str:
                 option_id = chr(ord("A") + option_index - 1)
             description_text = text(option.get("description") or option.get("summary"))
             if description_text:
-                options.append(f"選項 {option_id}：{description_text}")
+                options.append(f"- 選項 {option_id}：{description_text}")
         if options:
             blocks.extend(["", "### 解決選項", *options])
 
