@@ -15,6 +15,7 @@ from server.services.run_checkpoint import record_run_checkpoint
 
 
 MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
+BUILTIN_FORCE_REGENERATE_OUTPUTS = {"DR", "SRS"}
 
 
 def _project_id_from_flow(flow) -> Optional[str]:
@@ -361,6 +362,8 @@ def has_existing_dr(flow) -> bool:
 
 
 def force_regenerate_output(config: Dict[str, Any], key: str) -> bool:
+    if key in BUILTIN_FORCE_REGENERATE_OUTPUTS:
+        return True
     flags = config.get("force_regenerate_outputs")
     return isinstance(flags, dict) and flags.get(key) is True
 
