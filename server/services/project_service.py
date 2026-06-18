@@ -11,7 +11,7 @@ from storage import Store
 from utils import Logger, export_enabled
 from utils.language import sync_output_language
 
-from .security import sanitize_filename
+from .security import sanitize_filename, validate_project_id
 
 
 ALLOWED_REFERENCE_EXTS = {
@@ -34,9 +34,11 @@ class ProjectService:
         self.run_manager = run_manager
 
     def store(self, project_id: str) -> Store:
+        project_id = validate_project_id(project_id)
         return Store(self.base_dir, project_id)
 
     def _latest_run_status(self, project_id: str) -> str:
+        project_id = validate_project_id(project_id)
         if not self.run_manager:
             return "idle"
         runs = self.run_manager.list_runs(project_id=project_id)
@@ -45,6 +47,7 @@ class ProjectService:
         return str(runs[0].get("status") or "idle")
 
     def _project_hints(self, project_id: str) -> Dict[str, Any]:
+        project_id = validate_project_id(project_id)
         results_dir = self.base_dir / "projects" / project_id / "results"
         active_run = self.run_manager.get_active_run(project_id) if self.run_manager else None
         active_summary = None
@@ -90,6 +93,7 @@ class ProjectService:
         return mapping
 
     def ensure_project(self, project_id: str) -> Store:
+        project_id = validate_project_id(project_id)
         project_dir = self.base_dir / "projects" / project_id
         project_file = project_dir / "artifact" / "project.json"
         if not project_dir.exists() or not project_dir.is_dir() or not project_file.exists():
@@ -97,15 +101,18 @@ class ProjectService:
         return self.store(project_id)
 
     def assert_no_active_run(self, project_id: str) -> None:
+        project_id = validate_project_id(project_id)
         if self.run_manager and self.run_manager.get_active_run(project_id):
             raise HTTPException(status_code=409, detail="Project has an active run")
 
     def references_dir(self, project_id: str) -> Path:
+        project_id = validate_project_id(project_id)
         path = self.base_dir / "doc" / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def references_path(self, project_id: str) -> Path:
+        project_id = validate_project_id(project_id)
         return self.base_dir / "doc" / project_id
 
     def get_summary(self, project_id: str) -> Dict[str, Any]:

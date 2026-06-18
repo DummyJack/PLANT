@@ -34,6 +34,19 @@ def sanitize_filename(name: str) -> str:
     return cleaned
 
 
+def validate_project_id(project_id: str) -> str:
+    cleaned = str(project_id or "").strip()
+    if (
+        not cleaned
+        or cleaned in {".", ".."}
+        or "/" in cleaned
+        or "\\" in cleaned
+        or "\x00" in cleaned
+    ):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    return cleaned
+
+
 def resolve_under(base_dir: Path, root: Path, relative_path: str) -> Path:
     if not relative_path or ".." in Path(relative_path).parts:
         raise HTTPException(status_code=400, detail="Invalid path")

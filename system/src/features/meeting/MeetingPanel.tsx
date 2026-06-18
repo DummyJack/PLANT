@@ -16,7 +16,7 @@ import { useNoticeStore } from "@/stores/noticeStore";
 import { useUiStore } from "@/stores/uiStore";
 import { errorMessage } from "@/utils/errorMessage";
 import { buildInitialUserMessage, mergeChatMessages } from "@/utils/logParser";
-import type { RunCheckpoint } from "@/types/api";
+import type { BootstrapResponse, RunCheckpoint } from "@/types/api";
 import { ChatFeed } from "./ChatFeed";
 import { DecisionDock, type ReviewReference, type ReviewSuggestion } from "./DecisionDock";
 import { MeetingComposer } from "./MeetingComposer";
@@ -708,15 +708,32 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const deleteProjectMut = useMutation({
     mutationFn: async () => {
       if (!projectId) throw new Error("未選擇專案");
-      return deleteProject(projectId);
+      const deletedProjectId = projectId;
+      await deleteProject(deletedProjectId);
+      return deletedProjectId;
     },
-    onSuccess: async () => {
+    onSuccess: async (deletedProjectId) => {
       setConfirmDeleteProjectOpen(false);
       setActiveProjectId(null);
+      queryClient.setQueryData<BootstrapResponse | undefined>(["bootstrap"], (current) => {
+        if (!current) return current;
+        const { [deletedProjectId]: _deletedRun, ...activeRuns } = current.active_runs ?? {};
+        return {
+          ...current,
+          projects: current.projects.filter((project) => project.project_id !== deletedProjectId),
+          active_runs: activeRuns,
+        };
+      });
+      queryClient.removeQueries({ queryKey: ["project", deletedProjectId] });
+      queryClient.removeQueries({ queryKey: ["artifacts", deletedProjectId] });
+      queryClient.removeQueries({ queryKey: ["references", deletedProjectId] });
+      queryClient.removeQueries({ queryKey: ["runs", deletedProjectId] });
+      queryClient.removeQueries({ queryKey: ["file", deletedProjectId] });
       await queryClient.fetchQuery({
         queryKey: ["bootstrap"],
         queryFn: fetchBootstrap,
       });
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
     },
     onError: (e: Error) => {
       pushNotice({

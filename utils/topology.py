@@ -39,59 +39,10 @@ def render_trace_topology_assets() -> str:
   margin: 18px 0 22px;
   padding: 0;
 }
-.dr-trace-topology__toolbar {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  z-index: 2;
-  display: flex;
-  justify-content: flex-end;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.16s ease;
-}
-.dr-trace-topology:hover .dr-trace-topology__toolbar,
-.dr-trace-topology__graph:hover .dr-trace-topology__toolbar,
-.dr-trace-topology__graph:focus-within .dr-trace-topology__toolbar {
-  opacity: 1;
-  pointer-events: auto;
-}
-.dr-trace-topology__download {
-  align-items: center;
-  border: 1px solid #d8dee8;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 6px 16px rgba(31, 41, 55, 0.14);
-  color: #52627a;
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 12px;
-  font-weight: 700;
-  height: 30px;
-  justify-content: center;
-  padding: 6px 10px;
-  width: 34px;
-}
-.dr-trace-topology__download:hover {
-  border-color: #b8c4d6;
-  color: #243044;
-  background: #f8fafc;
-}
-.dr-trace-topology__download svg {
-  display: block;
-  height: 16px;
-  width: 16px;
-}
 .dr-trace-topology__graph {
   position: relative;
   width: 100%;
   overflow-x: hidden;
-}
-@media (hover: none) {
-  .dr-trace-topology__toolbar {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 .dr-trace-topology__svg {
   display: block;
@@ -469,56 +420,6 @@ def render_trace_topology_assets() -> str:
     modal.setAttribute('aria-hidden', 'false');
   };
   document.addEventListener('click', (event) => {
-    const downloadButton = event.target.closest('.dr-trace-topology__download');
-    if (downloadButton) {
-      event.preventDefault();
-      const topology = downloadButton.closest('.dr-trace-topology');
-      const svg = topology ? topology.querySelector('.dr-trace-topology__svg') : null;
-      if (!svg) return;
-      const clone = svg.cloneNode(true);
-      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      clone.setAttribute('width', clone.viewBox && clone.viewBox.baseVal ? String(clone.viewBox.baseVal.width) : clone.getAttribute('width') || '1200');
-      clone.setAttribute('height', clone.viewBox && clone.viewBox.baseVal ? String(clone.viewBox.baseVal.height) : clone.getAttribute('height') || '800');
-      const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-      style.textContent = svgStyle;
-      clone.insertBefore(style, clone.firstChild);
-      const source = '<?xml version="1.0" encoding="UTF-8"?>\\n' + new XMLSerializer().serializeToString(clone);
-      const svgBlob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
-      const svgUrl = URL.createObjectURL(svgBlob);
-      const image = new Image();
-      image.onload = () => {
-        const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
-        const width = Number(clone.getAttribute('width')) || 1200;
-        const height = Number(clone.getAttribute('height')) || 800;
-        const canvas = document.createElement('canvas');
-        canvas.width = width * scale;
-        canvas.height = height * scale;
-        const context = canvas.getContext('2d');
-        if (!context) {
-          URL.revokeObjectURL(svgUrl);
-          return;
-        }
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.setTransform(scale, 0, 0, scale, 0, 0);
-        context.drawImage(image, 0, 0, width, height);
-        canvas.toBlob((pngBlob) => {
-          URL.revokeObjectURL(svgUrl);
-          if (!pngBlob) return;
-          const url = URL.createObjectURL(pngBlob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = downloadButton.dataset.filename || 'requirements-traceability-map.png';
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }, 'image/png');
-      };
-      image.onerror = () => URL.revokeObjectURL(svgUrl);
-      image.src = svgUrl;
-      return;
-    }
     const button = event.target.closest('.dr-trace-node');
     if (button) {
       event.preventDefault();
@@ -900,7 +801,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         return ""
 
     target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
-    download_target_id = target_id
     graph_nodes, graph_edges = compact_stakeholder_statement_nodes(
         graph_nodes,
         graph_edges,
@@ -2345,19 +2245,9 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         edges.append(edge_label_markup(target[0] + target[2] / 2, target[1] - 14, "衝突"))
     validate_rendered_trace_edges(valid_edges, rendered_edge_keys)
 
-    safe_target_id = re.sub(r"[^A-Za-z0-9_-]+", "-", download_target_id).strip("-").lower() or "requirement"
     return (
         '<div class="dr-trace-topology">'
         '<div class="dr-trace-topology__graph">'
-        '<div class="dr-trace-topology__toolbar">'
-        f'<button class="dr-trace-topology__download" type="button" title="下載 PNG" aria-label="下載 PNG" data-filename="{html_attr(safe_target_id)}-requirements-traceability-map.png">'
-        '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>'
-        '<path d="M7 10l5 5 5-5"></path>'
-        '<path d="M12 15V3"></path>'
-        '</svg>'
-        '</button>'
-        '</div>'
         f'<svg class="dr-trace-topology__svg" viewBox="0 0 {view_width} {height}" height="{height}" '
         f'data-layout-quality="{layout_quality}" data-layout-attempt="{selected_attempt_index + 1}" '
         f'data-compact-labels="{"true" if compact_label_mode else "false"}" '

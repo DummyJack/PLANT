@@ -6,7 +6,7 @@ import re
 import shutil
 from pathlib import Path
 
-from utils import stage_enabled, export_enabled
+from utils import stage_enabled, export_enabled, force_regenerate_output
 from utils.cancel import raise_if_cancelled
 from storage import markdown as markdown_storage
 from storage.export import export_project_manual, should_export_html, should_export_manual
@@ -15,7 +15,6 @@ from server.services.run_checkpoint import record_run_checkpoint
 
 
 MOM_ROUND_FILE = re.compile(r"^R(\d+)-M\d+\.md$")
-BUILTIN_FORCE_REGENERATE_OUTPUTS = {"DR", "SRS"}
 
 
 def _project_id_from_flow(flow) -> Optional[str]:
@@ -359,13 +358,6 @@ def has_existing_dr(flow) -> bool:
         return False
     path = output_dir / "design_rationale.md"
     return path.exists() and path.is_file() and path.stat().st_size > 0
-
-
-def force_regenerate_output(config: Dict[str, Any], key: str) -> bool:
-    if key in BUILTIN_FORCE_REGENERATE_OUTPUTS:
-        return True
-    flags = config.get("force_regenerate_outputs")
-    return isinstance(flags, dict) and flags.get(key) is True
 
 
 # ========

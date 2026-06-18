@@ -135,6 +135,15 @@ class RunManager:
         stage_overrides: Optional[Dict[str, bool]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        project_id = str(project_id or "").strip()
+        if (
+            not project_id
+            or project_id in {".", ".."}
+            or "/" in project_id
+            or "\\" in project_id
+            or "\x00" in project_id
+        ):
+            raise ValueError("Invalid project_id")
         project_dir = self.base_dir / "projects" / project_id
         if not project_dir.exists() or not project_dir.is_dir():
             raise ValueError("Project not found")

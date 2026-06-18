@@ -30,8 +30,6 @@ const FORCE_REGENERATE_KEYS = new Set([
   "research_domain",
   "system_model",
   "draft",
-  "DR",
-  "SRS",
 ]);
 
 function stageEnabled(
@@ -77,7 +75,8 @@ function setForceRegenerateOutputs(
     }
   }
   if (!Object.keys(force).length) {
-    const { force_regenerate_outputs: _forceRegenerateOutputs, ...rest } = config;
+    const rest = { ...config };
+    delete rest.force_regenerate_outputs;
     return rest;
   }
   return { ...config, force_regenerate_outputs: force };

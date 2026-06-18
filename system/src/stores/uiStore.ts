@@ -97,7 +97,7 @@ export const useUiStore = create<UiState>()(
       canWrite: false,
       setActiveProjectId: (id) =>
         set({
-          activeProjectId: id,
+          activeProjectId: String(id ?? "").trim() || null,
           selectedOutputPath: null,
           selectedOutputAnchor: null,
           autoFollowOutput: true,
@@ -205,6 +205,14 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "plant-ui-state",
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<UiState>;
+        return {
+          ...current,
+          ...saved,
+          activeProjectId: String(saved.activeProjectId ?? "").trim() || null,
+        };
+      },
       partialize: (state) => ({
         activeProjectId: state.activeProjectId,
         darkMode: state.darkMode,
