@@ -175,7 +175,7 @@ function logMessageToAgent(text: string): { speaker: string; text: string } | nu
 
   const humanDecision = /^\s*人類裁決[：:]\s*([\s\S]+)$/i.exec(value);
   if (humanDecision) {
-    return { speaker: "user", text: displayText(humanDecision[1].trim()) };
+    return null;
   }
 
   return null;

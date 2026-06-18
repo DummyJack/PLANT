@@ -271,7 +271,28 @@ def mark_run_checkpoint(
 ) -> Dict[str, Any]:
     artifact = store.load_artifact() or {}
     checkpoint = _load_checkpoint(store, artifact)
+    requested_stage_id = str(stage_id or "").strip()
     if checkpoint:
+        checkpoint_stage_id = str(checkpoint.get("stage_id") or "").strip()
+        if requested_stage_id and requested_stage_id != checkpoint_stage_id:
+            round_num = None
+            if requested_stage_id in {"formal_meeting", "meeting_issue_proposal_review"}:
+                try:
+                    round_num = int(checkpoint.get("round") or 0) or int(
+                        (artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}).get("last_round")
+                        or artifact.get("last_round")
+                        or 0
+                    ) + 1
+                except (TypeError, ValueError):
+                    round_num = 1
+            return record_run_checkpoint(
+                store,
+                run_id=run_id,
+                status=status,
+                stage_id=requested_stage_id,
+                round_num=round_num,
+                error=error,
+            )
         checkpoint["status"] = status
         checkpoint["run_id"] = run_id
         if error:

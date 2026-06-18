@@ -29,6 +29,7 @@ interface UiState {
     workspace: boolean;
     output: boolean;
   };
+  darkMode: boolean;
   dismissedRunCheckpointKeys: Record<string, string>;
   scopeReviewDrafts: Record<string, ScopeReviewDraft>;
   canWrite: boolean;
@@ -50,6 +51,7 @@ interface UiState {
   setEnabledAgents: (agents: Record<string, boolean>) => void;
   toggleAgent: (agent: string) => void;
   togglePanelVisibility: (panel: "references" | "workspace" | "output") => void;
+  toggleDarkMode: () => void;
   dismissRunCheckpoint: (projectId: string, checkpointKey: string) => void;
   setScopeReviewDraft: (decisionId: string, draft: ScopeReviewDraft) => void;
   clearScopeReviewDraft: (decisionId: string) => void;
@@ -89,6 +91,7 @@ export const useUiStore = create<UiState>()(
         workspace: true,
         output: true,
       },
+      darkMode: false,
       dismissedRunCheckpointKeys: {},
       scopeReviewDrafts: {},
       canWrite: false,
@@ -176,6 +179,7 @@ export const useUiStore = create<UiState>()(
             [panel]: !s.visiblePanels[panel],
           },
         })),
+      toggleDarkMode: () => set((s) => ({ darkMode: !s.darkMode })),
       dismissRunCheckpoint: (projectId, checkpointKey) =>
         set((s) => ({
           dismissedRunCheckpointKeys: {
@@ -203,6 +207,7 @@ export const useUiStore = create<UiState>()(
       name: "plant-ui-state",
       partialize: (state) => ({
         activeProjectId: state.activeProjectId,
+        darkMode: state.darkMode,
         dismissedRunCheckpointKeys: state.dismissedRunCheckpointKeys,
       }),
     },

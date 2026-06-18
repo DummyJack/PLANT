@@ -15,6 +15,7 @@ import { useProjectData } from "@/hooks/useProjectData";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
+import { cn } from "@/utils/cn";
 import type { FileTreeNode } from "@/types/api";
 
 const LAYOUT_KEY = "plant-layout-v16";
@@ -56,6 +57,7 @@ export default function App() {
   const setEnabledAgents = useUiStore((s) => s.setEnabledAgents);
   const setMeetingDefaults = useUiStore((s) => s.setMeetingDefaults);
   const visiblePanels = useUiStore((s) => s.visiblePanels);
+  const darkMode = useUiStore((s) => s.darkMode);
   const layoutMode = useLayoutMode();
   const bootstrap = useBootstrap();
   const configQuery = useQuery({
@@ -269,7 +271,7 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-slate-50">
+    <div className={cn("flex h-full flex-col overflow-hidden bg-slate-50", darkMode && "theme-dark")}>
       <HeaderBar />
       <NoticeStack />
       <div className="min-h-0 flex-1 p-1">

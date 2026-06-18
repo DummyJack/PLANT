@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, LayoutPanelLeft, Settings } from "lucide-react";
+import { ChevronDown, LayoutPanelLeft, Moon, Settings, Sun } from "lucide-react";
 import { fetchConfig, updateConfig } from "@/api/config";
 import {
   activateCode,
@@ -536,8 +536,10 @@ export function HeaderBar() {
   const projectId = useUiStore((s) => s.activeProjectId);
   const enabledAgents = useUiStore((s) => s.enabledAgents);
   const visiblePanels = useUiStore((s) => s.visiblePanels);
+  const darkMode = useUiStore((s) => s.darkMode);
   const setEnabledAgents = useUiStore((s) => s.setEnabledAgents);
   const togglePanelVisibility = useUiStore((s) => s.togglePanelVisibility);
+  const toggleDarkMode = useUiStore((s) => s.toggleDarkMode);
   const setCanWrite = useUiStore((s) => s.setCanWrite);
   const pushNotice = useNoticeStore((s) => s.pushNotice);
   const { activeRun } = useActiveRun(projectId);
@@ -850,6 +852,22 @@ export function HeaderBar() {
         </div>
 
         <div className="flex items-center justify-end gap-2 justify-self-end">
+          <button
+            type="button"
+            className={cn(
+              "inline-flex h-7 w-7 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 hover:text-slate-900",
+              darkMode && "border-slate-700 bg-slate-900 text-amber-200 hover:bg-slate-800 hover:text-amber-100",
+            )}
+            title={darkMode ? "切換亮色模式" : "切換深色模式"}
+            aria-pressed={darkMode}
+            onClick={() => {
+              setOpenAgent(null);
+              setLayoutOpen(false);
+              toggleDarkMode();
+            }}
+          >
+            {darkMode ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+          </button>
           <div className="relative">
             <button
               type="button"

@@ -78,7 +78,7 @@ export function useRunEvents(
         event.type === "human_decision_submitted" ||
         event.type === "human_decision_auto_skipped"
       ) {
-        resolveHumanInterventionProgress(event.decision, event.payload ?? null);
+        resolveHumanInterventionProgress(event.decision);
       }
       for (const chat of chats) {
         appendMessage(chat);

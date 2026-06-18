@@ -91,6 +91,7 @@ interface StageToggleMenuProps {
     [key: string]: boolean | undefined;
   };
   compact?: boolean;
+  enabledRowIds?: string[];
 }
 
 export function StageToggleMenu({
@@ -99,6 +100,7 @@ export function StageToggleMenu({
   stageOverrides,
   existingOutputs,
   compact = false,
+  enabledRowIds,
 }: StageToggleMenuProps) {
   const queryClient = useQueryClient();
   const pushNotice = useNoticeStore((s) => s.pushNotice);
@@ -155,6 +157,7 @@ export function StageToggleMenu({
     );
     saveMut.mutate(nextConfig);
   };
+  const rowEnabledIds = enabledRowIds?.length ? new Set(enabledRowIds) : null;
 
   return (
     <div ref={rootRef} className="group relative">
@@ -193,13 +196,16 @@ export function StageToggleMenu({
                 const enabled = stageEnabled(configQuery.data, row.keys, stageOverrides);
                 const completed = row.keys.some((key) => (stageOverrides ?? {})[key] === false);
                 const forceSupported = row.keys.some((key) => FORCE_REGENERATE_KEYS.has(key));
+                const rowDisabled = !!rowEnabledIds && !rowEnabledIds.has(row.id);
                 return (
                   <button
                     key={row.id}
                     type="button"
-                    disabled={disabled || saveMut.isPending || !configQuery.data}
+                    disabled={disabled || saveMut.isPending || !configQuery.data || rowDisabled}
                     title={
-                      disabled
+                      rowDisabled
+                        ? "執行完成後只能重新執行一般會議、DR、SRS"
+                        : disabled
                         ? (disabledReason ?? "執行中不可調整階段")
                         : completed && !enabled && forceSupported
                           ? "已完成；開啟後下次執行會重新產生"

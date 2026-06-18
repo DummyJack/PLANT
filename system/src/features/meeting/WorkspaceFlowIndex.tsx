@@ -562,10 +562,12 @@ export function WorkspaceFlowIndex({
   compact = false,
   runCheckpoint = null,
   artifactItems = [],
+  completedDisplayOnly = false,
 }: {
   compact?: boolean;
   runCheckpoint?: RunCheckpoint | null;
   artifactItems?: FileTreeNode[];
+  completedDisplayOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -591,6 +593,14 @@ export function WorkspaceFlowIndex({
       if (!byKey.has(item.dedupeKey)) byKey.set(item.dedupeKey, item);
     });
     return Array.from(byKey.values())
+      .filter((item) => {
+        if (!completedDisplayOnly) return true;
+        if (/第\s*\d+\s*輪會議/.test(item.title)) return true;
+        return item.title === "Design Rationale" ||
+          item.title === "SRS" ||
+          item.dedupeKey === "decision:meeting_issues" ||
+          item.dedupeKey === "decision:conflict";
+      })
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
         const orderDiff = flowItemOrder(a.item) - flowItemOrder(b.item);
@@ -600,7 +610,7 @@ export function WorkspaceFlowIndex({
         ...item,
         outputPath: outputPathForFlowItem(item, availablePaths),
       }));
-  }, [artifactItems, messages]);
+  }, [artifactItems, completedDisplayOnly, messages]);
   const activeItemId = useMemo(() => {
     if (!activeFlowMessageId) return items[0]?.id ?? null;
     const itemIds = new Set(items.map((item) => item.id));

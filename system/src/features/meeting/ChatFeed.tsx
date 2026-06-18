@@ -613,6 +613,11 @@ function momMeetingIdFromPath(path?: string) {
   return /(?:results\/MoM\/|artifact\/MoM\/)(R\d+-M\d+)\.(?:html|md)$/i.exec(path ?? "")?.[1]?.toUpperCase() ?? null;
 }
 
+function roundNumberFromId(round?: string | null) {
+  const value = /^R(\d+)$/i.exec(String(round ?? "").trim())?.[1];
+  return value ? Number(value) : null;
+}
+
 function momFilesForMessage(msg: ChatMessage, momFiles: OutputFile[]) {
   const meetingId = momMeetingIdFromPath(msg.outputPath);
   if (meetingId) {
@@ -689,7 +694,11 @@ function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
   const matchingMomEntries = rest
     .map((message, index) => ({ message, index }))
     .filter((entry) => isFormalMeetingMomMessage(entry.message) && momRoundFromPath(entry.message.outputPath) === round);
-  if (matchingMomEntries.length === 0) return segment;
+  const roundNumber = roundNumberFromId(round);
+  const matchingDraftEntries = rest
+    .map((message, index) => ({ message, index }))
+    .filter((entry) => isDraftPath(entry.message.outputPath) && draftVersionFromPath(entry.message.outputPath) === roundNumber);
+  if (matchingMomEntries.length === 0 && matchingDraftEntries.length === 0) return segment;
 
   const consumed = new Set<string>();
   const arranged: ChatMessage[] = [segment[0]];
@@ -729,6 +738,14 @@ function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
     });
   }
 
+  matchingDraftEntries
+    .sort((a, b) => a.index - b.index)
+    .forEach(({ message }) => {
+      if (consumed.has(message.id)) return;
+      arranged.push(message);
+      consumed.add(message.id);
+    });
+
   rest.forEach((message) => {
     if (consumed.has(message.id)) return;
     arranged.push(message);
@@ -750,6 +767,10 @@ function arrangeMeetingPlanMomMessages(messages: ChatMessage[]) {
     while (cursor < messages.length && !formalMeetingRoundFromStage(messages[cursor])) {
       segment.push(messages[cursor]);
       cursor += 1;
+    }
+    if (segment.length === 1 && cursor < messages.length) {
+      index = cursor - 1;
+      continue;
     }
     arranged.push(...arrangeMeetingPlanMomSegment(segment));
     index = cursor - 1;
@@ -2829,7 +2850,11 @@ function Bubble({
     !meetingTask &&
     !meetingResult;
   const bubbleSelectable = !!msg.outputPath && !modelPreviewGrid;
-  const bubbleContent = elicitPlan ? (
+  const bubbleContent = submittedDecision ? (
+    <div className="text-sm font-semibold leading-relaxed text-white">
+      {submittedDecision}
+    </div>
+  ) : elicitPlan ? (
     <ElicitPlanCard msg={msg} />
   ) : conflictPlan ? (
     <ConflictPlanCard msg={msg} />
@@ -2841,8 +2866,6 @@ function Bubble({
     <HumanDecisionRequestCard msg={msg} />
   ) : humanDecision ? (
     <HumanDecisionCard msg={msg} />
-  ) : submittedDecision ? (
-    submittedDecision
   ) : msg.outputPath ? (
     <OutputPreview
       projectId={projectId}
@@ -2952,6 +2975,7 @@ export function ChatFeed({
   const didInitialScrollRef = useRef(false);
   const didRestoreScrollRef = useRef(false);
   const forcedDecisionScrollMessageIdRef = useRef<string | null>(null);
+  const forcedStagePillScrollMessageIdRef = useRef<string | null>(null);
   const scrollStorageKeyRef = useRef(chatScrollKey(projectId));
   const latestHydrationStateRef = useRef({
     historyLoading,
@@ -2996,6 +3020,7 @@ export function ChatFeed({
     didInitialScrollRef.current = false;
     didRestoreScrollRef.current = false;
     forcedDecisionScrollMessageIdRef.current = null;
+    forcedStagePillScrollMessageIdRef.current = null;
     setCollapsedStagePills(new Set());
     setHasNewBelow(false);
     setIsNearBottom(true);
@@ -3084,6 +3109,18 @@ export function ChatFeed({
   );
   const visibleMessages = collapsedView.visible;
   const collapsedHiddenCounts = collapsedView.hiddenCounts;
+
+  useEffect(() => {
+    if (!didRestoreScrollRef.current) return;
+    const latestStagePill = [...visibleMessages].reverse().find(isStagePillMessage);
+    if (!latestStagePill || forcedStagePillScrollMessageIdRef.current === latestStagePill.id) return;
+    forcedStagePillScrollMessageIdRef.current = latestStagePill.id;
+    requestAnimationFrame(() => {
+      scrollToLatest(didInitialScrollRef.current ? "smooth" : "auto");
+      didInitialScrollRef.current = true;
+    });
+  }, [scrollToLatest, visibleMessages]);
+
   const toggleStagePillCollapse = useCallback((id: string) => {
     setCollapsedStagePills((current) => {
       const next = new Set(current);

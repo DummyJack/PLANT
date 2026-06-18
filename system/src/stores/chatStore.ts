@@ -14,7 +14,6 @@ interface ChatState {
   setMessages: (msgs: ChatMessage[]) => void;
   resolveHumanInterventionProgress: (
     decision?: ChatMessage["decision"] | null,
-    payload?: Record<string, unknown> | null,
   ) => void;
   setContinueReplacementStage: (target?: ContinueTrimTarget) => void;
   trimRunStatusMessagesForContinue: (target?: ContinueTrimTarget) => void;
@@ -77,24 +76,6 @@ function hasDuplicateMessage(messages: ChatMessage[], msg: ChatMessage) {
   const key = messageSemanticKey(msg);
   if (!key) return false;
   return messages.some((message) => messageSemanticKey(message) === key);
-}
-
-function resolvedProgressText(kind?: string, payload?: Record<string, unknown> | null) {
-  if (payload?.skipped === true) return "已略過本次裁決";
-  switch (kind) {
-    case "meeting_issue_proposal_review":
-      return "候選議題已確認";
-    case "scope_review":
-      return "需求範圍已確認";
-    case "domain_research_review":
-      return "領域研究已確認";
-    case "requirements_review":
-      return "初始需求已確認";
-    case "stakeholder_statement_review":
-      return "利害關係人發言已確認";
-    default:
-      return "人類介入已完成";
-  }
 }
 
 function isProgressForDecision(message: ChatMessage, decision?: ChatMessage["decision"] | null) {
@@ -175,6 +156,9 @@ export function trimRunDisplayMessagesFromStage(
     }
   }
   if (start < 0) return trimTrailingRunDisplayMessages(messages);
+  if (stage === "document_generation") {
+    return messages.slice(0, start);
+  }
   return messages.slice(0, start + 1);
 }
 
@@ -187,22 +171,14 @@ export const useChatStore = create<ChatState>((set) => ({
       return { messages: [...s.messages, msg] };
     }),
   setMessages: (messages) => set({ messages }),
-  resolveHumanInterventionProgress: (decision, payload) =>
+  resolveHumanInterventionProgress: (decision) =>
     set((s) => {
       let changed = false;
       const next = [...s.messages];
       for (let index = next.length - 1; index >= 0; index -= 1) {
         const message = next[index];
         if (!isProgressForDecision(message, decision)) continue;
-        if (payload?.auto_skipped === true) {
-          next.splice(index, 1);
-        } else {
-          next[index] = {
-            ...message,
-            status: "done",
-            text: resolvedProgressText(decision?.kind, payload),
-          };
-        }
+        next.splice(index, 1);
         changed = true;
         break;
       }

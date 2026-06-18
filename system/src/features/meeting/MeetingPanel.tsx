@@ -56,6 +56,42 @@ const INITIAL_AGENT_STAGE_OVERRIDES: Record<string, boolean> = {
   SRS: false,
 };
 
+const COMPLETED_ALLOWED_STAGE_KEYS = new Set([
+  "general_formal_meeting",
+  "general_update_draft",
+  "DR",
+  "SRS",
+]);
+
+const KNOWN_STAGE_KEYS = [
+  "init",
+  "elicitation",
+  "conflict_detection",
+  "research_domain",
+  "system_model",
+  "draft",
+  "default_formal_meeting",
+  "default_update_draft",
+  "general_formal_meeting",
+  "general_update_draft",
+  "DR",
+  "SRS",
+];
+
+function restrictCompletedStageOverrides(
+  overrides: Record<string, boolean> | undefined,
+  docsComplete: boolean,
+) {
+  if (!docsComplete) return overrides;
+  const next: Record<string, boolean> = {};
+  KNOWN_STAGE_KEYS.forEach((key) => {
+    next[key] = COMPLETED_ALLOWED_STAGE_KEYS.has(key)
+      ? (overrides?.[key] ?? false)
+      : false;
+  });
+  return next;
+}
+
 function completedStageOverrides(
   projectId: string | null,
   items: Array<{ path: string; kind: string }> | undefined,
@@ -114,6 +150,12 @@ function completedStageOverrides(
     has(/^results\/MoM\/R1-M\d+\.html$/i)
   ) {
     close(["default_formal_meeting", "default_update_draft"]);
+  }
+  const generalMeetingComplete =
+    has(/^artifact\/meeting\/formal_meeting_r(?:[2-9]|\d{2,})\.json$/i) ||
+    has(/^results\/MoM\/R(?:[2-9]|\d{2,})-M\d+\.html$/i);
+  if (generalMeetingComplete) {
+    close(["general_formal_meeting", "general_update_draft"]);
   }
   if (docsComplete) {
     close([
@@ -481,6 +523,18 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       default_formal_meeting:
         hasArtifactPath("artifact/meeting/formal_meeting_r1.json") ||
         (artifactItems ?? []).some((item) => item.kind === "file" && /^results\/MoM\/R1-M\d+\.html$/i.test(item.path)),
+      general_formal_meeting: (artifactItems ?? []).some(
+        (item) =>
+          item.kind === "file" &&
+          (/^artifact\/meeting\/formal_meeting_r(?:[2-9]|\d{2,})\.json$/i.test(item.path) ||
+            /^results\/MoM\/R(?:[2-9]|\d{2,})-M\d+\.html$/i.test(item.path)),
+      ),
+      general_update_draft: (artifactItems ?? []).some(
+        (item) =>
+          item.kind === "file" &&
+          (/^artifact\/meeting\/formal_meeting_r(?:[2-9]|\d{2,})\.json$/i.test(item.path) ||
+            /^results\/MoM\/R(?:[2-9]|\d{2,})-M\d+\.html$/i.test(item.path)),
+      ),
       DR:
         hasArtifactPath("output/design_rationale.md") ||
         hasArtifactPath("results/design_rationale.html"),
@@ -495,8 +549,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     [projectId, artifactItems, project.data?.project],
   );
   const effectiveStageOverrides = useMemo(
-    () => stageOverridesWithForce(stageOverrides, configQuery.data),
-    [configQuery.data, stageOverrides],
+    () => restrictCompletedStageOverrides(
+      stageOverridesWithForce(stageOverrides, configQuery.data),
+      docsComplete,
+    ),
+    [configQuery.data, docsComplete, stageOverrides],
   );
   const agentStageOverrides = projectId ? effectiveStageOverrides : INITIAL_AGENT_STAGE_OVERRIDES;
   const { loading: historyLoading } = useProjectChatHydration(
@@ -545,9 +602,12 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           }))
         : undefined;
       const stageOverridesForRun = projectId
-        ? stageOverridesForCheckpoint(
-            stageOverridesWithForce(stageOverrides, runConfig),
-            rawRunCheckpoint,
+        ? restrictCompletedStageOverrides(
+            stageOverridesForCheckpoint(
+              stageOverridesWithForce(stageOverrides, runConfig),
+              rawRunCheckpoint,
+            ),
+            docsComplete,
           )
         : undefined;
       const targetProjectId = projectId ?? (await createProject(runIdea)).project_id;
@@ -685,6 +745,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             compact={headerCompact}
             runCheckpoint={runCheckpoint}
             artifactItems={artifactItems ?? []}
+            completedDisplayOnly={docsComplete}
           />
           <StageToggleMenu
             disabled={stageDisabled}
@@ -692,6 +753,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             stageOverrides={stageOverrides}
             existingOutputs={existingStageOutputs}
             compact={headerCompact}
+            enabledRowIds={docsComplete ? ["general_meeting", "DR", "SRS"] : undefined}
           />
         </>
       }

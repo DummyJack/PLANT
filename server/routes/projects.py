@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -89,18 +90,23 @@ def create_project(payload: ProjectCreate, request: Request):
         raise HTTPException(status_code=400, detail="rough_idea is required")
     store = Store(base_dir(request))
     project_id = store.create_project()
-    project_store = Store(base_dir(request), project_id)
-    artifact = {
-        "rough_idea": rough_idea,
-        "stakeholders": [],
-        "scope": {"in_scope": [], "out_of_scope": []},
-        "URL": [],
-        "feedback": {},
-        "system_models": [],
-        "meta": {"last_round": 0},
-    }
-    sync_output_language(rough_idea, artifact)
-    project_store.save_artifact(artifact)
+    project_root = base_dir(request) / "projects" / project_id
+    try:
+        project_store = Store(base_dir(request), project_id)
+        artifact = {
+            "rough_idea": rough_idea,
+            "stakeholders": [],
+            "scope": {"in_scope": [], "out_of_scope": []},
+            "URL": [],
+            "feedback": {},
+            "system_models": [],
+            "meta": {"last_round": 0},
+        }
+        sync_output_language(rough_idea, artifact)
+        project_store.save_artifact(artifact)
+    except Exception:
+        shutil.rmtree(project_root, ignore_errors=True)
+        raise
     return {"project_id": project_id, "rough_idea": rough_idea}
 
 

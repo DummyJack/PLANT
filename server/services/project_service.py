@@ -91,7 +91,8 @@ class ProjectService:
 
     def ensure_project(self, project_id: str) -> Store:
         project_dir = self.base_dir / "projects" / project_id
-        if not project_dir.exists() or not project_dir.is_dir():
+        project_file = project_dir / "artifact" / "project.json"
+        if not project_dir.exists() or not project_dir.is_dir() or not project_file.exists():
             raise HTTPException(status_code=404, detail="Project not found")
         return self.store(project_id)
 

@@ -773,7 +773,7 @@ function ModelDualView({
           )}
           onClick={() => setTab("diagram")}
         >
-          圖表
+          模型
         </button>
         <button
           type="button"
@@ -794,7 +794,7 @@ function ModelDualView({
           {!imagePath ? (
             <p className="text-sm text-slate-500">圖形尚無法預覽</p>
           ) : image.isLoading ? (
-            <p className="text-sm text-slate-500">載入圖表中…</p>
+            <p className="text-sm text-slate-500">載入模型中…</p>
           ) : image.data?.content ? (
             <img
               src={`data:${image.data.mime ?? "image/png"};base64,${image.data.content}`}
@@ -1955,7 +1955,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           ref={iframeRef}
           title={title || "產出物"}
           src={htmlPreviewUrl ?? undefined}
-          sandbox="allow-same-origin"
+          sandbox="allow-same-origin allow-scripts allow-downloads"
           onLoad={collectHtmlToc}
           className="min-h-0 flex-1 border-0 bg-slate-50/50"
         />
