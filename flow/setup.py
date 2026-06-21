@@ -261,6 +261,8 @@ class Flow:
             "base_url",
             "api_key",
             "json_response_format",
+            "thinking_level",
+            "thinking_budget",
         )
         for key in passthrough_keys:
             if per_agent.get(key) is not None:

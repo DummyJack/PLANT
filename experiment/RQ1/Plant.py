@@ -16,6 +16,7 @@ if str(EXPERIMENT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 import numpy as np
 
+from utils import json_dump_no_scientific
 from utils.clean import apply_entrypoint_bootstrap
 
 apply_entrypoint_bootstrap()
@@ -32,6 +33,114 @@ ask_max_tasks = True
 ask_runs = True
 
 load_dotenv(BASE_DIR / ".env")
+
+def load_checkpoint_file(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"checkpoint 檔案無法讀取，請修復或刪除後再續跑：{path}") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"checkpoint 檔案格式錯誤，最外層必須是 object：{path}")
+    return payload
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json_dump_no_scientific(payload, f, indent=2, ensure_ascii=False)
+    tmp_path.replace(path)
+
+
+def merge_cost_payloads(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    if not previous:
+        return current
+    if not current:
+        return previous
+    merged_agents: Dict[str, Any] = {}
+    previous_agents = previous.get("agents") or {}
+    current_agents = current.get("agents") or {}
+    for agent in sorted(set(previous_agents.keys()) | set(current_agents.keys())):
+        prev = previous_agents.get(agent) or {}
+        cur = current_agents.get(agent) or {}
+        merged_agents[agent] = {
+            "model": cur.get("model") or prev.get("model") or "",
+            "input_tokens": int(prev.get("input_tokens", 0) or 0) + int(cur.get("input_tokens", 0) or 0),
+            "output_tokens": int(prev.get("output_tokens", 0) or 0) + int(cur.get("output_tokens", 0) or 0),
+            "total_tokens": int(prev.get("total_tokens", 0) or 0) + int(cur.get("total_tokens", 0) or 0),
+            "run_time(s)": round(float(prev.get("run_time(s)", 0.0) or 0.0) + float(cur.get("run_time(s)", 0.0) or 0.0), 3),
+            "estimated_cost(USD)": round(float(prev.get("estimated_cost(USD)", 0.0) or 0.0) + float(cur.get("estimated_cost(USD)", 0.0) or 0.0), 8),
+        }
+    totals = {
+        "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in merged_agents.values()),
+        "output_tokens": sum(int(v.get("output_tokens", 0) or 0) for v in merged_agents.values()),
+        "total_tokens": sum(int(v.get("total_tokens", 0) or 0) for v in merged_agents.values()),
+        "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in merged_agents.values()), 3),
+        "estimated_cost(USD)": round(sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in merged_agents.values()), 8),
+    }
+    return {"agents": merged_agents, "totals": totals}
+
+
+def available_rq1_checkpoints(results_dir: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for path in sorted(results_dir.glob(f"checkpoint_{OUTPUT_PREFIX}_*.json")):
+        run_id = path.stem.replace(f"checkpoint_{OUTPUT_PREFIX}_", "", 1)
+        invalid = False
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            invalid = True
+            payload = {}
+        if not isinstance(payload, dict):
+            invalid = True
+            payload = {}
+        completed = 0
+        try:
+            completed = int(payload.get("completed_task_count", 0) or 0)
+        except (TypeError, ValueError):
+            invalid = True
+        rows.append({"run_id": run_id, "path": path, "completed": completed, "invalid": invalid})
+    return rows
+
+
+def choose_resume_run_id(results_dir: Path) -> str:
+    if not ask_runs:
+        return ""
+
+    checkpoints = available_rq1_checkpoints(results_dir)
+    if not checkpoints:
+        return ""
+
+    print("\n偵測到 RQ1 Plant checkpoint：")
+    for idx, row in enumerate(checkpoints, start=1):
+        suffix = "，檔案可能損壞" if row.get("invalid") else ""
+        print(f"  {idx}. run_id={row['run_id']}，已完成 {row['completed']} 個 task{suffix}")
+    print("  0. 開始新的 run")
+    raw = input("請選擇要續跑的 checkpoint（Enter/0: 新 run）：").strip()
+    if not raw or raw == "0":
+        return ""
+    try:
+        index = int(raw)
+    except ValueError:
+        return ""
+    if 1 <= index <= len(checkpoints):
+        return str(checkpoints[index - 1]["run_id"])
+    return ""
+
+
+def task_index_from_id(task_id: str) -> Optional[int]:
+    raw = str(task_id or "").strip()
+    if not raw.startswith("task_"):
+        return None
+    try:
+        return int(raw.split("_", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
 
 def main() -> None:
     from Plant.config import (
@@ -56,7 +165,6 @@ def main() -> None:
         task_implicit_requirements,
         task_initial_requirements,
     )
-    from utils import json_dump_no_scientific
 
     cfg_path = DEFAULT_CONFIG_PATH.resolve()
     exp_cfg = load_json(cfg_path)
@@ -84,7 +192,10 @@ def main() -> None:
     if max_tasks is not None and max_tasks > 0:
         tasks = tasks[:max_tasks]
 
-    runs = None
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    resume_run_id = choose_resume_run_id(RESULTS_DIR)
+
+    runs = 1 if resume_run_id else None
     if runs is None and ask_runs:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
@@ -112,7 +223,6 @@ def main() -> None:
     assert_models_have_pricing(flow_cfg, exp_cfg)
 
     verbose = bool(exp_cfg.get("verbose", True))
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     run_results: List[Dict[str, Any]] = []
     run_metrics: List[Dict[str, Any]] = []
@@ -122,8 +232,13 @@ def main() -> None:
     round_ids_used: List[str] = []
 
     for run_i in range(runs):
-        run_id = str(next_result_index(OUTPUT_PREFIX, RESULTS_DIR))
+        run_id = resume_run_id if resume_run_id and run_i == 0 else str(next_result_index(OUTPUT_PREFIX, RESULTS_DIR))
         round_ids_used.append(run_id)
+        prefix = OUTPUT_PREFIX
+        result_path = RESULTS_DIR / f"result_{prefix}_{run_id}.json"
+        record_path = RESULTS_DIR / f"record_{prefix}_{run_id}.json"
+        cost_path = RESULTS_DIR / f"cost_{prefix}_{run_id}.json"
+        checkpoint_path = RESULTS_DIR / f"checkpoint_{prefix}_{run_id}.json"
 
         print(f"\n=== Run {run_i + 1}/{runs}（run_id={run_id}）===")
         print("\n正在建立環境...")
@@ -142,12 +257,102 @@ def main() -> None:
         print("開始執行全量評估實驗...")
         print("=" * 60)
 
+        checkpoint_payload = (
+            load_checkpoint_file(checkpoint_path)
+            if resume_run_id and run_i == 0
+            else {}
+        )
+        task_result_rows: List[Dict[str, Any]] = [
+            row
+            for row in (checkpoint_payload.get("task_result_rows", []) if isinstance(checkpoint_payload, dict) else [])
+            if isinstance(row, dict)
+        ]
+        completed_task_ids = {str(row.get("task_id") or "") for row in task_result_rows}
+        completed_indexes = [
+            idx
+            for idx in (task_index_from_id(task_id) for task_id in completed_task_ids)
+            if idx is not None
+        ]
+        if completed_indexes and max(completed_indexes) >= len(tasks):
+            print(
+                "錯誤：checkpoint 已完成的 task 超出本次選擇的任務數量。"
+                "續跑時請輸入與原 run 相同或更大的任務數量。"
+            )
+            sys.exit(1)
+        selected_task_count = (
+            int(checkpoint_payload.get("selected_task_count", 0) or 0)
+            if isinstance(checkpoint_payload, dict)
+            else 0
+        )
+        if selected_task_count and selected_task_count != len(tasks):
+            print(
+                f"錯誤：checkpoint 原本任務數量為 {selected_task_count}，"
+                f"本次選擇為 {len(tasks)}。續跑時請使用相同任務數量。"
+            )
+            sys.exit(1)
+        previous_cost_payload = (
+            checkpoint_payload.get("cost_payload", {})
+            if isinstance(checkpoint_payload, dict)
+            else {}
+        )
+        if resume_run_id and task_result_rows and not previous_cost_payload:
+            print(
+                "警告：此 checkpoint 沒有 cost_payload，成本只能統計本次續跑新增部分。"
+                "若需要完整成本，請使用新版 checkpoint 或重新跑該 run。"
+            )
+
+        def persist_progress() -> Dict[str, Any]:
+            result_payload = build_result_payload(
+                flow_cfg=flow_cfg,
+                exp_cfg=exp_cfg,
+                task_results=task_result_rows,
+            )
+            with result_path.open("w", encoding="utf-8") as f:
+                json_dump_no_scientific(result_payload, f, indent=2, ensure_ascii=False)
+            with record_path.open("w", encoding="utf-8") as f:
+                json_dump_no_scientific(
+                    [
+                        {
+                            "task_id": t["task_id"],
+                            "task_name": t["task_name"],
+                            "initial_requirements": t["initial_requirements"],
+                            "user_answer_quality": t["user_answer_quality"],
+                            "Plant": build_plant_models(flow_cfg),
+                            "conversation": t["conversation"],
+                        }
+                        for t in task_result_rows
+                    ],
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            cost_payload = merge_cost_payloads(
+                previous_cost_payload,
+                build_cost_payload(flow, oracle_user),
+            )
+            with cost_path.open("w", encoding="utf-8") as f:
+                json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
+            write_json_atomic(
+                checkpoint_path,
+                {
+                    "run_id": run_id,
+                    "selected_task_count": len(tasks),
+                    "completed_task_count": len(task_result_rows),
+                    "task_result_rows": task_result_rows,
+                    "cost_payload": cost_payload,
+                },
+            )
+            return cost_payload
+
         records: List[Dict[str, Any]] = []
-        task_result_rows: List[Dict[str, Any]] = []
         t0 = time.perf_counter()
         for i, task in enumerate(tasks, start=1):
+            task_id = f"task_{i - 1}"
+            if task_id in completed_task_ids:
+                print(f"\n任務 {i}/{len(tasks)}：{task_id} 已完成，略過")
+                continue
             print()
-            print(f"任務 {i}/{len(tasks)}：task_{i-1}")
+            print(f"任務 {i}/{len(tasks)}：{task_id}")
             print(f"系統名稱：{task.get('name', 'N/A')}")
             print(f"應用類型：{task.get('application_type', 'N/A')}")
             print(f"初始需求：{task_initial_requirements(task)[:100]}...")
@@ -173,6 +378,8 @@ def main() -> None:
                 token_cost=task_token_cost,
             )
             task_result_rows.append(task_record)
+            completed_task_ids.add(task_id)
+            cost_payload = persist_progress()
             print(
                 f"\n任務 {i} 完成：總輪數={int(task_record.get('turns', 0) or 0)}，"
                 f"已取得需求數={int(task_record.get('total_elicited', 0) or 0)}"
@@ -186,34 +393,7 @@ def main() -> None:
             task_results=task_result_rows,
         )
 
-        prefix = OUTPUT_PREFIX
-        result_path = RESULTS_DIR / f"result_{prefix}_{run_id}.json"
-        record_path = RESULTS_DIR / f"record_{prefix}_{run_id}.json"
-        cost_path = RESULTS_DIR / f"cost_{prefix}_{run_id}.json"
-
-        with result_path.open("w", encoding="utf-8") as f:
-            json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
-        with record_path.open("w", encoding="utf-8") as f:
-
-            json_dump_no_scientific(
-                [
-                    {
-                        "task_id": t["task_id"],
-                        "task_name": t["task_name"],
-                        "initial_requirements": t["initial_requirements"],
-                        "user_answer_quality": t["user_answer_quality"],
-                        "Plant": build_plant_models(flow_cfg),
-                        "conversation": t["conversation"],
-                    }
-                    for t in task_result_rows
-                ],
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-        cost_payload = build_cost_payload(flow, oracle_user)
-        with cost_path.open("w", encoding="utf-8") as f:
-            json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
+        cost_payload = persist_progress()
 
         print_final_summary(result, task_result_rows)
 

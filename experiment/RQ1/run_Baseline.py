@@ -107,6 +107,7 @@ def main():
         base_url = os.environ.get("GEMINI_BASE_URL") or GEMINI_OPENAI_COMPAT_BASE
     interviewer_model = pick("interviewer_model", "gpt-4o-mini")
     gym_model = pick("gym_model", "gpt-5.2")
+    thinking_level = str(pick("thinking_level", "") or "").strip() or None
     use_thinking = bool(pick("use_thinking", False))
     data_path = resolve_data_path(DEFAULT_DATA_FILE)
 
@@ -239,12 +240,14 @@ def main():
             judge_temperature=judge_temperature,
             judge_max_tokens=judge_max_tokens,
             judge_timeout=judge_timeout,
+            judge_thinking_level=thinking_level,
             user_api_key=user_api_key,
             user_base_url=user_base_url,
             user_model_name=gym_model,
             user_temperature=user_temperature,
             user_max_tokens=user_max_tokens,
             user_timeout=user_timeout,
+            user_thinking_level=thinking_level,
             user_answer_quality=user_answer_quality,
             max_turns=max_turns,
             verbose=verbose,
@@ -275,6 +278,7 @@ def main():
             max_tokens=interviewer_max_tokens,
             timeout=interviewer_timeout,
             use_thinking=use_thinking,
+            thinking_level=thinking_level,
         )
         interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
         user_cost_tracker = CostTracker(model_name=gym_model)

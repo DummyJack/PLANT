@@ -35,8 +35,9 @@ CN_PAIRS_CSV = "cn_pairs.csv"
 RESULTS_DIR = RQ2_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 
-BASELINE_PROVIDER = "openai"
-BASELINE_MODEL = "gpt-4.1"
+BASELINE_PROVIDER = "gemini"
+BASELINE_MODEL = "gemini-3-flash-preview"
+BASELINE_THINKING_LEVEL = "minimal"
 BASELINE_TEMPERATURE = 0.0
 ask_runs = True
 MAX_WORKERS = 5
@@ -193,7 +194,17 @@ class BaselineModel:
         assert self.genai_client is not None and self.genai_types is not None
         assert self.gemini_lock is not None
 
-        cfg = self.genai_types.GenerateContentConfig(temperature=self.temperature)
+        cfg_kw = {"temperature": self.temperature}
+        fields = getattr(self.genai_types.ThinkingConfig, "model_fields", {})
+        if "thinking_level" in fields:
+            cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
+                thinking_level=BASELINE_THINKING_LEVEL
+            )
+        else:
+            cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
+                thinking_budget=0
+            )
+        cfg = self.genai_types.GenerateContentConfig(**cfg_kw)
         self.cost_tracker.start()
         response = None
         try:

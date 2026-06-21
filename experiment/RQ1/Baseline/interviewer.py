@@ -14,6 +14,7 @@ class Interviewer:
         max_tokens: int = 2048,
         timeout: float = 30.0,
         use_thinking: bool = False,
+        thinking_level: Optional[str] = None,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -21,6 +22,7 @@ class Interviewer:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.thinking_level = thinking_level
 
         self.use_thinking = use_thinking
 
@@ -32,6 +34,7 @@ class Interviewer:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "timeout": self.timeout,
+            "thinking_level": self.thinking_level,
         }
 
     def ask_question(self, conversation_history: List[Dict[str, str]], return_usage: bool = False) -> Any:

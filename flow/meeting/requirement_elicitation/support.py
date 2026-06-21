@@ -272,28 +272,6 @@ def build_recent_ask_history(
     return rows
 
 # ========
-# Defines find finish proposal function for this module workflow.
-# ========
-def find_finish_proposal(
-    conversation: List[Dict[str, Any]],
-    stop_phrase: str,
-) -> tuple[str, str]:
-    for c in conversation or []:
-        if not isinstance(c, dict):
-            continue
-        agent = str(c.get("agent") or "").strip()
-        if not agent or agent == "user":
-            continue
-        resp = c.get("response", {}) if isinstance(c.get("response"), dict) else {}
-        agent_action = str(resp.get("action") or "").strip().lower()
-        if agent_action == FINISH_AGENT_ACTION:
-            return agent, stop_phrase
-        text = get_conversation_text(c)
-        if text and stop_phrase in text:
-            return agent, stop_phrase
-    return "", ""
-
-# ========
 # Defines extract first question function for this module workflow.
 # ========
 def extract_first_question(text: str) -> str:

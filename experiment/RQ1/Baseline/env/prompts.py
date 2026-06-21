@@ -42,6 +42,17 @@ def apply_token_limit_to_create_kw(
         create_kw["max_tokens"] = max_val
 
 
+def apply_gemini_thinking_config(
+    create_kw: Dict[str, Any], model_config: Dict[str, Any]
+) -> None:
+    if not openai_endpoint_is_gemini_compat(model_config):
+        return
+    level = str(model_config.get("thinking_level") or "").strip().lower()
+    if not level:
+        return
+    create_kw["reasoning_effort"] = level
+
+
 def chat_message_text(message: Any) -> str:
     c = getattr(message, "content", None) if message is not None else None
     return (c or "").strip() if isinstance(c, str) else ""
@@ -75,6 +86,7 @@ def model_call(
                 timeout=model_config["timeout"],
             )
             apply_token_limit_to_create_kw(create_kw, model_config, max_val)
+            apply_gemini_thinking_config(create_kw, model_config)
             response = client.chat.completions.create(**create_kw)
             response_text = chat_message_text(response.choices[0].message)
 
@@ -154,6 +166,7 @@ def model_call_with_thinking(
             else:
                 create_kw["extra_body"] = {"enable_thinking": True}
             apply_token_limit_to_create_kw(create_kw, model_config, max_val)
+            apply_gemini_thinking_config(create_kw, model_config)
             response = client.chat.completions.create(**create_kw)
             response_text = chat_message_text(response.choices[0].message)
 

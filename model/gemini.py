@@ -1,12 +1,16 @@
 # Handles gemini logic for model provider integration and shared LLM client behavior.
-import json
 import logging
 import os
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .base import AUTH_ERROR_MESSAGE, BaseLLM, normalize_authentication_error
+from .base import (
+    AUTH_ERROR_MESSAGE,
+    BaseLLM,
+    normalize_authentication_error,
+    parse_json_object,
+)
 
 
 def gemini_split_messages(
@@ -40,6 +44,8 @@ class GeminiModel(BaseLLM):
     # Defines __init__ function for this module workflow.
     # ========
     def __init__(self, model_name: str, **kwargs):
+        self.thinking_level = kwargs.pop("thinking_level", None)
+        self.thinking_budget = kwargs.pop("thinking_budget", None)
         super().__init__(model_name, **kwargs)
         try:
             from google import genai
@@ -51,6 +57,31 @@ class GeminiModel(BaseLLM):
         if not api_key:
             raise ValueError(AUTH_ERROR_MESSAGE)
         self.client = genai.Client(api_key=api_key)
+
+    # ========
+    # Defines thinking config function for this module workflow.
+    # ========
+    def thinking_config(self) -> Optional[Any]:
+        from google.genai import types
+
+        level = str(self.thinking_level or "").strip().lower()
+        budget = self.thinking_budget
+        if level and budget is not None:
+            raise ValueError("Gemini thinking_level 與 thinking_budget 不能同時設定")
+        if not level and budget is None:
+            return None
+
+        fields = getattr(types.ThinkingConfig, "model_fields", {})
+        if level:
+            if "thinking_level" in fields:
+                return types.ThinkingConfig(thinking_level=level)
+            if level == "minimal" and "thinking_budget" in fields:
+                return types.ThinkingConfig(thinking_budget=0)
+            raise ValueError(
+                "目前安裝的 google-genai 不支援 thinking_level；"
+                "請升級 google-genai，或改用 thinking_budget。"
+            )
+        return types.ThinkingConfig(thinking_budget=int(budget))
 
     # ========
     # Defines gemini response text function for this module workflow.
@@ -114,6 +145,9 @@ class GeminiModel(BaseLLM):
         mt = kw.get("max_tokens")
         if mt is not None:
             cfg_kw["max_output_tokens"] = int(mt)
+        thinking_config = self.thinking_config()
+        if thinking_config is not None:
+            cfg_kw["thinking_config"] = thinking_config
         if response_mime_type:
             cfg_kw["response_mime_type"] = response_mime_type
         if not cfg_kw:
@@ -240,6 +274,9 @@ class GeminiModel(BaseLLM):
         mt = kw.get("max_tokens")
         if mt is not None:
             cfg_kw["max_output_tokens"] = int(mt)
+        thinking_config = self.thinking_config()
+        if thinking_config is not None:
+            cfg_kw["thinking_config"] = thinking_config
         return types.GenerateContentConfig(**cfg_kw)
 
     # ========
@@ -484,15 +521,6 @@ class GeminiModel(BaseLLM):
         self.add_usage_from_response(response, action=action, run_time_s=run_s)
         text = self.gemini_response_text(response).strip()
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            import re
-
-            json_match = re.search(
-                r"```(?:json)?\s*(\{.*?\})\s*```",
-                text,
-                re.DOTALL,
-            )
-            if json_match:
-                return json.loads(json_match.group(1))
+            return parse_json_object(text)
+        except ValueError:
             raise ValueError(f"無法從回應中解析 JSON: {text}")

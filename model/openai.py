@@ -1,10 +1,14 @@
 # Handles openai logic for model provider integration and shared LLM client behavior.
-import json
 import os
 
 from typing import Dict, List, Optional
 
-from .base import AUTH_ERROR_MESSAGE, BaseLLM, normalize_authentication_error
+from .base import (
+    AUTH_ERROR_MESSAGE,
+    BaseLLM,
+    normalize_authentication_error,
+    parse_json_object,
+)
 
 try:
     from openai import OpenAI
@@ -102,4 +106,4 @@ class OpenAIModel(BaseLLM):
                 action=action,
                 run_time_s=run_s,
             )
-        return json.loads(response.choices[0].message.content)
+        return parse_json_object(response.choices[0].message.content)

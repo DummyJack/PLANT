@@ -1,5 +1,6 @@
 # Handles base logic for model provider integration and shared LLM client behavior.
 import inspect
+import json
 import os
 import re
 
@@ -17,6 +18,56 @@ PROVIDER_API_KEY_ENV = {
 }
 
 AUTH_ERROR_MESSAGE = "API Key 無效或已失效，請到設定中重新輸入。"
+
+
+def parse_json_object(text: str) -> Dict[str, Any]:
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("empty JSON response")
+
+    decoder = json.JSONDecoder()
+    try:
+        obj, idx = decoder.raw_decode(source)
+        trailing = source[idx:].strip()
+        if not trailing or all(ch in "}]`" for ch in trailing):
+            if isinstance(obj, dict):
+                return obj
+            raise ValueError("JSON response is not an object")
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", source, re.DOTALL)
+    if match:
+        return parse_json_object(match.group(1))
+
+    start = source.find("{")
+    if start < 0:
+        raise ValueError("JSON object start not found")
+    depth = 0
+    in_string = False
+    escape = False
+    for pos in range(start, len(source)):
+        ch = source[pos]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                obj = json.loads(source[start : pos + 1])
+                if isinstance(obj, dict):
+                    return obj
+                raise ValueError("JSON response is not an object")
+    raise ValueError("JSON object end not found")
 
 
 def is_authentication_error(exc: BaseException) -> bool:

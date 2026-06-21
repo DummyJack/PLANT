@@ -68,7 +68,7 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
 # Defines next result index function for this experiment module.
 # ========
 def next_result_index(prefix: str, results_dir: Path) -> int:
-    pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
+    pat = re.compile(rf"^(?:result|record|cost|checkpoint)_{re.escape(prefix)}_(\d+)\.json$")
     max_idx = 0
     for p in results_dir.glob(f"*_{prefix}_*.json"):
         m = pat.match(p.name)
@@ -225,9 +225,10 @@ def write_rq2_outputs(
     result: Dict[str, Any],
     record: Dict[str, Any],
     cost: Dict[str, Any],
+    run_id: Optional[str] = None,
 ) -> Dict[str, Path]:
     results_dir.mkdir(parents=True, exist_ok=True)
-    run_idx = next_result_index(prefix, results_dir)
+    run_idx = str(run_id or next_result_index(prefix, results_dir))
     result_path = results_dir / f"result_{prefix}_{run_idx}.json"
     record_path = results_dir / f"record_{prefix}_{run_idx}.json"
     cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"

@@ -18,7 +18,6 @@ from .support import (
     derive_turn_summary,
     elicitation_phase_for_turn,
     extract_candidates,
-    find_finish_proposal,
     merge_turn_summary,
     clean_elicited_reqts,
     split_text_by_speaking_as,
@@ -373,6 +372,29 @@ def planned_targets_for_agent(
 
 
 # ========
+# Defines finish agents from conversation function for this module workflow.
+# ========
+def finish_agents_from_conversation(
+    conversation: List[Dict[str, Any]],
+    stop_phrase: str,
+) -> List[str]:
+    agents: List[str] = []
+    for row in conversation or []:
+        if not isinstance(row, dict):
+            continue
+        agent = str(row.get("agent") or "").strip()
+        if not agent or agent == "user":
+            continue
+        response = row.get("response") if isinstance(row.get("response"), dict) else {}
+        action = str(response.get("action") or "").strip().lower()
+        text = str(response.get("text") or response.get("content") or "").strip()
+        if action == FINISH_AGENT_ACTION or (text and stop_phrase in text):
+            if agent not in agents:
+                agents.append(agent)
+    return agents
+
+
+# ========
 # Defines default plan function for this module workflow.
 # ========
 def default_plan(coordinator: Any) -> Dict[str, Any]:
@@ -434,24 +456,71 @@ def run_elicitation(
     )
     display_round_num = max(1, int(round_num))
 
-    def append_finish_turn(final_turn: int, final_agent: str, final_text: str) -> None:
+    def append_finish_turn(
+        final_turn: int,
+        final_agent: Any,
+        final_text: str,
+        *,
+        forced_finish: bool = True,
+    ) -> None:
         final_recent_ask_history = build_recent_ask_history(elicitation_trace)
+        final_agents = (
+            [
+                str(agent or "").strip()
+                for agent in final_agent
+                if str(agent or "").strip()
+            ]
+            if isinstance(final_agent, list)
+            else [str(final_agent or "").strip()]
+        )
+        final_agents = list(dict.fromkeys(agent for agent in final_agents if agent))
+        if not final_agents:
+            final_agents = ["mediator"]
+        final_conversation = [
+            {"agent": agent, "text": final_text, "action": FINISH_AGENT_ACTION}
+            for agent in final_agents
+        ]
         final_turn_log = {
             "round": round_num,
             "turn": final_turn,
             "meeting_phase": "conclusion",
             "issue_id": f"ELICIT-R{display_round_num}-T{final_turn}",
-            "conversation": [{"agent": final_agent, "text": final_text, "action": FINISH_AGENT_ACTION}],
+            "conversation": final_conversation,
             "discussion_mode": "sequential",
-            "participants": [final_agent],
-                        "judged_action_agent": final_agent,
+            "participants": final_agents,
+                        "judged_action_agent": final_agents[0],
             "judged_action": final_text,
             "recent_ask_history": final_recent_ask_history,
             "new_candidates_count": 0,
             "new_candidate_texts": [],
-            "forced_finish": True,
+            "forced_finish": forced_finish,
         }
         elicitation_trace.append(final_turn_log)
+
+    def finalize_elicitation(reason: str) -> Dict[str, Any]:
+        cleaned_candidates = clean_elicited_reqts(all_candidates)
+        rows_by_round = meeting_rows(
+            elicitation_trace,
+            round_num=round_num,
+        )
+        coordinator.flow.logger.info(
+            "  reason=%s | 提取的需求：%s 筆",
+            reason,
+            len(cleaned_candidates),
+        )
+        elicitation = artifact.setdefault("elicitation", {})
+        elicitation["plan"] = {
+            "round_limit": max_turns,
+            "participants": plan.get("participants", []) or [],
+            "mode": "simultaneous",
+        }
+        elicitation["meeting"] = rows_by_round
+        elicitation["elicited_reqts"] = list(elicitation.get("elicited_reqts", []) or []) + list(cleaned_candidates)
+        elicitation["elicitation_stop_reason"] = reason
+        artifact.setdefault("elicitation_trace", []).extend(elicitation_trace)
+
+        coordinator.flow.store.save_artifact(artifact)
+        return artifact
 
     for turn in range(1, max_turns):
         meeting_phase = elicitation_phase_for_turn(turn, max_turns)
@@ -569,54 +638,74 @@ def run_elicitation(
         interviewer_conversation = list(conversation)
         interviewer_finish = False
         closure_vote: Dict[str, Any] = {}
-        finish_proposer, finish_text = find_finish_proposal(
+        finish_agents = finish_agents_from_conversation(
             interviewer_conversation,
             stop_phrase,
         )
+        finish_proposer = finish_agents[0] if finish_agents else ""
+        finish_text = stop_phrase if finish_agents else ""
         effective_conversation = list(interviewer_conversation)
         if finish_text:
             if not finish_proposer:
                 raise RuntimeError("需求擷取收束缺少提出收束的 agent")
-            closure_vote = collect_closure_votes(
-                coordinator,
-                artifact,
-                round_num=round_num,
-                turn=turn,
-                proposer_role=finish_proposer,
-                recent_ask_history=recent_ask_history,
-                candidate_texts=[
-                    str(c.get("text") or "").strip()
-                    for c in all_candidates
-                    if isinstance(c, dict) and str(c.get("text") or "").strip()
-                ],
-            )
-            if closure_vote.get("approved"):
+            if len(finish_agents) >= 2:
                 coordinator.flow.logger.info(
-                    "  收束投票通過：close=%s continue=%s",
-                    closure_vote.get("close_count"),
-                    closure_vote.get("continue_count"),
+                    "  停止：本輪有 %s 位 agent 實際提出 propose_finish，視為需求擷取結束",
+                    len(finish_agents),
                 )
                 interviewer_finish = True
                 effective_conversation = [
                     {
-                        "agent": finish_proposer,
+                        "agent": agent,
                         "response": {
                             "text": stop_phrase,
                             "content": stop_phrase,
                             "action": FINISH_AGENT_ACTION,
                         },
                     }
+                    for agent in finish_agents
                 ]
             else:
-                coordinator.flow.logger.info(
-                    "  收束投票未通過：close=%s continue=%s，本輪後繼續追問",
-                    closure_vote.get("close_count"),
-                    closure_vote.get("continue_count"),
+                closure_vote = collect_closure_votes(
+                    coordinator,
+                    artifact,
+                    round_num=round_num,
+                    turn=turn,
+                    proposer_role=finish_proposer,
+                    recent_ask_history=recent_ask_history,
+                    candidate_texts=[
+                        str(c.get("text") or "").strip()
+                        for c in all_candidates
+                        if isinstance(c, dict) and str(c.get("text") or "").strip()
+                    ],
                 )
-                effective_conversation = without_finish_proposals(
-                    interviewer_conversation,
-                    stop_phrase,
-                )
+                if closure_vote.get("approved"):
+                    coordinator.flow.logger.info(
+                        "  收束投票通過：close=%s continue=%s",
+                        closure_vote.get("close_count"),
+                        closure_vote.get("continue_count"),
+                    )
+                    interviewer_finish = True
+                    effective_conversation = [
+                        {
+                            "agent": finish_proposer,
+                            "response": {
+                                "text": stop_phrase,
+                                "content": stop_phrase,
+                                "action": FINISH_AGENT_ACTION,
+                            },
+                        }
+                    ]
+                else:
+                    coordinator.flow.logger.info(
+                        "  收束投票未通過：close=%s continue=%s，本輪後繼續追問",
+                        closure_vote.get("close_count"),
+                        closure_vote.get("continue_count"),
+                    )
+                    effective_conversation = without_finish_proposals(
+                        interviewer_conversation,
+                        stop_phrase,
+                    )
 
         question_conversations = user_questions(effective_conversation)
         normalized_question_conversations: List[Dict[str, Any]] = []
@@ -655,6 +744,65 @@ def run_elicitation(
             judged_action_agent = finish_proposer
             judged_text = stop_phrase
         elif not judged_text:
+            if finish_text and closure_vote and not closure_vote.get("approved"):
+                coordinator.flow.logger.info(
+                    "  收束投票未通過且本輪無可追問問題，進入下一輪"
+                )
+                continue
+            planned_finish_agents = [
+                agent
+                for agent, row in (turn_strategy.get("actions") or {}).items()
+                if isinstance(row, dict)
+                and str(row.get("action") or "").strip().lower()
+                == FINISH_AGENT_ACTION
+            ]
+            if planned_finish_agents:
+                if len(planned_finish_agents) >= 2:
+                    append_finish_turn(
+                        turn,
+                        planned_finish_agents,
+                        stop_phrase,
+                        forced_finish=False,
+                    )
+                    coordinator.flow.logger.info(
+                        "  停止：本輪有 %s 位 agent action=propose_finish，視為需求擷取結束",
+                        len(planned_finish_agents),
+                    )
+                    return finalize_elicitation("propose_finish")
+
+                finish_agent = str(planned_finish_agents[0] or "mediator").strip() or "mediator"
+                closure_vote = collect_closure_votes(
+                    coordinator,
+                    artifact,
+                    round_num=round_num,
+                    turn=turn,
+                    proposer_role=finish_agent,
+                    recent_ask_history=recent_ask_history,
+                    candidate_texts=[
+                        str(c.get("text") or "").strip()
+                        for c in all_candidates
+                        if isinstance(c, dict) and str(c.get("text") or "").strip()
+                    ],
+                )
+                if closure_vote.get("approved"):
+                    append_finish_turn(
+                        turn,
+                        finish_agent,
+                        stop_phrase,
+                        forced_finish=False,
+                    )
+                    coordinator.flow.logger.info(
+                        "  收束投票通過：close=%s continue=%s",
+                        closure_vote.get("close_count"),
+                        closure_vote.get("continue_count"),
+                    )
+                    return finalize_elicitation("propose_finish")
+                coordinator.flow.logger.info(
+                    "  單一 propose_finish 收束投票未通過：close=%s continue=%s，進入下一輪",
+                    closure_vote.get("close_count"),
+                    closure_vote.get("continue_count"),
+                )
+                continue
             conversation_preview = []
             for row in effective_conversation:
                 if not isinstance(row, dict):
@@ -930,26 +1078,4 @@ def run_elicitation(
         )
         termination_reason = "max_turn"
 
-    all_candidates = clean_elicited_reqts(all_candidates)
-    rows_by_round = meeting_rows(
-        elicitation_trace,
-        round_num=round_num,
-    )
-    coordinator.flow.logger.info(
-        "  reason=%s | 提取的需求：%s 筆",
-        termination_reason,
-        len(all_candidates),
-    )
-    elicitation = artifact.setdefault("elicitation", {})
-    elicitation["plan"] = {
-        "round_limit": max_turns,
-        "participants": plan.get("participants", []) or [],
-        "mode": "simultaneous",
-    }
-    elicitation["meeting"] = rows_by_round
-    elicitation["elicited_reqts"] = list(elicitation.get("elicited_reqts", []) or []) + list(all_candidates)
-    elicitation["elicitation_stop_reason"] = termination_reason
-    artifact.setdefault("elicitation_trace", []).extend(elicitation_trace)
-
-    coordinator.flow.store.save_artifact(artifact)
-    return artifact
+    return finalize_elicitation(termination_reason)

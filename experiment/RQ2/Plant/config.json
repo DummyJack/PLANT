@@ -10,8 +10,9 @@
   },
   "agent_models": {
     "default": {
-      "provider": "openai",
-      "model": "gpt-4.1",
+      "provider": "gemini",
+      "model": "gemini-3-flash-preview",
+      "thinking_level": "minimal",
       "temperature": 0
     }
   }

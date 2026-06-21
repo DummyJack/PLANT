@@ -268,6 +268,7 @@ class ReqElicitGym(gym.Env):
             "temperature": self.config.judge_temperature,
             "max_tokens": self.config.judge_max_tokens,
             "timeout": self.config.judge_timeout,
+            "thinking_level": self.config.judge_thinking_level,
         }
 
 
@@ -278,6 +279,7 @@ class ReqElicitGym(gym.Env):
             "temperature": self.config.user_temperature,
             "max_tokens": self.config.user_max_tokens,
             "timeout": self.config.user_timeout,
+            "thinking_level": self.config.user_thinking_level,
         }
 
         user_quality_level = self.config.user_answer_quality
