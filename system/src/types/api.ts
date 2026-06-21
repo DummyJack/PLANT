@@ -14,6 +14,7 @@ export interface ProjectSummary {
   rough_idea?: string;
   scenario?: string;
   has_results?: boolean;
+  has_cost_summary?: boolean;
   status_hint?: string;
   active_run?: {
     run_id: string;
@@ -128,6 +129,24 @@ export interface FileContent {
   editable: boolean;
   readonly: boolean;
   mime?: string;
+}
+
+export interface CostAgentSummary {
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  "run_time(s)"?: number;
+  estimated_cost?: number;
+  "estimated_cost(USD)"?: number;
+  [key: string]: unknown;
+}
+
+export interface CostSummary {
+  project_id?: string;
+  agents?: Record<string, CostAgentSummary>;
+  totals?: CostAgentSummary;
+  [key: string]: unknown;
 }
 
 export interface LibraryRow {

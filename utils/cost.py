@@ -13,6 +13,7 @@ class CostTracker:
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
         "gpt-5.2": {"input": 1.75, "output": 14.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
     }
 
     # ========

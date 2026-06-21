@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronDown, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Coins, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchArtifacts, manualIndexUrl } from "@/api/projects";
+import { fetchArtifacts, fetchCostSummary, manualIndexUrl } from "@/api/projects";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useActiveRun } from "@/hooks/useActiveRun";
 import { useUiStore } from "@/stores/uiStore";
+import { errorMessage } from "@/utils/errorMessage";
+import { CostSummaryModal } from "./CostSummaryModal";
 
 function projectOptionLabel(project: {
   project_id: string;
@@ -59,6 +61,7 @@ export function ProjectHeaderActions({
   const { activeRun } = useActiveRun(projectId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [costModalOpen, setCostModalOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
 
@@ -89,6 +92,16 @@ export function ProjectHeaderActions({
   const hasManual = (artifactsQuery.data?.items ?? []).some(
     (item) => item.kind === "file" && item.path === "manual/index.html",
   );
+  const hasCostSummary =
+    current?.has_cost_summary === true ||
+    (artifactsQuery.data?.items ?? []).some(
+      (item) => item.kind === "file" && item.path === "cost_summary.json",
+    );
+  const costQuery = useQuery({
+    queryKey: ["cost-summary", projectId],
+    queryFn: () => fetchCostSummary(projectId!),
+    enabled: !!projectId && costModalOpen && hasCostSummary,
+  });
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -114,8 +127,25 @@ export function ProjectHeaderActions({
     setProjectMenuOpen(false);
   }, [hasProjects]);
 
+  useEffect(() => {
+    setCostModalOpen(false);
+  }, [projectId]);
+
   return (
     <div className="relative flex min-w-0 items-center gap-1.5">
+      {projectId && hasCostSummary && !compact && (
+        <button
+          type="button"
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
+          aria-label="成本"
+          title="成本"
+          onClick={() => setCostModalOpen(true)}
+        >
+          <Coins className="h-3.5 w-3.5" />
+          <span>成本</span>
+        </button>
+      )}
+
       {projectId && hasManual && !compact && (
         <button
           type="button"
@@ -198,6 +228,19 @@ export function ProjectHeaderActions({
           </button>
           {actionMenuOpen && (
             <div className="absolute right-0 top-full z-40 mt-3 w-32 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
+              {hasCostSummary && compact && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
+                  onClick={() => {
+                    setActionMenuOpen(false);
+                    setCostModalOpen(true);
+                  }}
+                >
+                  <Coins className="h-3.5 w-3.5" />
+                  成本
+                </button>
+              )}
               {hasManual && compact && (
                 <button
                   type="button"
@@ -238,6 +281,14 @@ export function ProjectHeaderActions({
             </div>
           )}
         </div>
+      )}
+      {costModalOpen && (
+        <CostSummaryModal
+          summary={costQuery.data?.cost_summary}
+          loading={costQuery.isLoading || costQuery.isFetching}
+          error={costQuery.error ? errorMessage(costQuery.error, "讀取成本摘要失敗") : null}
+          onClose={() => setCostModalOpen(false)}
+        />
       )}
     </div>
   );

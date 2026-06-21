@@ -48,7 +48,9 @@ class ProjectService:
 
     def _project_hints(self, project_id: str) -> Dict[str, Any]:
         project_id = validate_project_id(project_id)
-        results_dir = self.base_dir / "projects" / project_id / "results"
+        project_dir = self.base_dir / "projects" / project_id
+        results_dir = project_dir / "results"
+        cost_path = project_dir / "cost_summary.json"
         active_run = self.run_manager.get_active_run(project_id) if self.run_manager else None
         active_summary = None
         if active_run:
@@ -59,6 +61,7 @@ class ProjectService:
             }
         return {
             "has_results": results_dir.exists() and any(results_dir.rglob("*")),
+            "has_cost_summary": cost_path.exists(),
             "status_hint": active_run.get("status") if active_run else self._latest_run_status(project_id),
             "active_run": active_summary,
         }

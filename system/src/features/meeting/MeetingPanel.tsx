@@ -315,7 +315,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
 
     const updateHeaderLayout = () => {
       const panelWidth = panel.getBoundingClientRect().width;
-      const nextCompact = panelWidth < 550;
+      const nextCompact = panelWidth < 650;
       setHeaderCompact((current) => (current === nextCompact ? current : nextCompact));
     };
 

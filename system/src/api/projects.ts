@@ -1,4 +1,4 @@
-import type { FileContent, FileTreeNode } from "@/types/api";
+import type { CostSummary, FileContent, FileTreeNode } from "@/types/api";
 import { apiFetch, apiUrl } from "./client";
 
 export function fetchProjects() {
@@ -71,6 +71,12 @@ export function referencePreviewUrl(projectId: string, name: string) {
 
 export function manualIndexUrl(projectId: string) {
   return apiUrl(`/api/projects/${projectId}/manual/index.html`);
+}
+
+export function fetchCostSummary(projectId: string) {
+  return apiFetch<{ project_id: string; cost_summary: CostSummary }>(
+    `/api/projects/${projectId}/cost-summary`,
+  );
 }
 
 export function fetchArtifacts(projectId: string) {
