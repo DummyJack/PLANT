@@ -742,14 +742,14 @@ class RunManager:
             "id": f"stakeholder_statement_{uuid.uuid4().hex[:8]}",
             "kind": "stakeholder_statement_review",
             "title": "利害關係人發言",
-            "description": "請確認、直接編輯，或留下 Human Decision。",
+            "description": "請確認、直接編輯，或留下建議讓 Agent 納入考量後調整。",
             "options": {
                 "stage_id": "stakeholder_statement",
                 "status": "waiting_for_human_decision",
                 "stakeholders": stakeholders,
             },
             "response_schema": {
-                "action": "approve|direct_edit|submit_suggestions|agent_refinement",
+                "action": "approve|direct_edit|submit_suggestions",
                 "stakeholders": [{"name": "string", "text": [{"id": "string", "text": "string"}]}],
                 "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
             },
@@ -766,14 +766,14 @@ class RunManager:
             "id": f"requirements_review_{uuid.uuid4().hex[:8]}",
             "kind": "requirements_review",
             "title": "初始需求分析",
-            "description": "請在對話匡加入建議，按確定送出。",
+            "description": "請確認，或留下建議讓 Agent 納入考量後調整初始需求。",
             "options": {
                 "stage_id": "requirements_review",
                 "status": "waiting_for_human_decision",
                 "requirements": requirements,
             },
             "response_schema": {
-                "action": "approve|submit_suggestions|agent_refinement",
+                "action": "approve|submit_suggestions",
                 "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
             },
         }
@@ -790,7 +790,7 @@ class RunManager:
             "id": f"scope_review_{uuid.uuid4().hex[:8]}",
             "kind": "scope_review",
             "title": "需求範圍",
-            "description": "請確認、直接編輯，或留下 Human Decision。",
+            "description": "請確認、直接編輯，或留下建議讓 Agent 納入考量後調整範圍。",
             "options": {
                 "stage_id": "scope_review",
                 "status": "waiting_for_human_decision",
@@ -800,7 +800,7 @@ class RunManager:
                 },
             },
             "response_schema": {
-                "action": "approve|direct_edit|submit_suggestions|agent_refinement",
+                "action": "approve|direct_edit|submit_suggestions",
                 "scope": {
                     "in_scope": ["string"],
                     "out_of_scope": ["string"],
@@ -820,7 +820,7 @@ class RunManager:
             "id": f"domain_research_review_{uuid.uuid4().hex[:8]}",
             "kind": "domain_research_review",
             "title": "領域研究",
-            "description": "請在對話匡加入建議，按確定送出。",
+            "description": "請確認，或留下建議讓 Expert 納入考量並查證。",
             "options": {
                 "stage_id": "domain_research_review",
                 "status": "waiting_for_human_decision",

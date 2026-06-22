@@ -14,7 +14,7 @@ def required_agents_for_enabled_stages(config: Dict[str, Any]) -> set[str]:
     if stage_enabled(config, "init", True):
         required.add("user")
     if stage_enabled(config, "elicitation", True):
-        required.update({"user", "mediator"})
+        required.update({"user", "analyst", "mediator"})
     if stage_enabled(config, "conflict_detection", True):
         required.update({"analyst", "mediator"})
     if stage_enabled(config, "research_domain", True):
@@ -24,7 +24,7 @@ def required_agents_for_enabled_stages(config: Dict[str, Any]) -> set[str]:
     if stage_enabled(config, "draft", True):
         required.add("analyst")
     if formal_meeting_enabled(config):
-        required.update({"user", "mediator"})
+        required.update({"user", "analyst", "expert", "modeler", "mediator"})
     if stage_enabled(config, "DR", True) or stage_enabled(config, "SRS", True):
         required.add("documentor")
     return required

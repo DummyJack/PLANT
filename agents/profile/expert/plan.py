@@ -99,6 +99,7 @@ def research_prompt(*, state_text: str, obs_text: str) -> str:
 - read_reference_docs 與 research_issue 只取得證據；只有 update_feedback 會寫回正式 feedback artifact。
 - 若有 referenced_files 並執行 read_reference_docs，最後必須 update_feedback，把文件證據整理成 feedback。
 - 不得把 feedback 直接定案成需求；需求正式化由 Analyst action 處理。
+- user_guidance 若存在，是人類審查建議與查證方向，不是已確認需求或強制結論；必須納入研究規劃，但只有取得文件、外部來源或既有 artifact 支持時才能寫入 feedback。
 
 # 目前專案狀態
 {state_text}
@@ -112,6 +113,7 @@ def research_prompt(*, state_text: str, obs_text: str) -> str:
 - done：沒有需要研究，或已完成寫回。
 
 - 研究問題必須來自目前 issue、scenario、scope、stakeholders、open_questions、URL 或 REQ。
+- 若 user_guidance 指出特定方向，優先判斷它是否對需求成立、系統邊界、法規/合規/安全、責任歸屬或驗收標準有影響；有影響才規劃 read_reference_docs 或 research_issue 查證。
 - 只規劃 high-value research_issue，不為了湊數研究。
 - high-value 指會影響需求是否成立、系統邊界、法規/合規/安全、責任歸屬、驗收標準、多個 URL/REQ，或目前 artifact 沒有清楚答案。
 - 不研究低價值內容：一般功能偏好、已清楚的 UI 操作、不影響需求條文的背景知識、與 scope 無關的產業介紹。
@@ -133,6 +135,7 @@ def research_prompt(*, state_text: str, obs_text: str) -> str:
 - 只要有 read_reference_docs、research_issue 或已有 research_results，最後必須 update_feedback。
 - update_feedback 只允許放在 action_plan 最後一次。
 - feedback.sources 集中列出來源；web 來源使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}，專案引用文件使用 {{"title": "檔名", "url": "專案文件路徑", "type": "file"}}。
+- 若 user_guidance 沒有足夠證據支持，feedback 不得把它寫成確定限制；只能記錄為風險、不確定性或後續待釐清方向。
 
 # Output JSON
 {{

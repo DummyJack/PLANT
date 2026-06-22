@@ -1010,13 +1010,18 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             action="review_domain_research_inputs",
         )
         review = Collect.domain_research_review(references)
+        action = str((review or {}).get("action") or "approve").strip()
         artifact.setdefault("domain_research_reviews", []).append(review)
         artifact["domain_research_review"] = review
-        feedback = domain_research_review_feedback(review)
-        referenced_files = domain_research_review_references(
-            review,
-            project_id,
-        )
+        if action == "approve":
+            feedback = ""
+            referenced_files = []
+        else:
+            feedback = domain_research_review_feedback(review)
+            referenced_files = domain_research_review_references(
+                review,
+                project_id,
+            )
         if feedback or referenced_files:
             meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
             if feedback:

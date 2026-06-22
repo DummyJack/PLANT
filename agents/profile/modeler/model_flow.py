@@ -1069,11 +1069,29 @@ class ModelerModeling(ModelPlan):
             if result is None:
                 continue
             if "通過" in result:
+                m["plantuml_validation_status"] = "passed"
+                m.pop("plantuml_validation_error", None)
                 continue
             self.logger.warning(f"  {m.get('name', '')} 語法修正中")
             fixed = self.repair_plantuml(m, result)
             if fixed:
                 m["plantuml"] = fixed
+                retry_result = self.execute_tool(
+                    "plantuml_validate",
+                    {"plantuml_code": fixed},
+                    active_skill="UML",
+                )
+                m["plantuml_repaired"] = True
+                if "通過" in retry_result:
+                    m["plantuml_validation_status"] = "repaired"
+                    m.pop("plantuml_validation_error", None)
+                else:
+                    m["plantuml_validation_status"] = "failed_after_repair"
+                    m["plantuml_validation_error"] = retry_result
+                    self.logger.warning(f"  {m.get('name', '')} 修正後仍驗證失敗")
+            else:
+                m["plantuml_validation_status"] = "failed"
+                m["plantuml_validation_error"] = result
 
         return model_data
 

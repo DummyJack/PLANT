@@ -96,6 +96,7 @@ function requiredAgentReasons(
   if (stageEnabled(config, stageOverrides, "init")) add("user", "初始階段");
   if (stageEnabled(config, stageOverrides, "elicitation")) {
     add("user", "需求擷取");
+    add("analyst", "需求擷取");
     add("mediator", "需求擷取");
   }
   if (stageEnabled(config, stageOverrides, "conflict_detection")) {
@@ -116,6 +117,9 @@ function requiredAgentReasons(
     stageEnabled(config, stageOverrides, "general_formal_meeting")
   ) {
     add("user", "會議");
+    add("analyst", "會議");
+    add("expert", "會議");
+    add("modeler", "會議");
     add("mediator", "會議");
   }
   if (stageEnabled(config, stageOverrides, "DR") || stageEnabled(config, stageOverrides, "SRS")) {
@@ -598,9 +602,9 @@ export function MeetingComposer({
               </div>
               <div className="py-1">
                 {displayAgents.map((id) => {
-                  const on = enabledAgents[id] !== false;
                   const lockReasons = lockedAgentReasons[id] ?? [];
                   const locked = lockReasons.length > 0;
+                  const on = locked || enabledAgents[id] !== false;
                   const ready = agentReady(configQuery.data, id, configuredProviders);
                   const unavailable = !ready;
                   return (
