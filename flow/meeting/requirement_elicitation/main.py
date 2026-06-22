@@ -27,6 +27,15 @@ from .support import (
     without_finish_proposals,
 )
 
+
+def feedback_has_rows(artifact: Dict[str, Any]) -> bool:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        if any(isinstance(row, dict) for row in (feedback.get(section) or [])):
+            return True
+    return False
+
+
 # ========
 # Defines meeting rows function for this module workflow.
 # ========
@@ -194,6 +203,8 @@ def validated_elicitation_answer(
         for name in speaking_as
         if str(name).strip() and str(name).strip() in set(question_targets)
     ]
+    if not valid_speakers and len(question_targets) == 1:
+        valid_speakers = [question_targets[0]]
     if not valid_speakers:
         raise RuntimeError(
             "Requirement elicitation user answer 缺少有效 speaking_as，"
@@ -520,6 +531,14 @@ def run_elicitation(
         artifact.setdefault("elicitation_trace", []).extend(elicitation_trace)
 
         coordinator.flow.store.save_artifact(artifact)
+        if feedback_has_rows(artifact):
+            coordinator.flow.logger.step_completed(
+                "elicitation",
+                "elicitation.update_feedback",
+                "領域研究",
+                agent="expert",
+                output_path="artifact/feedback.json",
+            )
         return artifact
 
     for turn in range(1, max_turns):

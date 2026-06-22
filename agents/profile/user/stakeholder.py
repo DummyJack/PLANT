@@ -1,5 +1,9 @@
 # Handles module workflow behavior.
-from .actions.simulate import suggest_stakeholders, write_stakeholder_text
+from .actions.simulate import (
+    revise_stakeholder_text as revise_stakeholder_text_prompt,
+    suggest_stakeholders,
+    write_stakeholder_text,
+)
 import json
 from typing import Any, Dict, List
 
@@ -137,6 +141,71 @@ class UserStakeholder:
         if result.get("error"):
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
+
+    def revise_stakeholder_text(
+        self,
+        rough_idea: Any,
+        stakeholders: List[Dict[str, Any]],
+        review_considerations: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        current = normalize_stakeholder_text(stakeholders or [])
+        feedback_lines: List[str] = []
+        for index, row in enumerate(review_considerations or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            text = str(row.get("text") or "").strip()
+            targets = [
+                str(value or "").strip()
+                for value in (row.get("target_ids") or [])
+                if str(value or "").strip()
+            ]
+            references = [
+                str(ref.get("name") or "").strip()
+                for ref in (row.get("references") or [])
+                if isinstance(ref, dict) and str(ref.get("name") or "").strip()
+            ]
+            parts = []
+            if targets:
+                parts.append(f"target_ids={targets}")
+            if references:
+                parts.append(f"references={references}")
+            if text:
+                parts.append(text)
+            if parts:
+                feedback_lines.append(f"{index}. " + "；".join(parts))
+
+        feedback_text = "\n".join(feedback_lines).strip()
+        if not current or not feedback_text:
+            return current
+
+        user_prompt = revise_stakeholder_text_prompt(
+            current_stakeholders_text=json.dumps(current, ensure_ascii=False, indent=2),
+            feedback_text=feedback_text,
+            scenario_context=self.scenario_json(rough_idea),
+        )
+        try:
+            response = self.chat_json(self.build_direct_messages(user_prompt), temperature=0.7)
+            revised_rows = response.get("stakeholders", [])
+            if not isinstance(revised_rows, list):
+                raise ValueError("stakeholders must be a list")
+            revised_by_name = {
+                str(row.get("name") or "").strip(): row
+                for row in revised_rows
+                if isinstance(row, dict) and str(row.get("name") or "").strip()
+            }
+            merged: List[Dict[str, Any]] = []
+            for base in current:
+                name = str(base.get("name") or "").strip()
+                source = revised_by_name.get(name)
+                next_row = dict(base)
+                if isinstance(source, dict):
+                    text_items = stakeholder_text_items(source)
+                    if text_items:
+                        next_row["text"] = text_items
+                merged.append(next_row)
+            return normalize_stakeholder_text(merged)
+        except Exception as e:
+            raise RuntimeError(f"User 修正利害關係人發言失敗: {e}")
 
     # Defines obs setup function for this module workflow.
     def obs_setup(self, **kwargs: Any) -> Dict[str, Any]:

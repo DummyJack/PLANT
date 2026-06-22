@@ -305,6 +305,74 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
 
   if (event.type === "step_completed") {
     if (
+      event.output_path &&
+      (
+        event.step_id === "init.analyze_requirements_review" ||
+        event.step_id === "init.generate_scope_review"
+      )
+    ) {
+      const speaker = event.agent || "analyst";
+      return {
+        id: `workspace-review-output-${event.id}`,
+        role: "agent",
+        kind: "output",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "done",
+        text: workspaceEventText(event, "修正結果"),
+        outputPath: event.output_path,
+        timestamp: event.timestamp,
+      };
+    }
+    if (
+      event.output_path === "artifact/feedback.json" &&
+      (
+        event.step_id === "elicitation.update_feedback" ||
+        event.step_id === "research_domain.update_feedback"
+      )
+    ) {
+      const speaker = event.agent || "expert";
+      return {
+        id: `workspace-feedback-output-${event.id}`,
+        role: "agent",
+        kind: "output",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "done",
+        text: workspaceEventText(event, "領域研究"),
+        outputPath: event.output_path,
+        timestamp: event.timestamp,
+      };
+    }
+    if (
+      event.stage_id === "document_generation" &&
+      event.output_path &&
+      /^(?:results\/(?:srs|design_rationale)\.html|output\/(?:srs|design_rationale)\.md)$/i.test(event.output_path) &&
+      (
+        event.step_id === "document_generation.generate_dr" ||
+        event.step_id === "document_generation.generate_srs"
+      )
+    ) {
+      const speaker = event.agent || "documentor";
+      return {
+        id: `workspace-document-output-${event.id}`,
+        role: "agent",
+        kind: "output",
+        speaker,
+        label: agentLabel(speaker),
+        action: event.step_id ?? event.action,
+        stage: event.stage_id,
+        status: "done",
+        text: workspaceEventText(event, event.step_id === "document_generation.generate_srs" ? "SRS" : "Design Rationale"),
+        outputPath: event.output_path,
+        timestamp: event.timestamp,
+      };
+    }
+    if (
       event.step_id?.startsWith("document_generation.") &&
       !/^(results\/(?:srs|design_rationale)\.html|output\/(?:srs|design_rationale)\.md)$/i.test(event.output_path ?? "")
     ) {
@@ -502,10 +570,15 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
 }
 
 export function logEventToChats(event: RunEvent): ChatMessage[] {
-  if (event.type === "step_started" && event.step_id === "init.write_stakeholder_text") {
+  if (
+    event.type === "step_started" &&
+    (event.step_id === "init.write_stakeholder_text" ||
+      event.step_id === "init.write_stakeholder_text_review")
+  ) {
     const message = logEventToChat(event);
     const title = String(event.title ?? "").trim();
-    const isRevision = /修正|Human Decision|回饋/i.test(title);
+    const isReview = event.step_id === "init.write_stakeholder_text_review";
+    const isRevision = isReview || /修正|Human Decision|回饋/i.test(title);
     const output: ChatMessage = {
       id: `stakeholder-statement-output-${event.id}`,
       role: "agent",
@@ -515,7 +588,7 @@ export function logEventToChats(event: RunEvent): ChatMessage[] {
       action: isRevision ? "stakeholder_statement_revision" : "stakeholder_statement",
       stage: event.stage_id,
       status: "done",
-      text: isRevision ? "發言修正" : "利害關係人發言",
+      text: isReview ? title || "利害關係人發言修正" : isRevision ? "發言修正" : "利害關係人發言",
       outputPath: "artifact/project.json",
       timestamp: event.timestamp,
     };

@@ -51,8 +51,22 @@ function isDuplicateStagePill(a: ChatMessage, b: ChatMessage) {
   );
 }
 
+function isReviewOutputMessage(message: ChatMessage) {
+  const action = String(message.action || "").trim();
+  return (
+    action === "stakeholder_statement_revision" ||
+    action === "init.analyze_requirements_review" ||
+    action === "init.generate_scope_review" ||
+    action === "elicitation.update_feedback" ||
+    action === "research_domain.update_feedback"
+  );
+}
+
 function messageSemanticKey(message: ChatMessage) {
   if (message.outputPath) {
+    if (isReviewOutputMessage(message)) {
+      return `output-review:${message.outputPath}:${message.action || ""}:${message.text.trim()}`;
+    }
     return `output:${message.outputPath}`;
   }
   if (message.role === "system" && message.kind === "stage") {

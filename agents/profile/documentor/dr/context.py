@@ -1010,6 +1010,7 @@ class DocumentorDrContext:
                 "type": str(req.get("type") or "").strip(),
                 "srs_id": srs_ids.get(req_id, ""),
                 "source": req.get("source"),
+                "dependencies": req.get("dependencies"),
                 "description": str(req.get("description") or "").strip(),
                 "acceptance_criteria": [
                     cls.clean_repeated_text(item)
@@ -1568,10 +1569,21 @@ class DocumentorDrContext:
         req_id = str(requirement.get("id") or "").strip()
         srs_id = str(requirement.get("srs_id") or req_id).strip()
         url_rows = [row for row in requirement.get("user_requirements") or [] if isinstance(row, dict)]
+        requirement_kind = str(requirement.get("type") or "").strip().lower()
+        is_constraint = requirement_kind == "constraint" or bool(re.match(r"^CON-\d+$", srs_id, flags=re.IGNORECASE))
         if not url_rows:
-            raise ValueError(f"DR trace missing User Requirement for {srs_id or req_id}")
+            if not is_constraint:
+                raise ValueError(f"DR trace missing User Requirement for {srs_id or req_id}")
+            has_constraint_evidence = any(
+                isinstance(requirement.get(section), list) and requirement.get(section)
+                for section in ("feedback", "system_models", "meetings", "dependencies")
+            ) or bool(requirement.get("source"))
+            if not has_constraint_evidence:
+                raise ValueError(f"DR trace missing evidence for {srs_id or req_id}")
 
         warnings: List[str] = []
+        if is_constraint and not url_rows:
+            warnings.append(f"{srs_id or req_id} is a constraint traced from non-URL evidence")
         for row in requirement.get("trace_event_warnings") or []:
             if not isinstance(row, dict):
                 continue

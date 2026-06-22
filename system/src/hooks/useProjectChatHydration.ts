@@ -24,8 +24,17 @@ const ACTIVE = new Set([
 function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
   const seen = new Set<string>();
   return messages.filter((message) => {
+    const action = String(message.action || "").trim();
+    const isReviewOutput =
+      action === "stakeholder_statement_revision" ||
+      action === "init.analyze_requirements_review" ||
+      action === "init.generate_scope_review" ||
+      action === "elicitation.update_feedback" ||
+      action === "research_domain.update_feedback";
     const semanticKey = message.outputPath
-      ? `output:${message.outputPath}`
+      ? isReviewOutput
+        ? `output-review:${message.outputPath}:${action}:${message.text.trim()}`
+        : `output:${message.outputPath}`
       : message.role === "system" && message.kind === "stage"
         ? `stage:${message.stage || ""}:${message.text.trim()}`
         : message.kind === "decision" && message.decision?.id
@@ -119,7 +128,7 @@ function historicalRunEvents(run: RunState, events: unknown[]): unknown[] {
 
 function historicalRunMessages(run: RunState, events: unknown[]): ChatMessage[] {
   const messages = historicalLogMessages(historicalRunEvents(run, events));
-  if (run.mode === "continue") {
+  if (run.mode === "continue" && ACTIVE.has(run.status)) {
     return trimTrailingGeneratedDocumentMessages(messages);
   }
   return messages;

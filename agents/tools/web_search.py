@@ -9,6 +9,8 @@ from .base import BaseTool
 
 logger = logging.getLogger("Plant.WebSearchTool")
 
+MAX_TAVILY_QUERY_CHARS = 400
+
 
 # ========
 # Defines token set function for this module workflow.
@@ -55,6 +57,32 @@ def credible_source_url(url: str) -> bool:
     except Exception:
         host = netloc(url)
         return bool(host and (".gov" in host or ".edu" in host or ".org" in host))
+
+
+def compact_search_query(query: str, *, max_chars: int = MAX_TAVILY_QUERY_CHARS) -> str:
+    text = re.sub(r"\s+", " ", str(query or "")).strip()
+    if len(text) <= max_chars:
+        return text
+    separators = r"[，。；、,;|｜\n\r\t]+"
+    parts = [
+        part.strip(" -:：")
+        for part in re.split(separators, text)
+        if part.strip(" -:：")
+    ]
+    kept: List[str] = []
+    used_tokens: Set[str] = set()
+    for part in parts:
+        tokens = token_set(part, min_len=2)
+        if tokens and tokens <= used_tokens:
+            continue
+        candidate = " ".join([*kept, part]).strip()
+        if len(candidate) > max_chars:
+            continue
+        kept.append(part)
+        used_tokens |= tokens
+    if kept:
+        return " ".join(kept)[:max_chars].strip()
+    return text[:max_chars].strip()
 
 
 # ========
@@ -238,6 +266,14 @@ class WebSearchTool(BaseTool):
         query = query.strip()
         if not query:
             return "錯誤: 搜尋關鍵字不可為空"
+        original_query = query
+        query = compact_search_query(query)
+        if query != original_query:
+            logger.info(
+                "搜尋 query 過長，已由 %s 字縮短為 %s 字",
+                len(original_query),
+                len(query),
+            )
 
         self.maybe_set_user_question(kwargs)
 

@@ -124,7 +124,13 @@ def emit_requirement_deltas(flow, stage_id: str, step_id: str, rows: list[Dict[s
         )
 
 
-def emit_scope_delta(flow, scope: Dict[str, Any]) -> None:
+def emit_scope_delta(
+    flow,
+    scope: Dict[str, Any],
+    *,
+    stage_id: str = "init",
+    step_id: str = "init.generate_scope",
+) -> None:
     if not isinstance(scope, dict):
         return
     for key, title in (("in_scope", "範圍內"), ("out_of_scope", "範圍外")):
@@ -132,8 +138,8 @@ def emit_scope_delta(flow, scope: Dict[str, Any]) -> None:
         if not values:
             continue
         flow.logger.step_delta(
-            "init",
-            "init.generate_scope",
+            stage_id,
+            step_id,
             {
                 "title": title,
                 "text": "\n".join(f"- {value}" for value in values),
@@ -569,6 +575,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 [row["name"] for row in stakeholders],
             )
             stakeholders = merge_stakeholder_text(stakeholders, generated_stakeholders)
+        stakeholder_review_output_title = ""
         while True:
             artifact["stakeholders"] = stakeholders
             flow.user_agent.stakeholders = stakeholders
@@ -582,12 +589,15 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             if action == "approve":
                 break
             if action == "direct_edit":
-                stakeholders = apply_stakeholder_statement_review(stakeholders, review)
-                consideration_rows = normalize_review_considerations(
-                    review or {},
-                    stage="stakeholder_statement_review",
+                flow.logger.step_started(
+                    "init",
+                    "init.write_stakeholder_text_review",
+                    "利害關係人發言修正",
+                    agent="user",
+                    message="已收到回饋，更新中 ...",
                 )
-                append_review_considerations(artifact, consideration_rows)
+                stakeholders = apply_stakeholder_statement_review(stakeholders, review)
+                stakeholder_review_output_title = "利害關係人發言修正"
                 break
 
             consideration_rows = normalize_review_considerations(
@@ -597,15 +607,32 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             if not consideration_rows:
                 break
 
-            append_review_considerations(
-                artifact,
+            flow.logger.step_started(
+                "init",
+                "init.write_stakeholder_text_review",
+                "利害關係人發言修正",
+                agent="user",
+                message="已收到回饋，更新中 ...",
+            )
+            stakeholders = flow.user_agent.revise_stakeholder_text(
+                rough_idea,
+                stakeholders,
                 consideration_rows,
             )
+            stakeholder_review_output_title = "利害關係人發言修正"
             break
 
         artifact["stakeholders"] = stakeholders
         flow.user_agent.stakeholders = stakeholders
         flow.store.save_artifact(artifact)
+        if stakeholder_review_output_title:
+            flow.logger.step_completed(
+                "init",
+                "init.write_stakeholder_text_review",
+                stakeholder_review_output_title,
+                agent="user",
+                output_path="artifact/project.json",
+            )
 
         flow.logger.info(f"✓ {len(stakeholders)} 位利害關係人提出需求")
         flow.logger.step_completed(
@@ -650,10 +677,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             agent="analyst",
             message="正在從利害關係人描述中整理候選需求",
         )
-        stakeholder_considerations = review_considerations(
-            artifact,
-            stage="stakeholder_statement_review",
-        )
+        stakeholder_considerations: list[Dict[str, Any]] = []
         initial_candidates = requirements_from_analysis(
             flow,
             stakeholders,
@@ -774,7 +798,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             )
             append_review_considerations(artifact, consideration_rows)
             flow.store.save_artifact(artifact)
-            emit_scope_delta(flow, edited_scope)
+            emit_scope_delta(
+                flow,
+                edited_scope,
+                step_id="init.generate_scope_review",
+            )
             flow.logger.step_completed(
                 "init",
                 "init.generate_scope_review",
@@ -818,7 +846,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                         "out_of_scope": revised_scope.get("out_of_scope", []) or [],
                     }
                     flow.store.save_artifact(artifact)
-                    emit_scope_delta(flow, artifact.get("scope", {}))
+                    emit_scope_delta(
+                        flow,
+                        artifact.get("scope", {}),
+                        step_id="init.generate_scope_review",
+                    )
                     flow.logger.step_completed(
                         "init",
                         "init.generate_scope_review",
@@ -1038,23 +1070,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 meta["domain_research_referenced_files"] = referenced_files
             artifact["meta"] = meta
             flow.store.save_artifact(artifact)
-        research_domain_completed = bool(meta.get("research_domain_completed"))
-        feedback_covers_urls = feedback_covers_current_urls(artifact)
-        if (
-            not feedback
-            and not referenced_files
-            and not force_research_domain
-            and has_feedback_payload(artifact)
-            and (research_domain_completed or feedback_covers_urls)
-        ):
-            if feedback_covers_urls:
-                meta["research_domain_completed"] = True
-                meta["research_domain_coverage"] = "covered_current_urls"
-                artifact["meta"] = meta
-                flow.store.save_artifact(artifact)
-            flow.logger.info("✓ 領域研究已存在，跳過重新生成")
-            reused_research_domain = True
-        elif feedback or referenced_files:
+        if feedback or referenced_files:
             meta.pop("research_domain_completed", None)
             meta.pop("research_domain_coverage", None)
             artifact["meta"] = meta

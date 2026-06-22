@@ -24,6 +24,8 @@ def analyze_requirement(**context: Any) -> str:
 - review_considerations 只作為人工審查建議、遺漏檢查角度或待確認方向；不得視為 stakeholder 已提出的原始需求。
 - 不得因 review_considerations 出現某方向，就推論所有 stakeholder 都支持該方向；只有 source_text 本身明確支持時，才可新增 requirement_candidate。
 - review_considerations 若包含 target_ids，只能用於指定 target；runtime 只會提供目前 source_text 適用的 considerations，不得把它套用到其他 source、stakeholder 或 requirement。
+- review_considerations 若沒有 target_ids，代表全局檢查角度，不代表每一條 source_text 都要新增或改成該方向；不得把同一建議逐條套用到所有 requirement_candidate。
+- 若一條建議影響多個 source_text，只在 source_text 明確支持且最相關的項目中反映；不要為了呼應建議而重複產生相同或相近需求。
 - 若 review_considerations 指出可能遺漏但 source_text 未支持，回傳空陣列；該內容應留待後續 open question、正式會議或人工直接編輯處理。
 
 # Input
