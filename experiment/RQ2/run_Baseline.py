@@ -27,7 +27,7 @@ import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from metric import Metric
+from metric import Metric, round_float_tree_to_4, round_to_4
 from utils import CostTracker, json_dump_no_scientific, model_has_token_pricing
 
 load_dotenv(dotenv_path=BASE_DIR / ".env")
@@ -35,20 +35,43 @@ CN_PAIRS_CSV = "cn_pairs.csv"
 RESULTS_DIR = RQ2_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 
-BASELINE_PROVIDER = "gemini"
-BASELINE_MODEL = "gemini-3-flash-preview"
+BASELINE_PROVIDER = "openai"
+BASELINE_MODEL = "gpt-4.1"
 BASELINE_THINKING_LEVEL = "minimal"
 BASELINE_TEMPERATURE = 0.0
 ask_runs = True
-MAX_WORKERS = 5
+MAX_WORKERS = 10
+
+
+def model_is_gemini_3_or_newer(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    if not normalized.startswith("gemini-"):
+        return False
+    version = normalized.removeprefix("gemini-").split("-", 1)[0]
+    try:
+        return float(version) >= 3.0
+    except ValueError:
+        return False
+
 
 # ========
 # Defines next result index function for this experiment module.
 # ========
-def next_result_index(prefix: str, results_dir: Path) -> int:
-    pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
+def model_file_prefix(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "openai":
+        return "gpt"
+    if normalized in {"gemini", "claude"}:
+        return normalized
+    return normalized or "model"
+
+
+def next_result_index(model_prefix: str, prefix: str, results_dir: Path) -> int:
+    pat = re.compile(
+        rf"^{re.escape(model_prefix)}_(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$"
+    )
     max_idx = 0
-    for p in results_dir.glob(f"*_{prefix}_*.json"):
+    for p in results_dir.glob(f"{model_prefix}_*_{prefix}_*.json"):
         m = pat.match(p.name)
         if not m:
             continue
@@ -195,15 +218,16 @@ class BaselineModel:
         assert self.gemini_lock is not None
 
         cfg_kw = {"temperature": self.temperature}
-        fields = getattr(self.genai_types.ThinkingConfig, "model_fields", {})
-        if "thinking_level" in fields:
-            cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
-                thinking_level=BASELINE_THINKING_LEVEL
-            )
-        else:
-            cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
-                thinking_budget=0
-            )
+        if model_is_gemini_3_or_newer(self.model_name):
+            fields = getattr(self.genai_types.ThinkingConfig, "model_fields", {})
+            if "thinking_level" in fields:
+                cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
+                    thinking_level=BASELINE_THINKING_LEVEL
+                )
+            else:
+                cfg_kw["thinking_config"] = self.genai_types.ThinkingConfig(
+                    thinking_budget=0
+                )
         cfg = self.genai_types.GenerateContentConfig(**cfg_kw)
         self.cost_tracker.start()
         response = None
@@ -351,17 +375,17 @@ def scalar_metrics_for_summary(result: dict) -> dict[str, float]:
     overall = metrics.get("overall") if isinstance(metrics.get("overall"), dict) else {}
     for k, v in overall.items():
         if isinstance(v, (int, float)):
-            out[f"overall_{k}"] = float(v)
+            out[f"overall_{k}"] = round_to_4(v)
         elif isinstance(v, dict):
             prefix = str(k)
             for sk, sv in v.items():
                 if isinstance(sv, (int, float)):
-                    out[f"{prefix}_{sk}"] = float(sv)
+                    out[f"{prefix}_{sk}"] = round_to_4(sv)
     conflict = metrics.get("conflict")
     if isinstance(conflict, dict):
         for k, v in conflict.items():
             if isinstance(v, (int, float)):
-                out[f"conflict_{k}"] = float(v)
+                out[f"conflict_{k}"] = round_to_4(v)
     metrics_by_type = (
         result.get("metrics_by_type")
         if isinstance(result.get("metrics_by_type"), dict)
@@ -375,12 +399,12 @@ def scalar_metrics_for_summary(result: dict) -> dict[str, float]:
         if isinstance(overall_by_type, dict):
             for k, v in overall_by_type.items():
                 if isinstance(v, (int, float)):
-                    out[f"{prefix}.overall_{k}"] = float(v)
+                    out[f"{prefix}.overall_{k}"] = round_to_4(v)
         conflict_by_type = scenario_metrics.get("conflict")
         if isinstance(conflict_by_type, dict):
             for k, v in conflict_by_type.items():
                 if isinstance(v, (int, float)):
-                    out[f"{prefix}.conflict_{k}"] = float(v)
+                    out[f"{prefix}.conflict_{k}"] = round_to_4(v)
     return out
 
 
@@ -404,7 +428,9 @@ def metrics_by_type(data: list[dict], y_true: list[str], y_pred: list[str]) -> d
                 "neutral": yt.count("Neutral"),
             },
             "overall": Metric.macro(yt, yp, labels=["Conflict", "Neutral"])["macro"],
-            "conflict": Metric.binary(yt, yp, positive_label="Conflict"),
+            "conflict": round_float_tree_to_4(
+                Metric.binary(yt, yp, positive_label="Conflict")
+            ),
         }
     return out
 
@@ -456,7 +482,9 @@ def run_conflict(
     n_conflict = y_true.count("Conflict")
     n_neutral = y_true.count("Neutral")
     overall = Metric.macro(y_true, y_pred, labels=["Conflict", "Neutral"])["macro"]
-    conflict_metrics = Metric.binary(y_true, y_pred, positive_label="Conflict")
+    conflict_metrics = round_float_tree_to_4(
+        Metric.binary(y_true, y_pred, positive_label="Conflict")
+    )
     metrics = {"overall": overall, "conflict": conflict_metrics}
     per_type_metrics = metrics_by_type(data, y_true, y_pred)
 
@@ -470,14 +498,6 @@ def run_conflict(
         "metrics": metrics,
         "metrics_by_type": per_type_metrics,
     }
-    selected_scenarios = [
-        str(s).strip()
-        for s in (scenarios or [])
-        if str(s).strip()
-    ]
-    if selected_scenarios:
-        result["selected_types"] = selected_scenarios
-
     with paths["result"].open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
     with paths["record"].open("w", encoding="utf-8") as f:
@@ -516,13 +536,14 @@ if __name__ == "__main__":
         sys.exit(1)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    file_prefix = model_file_prefix(BASELINE_PROVIDER)
     run_scalar_metrics: list[dict[str, float]] = []
     run_costs_usd: list[float] = []
     run_total_tokens: list[int] = []
     run_total_runtime_s: list[float] = []
 
     for run_idx in range(runs):
-        run_id = str(next_result_index(RESULTS_FILE_PREFIX, RESULTS_DIR))
+        run_id = str(next_result_index(file_prefix, RESULTS_FILE_PREFIX, RESULTS_DIR))
         print(f"\n=== Run {run_idx + 1}/{runs}（run_id={run_id}）===")
 
         model = BaselineModel(
@@ -533,9 +554,9 @@ if __name__ == "__main__":
         print(f"  provider={model.provider} model={model.model_name}")
 
         paths = {
-            "result": RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json",
-            "record": RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json",
-            "cost": RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json",
+            "result": RESULTS_DIR / f"{file_prefix}_result_{RESULTS_FILE_PREFIX}_{run_id}.json",
+            "record": RESULTS_DIR / f"{file_prefix}_record_{RESULTS_FILE_PREFIX}_{run_id}.json",
+            "cost": RESULTS_DIR / f"{file_prefix}_cost_{RESULTS_FILE_PREFIX}_{run_id}.json",
         }
         result = run_conflict(model, count=count, paths=paths, scenarios=scenarios)
         run_scalar_metrics.append(scalar_metrics_for_summary(result))
@@ -548,7 +569,7 @@ if __name__ == "__main__":
         all_keys: set[str] = set()
         for m in run_scalar_metrics:
             all_keys.update(m.keys())
-        print("\n多次執行結果統計（平均值 ± 標準差）：")
+        print("\n多次執行結果統計（平均值）：")
 
         preferred_order = [
             "overall_precision",
@@ -566,12 +587,13 @@ if __name__ == "__main__":
             vals = [float(m[key]) for m in run_scalar_metrics if key in m]
             if not vals:
                 continue
-            mu = mean(vals)
-            sd = float(np.std(vals))
+            rounded_vals = [round_to_4(v) for v in vals]
+            mu = round_to_4(mean(vals))
+            sigma = round_to_4(float(np.std(vals)))
             summary_item = {
                 "mean": mu,
-                "std": sd,
-                "per_round_values": vals,
+                "std": sigma,
+                "per_round_values": rounded_vals,
             }
             if key.startswith("by_type."):
                 parts = key.split(".", 2)
@@ -582,7 +604,7 @@ if __name__ == "__main__":
                     summary_metrics[key] = summary_item
             else:
                 summary_metrics[key] = summary_item
-            print(f"  {key}：{mu:.4f} ± {sd:.4f}")
+            print(f"  {key}：{mu:.2f}")
 
         summary_payload: dict[str, Any] = {"runs": runs}
         if summary_metrics:
@@ -604,7 +626,7 @@ if __name__ == "__main__":
         else:
             print("  平均成本(USD)：N/A")
 
-        summary_path = RESULTS_DIR / f"summary_{RESULTS_FILE_PREFIX}.json"
+        summary_path = RESULTS_DIR / f"{file_prefix}_summary_{RESULTS_FILE_PREFIX}.json"
         with summary_path.open("w", encoding="utf-8") as f:
             json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
         print(f"已儲存至：{summary_path}")

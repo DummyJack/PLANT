@@ -1,26 +1,9 @@
 # Provides RQ1 Plant experiment utils helpers.
 import re
 import os
-from pathlib import Path
 from typing import Any, Dict, List
 
 from storage.artifact import project_payload
-
-# ========
-# Defines next result index function for this experiment module.
-# ========
-def next_result_index(prefix: str, results_dir: Path) -> int:
-    pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
-    max_idx = 0
-    for p in results_dir.glob(f"*_{prefix}_*.json"):
-        m = pat.match(p.name)
-        if not m:
-            continue
-        try:
-            max_idx = max(max_idx, int(m.group(1)))
-        except ValueError:
-            continue
-    return max_idx + 1
 
 # ========
 # Defines is likely english function for this experiment module.

@@ -1,12 +1,9 @@
 import os
 import json
 import sys
-import re
 from time import perf_counter
 from pathlib import Path
-from statistics import mean
 
-import numpy as np
 from typing import List
 
 from dotenv import load_dotenv
@@ -35,12 +32,6 @@ RESULTS_DIR = RQ1_DIR / "results"
 RESULTS_FILE_PREFIX = "Baseline"
 
 DEFAULT_DATA_FILE = "ReqElicitBench.json"
-
-PROMPT_FOR_MAX_TASKS = True
-
-PROMPT_FOR_RUNS = True
-
-DEFAULT_MAX_TASKS = None
 
 GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
@@ -71,81 +62,145 @@ def load_baseline_file_config(path: Path) -> dict:
     return cfg
 
 
-def next_result_index(prefix: str, results_dir: Path) -> int:
-    pat = re.compile(rf"^(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$")
-    max_idx = 0
-    for p in results_dir.glob(f"*_{prefix}_*.json"):
-        m = pat.match(p.name)
-        if not m:
+def model_file_prefix(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "openai":
+        return "gpt"
+    if normalized in {"gemini", "claude"}:
+        return normalized
+    return normalized or "model"
+
+
+def model_provider(model_name: str) -> str:
+    normalized = str(model_name or "").strip().lower()
+    if normalized.startswith("gemini-"):
+        return "gemini"
+    return "openai"
+
+
+def model_supports_thinking_level(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    if not normalized.startswith("gemini-"):
+        return False
+    version = normalized.removeprefix("gemini-").split("-", 1)[0]
+    try:
+        return float(version) >= 3.0
+    except ValueError:
+        return False
+
+
+def endpoint_for_model(model_name: str) -> tuple[str, str]:
+    provider = model_provider(model_name)
+    if provider == "gemini":
+        return (
+            os.environ.get("GEMINI_API_KEY", ""),
+            os.environ.get("GEMINI_BASE_URL") or GEMINI_OPENAI_COMPAT_BASE,
+        )
+    return (
+        os.environ.get("OPENAI_API_KEY", ""),
+        os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL,
+    )
+
+
+def thinking_level_for_model(
+    model_name: str, configured_level: str | None, *, enabled: bool
+) -> str | None:
+    if not enabled:
+        return None
+    if not model_supports_thinking_level(model_name):
+        return None
+    return configured_level
+
+
+def choose_application_types(tasks: List[dict]) -> List[str] | None:
+    counts: dict[str, int] = {}
+    for task in tasks:
+        app_type = str(task.get("name") or "Unknown").strip() or "Unknown"
+        counts[app_type] = counts.get(app_type, 0) + len(task.get("Implicit Requirements", []) or [])
+    if not counts:
+        print("錯誤：資料集中沒有可執行的情境")
+        sys.exit(1)
+
+    scenarios = list(counts.keys())
+    print("可選情境：")
+    for idx, scenario in enumerate(scenarios, start=1):
+        print(f"  {idx}. {scenario}（{counts[scenario]} 個隱性需求）")
+
+    raw = input("請選擇要執行的情境（Enter: 全部，可輸入 1,3,5）：").strip()
+    if not raw:
+        return None
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if not tokens or any(not token.isdigit() for token in tokens):
+        print("錯誤：請輸入情境編號；多個情境請使用 1,3,5 格式")
+        sys.exit(1)
+
+    selected: List[str] = []
+    seen: set[int] = set()
+    for token in tokens:
+        selected_idx = int(token)
+        if selected_idx < 1 or selected_idx > len(scenarios):
+            print("錯誤：情境編號超出範圍")
+            sys.exit(1)
+        if selected_idx in seen:
             continue
-        try:
-            max_idx = max(max_idx, int(m.group(1)))
-        except ValueError:
-            continue
-    return max_idx + 1
+        seen.add(selected_idx)
+        selected.append(scenarios[selected_idx - 1])
+    return selected
 
 
 def main():
     cfg_path = DEFAULT_CONFIG_PATH.resolve()
     file_cfg = load_baseline_file_config(cfg_path)
-    print(f"設定檔：{cfg_path}")
 
     def pick(key: str, default):
         v = file_cfg.get(key, default)
         return default if v is None else v
 
-
-    use_gemini = bool(pick("use_gemini", False))
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
-    if use_gemini:
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
-        api_key = gemini_key
-        if not api_key:
-            print("錯誤：use_gemini 為 true 時請在 .env 設定 GEMINI_API_KEY")
-            sys.exit(1)
-        base_url = os.environ.get("GEMINI_BASE_URL") or GEMINI_OPENAI_COMPAT_BASE
     interviewer_model = pick("interviewer_model", "gpt-4o-mini")
     gym_model = pick("gym_model", "gpt-5.2")
     thinking_level = str(pick("thinking_level", "") or "").strip() or None
     use_thinking = bool(pick("use_thinking", False))
+    api_key, base_url = endpoint_for_model(interviewer_model)
+    gym_api_key, gym_base_url = endpoint_for_model(gym_model)
     data_path = resolve_data_path(DEFAULT_DATA_FILE)
 
-    max_tasks = None
-    if max_tasks is None:
-        max_tasks = DEFAULT_MAX_TASKS
-        if max_tasks is not None and (not isinstance(max_tasks, int) or max_tasks <= 0):
-            max_tasks = None
-    if max_tasks is None and PROMPT_FOR_MAX_TASKS:
-        raw = input("請輸入要執行的任務數量（Enter: 全做）：").strip()
-        if raw:
-            try:
-                max_tasks = int(raw)
-                if max_tasks <= 0:
-                    max_tasks = None
-            except ValueError:
-                max_tasks = None
+    try:
+        print(f"正在載入資料檔案：{data_path}")
+        with open(data_path, "r", encoding="utf-8") as f:
+            all_tasks = json.load(f)
+        if not isinstance(all_tasks, list):
+            raise TypeError("資料檔案必須是 list")
+    except Exception as e:
+        print(f"錯誤：無法載入資料檔案：{e}")
+        import traceback
 
-    runs = None
-    if runs is None and PROMPT_FOR_RUNS:
-        raw_runs = input("請輸入要重複執行幾次：").strip()
-        if not raw_runs:
-            print("錯誤：請輸入重複執行次數（正整數）")
-            sys.exit(1)
-        try:
-            runs = int(raw_runs)
-        except ValueError:
-            print("錯誤：重複執行次數必須是整數")
-            sys.exit(1)
-    if runs is None:
-        if PROMPT_FOR_RUNS:
-            print("錯誤：請在互動模式下輸入重複執行次數（正整數）")
-            sys.exit(1)
-        runs = 1
-    runs = int(runs)
-    if runs <= 0:
-        print("錯誤：runs 必須為正整數")
+        traceback.print_exc()
         sys.exit(1)
+
+    total_tasks_in_file = len(all_tasks)
+    selected_application_types = choose_application_types(all_tasks)
+    if selected_application_types:
+        selected_set = set(selected_application_types)
+        all_tasks = [
+            task for task in all_tasks
+            if (str(task.get("name") or "Unknown").strip() or "Unknown") in selected_set
+        ]
+        if not all_tasks:
+            print("錯誤：選擇的情境沒有可執行任務")
+            sys.exit(1)
+
+    print(
+        f"資料檔案共 {total_tasks_in_file} 個任務，"
+        f"本輪執行 {len(all_tasks)} 個任務"
+    )
+
+    if len(all_tasks) != total_tasks_in_file:
+        subset_path = RQ1_DIR / ".reqelicit_subset.json"
+        with open(subset_path, "w", encoding="utf-8") as f:
+            json.dump(all_tasks, f, ensure_ascii=False, indent=2)
+        data_path = str(subset_path)
+
+    runs = 1
     verbose = bool(pick("verbose", True))
 
     judge_temperature = float(pick("judge_temperature", 0.0))
@@ -162,13 +217,23 @@ def main():
     interviewer_max_tokens_thinking = int(pick("interviewer_max_tokens_thinking", 8192))
 
 
-    judge_api_key = os.getenv("JUDGE_API_KEY", api_key)
-    user_api_key = os.getenv("USER_API_KEY", api_key)
-    judge_base_url = os.getenv("JUDGE_BASE_URL", base_url)
-    user_base_url = os.getenv("USER_BASE_URL", base_url)
+    judge_api_key = os.getenv("JUDGE_API_KEY", gym_api_key)
+    user_api_key = os.getenv("USER_API_KEY", gym_api_key)
+    judge_base_url = os.getenv("JUDGE_BASE_URL", gym_base_url)
+    user_base_url = os.getenv("USER_BASE_URL", gym_base_url)
+    interviewer_thinking_level = thinking_level_for_model(
+        interviewer_model, thinking_level, enabled=use_thinking
+    )
 
     if not api_key:
-        print("錯誤：請在專案主目錄 .env 中設定 OPENAI_API_KEY，或設定環境變數 / 使用 --api-key 參數")
+        provider = model_provider(interviewer_model)
+        required_key = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+        print(f"錯誤：interviewer_model={interviewer_model} 需要在 .env 設定 {required_key}")
+        sys.exit(1)
+    if not judge_api_key or not user_api_key:
+        provider = model_provider(gym_model)
+        required_key = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+        print(f"錯誤：gym_model={gym_model} 需要在 .env 設定 {required_key}")
         sys.exit(1)
 
     for label, mn in (
@@ -190,47 +255,17 @@ def main():
         sys.exit(1)
 
 
-    try:
-        print(f"\n正在載入資料檔案：{data_path}")
-        with open(data_path, "r", encoding="utf-8") as f:
-            all_tasks = json.load(f)
-        total_tasks_in_file = len(all_tasks)
-        if max_tasks is not None and max_tasks > 0:
-            all_tasks = all_tasks[:max_tasks]
-            print(f"資料檔案共 {total_tasks_in_file} 個任務，本輪執行前 {len(all_tasks)} 個（--max-tasks={max_tasks}）")
-        else:
-            print(f"資料檔案包含 {total_tasks_in_file} 個任務，將對全部任務進行評估")
-
-        if max_tasks is not None and max_tasks > 0 and len(all_tasks) < total_tasks_in_file:
-            subset_path = RQ1_DIR / ".reqelicit_subset.json"
-            with open(subset_path, "w", encoding="utf-8") as f:
-                json.dump(all_tasks, f, ensure_ascii=False, indent=2)
-            data_path = str(subset_path)
-    except Exception as e:
-        print(f"錯誤：無法載入資料檔案：{e}")
-        import traceback
-
-        traceback.print_exc()
-        sys.exit(1)
-
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     llm = interviewer_model
+    file_prefix = model_file_prefix(model_provider(interviewer_model))
     run_results: List[dict] = []
-    run_metrics: List[dict] = []
-    run_costs_usd: List[float] = []
-    run_total_tokens: List[int] = []
-    run_total_runtime_s: List[float] = []
-    round_ids_used: List[str] = []
 
     for run_idx in range(runs):
-        run_id = str(next_result_index(RESULTS_FILE_PREFIX, RESULTS_DIR))
-        round_ids_used.append(run_id)
+        evaluation_result_path = str(RESULTS_DIR / f"{file_prefix}_result_{RESULTS_FILE_PREFIX}.json")
+        conversation_result_path = str(RESULTS_DIR / f"{file_prefix}_record_{RESULTS_FILE_PREFIX}.json")
+        cost_result_path = str(RESULTS_DIR / f"{file_prefix}_cost_{RESULTS_FILE_PREFIX}.json")
 
-        evaluation_result_path = str(RESULTS_DIR / f"result_{RESULTS_FILE_PREFIX}_{run_id}.json")
-        conversation_result_path = str(RESULTS_DIR / f"record_{RESULTS_FILE_PREFIX}_{run_id}.json")
-        cost_result_path = str(RESULTS_DIR / f"cost_{RESULTS_FILE_PREFIX}_{run_id}.json")
-
-        print(f"\n=== Run {run_idx + 1}/{runs}（run_id={run_id}）===")
+        print(f"\n=== Run {run_idx + 1}/{runs} ===")
 
         config = ReqElicitGymConfig(
             data_path=data_path,
@@ -240,14 +275,14 @@ def main():
             judge_temperature=judge_temperature,
             judge_max_tokens=judge_max_tokens,
             judge_timeout=judge_timeout,
-            judge_thinking_level=thinking_level,
+            judge_thinking_level=None,
             user_api_key=user_api_key,
             user_base_url=user_base_url,
             user_model_name=gym_model,
             user_temperature=user_temperature,
             user_max_tokens=user_max_tokens,
             user_timeout=user_timeout,
-            user_thinking_level=thinking_level,
+            user_thinking_level=None,
             user_answer_quality=user_answer_quality,
             max_turns=max_turns,
             verbose=verbose,
@@ -268,7 +303,8 @@ def main():
         env.current_task_index = 0
 
         interviewer_max_tokens = (
-            interviewer_max_tokens_thinking if use_thinking else interviewer_max_tokens
+            interviewer_max_tokens_thinking
+            if interviewer_thinking_level and use_thinking else interviewer_max_tokens
         )
         interviewer = Interviewer(
             api_key=api_key,
@@ -277,8 +313,8 @@ def main():
             temperature=interviewer_temperature,
             max_tokens=interviewer_max_tokens,
             timeout=interviewer_timeout,
-            use_thinking=use_thinking,
-            thinking_level=thinking_level,
+            use_thinking=bool(interviewer_thinking_level and use_thinking),
+            thinking_level=interviewer_thinking_level,
         )
         interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
         user_cost_tracker = CostTracker(model_name=gym_model)
@@ -361,10 +397,6 @@ def main():
             import traceback
             traceback.print_exc()
 
-        run_total_cost_usd = 0.0
-        run_total_token = 0
-        run_total_runtime = 0.0
-        run_cost_ok = False
         try:
             interviewer_summary = interviewer_cost_tracker.export_summary_dict()
             user_summary = user_cost_tracker.export_summary_dict()
@@ -388,12 +420,8 @@ def main():
                     8,
                 ),
             }
-            run_total_cost_usd = float(cost_payload.get("estimated_cost(USD)", 0.0) or 0.0)
-            run_total_token = int(cost_payload.get("total_tokens", 0) or 0)
-            run_total_runtime = float(cost_payload.get("run_time(s)", 0.0) or 0.0)
             with open(cost_result_path, "w", encoding="utf-8") as f:
                 json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
-            run_cost_ok = True
             print(f"成本摘要已儲存至：{cost_result_path}")
         except Exception as e:
             print(f"儲存成本摘要時發生錯誤：{e}")
@@ -401,11 +429,6 @@ def main():
             traceback.print_exc()
 
         run_results.append(results)
-        run_metrics.append(results.get("overall_metrics", {}) or {})
-        if run_cost_ok:
-            run_costs_usd.append(run_total_cost_usd)
-            run_total_tokens.append(run_total_token)
-            run_total_runtime_s.append(run_total_runtime)
 
     results = run_results[-1] if run_results else {}
     print("\n" + "=" * 60)
@@ -422,89 +445,27 @@ def main():
         print("\n評估指標總結：")
         print(f"  總測試樣本數：{overall_metrics.get('total_tasks', 0)}")
         print(f"  總隱式需求數：{overall_metrics.get('total_requirements_all_tasks', 0)}")
-        print(f"  總取得數：{overall_metrics.get('total_elicited_all_tasks', 0)}")
         print("\n平均指標（基於測試樣本平均）：")
         print(f"  平均取得比例：{overall_metrics.get('elicitation_ratio', 0.0):.2%}")
         print(f"  平均 TKQR：{overall_metrics.get('tkqr', 0.0):.4f}")
-        print(f"  平均 ORA：{overall_metrics.get('ora', 0.0):.4f}")
-        print("\n變異數：")
-        print(f"  取得比例變異數：{overall_metrics.get('variance_elicitation_ratio', 0.0):.6f}")
-        print(f"  TKQR 變異數：{overall_metrics.get('variance_tkqr', 0.0):.6f}")
-        print(f"  ORA 變異數：{overall_metrics.get('variance_ora', 0.0):.6f}")
-        print("\n總體比例（基於總計數）：")
-        print(f"  總取得比例：{overall_metrics.get('elicitation_ratio_from_totals', 0.0):.2%}")
+        print(f"  平均 Turns：{overall_metrics.get('average_turn', 0.0):.2f}")
+        print("\n標準差：")
+        print(f"  取得比例標準差：{overall_metrics.get('std_elicitation_ratio', 0.0):.4f}")
+        print(f"  TKQR 標準差：{overall_metrics.get('std_tkqr', 0.0):.4f}")
+        print(f"  Turns 標準差：{overall_metrics.get('std_turn', 0.0):.2f}")
 
         app_type_stats = overall_metrics.get("application_type_statistics", {})
         if app_type_stats:
             print("\n依應用類型統計：")
-            print(f"{'Application Type':<40} {'任務數':<10} {'平均取得比例':<15} {'平均TKQR':<12} {'平均ORA':<12}")
-            print("-" * 100)
+            print(f"{'Application Type':<40} {'任務數':<10} {'平均取得比例':<15} {'平均TKQR':<12}")
+            print("-" * 85)
             for app_type in sorted(app_type_stats.keys()):
                 stats = app_type_stats[app_type]
                 print(
                     f"{app_type:<40} {stats['num_tasks']:<10} "
                     f"{stats['average_elicitation_ratio']:>13.2%} "
-                    f"{stats['average_tkqr']:>10.4f} "
-                    f"{stats['average_ora']:>10.4f}"
+                    f"{stats['average_tkqr']:>10.4f}"
                 )
-
-    if runs > 1:
-        metric_keys = [
-            ("elicitation_ratio", "IRE", "平均取得比例", "percent"),
-            ("tkqr", "TKQR", "平均 TKQR", "float4"),
-            ("ora", "ORA", "平均 ORA", "float4"),
-            ("average_turn", "Turns", "Turns", "float4"),
-        ]
-        print("\n多次執行結果統計（平均值 ± 標準差）：")
-        summary_metrics = {}
-        if run_metrics:
-            for src_key, out_key, label, fmt in metric_keys:
-                vals = []
-                for m in run_metrics:
-                    v = m.get(src_key, None)
-                    if isinstance(v, (int, float)):
-                        vals.append(float(v))
-                if not vals:
-                    continue
-                mu = mean(vals)
-                sd = float(np.std(vals))
-                summary_metrics[out_key] = {
-                    "mean": mu,
-                    "std": sd,
-                    "per_round_values": vals,
-                }
-                if fmt == "percent":
-                    print(f"  {label}：{mu:.2%} ± {sd:.2%}")
-                else:
-                    print(f"  {label}：{mu:.4f} ± {sd:.4f}")
-
-        summary_cost = None
-        if run_costs_usd:
-            cost_mu = float(np.mean(run_costs_usd))
-            token_mu = float(np.mean(run_total_tokens))
-            rt_mu = float(np.mean(run_total_runtime_s))
-            print(f"  平均 token：{token_mu:.1f}")
-            print(f"  平均成本(USD)：{cost_mu:.8f}")
-            print(f"  平均執行時間(s)：{rt_mu:.3f}")
-            summary_cost = {
-                "average_token": token_mu,
-                "average_cost(USD)": cost_mu,
-                "average_run_time(s)": rt_mu,
-            }
-        else:
-            print("  平均成本(USD)：N/A（本次執行未成功產生成本檔）")
-
-
-        summary_payload = {"runs": runs}
-        if summary_metrics:
-            summary_payload["metrics"] = summary_metrics
-        if summary_cost is not None:
-            summary_payload["cost"] = summary_cost
-
-        summary_path = RESULTS_DIR / f"summary_{RESULTS_FILE_PREFIX}.json"
-        with summary_path.open("w", encoding="utf-8") as f:
-            json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
-        print(f"已儲存至：{summary_path}")
 
     return results
 

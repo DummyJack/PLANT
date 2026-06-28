@@ -8,7 +8,15 @@ import json
 from .prompts import evaluate_action
 from .task_data import load_tasks
 from ..config import ReqElicitGymConfig, get_default_config
-from metric import compute_ora, compute_overall_metrics, compute_tkqr
+from metric import (
+    round_to_4,
+    round_to_2,
+    compute_ora,
+    compute_overall_metrics,
+    compute_tkqr,
+    std_from_variance,
+    variance,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -669,25 +677,25 @@ class ReqElicitGym(gym.Env):
             sum(turn_values) / len(turn_values)
             if turn_values else 0.0
         )
+        overall_metrics["std_turn"] = std_from_variance(
+            variance(turn_values, overall_metrics["average_turn"])
+            if turn_values else 0.0
+        )
 
         if self.config.verbose:
             print("\n總體評估結果：")
             print(f"  總測試樣本數：{overall_metrics['total_tasks']}")
             print(f"  總隱式需求數：{overall_metrics['total_requirements_all_tasks']}")
-            print(f"  總取得數：{overall_metrics['total_elicited_all_tasks']}")
             print("\n平均比例（基於測試樣本平均）：")
             print(f"  平均取得比例：{overall_metrics['elicitation_ratio']:.2%}")
             print(f"  平均 TKQR：{overall_metrics['tkqr']:.4f}")
-            print(f"  平均 ORA：{overall_metrics['ora']:.4f}")
-            print("\n變異數：")
-            print(f"  取得比例變異數：{overall_metrics.get('variance_elicitation_ratio', 0.0):.6f}")
-            print(f"  TKQR 變異數：{overall_metrics.get('variance_tkqr', 0.0):.6f}")
-            print(f"  ORA 變異數：{overall_metrics.get('variance_ora', 0.0):.6f}")
+            print(f"  平均 Turns：{overall_metrics.get('average_turn', 0.0):.2f}")
+            print("\n標準差：")
+            print(f"  取得比例標準差：{overall_metrics.get('std_elicitation_ratio', 0.0):.4f}")
+            print(f"  TKQR 標準差：{overall_metrics.get('std_tkqr', 0.0):.4f}")
+            print(f"  Turns 標準差：{overall_metrics.get('std_turn', 0.0):.2f}")
             print("\nToken 消耗：")
             print(f"  平均 Token 消耗：{overall_metrics.get('average_token_cost', 0.0):.2f}")
-            print(f"  Token 消耗變異數：{overall_metrics.get('variance_token_cost', 0.0):.6f}")
-            print("\n總體比例（基於總計數）：")
-            print(f"  總取得比例：{overall_metrics['elicitation_ratio_from_totals']:.2%}")
 
 
             if overall_metrics.get('application_type_statistics'):
@@ -695,9 +703,8 @@ class ReqElicitGym(gym.Env):
                 for app_type, stats in overall_metrics['application_type_statistics'].items():
                     print(f"  {app_type}:")
                     print(f"    任務數：{stats['num_tasks']}")
-                    print(f"    平均取得比例：{stats['average_elicitation_ratio']:.2%}（變異數：{stats['variance_elicitation_ratio']:.6f}）")
-                    print(f"    平均 TKQR：{stats['average_tkqr']:.4f}（變異數：{stats['variance_tkqr']:.6f}）")
-                    print(f"    平均 ORA：{stats['average_ora']:.4f}（變異數：{stats['variance_ora']:.6f}）")
+                    print(f"    平均取得比例：{stats['average_elicitation_ratio']:.2%}")
+                    print(f"    平均 TKQR：{stats['average_tkqr']:.4f}")
 
 
             if overall_metrics.get('action_type_effectiveness'):
@@ -733,6 +740,10 @@ class ReqElicitGym(gym.Env):
             sum(turn_values) / len(turn_values)
             if turn_values else 0.0
         )
+        overall_metrics["std_turn"] = std_from_variance(
+            variance(turn_values, overall_metrics["average_turn"])
+            if turn_values else 0.0
+        )
 
         if not overall_metrics or overall_metrics.get("total_tasks", 0) == 0:
             if self.config.verbose:
@@ -748,15 +759,26 @@ class ReqElicitGym(gym.Env):
                 "task_id": task_stats.get("task_id", ""),
                 "total_requirements": task_stats.get("total_requirements", 0),
                 "total_elicited": task_stats.get("total_elicited", 0),
-                "elicitation_ratio": task_stats.get("elicitation_ratio", 0.0),
-                "tkqr": task_stats.get("tkqr", 0.0),
-                "ora": task_stats.get("ora", 0.0),
+                "elicitation_ratio": round_to_4(task_stats.get("elicitation_ratio", 0.0)),
+                "tkqr": round_to_4(task_stats.get("tkqr", 0.0)),
                 "turns": task_stats.get("turns", 0),
                 "optimal_rounds": task_stats.get("optimal_rounds", 0),
                 "token_cost": task_stats.get("token_cost", 0),
                 "action_type_effectiveness": task_stats.get("action_type_effectiveness", {}),
                 "aspect_type_elicitation": task_stats.get("aspect_type_elicitation", {}),
             })
+
+        application_type_statistics = {
+            app_type: {
+                "num_tasks": int((stats or {}).get("num_tasks", 0) or 0),
+                "average_elicitation_ratio": float(
+                    (stats or {}).get("average_elicitation_ratio", 0.0) or 0.0
+                ),
+                "average_tkqr": float((stats or {}).get("average_tkqr", 0.0) or 0.0),
+            }
+            for app_type, stats in overall_metrics.get('application_type_statistics', {}).items()
+            if isinstance(stats, dict)
+        }
 
         evaluation_data = {
             "config": {
@@ -769,27 +791,21 @@ class ReqElicitGym(gym.Env):
             "overall_evaluation": {
                 "total_test_samples": overall_metrics['total_tasks'],
                 "total_hidden_requirements": overall_metrics['total_requirements_all_tasks'],
-                "total_elicited": overall_metrics['total_elicited_all_tasks'],
 
-                "average_elicitation_ratio": overall_metrics['elicitation_ratio'],
-                "average_tkqr": overall_metrics['tkqr'],
-                "average_ora": overall_metrics['ora'],
-                "average_turn": overall_metrics.get("average_turn", 0.0),
+                "average_elicitation_ratio": round_to_4(overall_metrics['elicitation_ratio']),
+                "average_tkqr": round_to_4(overall_metrics['tkqr']),
+                "average_turn": round_to_2(overall_metrics.get("average_turn", 0.0)),
+                "std_elicitation_ratio": round_to_4(overall_metrics.get('std_elicitation_ratio', 0.0)),
+                "std_tkqr": round_to_4(overall_metrics.get('std_tkqr', 0.0)),
+                "std_turn": round_to_2(overall_metrics.get("std_turn", 0.0)),
 
-                "variance_elicitation_ratio": overall_metrics.get('variance_elicitation_ratio', 0.0),
-                "variance_tkqr": overall_metrics.get('variance_tkqr', 0.0),
-                "variance_ora": overall_metrics.get('variance_ora', 0.0),
-
-                "average_token_cost": overall_metrics.get('average_token_cost', 0.0),
-                "variance_token_cost": overall_metrics.get('variance_token_cost', 0.0),
-
-                "elicitation_ratio_from_totals": overall_metrics['elicitation_ratio_from_totals'],
+                "average_token_cost": round_to_2(overall_metrics.get('average_token_cost', 0.0)),
 
                 "action_type_effectiveness": overall_metrics.get('action_type_effectiveness', {}),
 
                 "aspect_type_elicitation": overall_metrics.get('aspect_type_elicitation', {}),
 
-                "application_type_statistics": overall_metrics.get('application_type_statistics', {}),
+                "application_type_statistics": application_type_statistics,
             },
             "task_results": task_results,
         }

@@ -13,7 +13,16 @@ from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 
 GEMINI_OPENAI_HOST = "generativelanguage.googleapis.com"
 
-gemini_thinking_notice_flag = [False]
+
+def model_is_gemini_3_or_newer(model_name: str) -> bool:
+    name = str(model_name or "").strip().lower()
+    if not name.startswith("gemini-"):
+        return False
+    version = name.removeprefix("gemini-").split("-", 1)[0]
+    try:
+        return float(version) >= 3.0
+    except ValueError:
+        return False
 
 
 def openai_endpoint_is_gemini_compat(model_config: Dict[str, Any]) -> bool:
@@ -45,7 +54,7 @@ def apply_token_limit_to_create_kw(
 def apply_gemini_thinking_config(
     create_kw: Dict[str, Any], model_config: Dict[str, Any]
 ) -> None:
-    if not openai_endpoint_is_gemini_compat(model_config):
+    if not model_is_gemini_3_or_newer(model_config.get("model_name", "")):
         return
     level = str(model_config.get("thinking_level") or "").strip().lower()
     if not level:
@@ -157,13 +166,7 @@ def model_call_with_thinking(
                 temperature=model_config["temperature"],
                 timeout=model_config["timeout"],
             )
-            if openai_endpoint_is_gemini_compat(model_config):
-                if not gemini_thinking_notice_flag[0]:
-                    print(
-                        "[ReqElicitGym] Gemini OpenAI 相容端點不支援 enable_thinking，已改為一般 completions 呼叫。"
-                    )
-                    gemini_thinking_notice_flag[0] = True
-            else:
+            if not model_is_gemini_3_or_newer(model_config.get("model_name", "")):
                 create_kw["extra_body"] = {"enable_thinking": True}
             apply_token_limit_to_create_kw(create_kw, model_config, max_val)
             apply_gemini_thinking_config(create_kw, model_config)

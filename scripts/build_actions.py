@@ -37,10 +37,8 @@ from agents.profile.analyst.plan import (
     ANALYST_AVAILABLE_ACTIONS,
     ANALYST_NEW_REQUIREMENT_ACTION,
 )
-from agents.profile.analyst.rules import (
-    conflict_detection_base_task,
-    url_extraction_rules,
-)
+from agents.profile.analyst.actions.conflict.detection_rules import conflict_detection_base_task
+from agents.profile.analyst.rules import url_extraction_rules
 from agents.profile.analyst.skill import (
     conflict_skill_guidance,
     conflict_skill_subset,
@@ -303,8 +301,8 @@ SAMPLE_GROUP_CONFLICT_CONTEXT = {
     "pairwise_conflicts": [
         {
             "pair_index": 0,
-            "label": "Conflict",
-            "type": "scope",
+            "final_label": "Conflict",
+            "final_type": "scope",
             "reason": "取消時點不一致",
         }
     ],
@@ -312,8 +310,8 @@ SAMPLE_GROUP_CONFLICT_CONTEXT = {
 
 SAMPLE_CONFLICT_REPORT_ROW = {
     "id": "CR-1",
-    "label": "Conflict",
-    "type": "scope",
+    "final_label": "Conflict",
+    "final_type": "scope",
     "description": "取消規則無法同時成立",
     "requirements": [
         {"id": "URL-1", "text": "消費者能隨時取消訂單"},
@@ -811,7 +809,7 @@ def export_analyst() -> None:
                 {
                     "id": "PAIR-1",
                     "final_label": "Conflict",
-                    "initial_type": "scope",
+                    "final_type": "scope",
                 }
             ],
             extracted_pair_reviews=[],

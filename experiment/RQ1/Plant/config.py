@@ -1,5 +1,6 @@
 # Provides RQ1 Plant experiment config helpers.
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -8,6 +9,9 @@ from flow.setup import Flow
 from utils import model_has_token_pricing
 
 from .oracle_user import OracleConfigs
+
+GEMINI_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # ========
 # Defines ExperimentLogger class for this experiment module.
@@ -247,14 +251,13 @@ def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]
                 "請在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
             )
             sys.exit(1)
-    for k in ("oracle_user", "oracle_judge"):
-        model_name = str((exp_cfg.get(k) or {}).get("model") or "").strip()
-        if model_name and (not model_has_token_pricing(model_name)):
-            print(
-                f"警告：沒有找到 token 的定價：{k} 模型「{model_name}」。"
-                "請在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
-            )
-            sys.exit(1)
+    gym_model = str(exp_cfg.get("gym_model") or "").strip()
+    if gym_model and (not model_has_token_pricing(gym_model)):
+        print(
+            f"警告：沒有找到 token 的定價：gym_model 模型「{gym_model}」。"
+            "請在 utils/cost.py 的 CostTracker.DEFAULT_PRICING_PER_1M_TOKENS 補上定價。"
+        )
+        sys.exit(1)
 
 # ========
 # Defines build flow function for this experiment module.
@@ -284,24 +287,52 @@ def disable_rq1_candidate_extraction(flow: Flow) -> None:
 # ========
 # Defines build oracle configs function for this experiment module.
 # ========
-def build_oracle_configs(exp_cfg: Dict[str, Any], api_key: str, base_url: str) -> OracleConfigs:
-    user_cfg = exp_cfg.get("oracle_user") or {}
-    judge_cfg = exp_cfg.get("oracle_judge") or {}
+def model_provider(model_name: str) -> str:
+    normalized = str(model_name or "").strip().lower()
+    if normalized.startswith("gemini-"):
+        return "gemini"
+    return "openai"
+
+
+def endpoint_for_model(model_name: str) -> tuple[str, str]:
+    provider = model_provider(model_name)
+    if provider == "gemini":
+        return (
+            os.environ.get("GEMINI_API_KEY", ""),
+            os.environ.get("GEMINI_BASE_URL") or GEMINI_OPENAI_COMPAT_BASE,
+        )
+    return (
+        os.environ.get("OPENAI_API_KEY", ""),
+        os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL,
+    )
+
+
+def build_oracle_configs(exp_cfg: Dict[str, Any]) -> OracleConfigs:
+    gym_model = str(exp_cfg.get("gym_model") or "").strip()
+    if not gym_model:
+        raise ValueError("Plant/config.json 必須設定 gym_model")
+    api_key, base_url = endpoint_for_model(gym_model)
+    if not api_key:
+        required_key = "GEMINI_API_KEY" if model_provider(gym_model) == "gemini" else "OPENAI_API_KEY"
+        raise ValueError(f"gym_model={gym_model} 需要在 .env 設定 {required_key}")
+    judge_api_key = os.getenv("JUDGE_API_KEY", api_key)
+    user_api_key = os.getenv("USER_API_KEY", api_key)
+    judge_base_url = os.getenv("JUDGE_BASE_URL", base_url)
+    user_base_url = os.getenv("USER_BASE_URL", base_url)
     oracle_user = {
-        "api_key": api_key,
-        "base_url": base_url,
-        "model_name": str(user_cfg.get("model") or ""),
-        "temperature": float(user_cfg.get("temperature", 0.7)),
-        "max_tokens": int(user_cfg.get("max_tokens", 1024)),
-        "timeout": float(user_cfg.get("timeout", 30.0)),
+        "api_key": user_api_key,
+        "base_url": user_base_url,
+        "model_name": gym_model,
+        "temperature": float(exp_cfg.get("user_temperature", 0.7)),
+        "timeout": float(exp_cfg.get("user_timeout", 30.0)),
     }
     oracle_judge = {
-        "api_key": api_key,
-        "base_url": base_url,
-        "model_name": str(judge_cfg.get("model") or ""),
-        "temperature": float(judge_cfg.get("temperature", 0.0)),
-        "max_tokens": int(judge_cfg.get("max_tokens", 1024)),
-        "timeout": float(judge_cfg.get("timeout", 30.0)),
+        "api_key": judge_api_key,
+        "base_url": judge_base_url,
+        "model_name": gym_model,
+        "temperature": float(exp_cfg.get("judge_temperature", 0.0)),
+        "max_tokens": int(exp_cfg.get("judge_max_tokens", 1024)),
+        "timeout": float(exp_cfg.get("judge_timeout", 30.0)),
     }
     return OracleConfigs(
         judge_model_config=oracle_judge,

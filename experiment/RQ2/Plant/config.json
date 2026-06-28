@@ -1,12 +1,8 @@
 {
   "enable_human_judgment": false,
-  "enable_conflict_report": false,
   "enable_agents": {
     "user": false,
     "documentor": false
-  },
-  "conflict_detection": {
-    "enable_batch_pair_discovery": false
   },
   "agent_models": {
     "default": {

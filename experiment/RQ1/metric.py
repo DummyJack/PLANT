@@ -1,10 +1,42 @@
+import math
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Sequence
+
+
+def round_to_2(value: float) -> float:
+    value = float(value or 0.0)
+    if not math.isfinite(value):
+        return 0.0
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def round_to_4(value: float) -> float:
+    value = float(value or 0.0)
+    if not math.isfinite(value):
+        return 0.0
+    return float(Decimal(str(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+def round_float_tree_to_2(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return round_to_2(value)
+    if isinstance(value, list):
+        return [round_float_tree_to_2(item) for item in value]
+    if isinstance(value, dict):
+        return {key: round_float_tree_to_2(item) for key, item in value.items()}
+    return value
 
 
 def variance(values: Sequence[float], mean: float) -> float:
     if len(values) <= 1:
         return 0.0
     return sum((float(x) - mean) ** 2 for x in values) / len(values)
+
+
+def std_from_variance(value: float) -> float:
+    return max(float(value or 0.0), 0.0) ** 0.5
 
 
 def compute_tkqr(hit_sequence: Sequence[int], total_requirements: int) -> float:
@@ -123,6 +155,12 @@ def compute_overall_metrics(task_results: List[Dict[str, Any]]) -> Dict[str, Any
             "elicitation_ratio": 0.0,
             "tkqr": 0.0,
             "ora": 0.0,
+            "variance_elicitation_ratio": 0.0,
+            "variance_tkqr": 0.0,
+            "variance_ora": 0.0,
+            "std_elicitation_ratio": 0.0,
+            "std_tkqr": 0.0,
+            "std_ora": 0.0,
             "action_type_effectiveness": {},
             "aspect_type_elicitation": {},
             "total_tasks": 0,
@@ -142,14 +180,20 @@ def compute_overall_metrics(task_results: List[Dict[str, Any]]) -> Dict[str, Any
     avg_tkqr = (sum(tkqrs) / total_tasks) if total_tasks else 0.0
     avg_ora = (sum(oras) / total_tasks) if total_tasks else 0.0
     avg_token = (sum(token_costs) / total_tasks) if total_tasks else 0.0
+    variance_er = variance(ers, avg_er)
+    variance_tkqr = variance(tkqrs, avg_tkqr)
+    variance_ora = variance(oras, avg_ora)
 
     return {
         "elicitation_ratio": avg_er,
         "tkqr": avg_tkqr,
         "ora": avg_ora,
-        "variance_elicitation_ratio": variance(ers, avg_er),
-        "variance_tkqr": variance(tkqrs, avg_tkqr),
-        "variance_ora": variance(oras, avg_ora),
+        "variance_elicitation_ratio": variance_er,
+        "variance_tkqr": variance_tkqr,
+        "variance_ora": variance_ora,
+        "std_elicitation_ratio": std_from_variance(variance_er),
+        "std_tkqr": std_from_variance(variance_tkqr),
+        "std_ora": std_from_variance(variance_ora),
         "average_token_cost": avg_token,
         "variance_token_cost": variance(token_costs, avg_token),
         "elicitation_ratio_from_totals": (

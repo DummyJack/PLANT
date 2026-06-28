@@ -1,5 +1,4 @@
 # Provides RQ2 Plant experiment main helpers.
-import json
 import traceback
 from copy import deepcopy
 from pathlib import Path
@@ -8,7 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from flow.setup import Flow
 from storage.artifact import conflict_payload, requirements_payload
-from utils import json_dump_no_scientific
 
 from .config import build_flow, build_plant_cost_payload, load_rq2_config
 from .utils import (
@@ -37,109 +35,26 @@ OUTPUT_PREFIX = "Plant"
 
 load_dotenv(BASE_DIR / ".env")
 
-# ========
-# Defines load checkpoint file function for this experiment module.
-# ========
-def load_checkpoint_file(path: Path) -> Dict[str, Any]:
-    if not path.is_file():
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except Exception as e:
-        raise RuntimeError(f"checkpoint 檔案無法讀取，請修復或刪除後再續跑：{path}") from e
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"checkpoint 檔案格式錯誤，最外層必須是 object：{path}")
-    return payload
 
-# ========
-# Defines write json atomic function for this experiment module.
-# ========
-def write_json_atomic(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json_dump_no_scientific(payload, f, indent=2, ensure_ascii=False)
-    tmp_path.replace(path)
+def model_file_prefix(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "openai":
+        return "gpt"
+    if normalized in {"gemini", "claude"}:
+        return normalized
+    return normalized or "model"
 
-# ========
-# Defines merge cost payloads function for this experiment module.
-# ========
-def merge_cost_payloads(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
-    if not previous:
-        return current
-    if not current:
-        return previous
-    merged_agents: Dict[str, Any] = {}
-    previous_agents = previous.get("agents") or {}
-    current_agents = current.get("agents") or {}
-    for agent in sorted(set(previous_agents.keys()) | set(current_agents.keys())):
-        prev = previous_agents.get(agent) or {}
-        cur = current_agents.get(agent) or {}
-        merged_agents[agent] = {
-            "model": cur.get("model") or prev.get("model") or "",
-            "input_tokens": int(prev.get("input_tokens", 0) or 0) + int(cur.get("input_tokens", 0) or 0),
-            "output_tokens": int(prev.get("output_tokens", 0) or 0) + int(cur.get("output_tokens", 0) or 0),
-            "total_tokens": int(prev.get("total_tokens", 0) or 0) + int(cur.get("total_tokens", 0) or 0),
-            "run_time(s)": round(float(prev.get("run_time(s)", 0.0) or 0.0) + float(cur.get("run_time(s)", 0.0) or 0.0), 3),
-            "estimated_cost(USD)": round(float(prev.get("estimated_cost(USD)", 0.0) or 0.0) + float(cur.get("estimated_cost(USD)", 0.0) or 0.0), 8),
-        }
-    totals = {
-        "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in merged_agents.values()),
-        "output_tokens": sum(int(v.get("output_tokens", 0) or 0) for v in merged_agents.values()),
-        "total_tokens": sum(int(v.get("total_tokens", 0) or 0) for v in merged_agents.values()),
-        "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in merged_agents.values()), 3),
-        "estimated_cost(USD)": round(sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in merged_agents.values()), 8),
-    }
-    return {"agents": merged_agents, "totals": totals}
 
-# ========
-# Defines available rq2 checkpoints function for this experiment module.
-# ========
-def available_rq2_checkpoints(results_dir: Path) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    for path in sorted(results_dir.glob(f"checkpoint_{OUTPUT_PREFIX}_*.json")):
-        run_id = path.stem.replace(f"checkpoint_{OUTPUT_PREFIX}_", "", 1)
-        invalid = False
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except Exception:
-            invalid = True
-            payload = {}
-        if not isinstance(payload, dict):
-            invalid = True
-            payload = {}
-        completed = 0
-        try:
-            completed = int(payload.get("completed_type_count", 0) or 0)
-        except (TypeError, ValueError):
-            invalid = True
-        rows.append({"run_id": run_id, "path": path, "completed": completed, "invalid": invalid})
-    return rows
-
-# ========
-# Defines choose resume run id function for this experiment module.
-# ========
-def choose_resume_run_id(results_dir: Path) -> str:
-    checkpoints = available_rq2_checkpoints(results_dir)
-    if not checkpoints:
-        return ""
-    print("\n偵測到 RQ2 Plant checkpoint：")
-    for idx, row in enumerate(checkpoints, start=1):
-        suffix = "，檔案可能損壞" if row.get("invalid") else ""
-        print(f"  {idx}. run_id={row['run_id']}，已完成 {row['completed']} 個 type{suffix}")
-    print("  0. 開始新的 run")
-    raw = input("請選擇要續跑的 checkpoint（Enter/0: 新 run）：").strip()
-    if not raw or raw == "0":
-        return ""
-    try:
-        index = int(raw)
-    except ValueError:
-        return ""
-    if 1 <= index <= len(checkpoints):
-        return str(checkpoints[index - 1]["run_id"])
-    return ""
+def plant_model_file_prefix(config: Dict[str, Any]) -> str:
+    agent_models = config.get("agent_models") if isinstance(config.get("agent_models"), dict) else {}
+    default_cfg = agent_models.get("default") if isinstance(agent_models.get("default"), dict) else {}
+    provider = str(default_cfg.get("provider") or "").strip()
+    if not provider:
+        for row in agent_models.values():
+            if isinstance(row, dict) and str(row.get("provider") or "").strip():
+                provider = str(row.get("provider") or "").strip()
+                break
+    return model_file_prefix(provider)
 
 # ========
 # Defines run type group batch function for this experiment module.
@@ -230,11 +145,11 @@ def run_type_group_batch(
             if not isinstance(dec, dict):
                 continue
             cid = str(dec.get("id") or "").strip() or "-"
-            to_label = str(dec.get("to_label") or dec.get("new_label") or "").strip() or "-"
+            final_label = str(dec.get("final_label") or "").strip() or "-"
             result = str(dec.get("result") or "").strip() or "-"
             reason = str(dec.get("reason") or "").strip()
             print(
-                f"    - {cid}: {to_label} ({result})"
+                f"    - {cid}: {final_label} ({result})"
                 + (f"；理由：{reason}" if reason else ""),
                 flush=True,
             )
@@ -304,8 +219,7 @@ def run_conflict(
     scenario: Optional[str] = None,
     scenarios: Optional[List[str]] = None,
     run_id: Optional[str] = None,
-    checkpoint_path: Optional[Path] = None,
-    checkpoint_payload: Optional[Dict[str, Any]] = None,
+    model_prefix: str = "",
 ):
     try:
         if data_path is not None:
@@ -350,96 +264,13 @@ def run_conflict(
         g = str(row.get("types") or "Unknown")
         grouped.setdefault(g, []).append((i, row))
 
-    cp = checkpoint_payload if isinstance(checkpoint_payload, dict) else {}
-    previous_cost_payload = cp.get("cost_payload", {}) if isinstance(cp, dict) else {}
-    completed_types = {
-        str(item).strip()
-        for item in (cp.get("completed_types", []) if isinstance(cp, dict) else [])
-        if str(item).strip()
-    }
-    if cp and completed_types and not previous_cost_payload:
-        print(
-            "警告：此 checkpoint 沒有 cost_payload，成本只能統計本次續跑新增部分。"
-            "若需要完整成本，請使用新版 checkpoint 或重新跑該 run。",
-            flush=True,
-        )
-    if cp:
-        cp_total = int(cp.get("total", 0) or 0)
-        cp_selected_types = [
-            str(item).strip()
-            for item in (cp.get("selected_types", []) or [])
-            if str(item).strip()
-        ]
-        if cp_total and cp_total != total:
-            raise RuntimeError(
-                f"checkpoint 原本資料量為 {cp_total}，本次資料量為 {total}。續跑時請使用相同的 count 與 type 選擇。"
-            )
-        if cp_selected_types != selected_scenarios:
-            raise RuntimeError(
-                f"checkpoint 原本 type 選擇為 {cp_selected_types or '全部'}，"
-                f"本次為 {selected_scenarios or '全部'}。續跑時請使用相同設定。"
-            )
-    for raw_idx, packed in (cp.get("results_by_idx", {}) if isinstance(cp, dict) else {}).items():
-        try:
-            idx = int(raw_idx)
-        except (TypeError, ValueError):
-            continue
-        if isinstance(packed, dict):
-            results_by_idx[idx] = (packed.get("pred"), packed.get("record", {}))
-
-    meetings_by_type: Dict[str, Any] = (
-        dict(cp.get("meetings_by_type", {}))
-        if isinstance(cp.get("meetings_by_type"), dict)
-        else {}
-    )
-    conflict_artifact: Dict[str, Any] = (
-        dict(cp.get("conflict_artifact", {}))
-        if isinstance(cp.get("conflict_artifact"), dict)
-        else {"pairs": []}
-    )
-    requirements_artifact: Dict[str, Any] = (
-        dict(cp.get("requirements_artifact", {}))
-        if isinstance(cp.get("requirements_artifact"), dict)
-        else {"URL": []}
-    )
+    meetings_by_type: Dict[str, Any] = {}
+    conflict_artifact: Dict[str, Any] = {"pairs": []}
+    requirements_artifact: Dict[str, Any] = {"URL": []}
     conflict_artifact.setdefault("pairs", [])
     requirements_artifact.setdefault("URL", [])
 
-    def persist_checkpoint() -> Dict[str, Any]:
-        if checkpoint_path is None:
-            return merge_cost_payloads(previous_cost_payload, build_plant_cost_payload(flow))
-        cost_payload = merge_cost_payloads(previous_cost_payload, build_plant_cost_payload(flow))
-        packed_results = {
-            str(idx): {
-                "pred": pred,
-                "record": rec,
-            }
-            for idx, (pred, rec) in sorted(results_by_idx.items())
-        }
-        write_json_atomic(
-            checkpoint_path,
-            {
-                "run_id": str(run_id or ""),
-                "total": total,
-                "selected_types": selected_scenarios,
-                "completed_type_count": len(completed_types),
-                "completed_types": sorted(completed_types),
-                "results_by_idx": packed_results,
-                "meetings_by_type": meetings_by_type,
-                "conflict_artifact": conflict_artifact,
-                "requirements_artifact": requirements_artifact,
-                "cost_payload": cost_payload,
-            },
-        )
-        return cost_payload
-
     for g, items in grouped.items():
-        if str(g) in completed_types:
-            print(
-                f"========== 類型：{g}（{len(items)} 筆）已完成，略過 ==========",
-                flush=True,
-            )
-            continue
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
             flush=True,
@@ -454,8 +285,6 @@ def run_conflict(
                 conflict_artifact=conflict_artifact,
                 requirements_artifact=requirements_artifact,
             )
-            completed_types.add(str(g))
-            persist_checkpoint()
         except Exception as e:
             print(f"\n✗ 類型「{g}」整批失敗: {e}", flush=True)
             print("  ✗ Traceback:", flush=True)
@@ -525,7 +354,6 @@ def run_conflict(
         y_true=y_true,
         y_pred=y_pred,
         grouped=grouped,
-        selected_types=selected_scenarios,
     )
     metrics = result.get("metrics", {}) if isinstance(result.get("metrics"), dict) else {}
     overall = metrics.get("overall", {}) if isinstance(metrics.get("overall"), dict) else {}
@@ -545,7 +373,7 @@ def run_conflict(
         except (TypeError, ValueError):
             return 0.0
 
-    cost_payload = merge_cost_payloads(previous_cost_payload, build_plant_cost_payload(flow))
+    cost_payload = build_plant_cost_payload(flow)
     paths = write_rq2_outputs(
         prefix=OUTPUT_PREFIX,
         results_dir=RESULTS_DIR,
@@ -553,9 +381,8 @@ def run_conflict(
         record=record_by_type,
         cost=cost_payload,
         run_id=run_id,
+        model_prefix=model_prefix,
     )
-    persist_checkpoint()
-
     print("\n=== 執行結果 ===")
     print("【整體】")
     print(f"  總資料量: {total}")
@@ -615,7 +442,6 @@ def run_experiments(
     data_path: Optional[Path] = None,
     scenario: Optional[str] = None,
     scenarios: Optional[List[str]] = None,
-    resume_run_id: Optional[str] = None,
 ) -> None:
     try:
         rq2_config = load_rq2_config()
@@ -624,10 +450,7 @@ def run_experiments(
         raise SystemExit(1) from e
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    if resume_run_id is None:
-        resume_run_id = choose_resume_run_id(RESULTS_DIR)
-    if resume_run_id:
-        runs = 1
+    file_prefix = plant_model_file_prefix(rq2_config)
 
     run_scalar_metrics: List[Dict[str, float]] = []
     run_costs_usd: List[float] = []
@@ -635,12 +458,8 @@ def run_experiments(
     run_total_runtime_s: List[float] = []
 
     for run_idx in range(runs):
-        run_id = resume_run_id if resume_run_id and run_idx == 0 else str(next_result_index(OUTPUT_PREFIX, RESULTS_DIR))
-        checkpoint_path = RESULTS_DIR / f"checkpoint_{OUTPUT_PREFIX}_{run_id}.json"
-        checkpoint_payload = (
-            load_checkpoint_file(checkpoint_path)
-            if resume_run_id and run_idx == 0
-            else {}
+        run_id = str(
+            next_result_index(OUTPUT_PREFIX, RESULTS_DIR, model_prefix=file_prefix)
         )
         print(f"\n=== Run {run_idx + 1}/{runs}（run_id={run_id}）===")
         flow = build_flow(config=deepcopy(rq2_config))
@@ -653,8 +472,7 @@ def run_experiments(
             scenario=scenario,
             scenarios=scenarios,
             run_id=run_id,
-            checkpoint_path=checkpoint_path,
-            checkpoint_payload=checkpoint_payload,
+            model_prefix=file_prefix,
         )
         result = run_output.get("result", {}) if isinstance(run_output, dict) else {}
         cost_payload = run_output.get("cost", {}) if isinstance(run_output, dict) else {}
@@ -675,4 +493,5 @@ def run_experiments(
         run_costs_usd=run_costs_usd,
         run_total_tokens=run_total_tokens,
         run_total_runtime_s=run_total_runtime_s,
+        model_prefix=file_prefix,
     )

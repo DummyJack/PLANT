@@ -287,11 +287,23 @@ def load_rq2_config() -> Dict[str, Any]:
     return cfg
 
 # ========
+# Defines apply rq2 benchmark defaults function for this experiment module.
+# ========
+def apply_rq2_benchmark_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(config)
+    updated["enable_conflict_report"] = False
+    conflict_detection = dict(updated.get("conflict_detection") or {})
+    conflict_detection["enable_batch_pair_discovery"] = False
+    updated["conflict_detection"] = conflict_detection
+    return updated
+
+# ========
 # Defines build flow function for this experiment module.
 # ========
 def build_flow(config: Optional[Dict[str, Any]] = None) -> Flow:
     if config is None:
         config = load_rq2_config()
+    config = apply_rq2_benchmark_defaults(config)
     check_provider_model_mismatch(config)
     assert_agent_models_have_token_pricing(config)
     return Flow(config=config, store=ExperimentStore(), logger=ExperimentLogger())

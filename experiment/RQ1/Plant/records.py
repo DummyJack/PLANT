@@ -1,12 +1,28 @@
 # Provides RQ1 Plant experiment records helpers.
 import json
+import re
 from typing import Any, Dict, List
 
 from flow.setup import Flow
-from metric import compute_ora, compute_overall_metrics, compute_tkqr
+from metric import (
+    round_to_4,
+    round_to_2,
+    compute_ora,
+    compute_overall_metrics,
+    compute_tkqr,
+    std_from_variance,
+    variance,
+)
 
 from .oracle_user import OracleUserAgent
 from .utils import task_implicit_requirements, task_initial_requirements
+
+
+def finish_record_text(tlog: Dict[str, Any]) -> str:
+    judged_action = str(tlog.get("judged_action") or "").strip()
+    if "我已蒐集足夠資訊" in judged_action:
+        return "我已蒐集足夠資訊"
+    return "I have gathered enough information"
 
 # ========
 # Defines resolve role model name function for this experiment module.
@@ -63,6 +79,13 @@ def build_plant_models(flow_cfg: Dict[str, Any]) -> Dict[str, str]:
         out[role] = resolve_role_model_name(flow_cfg, role)
     return out
 
+
+def turn_record_rows(tlog: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows = tlog.get("conversation")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
 # ========
 # Defines resolve plant model label function for this experiment module.
 # ========
@@ -71,9 +94,7 @@ def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]
     for tlog in (per_task.get("elicitation_trace", []) or []):
         if not isinstance(tlog, dict):
             continue
-        for row in (tlog.get("record", []) or []):
-            if not isinstance(row, dict):
-                continue
+        for row in turn_record_rows(tlog):
             agent = str(row.get("agent") or "").strip()
             if agent in ("analyst", "expert", "modeler") and agent not in participants:
                 participants.append(agent)
@@ -291,7 +312,9 @@ def strip_post_meeting_analysis_sections(text: str) -> str:
 def keep_user_record_text(text: str) -> str:
     prefix, trailing_json = split_trailing_json_object(str(text or "").strip())
     cleaned = prefix if trailing_json and prefix else str(text or "").strip()
-    return strip_metadata_json_objects(cleaned)
+    cleaned = strip_metadata_json_objects(cleaned)
+    cleaned = re.sub(r"(?m)^\s*【Oracle User】\s*", "", cleaned)
+    return cleaned.strip()
 
 # ========
 # Defines keep interviewer record text function for this experiment module.
@@ -326,9 +349,7 @@ def format_mediator_record_text(tlog: Dict[str, Any]) -> str:
     discussion_mode = str(tlog.get("discussion_mode") or "").strip()
     is_finish = bool(tlog.get("judge_finish", False)) or bool(tlog.get("forced_finish", False))
     if is_finish:
-        if bool(tlog.get("forced_finish", False)):
-            return str(tlog.get("judged_action") or "This meeting is over.").strip()
-        return ""
+        return finish_record_text(tlog)
 
     participants = [
         str(role).strip()
@@ -408,13 +429,11 @@ def build_task_record(
         if not isinstance(tlog, dict):
             continue
         turn_no = safe_turn_no(tlog.get("turn"))
-        record = tlog.get("record", []) or []
+        record = turn_record_rows(tlog)
 
         role_parts: Dict[str, List[str]] = {"analyst": [], "expert": [], "modeler": []}
         user_parts: List[str] = []
         for row in record:
-            if not isinstance(row, dict):
-                continue
             agent = str(row.get("agent") or "").strip()
             stmt = str(row.get("text") or "").strip()
             if not agent or not stmt:
@@ -442,8 +461,8 @@ def build_task_record(
         hit_sequence.append(1 if hit else 0)
 
         action_types = agg.get("action_types", []) or []
-        forced_finish = bool(tlog.get("forced_finish", False) or tlog.get("judge_finish", False))
-        if forced_finish:
+        is_finish = bool(tlog.get("forced_finish", False) or tlog.get("judge_finish", False))
+        if is_finish:
             action_type = "finish"
             user_text = ""
         else:
@@ -459,10 +478,11 @@ def build_task_record(
         mediator_text = format_mediator_record_text(tlog)
         if mediator_text:
             turn_entry["mediator"] = mediator_text
-        for role in ("analyst", "expert", "modeler"):
-            role_text = "\n\n".join(role_parts[role]).strip()
-            if role_text:
-                turn_entry[role] = role_text
+        if not is_finish:
+            for role in ("analyst", "expert", "modeler"):
+                role_text = "\n\n".join(role_parts[role]).strip()
+                if role_text:
+                    turn_entry[role] = role_text
         if user_text:
             turn_entry["user"] = user_text
         turn_entry.update(
@@ -556,30 +576,38 @@ def build_result_payload(
         sum(turns_values) / len(turns_values)
         if turns_values else 0.0
     )
+    variance_turn = variance(turns_values, average_turn) if turns_values else 0.0
+    application_type_statistics = {
+        app: {
+            "num_tasks": int((stats or {}).get("num_tasks", 0) or 0),
+            "average_elicitation_ratio": float(
+                (stats or {}).get("average_elicitation_ratio", 0.0) or 0.0
+            ),
+            "average_tkqr": float((stats or {}).get("average_tkqr", 0.0) or 0.0),
+        }
+        for app, stats in (summary.get("application_type_statistics", {}) or {}).items()
+        if isinstance(stats, dict)
+    }
     overall = {
         "total_test_samples": int(summary.get("total_tasks", 0) or 0),
         "total_hidden_requirements": int(summary.get("total_requirements_all_tasks", 0) or 0),
-        "total_elicited": int(summary.get("total_elicited_all_tasks", 0) or 0),
-        "average_elicitation_ratio": float(summary.get("elicitation_ratio", 0.0) or 0.0),
-        "average_tkqr": float(summary.get("tkqr", 0.0) or 0.0),
-        "average_ora": float(summary.get("ora", 0.0) or 0.0),
-        "average_turn": float(average_turn),
-        "variance_elicitation_ratio": float(summary.get("variance_elicitation_ratio", 0.0) or 0.0),
-        "variance_tkqr": float(summary.get("variance_tkqr", 0.0) or 0.0),
-        "variance_ora": float(summary.get("variance_ora", 0.0) or 0.0),
-        "average_token_cost": float(summary.get("average_token_cost", 0.0) or 0.0),
-        "variance_token_cost": float(summary.get("variance_token_cost", 0.0) or 0.0),
-        "elicitation_ratio_from_totals": float(summary.get("elicitation_ratio_from_totals", 0.0) or 0.0),
+        "average_elicitation_ratio": round_to_4(summary.get("elicitation_ratio", 0.0) or 0.0),
+        "average_tkqr": round_to_4(summary.get("tkqr", 0.0) or 0.0),
+        "average_turn": round_to_2(average_turn),
+        "std_elicitation_ratio": round_to_4(summary.get("std_elicitation_ratio", 0.0) or 0.0),
+        "std_tkqr": round_to_4(summary.get("std_tkqr", 0.0) or 0.0),
+        "std_turn": round_to_2(std_from_variance(variance_turn)),
+        "average_token_cost": round_to_2(summary.get("average_token_cost", 0.0) or 0.0),
         "action_type_effectiveness": summary.get("action_type_effectiveness", {}) or {},
         "aspect_type_elicitation": summary.get("aspect_type_elicitation", {}) or {},
-        "application_type_statistics": summary.get("application_type_statistics", {}) or {},
+        "application_type_statistics": application_type_statistics,
     }
 
     return {
         "config": {
             "Plant": build_plant_models(flow_cfg),
-            "judge_model": str((exp_cfg.get("oracle_judge", {}) or {}).get("model", "")),
-            "user_model": str((exp_cfg.get("oracle_user", {}) or {}).get("model", "")),
+            "judge_model": str(exp_cfg.get("gym_model") or ""),
+            "user_model": str(exp_cfg.get("gym_model") or ""),
             "user_answer_quality": str(exp_cfg.get("user_answer_quality", "high")),
             "max_turns": int(flow_cfg.get("elicitation_max_turns", 0) or 0),
         },
@@ -589,9 +617,8 @@ def build_result_payload(
                 "task_id": t["task_id"],
                 "total_requirements": t["total_requirements"],
                 "total_elicited": t["total_elicited"],
-                "elicitation_ratio": t["elicitation_ratio"],
-                "tkqr": t["tkqr"],
-                "ora": t["ora"],
+                "elicitation_ratio": round_to_4(t["elicitation_ratio"]),
+                "tkqr": round_to_4(t["tkqr"]),
                 "turns": t["turns"],
                 "optimal_rounds": t["optimal_rounds"],
                 "token_cost": t["token_cost"],
@@ -625,29 +652,25 @@ def print_final_summary(result: Dict[str, Any], records: List[Dict[str, Any]]) -
     print("\n評估指標總結：")
     print(f"  總測試樣本數：{int(overall.get('total_test_samples', 0) or 0)}")
     print(f"  總隱式需求數：{int(overall.get('total_hidden_requirements', 0) or 0)}")
-    print(f"  總取得數：{int(overall.get('total_elicited', 0) or 0)}")
     print("\n平均指標（基於測試樣本平均）：")
     print(f"  平均取得比例：{float(overall.get('average_elicitation_ratio', 0.0) or 0.0):.2%}")
     print(f"  平均 TKQR：{float(overall.get('average_tkqr', 0.0) or 0.0):.4f}")
-    print(f"  平均 ORA：{float(overall.get('average_ora', 0.0) or 0.0):.4f}")
-    print("\n變異數：")
-    print(f"  取得比例變異數：{float(overall.get('variance_elicitation_ratio', 0.0) or 0.0):.6f}")
-    print(f"  TKQR 變異數：{float(overall.get('variance_tkqr', 0.0) or 0.0):.6f}")
-    print(f"  ORA 變異數：{float(overall.get('variance_ora', 0.0) or 0.0):.6f}")
-    print("\n總體比例（基於總計數）：")
-    print(f"  總取得比例：{float(overall.get('elicitation_ratio_from_totals', 0.0) or 0.0):.2%}")
+    print(f"  平均 Turns：{float(overall.get('average_turn', 0.0) or 0.0):.2f}")
+    print("\n標準差：")
+    print(f"  取得比例標準差：{float(overall.get('std_elicitation_ratio', 0.0) or 0.0):.4f}")
+    print(f"  TKQR 標準差：{float(overall.get('std_tkqr', 0.0) or 0.0):.4f}")
+    print(f"  Turns 標準差：{float(overall.get('std_turn', 0.0) or 0.0):.2f}")
 
     if app_stats:
         print("\n依應用類型統計：")
-        print(f"{'Application Type':<40} {'任務數':<10} {'平均取得比例':<15} {'平均TKQR':<12} {'平均ORA':<12}")
-        print("-" * 100)
+        print(f"{'Application Type':<40} {'任務數':<10} {'平均取得比例':<15} {'平均TKQR':<12}")
+        print("-" * 85)
         for app in sorted(app_stats.keys()):
             s = app_stats[app] or {}
             print(
                 f"{app:<40} {int(s.get('num_tasks', 0) or 0):<10} "
                 f"{float(s.get('average_elicitation_ratio', 0.0) or 0.0):>13.2%} "
-                f"{float(s.get('average_tkqr', 0.0) or 0.0):>10.4f} "
-                f"{float(s.get('average_ora', 0.0) or 0.0):>10.4f}"
+                f"{float(s.get('average_tkqr', 0.0) or 0.0):>10.4f}"
             )
 
     if action_stats:

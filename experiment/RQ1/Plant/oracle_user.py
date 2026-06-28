@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from agents.profile.user import UserAgent
-from Baseline.env.prompts import generate_user_response, judge_interviewer_action, model_call
+from Baseline.env.prompts import generate_user_response, judge_interviewer_action
 from Baseline.env.utils import relevant_requirement_ids_from_judgement
 from utils import CostTracker
 
@@ -311,94 +311,6 @@ class OracleUserAgent(UserAgent):
         if isinstance(judgement, dict):
             return str(judgement.get("action_type") or "probe").strip().lower() or "probe"
         return "probe"
-
-    # ========
-    # Defines judge revealed requirements function for this experiment module.
-    # ========
-    def judge_revealed_requirements(
-        self,
-        *,
-        interviewer_action: str,
-        user_response: str,
-    ) -> Dict[str, Any]:
-        response_text = str(user_response or "").strip()
-        if not response_text:
-            return {
-                "is_relevant_to_implied_requirements": False,
-                "relevant_implied_requirements_ids": [],
-                "reasoning": "",
-            }
-        remaining_requirements = ""
-        for requirement in self.remaining_requirements:
-            req_id = requirement.get("id", "")
-            aspect = requirement.get("aspect", "")
-            req_text = requirement.get("requirement", "")
-            remaining_requirements += (
-                f"Requirement ID: {req_id}\tAspect: {aspect}\tRequirement: {req_text}\n\n"
-            )
-        system_prompt = """You are an expert evaluator for requirement elicitation experiments.
-
-Task:
-Identify which hidden requirements are explicitly revealed by the user's latest answer.
-
-Rules:
-- Use only the user's latest answer, not your assumptions.
-- A requirement is revealed only when the answer clearly states the same need or a close semantic equivalent.
-- Multiple requirements may be revealed by one answer.
-- Do not count requirements that are merely adjacent, implied by the domain, or contradicted by the answer.
-- Return only JSON."""
-        user_prompt = f"""
-Initial requirement:
-{task_initial_requirements(self.current_task)}
-
-Interviewer question:
-{interviewer_action}
-
-User latest answer:
-{response_text}
-
-Remaining hidden requirements:
-{remaining_requirements.strip() if remaining_requirements.strip() else "No remaining requirements."}
-
-Return JSON:
-{{
-  "is_relevant_to_implied_requirements": true/false,
-  "relevant_implied_requirements_ids": ["IR-01"],
-  "reasoning": "brief evidence from the user answer"
-}}
-"""
-        judge_t0 = time.perf_counter()
-        judgement, usage = model_call(
-            system_prompt,
-            user_prompt,
-            self.oracle.judge_model_config,
-            return_json=True,
-            return_usage=True,
-        )
-        self.oracle_runtime_total_s["judge"] += max(0.0, time.perf_counter() - judge_t0)
-        self.merge_usage(self.oracle_usage_total["judge"], usage or {})
-        if not isinstance(judgement, dict):
-            return {
-                "is_relevant_to_implied_requirements": False,
-                "relevant_implied_requirements_ids": [],
-                "reasoning": "",
-            }
-        raw_ids = judgement.get("relevant_implied_requirements_ids")
-        if isinstance(raw_ids, str):
-            raw_ids = [raw_ids]
-        valid_ids = {str(req.get("id") or "").strip() for req in self.remaining_requirements}
-        ids: List[str] = []
-        if isinstance(raw_ids, list):
-            for raw_id in raw_ids:
-                req_id = str(raw_id or "").strip()
-                if req_id and req_id in valid_ids and req_id not in ids:
-                    ids.append(req_id)
-        return {
-            "is_relevant_to_implied_requirements": bool(ids),
-            "relevant_implied_requirements_ids": ids,
-            "relevant_implied_requirements_id": ids[0] if ids else None,
-            "reasoning": str(judgement.get("reasoning") or "").strip(),
-        }
 
     # ========
     # Defines log rq1 turn result function for this experiment module.
@@ -730,33 +642,9 @@ Return JSON:
             self.oracle_runtime_total_s["user"] += max(0.0, time.perf_counter() - user_t0)
         self.merge_usage(self.oracle_usage_total["user"], user_usage or {})
 
-        response_judgement = self.judge_revealed_requirements(
-            interviewer_action=selected_action,
-            user_response=user_response,
-        )
-
         elicited_req_ids: List[str] = []
         is_relevant = bool(selected_judgement.get("is_relevant_to_implied_requirements", False))
         relevant_req_ids = relevant_requirement_ids_from_judgement(selected_judgement)
-        for rid in relevant_requirement_ids_from_judgement(response_judgement):
-            if rid not in relevant_req_ids:
-                relevant_req_ids.append(rid)
-        if bool(response_judgement.get("is_relevant_to_implied_requirements", False)):
-            is_relevant = True
-            selected_judgement = dict(selected_judgement or {})
-            selected_judgement["is_relevant_to_implied_requirements"] = True
-            selected_judgement["relevant_implied_requirements_ids"] = list(relevant_req_ids)
-            selected_judgement["relevant_implied_requirements_id"] = (
-                relevant_req_ids[0] if relevant_req_ids else None
-            )
-            response_reason = str(response_judgement.get("reasoning") or "").strip()
-            if response_reason:
-                existing_reason = str(selected_judgement.get("reasoning") or "").strip()
-                selected_judgement["reasoning"] = (
-                    f"{existing_reason}\nresponse: {response_reason}"
-                    if existing_reason
-                    else f"response: {response_reason}"
-                )
         if is_relevant and relevant_req_ids:
             relevant_req_id_set = set(relevant_req_ids)
             for req in self.remaining_requirements:
@@ -791,7 +679,6 @@ Return JSON:
                 "interviewer_action_merged": merged_action,
                 "selected_interviewer_role": selected_role,
                 "judge_per_role": judge_details,
-                "response_judge": response_judgement,
                 "user_response": user_response,
                 "judge": self.last_action_info,
                 "revealed_ids": list(elicited_req_ids or []),

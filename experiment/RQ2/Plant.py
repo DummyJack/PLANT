@@ -18,7 +18,7 @@ RQ2_DIR = Path(__file__).resolve().parent
 EXP_DIR = RQ2_DIR.parent
 BASE_DIR = EXP_DIR.parent
 
-from Plant.main import RESULTS_DIR, choose_resume_run_id, run_experiments
+from Plant.main import run_experiments
 from Plant.utils import default_csv_path, load_rq2_dataset
 
 ask_runs = True
@@ -80,12 +80,8 @@ def main() -> None:
 
     scenarios = choose_scenarios(data_path)
     count = 0
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    resume_run_id = choose_resume_run_id(RESULTS_DIR)
 
-    if resume_run_id:
-        runs = 1
-    elif ask_runs:
+    if ask_runs:
         raw_runs = input("請輸入要重複執行幾次：").strip()
         if not raw_runs:
             print("錯誤：請輸入重複執行次數")
@@ -106,7 +102,6 @@ def main() -> None:
         runs=runs,
         data_path=data_path,
         scenarios=scenarios,
-        resume_run_id=resume_run_id,
     )
 
 if __name__ == "__main__":

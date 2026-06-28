@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from metric import Metric
+from metric import Metric, round_float_tree_to_4, round_to_4
 from utils import json_dump_no_scientific
 
 # ========
@@ -28,11 +28,6 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
     source.pop("reason", None)
 
     source.pop("round", None)
-    if "from_label" in source and "initial_label" not in source:
-        source["initial_label"] = source.pop("from_label")
-    else:
-        source.pop("from_label", None)
-    source.pop("to_label", None)
 
     # ========
     # Defines cleaned review rows function for this experiment module.
@@ -67,10 +62,16 @@ def normalize_pair_details(details: Any) -> Dict[str, Any]:
 # ========
 # Defines next result index function for this experiment module.
 # ========
-def next_result_index(prefix: str, results_dir: Path) -> int:
-    pat = re.compile(rf"^(?:result|record|cost|checkpoint)_{re.escape(prefix)}_(\d+)\.json$")
+def next_result_index(prefix: str, results_dir: Path, *, model_prefix: str) -> int:
+    model_prefix = str(model_prefix or "").strip()
+    if not model_prefix:
+        raise ValueError("RQ2 output model_prefix is required")
+    pat = re.compile(
+        rf"^{re.escape(model_prefix)}_(?:result|record|cost)_{re.escape(prefix)}_(\d+)\.json$"
+    )
+    glob_pattern = f"{model_prefix}_*_{prefix}_*.json"
     max_idx = 0
-    for p in results_dir.glob(f"*_{prefix}_*.json"):
+    for p in results_dir.glob(glob_pattern):
         m = pat.match(p.name)
         if not m:
             continue
@@ -126,10 +127,6 @@ def build_rq2_record_by_type(
                     "pred": None,
                     "details": {},
                 }
-            if "changed_after_review" in base and "is_changed" not in base:
-                base["is_changed"] = base.pop("changed_after_review")
-            else:
-                base.pop("changed_after_review", None)
             description = description_by_pair_index.get(local_pair_index, "")
             details = normalize_pair_details(base.pop("details", {}))
             base.pop("id", None)
@@ -170,12 +167,13 @@ def build_rq2_result_payload(
     y_true: List[str],
     y_pred: List[str],
     grouped: Dict[str, List[Tuple[int, Dict[str, Any]]]],
-    selected_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     n_conflict = y_true.count("Conflict")
     n_neutral = y_true.count("Neutral")
     overall = Metric.macro(y_true, y_pred, labels=["Conflict", "Neutral"])["macro"]
-    conflict_class = Metric.binary(y_true, y_pred, positive_label="Conflict")
+    conflict_class = round_float_tree_to_4(
+        Metric.binary(y_true, y_pred, positive_label="Conflict")
+    )
 
     by_type: Dict[str, Dict[str, Any]] = {}
     for g, items in grouped.items():
@@ -190,7 +188,9 @@ def build_rq2_result_payload(
             "total": len(yt),
             "count": {"conflict": n_conf, "neutral": n_neu},
             "overall": Metric.macro(yt, yp, labels=["Conflict", "Neutral"])["macro"],
-            "conflict": Metric.binary(yt, yp, positive_label="Conflict"),
+            "conflict": round_float_tree_to_4(
+                Metric.binary(yt, yp, positive_label="Conflict")
+            ),
         }
 
     result = {
@@ -206,13 +206,6 @@ def build_rq2_result_payload(
         },
         "metrics_by_type": by_type,
     }
-    normalized_selected = [
-        str(item).strip()
-        for item in (selected_types or [])
-        if str(item or "").strip()
-    ]
-    if normalized_selected:
-        result["selected_types"] = normalized_selected
     return result
 
 # ========
@@ -225,13 +218,18 @@ def write_rq2_outputs(
     result: Dict[str, Any],
     record: Dict[str, Any],
     cost: Dict[str, Any],
+    model_prefix: str,
     run_id: Optional[str] = None,
 ) -> Dict[str, Path]:
     results_dir.mkdir(parents=True, exist_ok=True)
-    run_idx = str(run_id or next_result_index(prefix, results_dir))
-    result_path = results_dir / f"result_{prefix}_{run_idx}.json"
-    record_path = results_dir / f"record_{prefix}_{run_idx}.json"
-    cost_path = results_dir / f"cost_{prefix}_{run_idx}.json"
+    model_prefix = str(model_prefix or "").strip()
+    if not model_prefix:
+        raise ValueError("RQ2 output model_prefix is required")
+    file_prefix = f"{model_prefix}_" if model_prefix else ""
+    run_idx = str(run_id or next_result_index(prefix, results_dir, model_prefix=model_prefix))
+    result_path = results_dir / f"{file_prefix}result_{prefix}_{run_idx}.json"
+    record_path = results_dir / f"{file_prefix}record_{prefix}_{run_idx}.json"
+    cost_path = results_dir / f"{file_prefix}cost_{prefix}_{run_idx}.json"
 
     with result_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
@@ -255,12 +253,12 @@ def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:
     overall = metrics.get("overall") if isinstance(metrics.get("overall"), dict) else {}
     for k, v in overall.items():
         if isinstance(v, (int, float)):
-            out[f"overall_{k}"] = float(v)
+            out[f"overall_{k}"] = round_to_4(v)
     conflict = metrics.get("conflict")
     if isinstance(conflict, dict):
         for k, v in conflict.items():
             if isinstance(v, (int, float)):
-                out[f"conflict_{k}"] = float(v)
+                out[f"conflict_{k}"] = round_to_4(v)
     metrics_by_type = (
         result.get("metrics_by_type")
         if isinstance(result.get("metrics_by_type"), dict)
@@ -274,10 +272,10 @@ def scalar_metrics_for_summary(result: Dict[str, Any]) -> Dict[str, float]:
         if isinstance(overall_by_type, dict):
             for k, v in overall_by_type.items():
                 if isinstance(v, (int, float)):
-                    out[f"{prefix}.overall_{k}"] = float(v)
+                    out[f"{prefix}.overall_{k}"] = round_to_4(v)
         conflict_by_type = scenario_metrics.get("conflict")
         if isinstance(conflict_by_type, dict):
             for k, v in conflict_by_type.items():
                 if isinstance(v, (int, float)):
-                    out[f"{prefix}.conflict_{k}"] = float(v)
+                    out[f"{prefix}.conflict_{k}"] = round_to_4(v)
     return out

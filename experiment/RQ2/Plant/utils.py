@@ -9,11 +9,18 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from agents.profile.analyst.conflicts import all_conflict_rows
+from metric import round_to_4
 from utils import json_dump_no_scientific
 
 RQ2_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
+
+# ========
+# Defines final pair label function for this experiment module.
+# ========
+def final_pair_label(row: Dict[str, Any]) -> str:
+    return str(row.get("final_label") or "").strip()
 
 # ========
 # Defines print multi run summary function for this experiment module.
@@ -25,6 +32,8 @@ def print_multi_run_summary(
     run_costs_usd: List[float],
     run_total_tokens: List[int],
     run_total_runtime_s: List[float],
+    model_prefix: str,
+    method_prefix: str = "Plant",
 ) -> None:
     if runs <= 1:
         return
@@ -43,19 +52,20 @@ def print_multi_run_summary(
     ordered_keys = [key for key in preferred_order if key in all_keys]
     ordered_keys.extend(sorted(key for key in all_keys if key not in set(ordered_keys)))
 
-    print("\n多次執行結果統計（平均值 ± 標準差）：")
+    print("\n多次執行結果統計（平均值）：")
     summary_metrics: Dict[str, Any] = {}
     summary_metrics_by_type: Dict[str, Dict[str, Any]] = {}
     for key in ordered_keys:
         vals = [float(row[key]) for row in run_scalar_metrics if key in row]
         if not vals:
             continue
-        mu = mean(vals)
-        sd = float(np.std(vals))
+        rounded_vals = [round_to_4(v) for v in vals]
+        mu = round_to_4(mean(vals))
+        sigma = round_to_4(float(np.std(vals)))
         summary_item = {
             "mean": mu,
-            "std": sd,
-            "per_round_values": vals,
+            "std": sigma,
+            "per_round_values": rounded_vals,
         }
         if key.startswith("by_type."):
             parts = key.split(".", 2)
@@ -66,7 +76,7 @@ def print_multi_run_summary(
                 summary_metrics[key] = summary_item
         else:
             summary_metrics[key] = summary_item
-        print(f"  {key}：{mu:.4f} ± {sd:.4f}")
+        print(f"  {key}：{mu:.2f}")
 
     summary_payload: Dict[str, Any] = {"runs": runs}
     if summary_metrics:
@@ -88,7 +98,8 @@ def print_multi_run_summary(
     else:
         print("  平均成本(USD)：N/A")
 
-    summary_path = RESULTS_DIR / "summary_Plant.json"
+    file_prefix = f"{str(model_prefix or '').strip()}_" if str(model_prefix or "").strip() else ""
+    summary_path = RESULTS_DIR / f"{file_prefix}summary_{method_prefix}.json"
     with summary_path.open("w", encoding="utf-8") as f:
         json_dump_no_scientific(summary_payload, f, indent=2, ensure_ascii=False)
     print(f"統計已儲存至：{summary_path}")
@@ -198,7 +209,7 @@ def extract_pair_preds_with_missing(
             continue
         if ik < 0 or ik >= n_pairs:
             continue
-        lb = (c.get("label") or "").strip()
+        lb = final_pair_label(c)
         if lb in ("Conflict", "Neutral"):
             by_k[ik] = lb
     preds = [by_k.get(k, "") for k in range(n_pairs)]
@@ -247,15 +258,18 @@ def extract_conflict_review_details(
                 add_participant(row.get("agent"))
 
         initial_label = str(c.get("initial_label") or "").strip()
-        final_label = str(c.get("final_label") or c.get("label") or "").strip()
+        final_label = str(c.get("final_label") or "").strip()
+        if initial_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 conflict review initial_label 不合法: {cid}")
+        if final_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 conflict review final_label 不合法: {cid}")
         description = str(c.get("description") or "").strip()
         decisions.append(
             {
                 "id": cid,
-                "new_label": final_label,
                 "reason": description,
-                "from_label": initial_label,
-                "to_label": final_label,
+                "initial_label": initial_label,
+                "final_label": final_label,
                 "result": (
                     "modify"
                     if initial_label and final_label and initial_label != final_label
@@ -302,13 +316,21 @@ def build_pair_changed_flags(artifact: Dict[str, Any], n_pairs: int) -> List[boo
         if ik < 0 or ik >= n_pairs:
             continue
 
-        final_label = str(c.get("label") or "").strip()
-        if final_label not in {"Conflict", "Neutral"}:
+        current_label = final_pair_label(c)
+        if current_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
-        from_label = str(c.get("initial_label") or "").strip()
-        to_label = str(c.get("final_label") or final_label).strip()
-        changed = bool(from_label and to_label and from_label != to_label)
+        initial_label = str(c.get("initial_label") or "").strip()
+        resolved_final_label = str(c.get("final_label") or "").strip()
+        if initial_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 pair initial_label 不合法: PAIR-{ik + 1}")
+        if resolved_final_label not in {"Conflict", "Neutral"}:
+            raise RuntimeError(f"RQ2 pair final_label 不合法: PAIR-{ik + 1}")
+        changed = bool(
+            initial_label
+            and resolved_final_label
+            and initial_label != resolved_final_label
+        )
 
         by_k[ik] = changed
 
@@ -344,7 +366,7 @@ def build_pair_review_details(
         if ik < 0 or ik >= n_pairs:
             continue
 
-        final_label = str(c.get("label") or "").strip()
+        final_label = final_pair_label(c)
         if final_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"RQ2 pair 缺少最終標籤: PAIR-{ik + 1}")
 
