@@ -169,7 +169,12 @@ class Store:
         html_path: Path,
         html_root: Optional[Path] = None,
     ) -> None:
-        save_markdown_as_html(md_path, html_path, html_root=html_root)
+        save_markdown_as_html(
+            md_path,
+            html_path,
+            html_root=html_root,
+            project_id=self.project_id,
+        )
 
 
     # ========

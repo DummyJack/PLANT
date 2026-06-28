@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 from markdown_it import MarkdownIt
 import re
+from urllib.parse import unquote
 
 from .atomic import atomic_write_text
 
@@ -279,6 +280,16 @@ def compute_models_prefix(html_path: Path, html_root: Optional[Path]) -> str:
     return "./" if depth == 0 else "../" * depth + ""
 
 
+def model_image_version(target: str, html_path: Path) -> Optional[int]:
+    image_name = unquote(str(target or "").split("?", 1)[0])
+    if not image_name:
+        return None
+    image_path = html_path.parent / "models" / image_name
+    if not image_path.exists() or not image_path.is_file():
+        return None
+    return int(image_path.stat().st_mtime_ns)
+
+
 # ========
 # Defines normalize model image paths function for this module workflow.
 # ========
@@ -286,12 +297,24 @@ def normalize_model_image_paths(
     html_body: str,
     html_path: Path,
     html_root: Optional[Path] = None,
+    project_id: Optional[str] = None,
 ) -> str:
-    prefix = compute_models_prefix(html_path, html_root) + "models/"
+    if project_id and html_path.name in {"srs.html", "design_rationale.html"}:
+        prefix = f"/{project_id}/manual/models/"
+    else:
+        prefix = compute_models_prefix(html_path, html_root) + "models/"
+
+    def repl(match: re.Match) -> str:
+        target = match.group("target")
+        suffix = ""
+        version = model_image_version(target, html_path)
+        if version is not None:
+            suffix = f"?v={version}"
+        return f'{match.group("attr")}={match.group(2)}{prefix}{target}{suffix}{match.group(4)}'
 
     return re.sub(
         r"""(?P<attr>src|href)=(['\"])(?:\.\./|\./)?(?:artifact/|output/)?(?:models/)(?P<target>[^\"'>\s]+)(?:\?[^\"']*)?(['\"])""",
-        lambda m: f'{m.group("attr")}={m.group(2)}{prefix}{m.group("target")}{m.group(4)}',
+        repl,
         html_body,
     )
 
@@ -561,8 +584,8 @@ def wrap_html_document(
     img {{ max-width: 100%; height: auto; display: block; margin: 12px auto; }}
     code, pre {{ white-space: pre-wrap; }}
     .srs-dr-ref,
-    h4 a[href*="design_rationale.html#"],
-    li a[href*="design_rationale.html#con-"] {{
+    h4 a[href*="dr#"],
+    li a[href*="dr#con-"] {{
       display: inline-flex;
       align-items: center;
       margin-left: 0.35rem;
@@ -574,8 +597,8 @@ def wrap_html_document(
       text-decoration: none;
     }}
     .srs-dr-ref:hover,
-    h4 a[href*="design_rationale.html#"]:hover,
-    li a[href*="design_rationale.html#con-"]:hover {{ color: #0f172a; text-decoration: underline; }}
+    h4 a[href*="dr#"]:hover,
+    li a[href*="dr#con-"]:hover {{ color: #0f172a; text-decoration: underline; }}
     @media (max-width: 1024px) {{
       body.has-floating-toc {{ margin: 16px; padding-bottom: 72px; }}
       .plant-floating-toc {{
@@ -606,13 +629,19 @@ def save_markdown_as_html(
     md_path: Path,
     html_path: Path,
     html_root: Optional[Path] = None,
+    project_id: Optional[str] = None,
 ) -> None:
     markdown_text = md_path.read_text(encoding="utf-8")
     needs_floating_toc = md_path.name in {"srs.md", "design_rationale.md"}
     if md_path.name in {"srs.md", "design_rationale.md"}:
         markdown_text = remove_generated_markdown_toc(markdown_text)
     html_body = markdown_to_html(markdown_text)
-    html_body = normalize_model_image_paths(html_body, html_path, html_root=html_root)
+    html_body = normalize_model_image_paths(
+        html_body,
+        html_path,
+        html_root=html_root,
+        project_id=project_id,
+    )
     html_body = normalize_markdown_document_links(html_body)
     html_body = normalize_html_document_links(html_body)
     html_body = normalize_external_links(html_body)

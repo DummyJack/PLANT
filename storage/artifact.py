@@ -2,12 +2,12 @@
 import json
 import re
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .atomic import atomic_write_text
 from .json import save_json_file
+from .trace_req.base import build_trace_req
 
 
 # ========
@@ -80,7 +80,7 @@ def save_optional_json_path(base_dir: Path, data: Any, path: Path) -> None:
 # ========
 def stakeholder_record(row: Any) -> Dict[str, Any]:
     if not isinstance(row, dict):
-        return {"name": "", "text": [str(row).strip()] if str(row).strip() else []}
+        return {"name": "", "text": []}
     text = row.get("text")
     if isinstance(text, list):
         text_rows = []
@@ -97,7 +97,7 @@ def stakeholder_record(row: Any) -> Dict[str, Any]:
         text_rows = []
     record = {
         "id": str(row.get("id") or "").strip(),
-        "name": str(row.get("name") or row.get("id") or "").strip(),
+        "name": str(row.get("name") or "").strip(),
         "text": text_rows,
     }
     stakeholder_type = str(row.get("type") or "").strip()
@@ -558,27 +558,13 @@ def conflict_report_row(item: Dict[str, Any], req_refs: Optional[Dict[str, Dict[
         row["requirements"] = requirements
     if stakeholders:
         row["stakeholders"] = stakeholders
-    meeting_row = {}
-    if isinstance(item.get("meeting"), list) and item["meeting"] and isinstance(item["meeting"][0], dict):
-        meeting_row = item["meeting"][0]
-    final_label = str(
-        item.get("final_label")
-        or meeting_row.get("final_label")
-        or item.get("initial_label")
-        or ""
-    ).strip()
+    final_label = str(item.get("final_label") or "").strip()
     if final_label:
-        row["label"] = final_label
-    conflict_type = str(
-        item.get("final_type")
-        or meeting_row.get("final_type")
-        or item.get("initial_type")
-        or item.get("type")
-        or ""
-    ).strip()
+        row["final_label"] = final_label
+    conflict_type = str(item.get("final_type") or "").strip()
     if final_label == "Conflict" and conflict_type:
-        row["type"] = conflict_type
-    description = str(item.get("description") or meeting_row.get("description") or "").strip()
+        row["final_type"] = conflict_type
+    description = str(item.get("description") or "").strip()
     if description:
         row["description"] = description
     resolution_options = item.get("resolution_options")
@@ -759,21 +745,13 @@ def flatten_conflict_meeting_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         row.pop("meeting", None)
     ordered: Dict[str, Any] = {}
     for key, value in row.items():
-        if key in {"meeting", "initial_label", "initial_type", "initial_reason", "final_label", "final_type", "description", "status"}:
+        if key in {"meeting", "initial_label", "initial_reason", "final_label", "final_type", "description", "status"}:
             continue
         ordered[key] = value
-    for key in ("initial_label", "initial_type", "initial_reason", "final_label", "final_type", "description", "status", "meeting"):
+    for key in ("initial_label", "initial_reason", "final_label", "final_type", "description", "status", "meeting"):
         if key in row:
             ordered[key] = row[key]
     return ordered
-
-
-# ========
-# Defines remove final item label function for this module workflow.
-# ========
-def remove_final_item_label(row: Dict[str, Any]) -> Dict[str, Any]:
-    row.pop("label", None)
-    return row
 
 
 # ========
@@ -800,7 +778,7 @@ def conflict_pair_payload(rows: Any) -> List[Dict[str, Any]]:
             "pair_index",
         ):
             row.pop(key, None)
-        out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
+        out.append(flatten_conflict_meeting_fields(row))
     return out
 
 
@@ -816,7 +794,7 @@ def conflict_multiple_payload(rows: Any) -> List[Dict[str, Any]]:
         req_ids = conflict_requirement_ids(item)
         if len(req_ids) < 2:
             continue
-        label = str(item.get("final_label") or item.get("label") or "").strip()
+        label = str(item.get("final_label") or "").strip()
         if label not in {"Conflict", "Neutral"}:
             continue
         new_id = conflict_output_id("MULTIPLE", multiple_num)
@@ -825,13 +803,19 @@ def conflict_multiple_payload(rows: Any) -> List[Dict[str, Any]]:
             "id": new_id,
             "requirements": [{"id": req_id} for req_id in req_ids],
         }
-        row["label"] = label
+        initial_label = str(item.get("initial_label") or "").strip()
+        if initial_label in {"Conflict", "Neutral"}:
+            row["initial_label"] = initial_label
+        row["final_label"] = label
+        final_type = str(item.get("final_type") or "").strip()
+        if label == "Conflict" and final_type:
+            row["final_type"] = final_type
         if isinstance(item.get("meeting"), dict) and item["meeting"]:
             row["meeting"] = item["meeting"]
         description = str(item.get("description") or "").strip()
         if description:
             row["description"] = description
-        out.append(remove_final_item_label(flatten_conflict_meeting_fields(row)))
+        out.append(flatten_conflict_meeting_fields(row))
     return out
 
 
@@ -916,18 +900,6 @@ def normalize_conflict_meeting_payload(value: Any) -> Dict[str, List[Dict[str, A
             out[key] = cleaned_rows
     return out
 
-
-def conflict_label_from_meeting(meeting: Dict[str, List[Dict[str, Any]]]) -> str:
-    for rows in meeting.values():
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            label = str(row.get("proposed_label") or row.get("final_label") or row.get("label") or "").strip()
-            if label in {"Conflict", "Neutral"}:
-                return label
-    return ""
-
-
 # ========
 # Defines conflict storage row function for this module workflow.
 # ========
@@ -944,27 +916,18 @@ def conflict_storage_row(
         row["requirements"] = requirements
 
     meeting = normalize_conflict_meeting_payload(item.get("meeting"))
-    inferred_label = conflict_label_from_meeting(meeting)
-    initial_label = str(item.get("initial_label") or item.get("label") or inferred_label).strip()
-    if not initial_label and len(req_ids) == 2:
-        initial_label = "Neutral"
-    elif not initial_label and len(req_ids) > 2:
-        initial_label = "Conflict"
-    initial_type = str(item.get("initial_type") or item.get("type") or item.get("conflict_type") or "").strip()
+    initial_label = str(item.get("initial_label") or "").strip()
     description = str(item.get("description") or "").strip()
-    initial_reason = str(item.get("initial_reason") or item.get("reason") or item.get("rationale") or description).strip()
-    final_label = str(item.get("final_label") or item.get("label") or inferred_label or initial_label).strip()
-    final_type = str(item.get("final_type") or item.get("type") or item.get("conflict_type") or "").strip()
-    if not initial_type and initial_label == "Conflict":
-        initial_type = "other"
+    initial_reason = str(item.get("initial_reason") or "").strip()
+    final_label = str(item.get("final_label") or "").strip()
+    final_type = str(item.get("final_type") or "").strip()
     if not final_type and final_label == "Conflict":
-        final_type = initial_type or "other"
+        final_type = "other"
     if not description:
         description = initial_reason
 
     for key, value in (
         ("initial_label", initial_label),
-        ("initial_type", initial_type),
         ("initial_reason", initial_reason),
         ("final_label", final_label),
         ("final_type", final_type),
@@ -1285,8 +1248,13 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     keep_keys = (
         "issue_id",
         "title",
+        "category",
+        "issue_focus",
         "expect_outcome",
         "sources",
+        "suggested_participants",
+        "participant_reasoning",
+        "issue_level",
         "importance",
         "reason",
         "proposed_by",
@@ -1315,6 +1283,7 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     meeting_keep_keys = (
         "id",
         "title",
+        "description",
         "category",
         "participants",
         "discussion_mode",
@@ -1322,7 +1291,9 @@ def issue_proposals_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "target_stakeholders",
         "trace",
         "proposed_by",
+        "issue_level",
         "expected_actions",
+        "participant_reasoning",
         "meeting_id",
         "completed",
     )
@@ -1540,742 +1511,8 @@ def load_artifact(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     return split_payload(artifact_dir)
 
 
-def trace_req_ids(value: Any) -> List[str]:
-    if value is None:
-        return []
-    values = value if isinstance(value, list) else [value]
-    return [str(item).strip() for item in values if str(item).strip()]
-
-
-def trace_req_next_id(rows: List[Dict[str, Any]]) -> str:
-    max_num = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        match = re.fullmatch(r"TE-(\d+)", str(row.get("event_id") or "").strip())
-        if match:
-            max_num = max(max_num, int(match.group(1)))
-    return f"TE-{max_num + 1}"
-
-
-def trace_req_target_id(value: Any, req_to_srs: Dict[str, str]) -> str:
-    for item in trace_req_ids(value):
-        if item.startswith(("FR-", "NFR-", "CON-")):
-            return item
-        if item in req_to_srs:
-            return req_to_srs[item]
-    return ""
-
-
-def trace_req_trace_id(target_requirement_id: str) -> str:
-    target = str(target_requirement_id or "").strip()
-    return f"TR-{target}" if target else ""
-
-
-def trace_req_first_id(value: Any) -> str:
-    ids = trace_req_ids(value)
-    return ids[0] if ids else ""
-
-
-def trace_req_event_defaults(event_type: str, relation: str = "") -> Dict[str, str]:
-    event = str(event_type or "").strip()
-    rel = str(relation or "").strip()
-    defaults = {
-        "derive_requirement": {"role": "main_chain", "edge_label": "整理"},
-        "formalize_requirement": {"role": "main_chain", "edge_label": ""},
-        "generate_feedback": {"role": "supporting", "edge_label": "依據", "style": "dashed"},
-        "generate_model": {"role": "supporting", "edge_label": "建模", "style": "dashed"},
-        "detect_conflict": {"role": "main_chain", "edge_label": ""},
-        "resolve_issue": {"role": "main_chain", "edge_label": "解決"},
-    }.get(event, {"role": "supporting", "edge_label": rel})
-    return {
-        "role": defaults.get("role", "supporting"),
-        "edge_label": defaults.get("edge_label", rel),
-        "style": defaults.get("style", ""),
-    }
-
-
-def enrich_trace_req_row(row: Dict[str, Any], req_to_srs: Dict[str, str]) -> Dict[str, Any]:
-    event_type = str(row.get("event_type") or row.get("stage") or "").strip()
-    relation = str(row.get("relation") or "").strip()
-    target_requirement_id = (
-        str(row.get("target_requirement_id") or "").strip()
-    )
-    if target_requirement_id:
-        row["target_requirement_id"] = target_requirement_id
-        row["trace_id"] = str(row.get("trace_id") or "").strip() or trace_req_trace_id(target_requirement_id)
-
-    from_id = str(row.get("from") or "").strip()
-    to_id = str(row.get("to") or "").strip()
-    if from_id:
-        row["from"] = from_id
-    if to_id:
-        row["to"] = to_id
-
-    defaults = trace_req_event_defaults(event_type, relation)
-    row["role"] = str(row.get("role") or defaults["role"]).strip() or defaults["role"]
-    if "edge_label" not in row:
-        row["edge_label"] = defaults["edge_label"]
-    if defaults.get("style") and not str(row.get("style") or "").strip():
-        row["style"] = defaults["style"]
-    return row
-
-
-def trace_req_public_signature(row: Dict[str, Any]) -> str:
-    return json.dumps(
-        {
-            "trace_id": str(row.get("trace_id") or "").strip(),
-            "target_requirement_id": str(row.get("target_requirement_id") or "").strip(),
-            "from": str(row.get("from") or "").strip(),
-            "to": str(row.get("to") or "").strip(),
-            "edge_label": str(row.get("edge_label") or "").strip(),
-            "role": str(row.get("role") or "").strip(),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def public_trace_req_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    public: Dict[str, Any] = {}
-    for key in (
-        "event_id",
-        "trace_id",
-        "target_requirement_id",
-        "from",
-        "to",
-        "edge_label",
-        "role",
-        "style",
-        "stage",
-        "agent",
-        "confidence",
-        "reason",
-        "trace_reason",
-        "created_at",
-    ):
-        value = row.get(key)
-        if value not in (None, "", []):
-            public[key] = value
-    return public
-
-
-def append_trace_req_row(
-    rows: List[Dict[str, Any]],
-    seen: set[str],
-    *,
-    trace_id: str = "",
-    target_requirement_id: str,
-    from_id: str,
-    to_id: str,
-    edge_label: str = "",
-    role: str = "supporting",
-    style: str = "",
-    stage: str = "",
-    agent: str = "",
-    confidence: str = "explicit",
-    reason: str = "",
-    trace_reason: str = "",
-) -> None:
-    target = str(target_requirement_id or "").strip()
-    source = str(from_id or "").strip()
-    target_node = str(to_id or "").strip()
-    if not target or not source or not target_node:
-        return
-    row = {
-        "trace_id": str(trace_id or "").strip() or trace_req_trace_id(target),
-        "target_requirement_id": target,
-        "from": source,
-        "to": target_node,
-        "edge_label": str(edge_label or "").strip(),
-        "role": str(role or "supporting").strip() or "supporting",
-    }
-    public_signature = trace_req_public_signature(row)
-    if public_signature in seen:
-        return
-    seen.add(public_signature)
-    row["event_id"] = trace_req_next_id(rows)
-    if style:
-        row["style"] = style
-    if stage:
-        row["stage"] = stage
-    if agent:
-        row["agent"] = agent
-    if confidence:
-        row["confidence"] = confidence
-    detail = str(trace_reason or reason or "").strip()
-    if reason:
-        row["reason"] = reason
-    if detail:
-        row["trace_reason"] = detail
-    row["created_at"] = datetime.now(timezone.utc).isoformat()
-    rows.append(row)
-
-
-def append_trace_req_event(
-    rows: List[Dict[str, Any]],
-    seen: set[str],
-    *,
-    event_type: str,
-    agent: str,
-    action: str,
-    input_ids: List[str],
-    output_ids: List[str],
-    reason: str = "",
-    stage: str = "",
-    source: str = "",
-    relation: str = "derives",
-    confidence: str = "explicit",
-    target_requirement_id: str = "",
-    from_id: str = "",
-    to_id: str = "",
-    role: str = "",
-    edge_label: str = "",
-    style: str = "",
-) -> None:
-    clean_inputs = list(dict.fromkeys(trace_req_ids(input_ids)))
-    clean_outputs = list(dict.fromkeys(trace_req_ids(output_ids)))
-    if not clean_outputs:
-        return
-    defaults = trace_req_event_defaults(event_type, relation)
-    append_trace_req_row(
-        rows,
-        seen,
-        target_requirement_id=target_requirement_id,
-        from_id=from_id or trace_req_first_id(clean_inputs),
-        to_id=to_id or trace_req_first_id(clean_outputs),
-        edge_label=edge_label if edge_label != "" else defaults["edge_label"],
-        role=role or defaults["role"],
-        style=style or defaults.get("style", ""),
-        stage=stage or event_type,
-        agent=agent,
-        confidence=confidence,
-        reason=reason,
-        trace_reason=reason,
-    )
-
-
 def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    existing = data.get("trace_req")
-    rows: List[Dict[str, Any]] = [
-        dict(row)
-        for row in existing
-        if isinstance(row, dict)
-        and str(row.get("trace_id") or "").strip()
-        and str(row.get("target_requirement_id") or "").strip()
-        and str(row.get("from") or "").strip()
-        and str(row.get("to") or "").strip()
-    ] if isinstance(existing, list) else []
-    req_to_srs = {
-        str(req.get("id") or "").strip(): str(req.get("srs_id") or "").strip()
-        for req in (data.get("REQ") or [])
-        if isinstance(req, dict)
-        and str(req.get("id") or "").strip()
-        and str(req.get("srs_id") or "").strip()
-    }
-    for row in rows:
-        confidence = str(row.get("confidence") or row.get("trace_confidence") or "").strip()
-        if confidence:
-            row["confidence"] = confidence
-        reason = str(row.get("reason") or row.get("trace_reason") or "").strip()
-        if reason:
-            row["reason"] = reason
-        enrich_trace_req_row(row, req_to_srs)
-    for index, row in enumerate(rows, 1):
-        row["event_id"] = f"TE-{index}"
-    seen = {
-        trace_req_public_signature(row)
-        for row in rows
-        if isinstance(row, dict)
-    }
-    source_to_srs: Dict[str, List[str]] = {}
-    for req in data.get("REQ") or []:
-        if not isinstance(req, dict):
-            continue
-        srs_id = req_to_srs.get(str(req.get("id") or "").strip(), "")
-        if not srs_id:
-            continue
-        for source_id in trace_req_ids(req.get("source")):
-            source_to_srs.setdefault(source_id, []).append(srs_id)
-
-    def trace_target_for_sources(value: Any) -> str:
-        direct = trace_req_target_id(value, req_to_srs)
-        if direct:
-            return direct
-        for source_id in trace_req_ids(value):
-            targets = source_to_srs.get(source_id) or []
-            if targets:
-                return targets[0]
-        return ""
-
-    discussion_issues: List[Dict[str, Any]] = []
-    for discussion in data.get("discussions") or []:
-        if not isinstance(discussion, dict):
-            continue
-        for issue in discussion.get("issues") or []:
-            if isinstance(issue, dict):
-                discussion_issues.append(issue)
-
-    meeting_id_by_category: Dict[str, List[str]] = {}
-    meeting_issue_by_id: Dict[str, Dict[str, Any]] = {}
-    for issue in discussion_issues:
-        meeting_id = str(issue.get("meeting_id") or "").strip()
-        category = str(issue.get("category") or "").strip()
-        if not meeting_id:
-            continue
-        meeting_issue_by_id[meeting_id] = issue
-        if category:
-            meeting_id_by_category.setdefault(category, [])
-            if meeting_id not in meeting_id_by_category[category]:
-                meeting_id_by_category[category].append(meeting_id)
-
-    def meeting_order_key(meeting_id: str) -> tuple[int, int, str]:
-        match = re.fullmatch(r"R(\d+)-M(\d+)", str(meeting_id or "").strip(), flags=re.IGNORECASE)
-        if match:
-            return (int(match.group(1)), int(match.group(2)), str(meeting_id))
-        numbers = [int(value) for value in re.findall(r"\d+", str(meeting_id or ""))]
-        padded = numbers[:2] + [0] * max(0, 2 - len(numbers))
-        return (padded[0] if padded else 10**9, padded[1] if len(padded) > 1 else 10**9, str(meeting_id))
-
-    for category, meeting_ids in list(meeting_id_by_category.items()):
-        meeting_id_by_category[category] = sorted(meeting_ids, key=meeting_order_key)
-
-    entry_meeting_id = (
-        trace_req_first_id(meeting_id_by_category.get("resolve_conflict"))
-        or ("R1-M1" if "R1-M1" in meeting_issue_by_id else "")
-    )
-    formalization_meeting_id = (
-        trace_req_first_id(meeting_id_by_category.get("formalize_requirement"))
-        or ("R1-M2" if "R1-M2" in meeting_issue_by_id else "")
-    )
-
-    issue_req_ids_by_meeting: Dict[str, List[str]] = {}
-    for issue in discussion_issues:
-        meeting_id = str(issue.get("meeting_id") or "").strip()
-        if not meeting_id:
-            continue
-        resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
-        affected_req_ids = trace_req_ids(resolution.get("affected_requirement_ids"))
-        if affected_req_ids:
-            issue_req_ids_by_meeting[meeting_id] = affected_req_ids
-
-    conflict = data.get("conflict") if isinstance(data.get("conflict"), dict) else {}
-    conflict_rows: List[Dict[str, Any]] = [
-        item
-        for section in ("pairs", "multiple", "report", "resolved_report")
-        for item in (conflict.get(section) or [])
-        if isinstance(item, dict)
-    ]
-    conflict_sources_by_id: Dict[str, List[str]] = {}
-    conflicts_by_req_id: Dict[str, List[str]] = {}
-    for item in conflict_rows:
-        conflict_id = str(item.get("id") or item.get("source_id") or "").strip()
-        if not conflict_id:
-            continue
-        related_ids = conflict_requirement_ids(item)
-        conflict_sources_by_id[conflict_id] = related_ids
-        for related_id in related_ids:
-            for srs_id in source_to_srs.get(related_id, []):
-                for req_id, mapped_srs_id in req_to_srs.items():
-                    if mapped_srs_id == srs_id:
-                        conflicts_by_req_id.setdefault(req_id, [])
-                        if conflict_id not in conflicts_by_req_id[req_id]:
-                            conflicts_by_req_id[req_id].append(conflict_id)
-            if related_id in req_to_srs:
-                conflicts_by_req_id.setdefault(related_id, [])
-                if conflict_id not in conflicts_by_req_id[related_id]:
-                    conflicts_by_req_id[related_id].append(conflict_id)
-    conflict_target_ids = {
-        req_to_srs.get(req_id, "")
-        for req_id, conflict_ids in conflicts_by_req_id.items()
-        if conflict_ids and req_to_srs.get(req_id, "")
-    }
-
-    for url in data.get("URL") or []:
-        if not isinstance(url, dict):
-            continue
-        url_id = str(url.get("id") or "").strip()
-        if not url_id:
-            continue
-        target_srs_ids = list(dict.fromkeys(source_to_srs.get(url_id, [])))
-        if not target_srs_ids:
-            continue
-        source_ids = trace_req_ids(url.get("source_id")) + trace_req_ids(url.get("related_statement_ids"))
-        for source_id in list(dict.fromkeys(source_ids)):
-            for srs_id in target_srs_ids:
-                append_trace_req_row(
-                    rows,
-                    seen,
-                    target_requirement_id=srs_id,
-                    from_id=source_id,
-                    to_id=url_id,
-                    edge_label="整理",
-                    role="main_chain",
-                    stage="requirements",
-                    agent="analyst",
-                    confidence="explicit",
-                )
-
-    for req in data.get("REQ") or []:
-        if not isinstance(req, dict):
-            continue
-        req_id = str(req.get("id") or "").strip()
-        if not req_id:
-            continue
-        append_trace_req_row(
-            rows,
-            seen,
-            target_requirement_id=req_to_srs.get(req_id, ""),
-            from_id=trace_req_first_id(req.get("source")),
-            to_id=req_id,
-            edge_label="整理",
-            role="main_chain",
-            stage="requirements",
-            agent="analyst",
-            reason=str(req.get("trace_reason") or req.get("rationale") or "").strip(),
-            confidence=str(req.get("trace_confidence") or "explicit").strip() or "explicit",
-        )
-        srs_id = str(req.get("srs_id") or "").strip()
-        if srs_id:
-            append_trace_req_row(
-                rows,
-                seen,
-                target_requirement_id=srs_id,
-                from_id=req_id,
-                to_id=srs_id,
-                edge_label="",
-                role="main_chain",
-                stage="srs",
-                agent="documentor",
-            )
-
-    feedback = data.get("feedback") if isinstance(data.get("feedback"), dict) else {}
-    feedback_index = 0
-    for section in ("findings", "constraints", "risks", "recommendations"):
-        for item in feedback.get(section) or []:
-            if not isinstance(item, dict):
-                continue
-            feedback_index += 1
-            append_trace_req_row(
-                rows,
-                seen,
-                target_requirement_id=trace_target_for_sources(item.get("related_requirement_ids")),
-                from_id=trace_req_first_id(item.get("related_requirement_ids")),
-                to_id=f"FB-{feedback_index}",
-                edge_label="依據",
-                role="supporting",
-                style="dashed",
-                stage="domain_research",
-                agent="expert",
-                reason=str(item.get("trace_reason") or "").strip(),
-                confidence=str(item.get("trace_confidence") or ("explicit" if item.get("related_requirement_ids") else "missing")).strip() or "missing",
-            )
-            for source_id in trace_req_ids(item.get("source_ids")):
-                if re.fullmatch(r"R\d+-M\d+", source_id, flags=re.IGNORECASE):
-                    append_trace_req_row(
-                        rows,
-                        seen,
-                        target_requirement_id=trace_target_for_sources(item.get("related_requirement_ids")),
-                        from_id=f"FB-{feedback_index}",
-                        to_id=source_id,
-                        edge_label="",
-                        role="supporting",
-                        style="dashed",
-                        stage="domain_research",
-                        agent="expert",
-                        confidence=str(item.get("trace_confidence") or "explicit").strip() or "explicit",
-                        reason=str(item.get("trace_reason") or "").strip(),
-                    )
-
-    for model in data.get("system_models") or []:
-        if not isinstance(model, dict):
-            continue
-        model_id = str(model.get("id") or "").strip()
-        if not model_id:
-            continue
-        append_trace_req_row(
-            rows,
-            seen,
-            target_requirement_id=trace_target_for_sources(model.get("related_requirement_ids")),
-            from_id=trace_req_first_id(model.get("related_requirement_ids")),
-            to_id=model_id,
-            edge_label="建模",
-            role="supporting",
-            style="dashed",
-            stage="system_model",
-            agent="modeler",
-            reason=str(model.get("description") or "").strip(),
-        )
-        for source_id in trace_req_ids(model.get("source_ids")):
-            if re.fullmatch(r"R\d+-M\d+", source_id, flags=re.IGNORECASE):
-                append_trace_req_row(
-                    rows,
-                    seen,
-                    target_requirement_id=trace_target_for_sources(model.get("related_requirement_ids")),
-                    from_id=model_id,
-                    to_id=source_id,
-                    edge_label="",
-                    role="supporting",
-                    style="dashed",
-                    stage="system_model",
-                    agent="modeler",
-                    reason=str(model.get("description") or "").strip(),
-                )
-
-    for item in conflict_rows:
-        conflict_id = str(item.get("id") or item.get("source_id") or "").strip()
-        req_ids = conflict_requirement_ids(item)
-        if not conflict_id or len(req_ids) < 2:
-            continue
-        for source_id in req_ids:
-            append_trace_req_row(
-                rows,
-                seen,
-                target_requirement_id=trace_target_for_sources(source_id),
-                from_id=source_id,
-                to_id=conflict_id,
-                edge_label="衝突",
-                role="main_chain",
-                stage="conflict_detection",
-                agent="analyst",
-                reason=str(item.get("description") or item.get("reason") or item.get("initial_reason") or "").strip(),
-            )
-
-    if entry_meeting_id and formalization_meeting_id:
-        for req in data.get("REQ") or []:
-            if not isinstance(req, dict):
-                continue
-            req_id = str(req.get("id") or "").strip()
-            srs_id = req_to_srs.get(req_id, "")
-            if not req_id or not srs_id:
-                continue
-            source_ids = trace_req_ids(req.get("source"))
-            conflict_ids = conflicts_by_req_id.get(req_id, [])
-            if conflict_ids:
-                for conflict_id in conflict_ids:
-                    append_trace_req_row(
-                        rows,
-                        seen,
-                        target_requirement_id=srs_id,
-                        from_id=conflict_id,
-                        to_id=entry_meeting_id,
-                        edge_label="解決",
-                        role="main_chain",
-                        stage="formal_meeting",
-                        agent="mediator",
-                        reason=str((meeting_issue_by_id.get(entry_meeting_id, {}).get("resolution") or {}).get("decision") or "").strip()
-                        if isinstance(meeting_issue_by_id.get(entry_meeting_id, {}).get("resolution"), dict)
-                        else "",
-                    )
-                append_trace_req_row(
-                    rows,
-                    seen,
-                    target_requirement_id=srs_id,
-                    from_id=entry_meeting_id,
-                    to_id=formalization_meeting_id,
-                    edge_label="正式化",
-                    role="main_chain",
-                    stage="formal_meeting",
-                    agent="mediator",
-                    reason=str((meeting_issue_by_id.get(formalization_meeting_id, {}).get("resolution") or {}).get("decision") or "").strip()
-                    if isinstance(meeting_issue_by_id.get(formalization_meeting_id, {}).get("resolution"), dict)
-                    else "",
-                )
-            else:
-                for source_id in source_ids:
-                    append_trace_req_row(
-                        rows,
-                        seen,
-                        target_requirement_id=srs_id,
-                        from_id=source_id,
-                        to_id=formalization_meeting_id,
-                        edge_label="正式化",
-                        role="main_chain",
-                        stage="formal_meeting",
-                        agent="mediator",
-                        reason=str((meeting_issue_by_id.get(formalization_meeting_id, {}).get("resolution") or {}).get("decision") or "").strip()
-                        if isinstance(meeting_issue_by_id.get(formalization_meeting_id, {}).get("resolution"), dict)
-                        else "",
-                    )
-            current_meeting_id = formalization_meeting_id
-            later_meeting_ids = [
-                meeting_id
-                for meeting_id, affected_req_ids in issue_req_ids_by_meeting.items()
-                if meeting_id not in {entry_meeting_id, formalization_meeting_id}
-                and req_id in affected_req_ids
-            ]
-            for meeting_id in sorted(later_meeting_ids, key=meeting_order_key):
-                issue = meeting_issue_by_id.get(meeting_id, {})
-                category = str(issue.get("category") or "").strip()
-                append_trace_req_row(
-                    rows,
-                    seen,
-                    target_requirement_id=srs_id,
-                    from_id=current_meeting_id,
-                    to_id=meeting_id,
-                    edge_label="精練" if category == "clarify_requirement" else "",
-                    role="main_chain",
-                    stage="formal_meeting",
-                    agent="mediator",
-                    reason=str((issue.get("resolution") or {}).get("decision") or "").strip()
-                    if isinstance(issue.get("resolution"), dict)
-                    else "",
-                )
-                current_meeting_id = meeting_id
-            append_trace_req_row(
-                rows,
-                seen,
-                target_requirement_id=srs_id,
-                from_id=current_meeting_id,
-                to_id=srs_id,
-                edge_label="",
-                role="main_chain",
-                stage="formal_meeting",
-                agent="mediator",
-            )
-
-    for issue in discussion_issues:
-            meeting_id = str(issue.get("meeting_id") or "").strip()
-            resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
-            affected_req_ids = trace_req_ids(resolution.get("affected_requirement_ids"))
-            affected_conflict_ids = trace_req_ids(resolution.get("affected_conflict_ids"))
-            issue_source_ids: List[str] = []
-            trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
-            issue_source_ids.extend(trace_req_ids(trace.get("artifact_ids")))
-            for source in issue.get("sources") or []:
-                if isinstance(source, dict):
-                    issue_source_ids.extend(trace_req_ids(source.get("ids")))
-            issue_source_ids = list(dict.fromkeys(issue_source_ids))
-            if meeting_id and affected_req_ids:
-                target_srs_id = trace_req_target_id(affected_req_ids, req_to_srs)
-                category = str(issue.get("category") or "").strip()
-                if category == "formalize_requirement" and not affected_conflict_ids:
-                    for source_id in issue_source_ids:
-                        if source_id.startswith("URL-"):
-                            if entry_meeting_id:
-                                continue
-                            append_trace_req_row(
-                                rows,
-                                seen,
-                                target_requirement_id=target_srs_id,
-                                from_id=source_id,
-                                to_id=meeting_id,
-                                edge_label="正式化",
-                                role="main_chain",
-                                stage="formal_meeting",
-                                agent="mediator",
-                                reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
-                            )
-                if affected_conflict_ids:
-                    append_trace_req_row(
-                        rows,
-                        seen,
-                        target_requirement_id=target_srs_id,
-                        from_id=trace_req_first_id(affected_conflict_ids),
-                        to_id=meeting_id,
-                        edge_label="解決",
-                        role="main_chain",
-                        stage="formal_meeting",
-                        agent="mediator",
-                        reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
-                    )
-                if target_srs_id:
-                    append_trace_req_row(
-                        rows,
-                        seen,
-                        target_requirement_id=target_srs_id,
-                        from_id=meeting_id,
-                        to_id=target_srs_id,
-                        edge_label="",
-                        role="main_chain",
-                        stage="formal_meeting",
-                        agent="mediator",
-                        reason=str(resolution.get("decision") or resolution.get("summary") or "").strip(),
-                    )
-
-    def normalize_trace_req_rows(input_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        target_entry_sources: set[tuple[str, str]] = set()
-        target_meeting_next: Dict[tuple[str, str], List[str]] = {}
-        for row in input_rows:
-            target_id = str(row.get("target_requirement_id") or "").strip()
-            from_id = str(row.get("from") or "").strip()
-            to_id = str(row.get("to") or "").strip()
-            if not target_id or not from_id or not to_id:
-                continue
-            if entry_meeting_id and to_id == entry_meeting_id:
-                target_entry_sources.add((target_id, from_id))
-            if re.fullmatch(r"R\d+-M\d+", from_id, flags=re.IGNORECASE) and re.fullmatch(r"R\d+-M\d+", to_id, flags=re.IGNORECASE):
-                target_meeting_next.setdefault((target_id, from_id), []).append(to_id)
-
-        cleaned: List[Dict[str, Any]] = []
-        dropped_signatures: set[tuple[str, str, str, str, str]] = set()
-        for row in input_rows:
-            target_id = str(row.get("target_requirement_id") or "").strip()
-            from_id = str(row.get("from") or "").strip()
-            to_id = str(row.get("to") or "").strip()
-            edge_label = str(row.get("edge_label") or "").strip()
-            if not target_id or not from_id or not to_id:
-                continue
-            if from_id == to_id:
-                continue
-            if re.fullmatch(r"R\d+-M\d+", from_id, flags=re.IGNORECASE) and re.fullmatch(r"R\d+-M\d+", to_id, flags=re.IGNORECASE):
-                if meeting_order_key(from_id) >= meeting_order_key(to_id):
-                    continue
-            if (
-                entry_meeting_id
-                and formalization_meeting_id
-                and target_id not in conflict_target_ids
-                and to_id == entry_meeting_id
-                and from_id.startswith("URL-")
-            ):
-                continue
-            if (
-                entry_meeting_id
-                and formalization_meeting_id
-                and target_id not in conflict_target_ids
-                and from_id == entry_meeting_id
-                and to_id == formalization_meeting_id
-            ):
-                continue
-            if (
-                entry_meeting_id
-                and formalization_meeting_id
-                and target_id in conflict_target_ids
-                and to_id == formalization_meeting_id
-                and from_id.startswith("URL-")
-                and edge_label == "正式化"
-                and (target_id, from_id) in target_entry_sources
-            ):
-                continue
-            if (
-                re.fullmatch(r"R\d+-M\d+", from_id, flags=re.IGNORECASE)
-                and to_id == target_id
-                and target_meeting_next.get((target_id, from_id))
-            ):
-                continue
-            signature = (
-                target_id,
-                from_id,
-                to_id,
-                edge_label,
-                str(row.get("role") or "").strip(),
-            )
-            if signature in dropped_signatures:
-                continue
-            dropped_signatures.add(signature)
-            cleaned.append(row)
-        for index, row in enumerate(cleaned, 1):
-            row["event_id"] = f"TE-{index}"
-        return cleaned
-
-    rows = normalize_trace_req_rows(rows)
-
-    for row in rows:
-        enrich_trace_req_row(row, req_to_srs)
-    public_rows = [public_trace_req_row(row) for row in rows]
-    data["trace_req"] = public_rows
-    return public_rows
+    return build_trace_req(data)
 
 
 # ========
