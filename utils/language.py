@@ -13,7 +13,9 @@ def is_likely_english(text: str) -> bool:
         return False
     ascii_words = re.findall(r"[A-Za-z]+", text)
     cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
-    return len(ascii_words) >= max(3, len(cjk_chars))
+    if cjk_chars:
+        return False
+    return bool(ascii_words)
 
 
 # ========
@@ -42,3 +44,19 @@ def current_output_language() -> str:
     if val in {"en", "english"}:
         return "en"
     return "zh-Hant"
+
+
+# ========
+# Defines output language directive function for this module workflow.
+# ========
+def output_language_directive() -> str:
+    if current_output_language() == "en":
+        return (
+            "Use English for all generated natural-language content. Preserve "
+            "technical terms, product names, API names, code identifiers, and "
+            "required IDs in their conventional form."
+        )
+    return (
+        "請使用繁體中文產生所有自然語言內容。技術術語、產品名稱、API 名稱、"
+        "程式碼識別字與必要 ID 可保留其慣用形式。"
+    )

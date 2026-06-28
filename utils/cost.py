@@ -11,8 +11,14 @@ from typing import Any, Dict, List, Optional
 class CostTracker:
 
     DEFAULT_PRICING_PER_1M_TOKENS: Dict[str, Dict[str, float]] = {
+        "gpt-5.5": {"input": 5.00, "output": 30.00},
         "gpt-5.2": {"input": 1.75, "output": 14.00},
         "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "claude-opus-4-8": {"input": 15.00, "output": 75.00},
+        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+        "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+        "gemini-3.5-flash": {"input": 0.75, "output": 4.50},
+        "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
         "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
     }
 

@@ -34,7 +34,12 @@ from .config import (
 )
 from .cost import CostTracker, model_has_token_pricing
 from .human import Collect
-from .language import current_output_language, is_likely_english, sync_output_language
+from .language import (
+    current_output_language,
+    is_likely_english,
+    output_language_directive,
+    sync_output_language,
+)
 from .log import Logger
 from .project_manager import ProjectManager, ProjectSession
 
@@ -64,6 +69,7 @@ __all__ = [
     "json_dumps_no_scientific",
     "model_has_token_pricing",
     "meeting_setting",
+    "output_language_directive",
     "require_stage_inputs",
     "stage_enabled",
     "sync_output_language",
