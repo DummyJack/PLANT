@@ -96,6 +96,7 @@ def main():
         if not session.is_continue:
             sync_output_language(session.rough_idea)
         flow = Flow(config, store, logger)
+        flow.run_mode = "continue" if session.is_continue else "new"
 
         if session.is_continue:
             flow.run_continue(session.artifact)
