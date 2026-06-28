@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.tools.artifact_query import ArtifactQueryTool
 from agents.profile.base import retry_response
+from agents.meeting.pair_review import normalize_pair_review_record
 
 
 # Defines MediatorDiscussion class for this module workflow.
@@ -222,33 +223,6 @@ class MediatorDiscussion:
             cleaned.append(clean_row)
         return cleaned
 
-    # Defines pair review record function for this module workflow.
-    def pair_review_record(
-        self,
-        raw: Dict[str, Any],
-        *,
-        pair_id_set: set[str],
-        current_labels_by_id: Optional[Dict[str, str]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        pair_id = str(raw.get("id") or "").strip()
-        if not pair_id or pair_id not in pair_id_set:
-            return None
-        proposed_label = str(raw.get("proposed_label") or "").strip()
-        if proposed_label not in {"Conflict", "Neutral"}:
-            return None
-        current_label = ""
-        if current_labels_by_id:
-            current_label = str(current_labels_by_id.get(pair_id) or "").strip()
-        decision = "keep"
-        if current_label in {"Conflict", "Neutral"} and proposed_label != current_label:
-            decision = "modify"
-        return {
-            "id": pair_id,
-            "decision": decision,
-            "proposed_label": proposed_label,
-            "reason": str(raw.get("reason") or "").strip(),
-        }
-
     # Defines validate conflict review contract function for this module workflow.
     def validate_conflict_review_contract(
         self,
@@ -323,10 +297,11 @@ class MediatorDiscussion:
                 errors.append(f"{pair_id} invalid proposed_label: {proposed_label or '<empty>'}")
             if not reason:
                 errors.append(f"{pair_id} missing reason")
-            normalized = self.pair_review_record(
+            normalized = normalize_pair_review_record(
                 raw,
                 pair_id_set=pair_id_set,
                 current_labels_by_id=current_labels_by_id,
+                require_valid_label=True,
             )
             if normalized:
                 reviews.append(normalized)
@@ -503,12 +478,18 @@ class MediatorDiscussion:
             allow_pair_reviews=is_pair_review_round,
             use_tools=use_artifact_tools,
         )
-        response = self.validate_agent_response(
-            response,
-            contract=contract,
-            issue=prompt_issue,
-            agent_name=getattr(agent, "name", ""),
-        )
+        try:
+            response = self.validate_agent_response(
+                response,
+                contract=contract,
+                issue=prompt_issue,
+                agent_name=getattr(agent, "name", ""),
+            )
+        except Exception as e:
+            if not is_pair_review_round:
+                raise
+            response = response if isinstance(response, dict) else {"text": str(response)}
+            response["format_error"] = str(e)
         if response.get("format_error") and not is_pair_review_round:
             retry_prompt = retry_response(
                 issue=prompt_issue,
@@ -544,17 +525,49 @@ class MediatorDiscussion:
                 allow_pair_reviews=is_pair_review_round,
                 use_tools=use_artifact_tools,
             )
-            response = self.validate_agent_response(
-                response,
-                contract=contract,
-                issue=prompt_issue,
-                agent_name=getattr(agent, "name", ""),
-            )
+            try:
+                response = self.validate_agent_response(
+                    response,
+                    contract=contract,
+                    issue=prompt_issue,
+                    agent_name=getattr(agent, "name", ""),
+                )
+            except Exception as e:
+                if not is_pair_review_round:
+                    raise
+                response = response if isinstance(response, dict) else {"text": str(response)}
+                response["format_error"] = str(e)
         if response.get("format_error"):
-            raise ValueError(
-                f"{getattr(agent, 'name', '')} agent response output contract invalid after fallback: "
-                f"{response.get('format_error')}"
+            if is_pair_review_round:
+                raise ValueError(
+                    f"{getattr(agent, 'name', '')} agent response output contract invalid after fallback: "
+                    f"{response.get('format_error')}"
+                )
+            format_error = str(response.get("format_error") or "").strip()
+            self.logger.warning(
+                "%s agent response output contract invalid after fallback; "
+                "fallback to needs_more_discussion: %s",
+                getattr(agent, "name", ""),
+                format_error,
             )
+            response = {
+                "text": (
+                    "本輪回覆格式修復後仍不合格。為避免誤判議題已完成，"
+                    "建議先繼續討論，請 Mediator 重新指派或要求本 agent 補充。"
+                ),
+                "open_questions": [],
+                "stance": {
+                    "state": "needs_more_discussion",
+                    "proposal": {
+                        "summary": "繼續討論並重新取得有效回覆",
+                        "rationale": (
+                            "agent response 格式修復後仍無法通過輸出契約，"
+                            "不應以 ready_to_close 或 done 收束。"
+                        ),
+                        "tradeoffs": [format_error] if format_error else [],
+                    },
+                },
+            }
         if not is_pair_review_round:
             response.pop("pair_reviews", None)
         if not is_answer_question and (not actions or actions[-1] != "respond_issue"):

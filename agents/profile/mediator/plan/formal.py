@@ -171,6 +171,115 @@ def meeting_plan(
 }}"""
 
 
+def repair_issue_selection(
+    *,
+    proposals: List[Dict[str, Any]],
+    backlog: List[Dict[str, Any]],
+    discarded: List[Dict[str, Any]],
+    errors: List[str],
+    max_items: int,
+    skip_artifact_ids: List[str],
+    is_last_round: bool,
+    round_num: int,
+) -> str:
+    return f"""# 任務
+上一次正式會議議題分流沒有產生可執行 issues。請由 Mediator 重新判斷是否應從候選或 backlog 中選出本輪正式會議議題。
+
+# 可用候選 proposals
+{json.dumps(proposals, ensure_ascii=False, indent=2)}
+
+# 既有 backlog
+{json.dumps(backlog, ensure_ascii=False, indent=2)}
+
+# 既有 discarded
+{json.dumps(discarded, ensure_ascii=False, indent=2)}
+
+# 錯誤原因
+{json.dumps(errors, ensure_ascii=False, indent=2)}
+
+- 本輪 round={round_num}，is_last_round={str(is_last_round).lower()}，max_issues={max_items}，already_discussed_artifact_ids={json.dumps(skip_artifact_ids, ensure_ascii=False)}。
+- 系統只提供候選、限制與錯誤原因；由 Mediator 自行判斷是否選入。
+- 若有 proposed_by="human" 且格式有效，必須選入 issues，除非它重複或沒有任何可追蹤來源。
+- 不要新增輸入沒有支持的新議題。
+- 只選具體且可追蹤的 high/medium 或 blocking 議題；low 通常放 discarded。
+- 若確定沒有任何值得正式會議處理的議題，可以讓 issues 為空，但必須在 discarded 說明原因。
+- 回傳格式必須與原本分流相同。
+
+# 輸出 JSON
+{{
+  "issues": [],
+  "backlog": [],
+  "discarded": []
+}}"""
+
+
+def repair_meeting_plan(
+    *,
+    proposal: Dict[str, Any],
+    related_context: Dict[str, Any],
+    invalid_output: Dict[str, Any],
+    errors: List[str],
+    active_types: List[str],
+    category_definitions: str,
+    registered: List[str],
+    stakeholder_names: List[str],
+) -> str:
+    category_values = "|".join([str(x).strip() for x in (active_types or []) if str(x).strip()])
+    if not category_values:
+        category_values = "clarify_requirement|define_boundary|tradeoff|align_model"
+    return f"""# 任務
+上一次把提案轉成正式會議議題時格式無效。請 Mediator 根據錯誤原因修正，重新輸出有效 meeting issue。
+
+# 原始議題提案
+{json.dumps(proposal, ensure_ascii=False, indent=2)}
+
+# 相關專案資料
+{json.dumps(related_context, ensure_ascii=False, indent=2)}
+
+# 上一次無效輸出
+{json.dumps(invalid_output, ensure_ascii=False, indent=2)}
+
+# 錯誤原因
+{json.dumps(errors, ensure_ascii=False, indent=2)}
+
+{category_definitions}
+
+# 可用利害關係人
+{json.dumps(stakeholder_names, ensure_ascii=False, indent=2)}
+
+- category 只能使用：{category_values}
+- participants 只能使用 agents={json.dumps(registered, ensure_ascii=False)}。
+- 每位 participant 都必須有 participant_reasoning。
+- proposed_by 若是 analyst/expert/modeler/user 且不是 mediator，participants 必須包含該提案人。
+- participants 包含 user 時，target_stakeholders 必須從可用利害關係人選擇；如果不需要利害關係人表態，不要加入 user。
+- trace 必須是 object，保留 proposal id，artifact_ids 只能使用輸入可追蹤來源。
+- discussion_mode 只能是 sequential 或 simultaneous。
+- discussion_rounds 必須是 1、2 或 3。
+- 不要用程式預設硬補；請依提案內容自行決定最小可執行議題。
+- 若此提案其實不應成為正式會議議題，輸出 issues=[] 並在 discarded_reason 說明。
+
+# 輸出 JSON
+{{
+  "issues": [
+    {{
+      "title": "正式會議議題標題",
+      "description": "可選，簡短說明會前要討論的共同問題",
+      "category": "{category_values}",
+      "participants": ["analyst"],
+      "discussion_mode": "sequential",
+      "discussion_rounds": 1,
+      "target_stakeholders": [],
+      "trace": {{"artifact_ids": [], "proposal_ids": ["..."]}},
+      "proposed_by": "analyst",
+      "issue_level": "blocking | improvement",
+      "expected_actions": {{}},
+      "participant_reasoning": {{"analyst": "需要釐清或修正需求內容"}}
+    }}
+  ],
+  "discarded_reason": ""
+}}"""
+
+
 # ========
 # Defines meeting action function for this module workflow.
 # ========
@@ -542,7 +651,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            row_id = str(row.get("id") or row.get("issue_id") or "").strip()
+            row_id = str(row.get("id") or "").strip()
             blob = json.dumps(row, ensure_ascii=False)
             if row_id not in ids and not any(source_id in blob for source_id in ids):
                 continue
@@ -739,8 +848,8 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
     def same_issue_proposal(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
         if not isinstance(left, dict) or not isinstance(right, dict):
             return False
-        left_id = str(left.get("issue_id") or left.get("id") or "").strip()
-        right_id = str(right.get("issue_id") or right.get("id") or "").strip()
+        left_id = str(left.get("issue_id") or "").strip()
+        right_id = str(right.get("issue_id") or "").strip()
         if left_id and right_id:
             return left_id == right_id
         return str(left.get("title") or "").strip() == str(right.get("title") or "").strip()
@@ -967,40 +1076,33 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                     if not self.same_issue_proposal(row, displaced)
                 ]
                 triage.setdefault("backlog", []).append(displaced)
-        if not selected_proposals and triage.get("backlog"):
-            backlog_candidates = [
-                row for row in (triage.get("backlog") or [])
-                if isinstance(row, dict)
-                and str(row.get("importance") or "").strip().lower() != "low"
-                and self.has_concrete_issue_source(row)
-            ]
-            selected_proposals = diversify_selected_proposals(backlog_candidates, max_items)
-            if selected_proposals:
-                triage["backlog"] = [
-                    row for row in (triage.get("backlog") or [])
-                    if not any(self.same_issue_proposal(row, selected) for selected in selected_proposals)
-                ]
-                self.logger.info(
-                    "Issue Triage：本輪無入選議題，將 %s 筆 high/medium backlog 具體候選提升進本輪",
-                    len(selected_proposals),
-                )
-        if proposals and not selected_proposals and not triage.get("backlog"):
-            fallback_candidates = [
-                row for row in proposals
-                if isinstance(row, dict)
-                and str(row.get("importance") or "").strip().lower() != "low"
-                and self.has_concrete_issue_source(row)
-            ]
-            selected_proposals = diversify_selected_proposals(fallback_candidates, max_items)
-            if selected_proposals:
-                triage["discarded"] = [
-                    row for row in (triage.get("discarded") or [])
-                    if not any(self.same_issue_proposal(row, selected) for selected in selected_proposals)
-                ]
-                self.logger.info(
-                    "Issue Triage：LLM 未選入議題，使用 deterministic fallback 選入 %s 筆具體候選",
-                    len(selected_proposals),
-                )
+        if proposals and not selected_proposals:
+            repair_prompt = repair_issue_selection(
+                proposals=proposals,
+                backlog=[row for row in (triage.get("backlog") or []) if isinstance(row, dict)],
+                discarded=[row for row in (triage.get("discarded") or []) if isinstance(row, dict)],
+                errors=["Issue triage produced no selected issues."],
+                max_items=max_items,
+                skip_artifact_ids=sorted(str(s) for s in skip),
+                is_last_round=is_last_round,
+                round_num=int(round_num or 1),
+            )
+            try:
+                repaired_triage = self.chat_json(self.build_direct_messages(repair_prompt))
+            except Exception as e:
+                raise RuntimeError(f"Issue triage repair LLM failed: {e}") from e
+            if not isinstance(repaired_triage, dict):
+                raise RuntimeError("Issue triage repair must return a JSON object")
+            triage = {
+                "issues": [row for row in (repaired_triage.get("issues") or []) if isinstance(row, dict)],
+                "backlog": [row for row in (repaired_triage.get("backlog") or []) if isinstance(row, dict)],
+                "discarded": [row for row in (repaired_triage.get("discarded") or []) if isinstance(row, dict)],
+            }
+            selected_proposals = sorted(
+                [p for p in (triage.get("issues") or []) if isinstance(p, dict)],
+                key=lambda row: (proposal_priority(row), str(row.get("issue_id") or "")),
+            )
+            selected_proposals = diversify_selected_proposals(selected_proposals, max_items)
         general_type_ids = list(active_type_ids or issue_type_ids)
         category_definitions = "\n".join(
             f"- {t['id']}：{t.get('description') or t.get('label') or t['id']}"
@@ -1034,12 +1136,16 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 raise RuntimeError(f"Issue meeting planning LLM failed: {e}") from e
             if not isinstance(planned, dict):
                 raise RuntimeError("Issue meeting planning must return a JSON object")
+            planned_rows = []
+            row_errors = []
             for row in planned.get("issues") or []:
                 if isinstance(row, dict):
                     if not str(row.get("proposed_by") or "").strip():
-                        raise RuntimeError("Issue meeting planning output missing proposed_by")
+                        row_errors.append("Issue meeting planning output missing proposed_by")
+                        continue
                     if not isinstance(row.get("trace"), dict):
-                        raise RuntimeError("Issue meeting planning output missing trace")
+                        row_errors.append("Issue meeting planning output missing trace")
+                        continue
                     if proposal.get("expected_actions") and not row.get("expected_actions"):
                         row["expected_actions"] = proposal.get("expected_actions")
                     if proposal.get("suggested_participants") and not row.get("suggested_participants"):
@@ -1049,7 +1155,28 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                     for key in ("participants", "discussion_mode", "discussion_rounds", "issue_level"):
                         if proposal.get(key) and not row.get(key):
                             row[key] = proposal.get(key)
-                    meeting_issues.append(row)
+                    planned_rows.append(row)
+            if not planned_rows:
+                repair_prompt = repair_meeting_plan(
+                    proposal=proposal,
+                    related_context=related_context,
+                    invalid_output=planned,
+                    errors=row_errors or ["Issue meeting planning produced no valid issue rows."],
+                    active_types=general_type_ids,
+                    category_definitions=category_definitions,
+                    registered=registered,
+                    stakeholder_names=stakeholder_names,
+                )
+                try:
+                    repaired = self.chat_json(self.build_direct_messages(repair_prompt))
+                except Exception as e:
+                    raise RuntimeError(f"Issue meeting planning repair LLM failed: {e}") from e
+                if not isinstance(repaired, dict):
+                    raise RuntimeError("Issue meeting planning repair must return a JSON object")
+                for row in repaired.get("issues") or []:
+                    if isinstance(row, dict):
+                        planned_rows.append(row)
+            meeting_issues.extend(planned_rows)
 
         items = []
         for p in meeting_issues:
@@ -1084,20 +1211,7 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
                 )
                 items.append(normalized)
         if selected_proposals and not items:
-            for proposal in selected_proposals[:max_items]:
-                if not isinstance(proposal, dict):
-                    continue
-                fallback = self.fallback_meeting_issue_from_proposal(
-                    proposal,
-                    active_type_ids=general_type_ids,
-                    registered=registered,
-                    stakeholder_names=stakeholder_names,
-                    index=len(items) + 1,
-                )
-                if fallback:
-                    items.append(fallback)
-            if not items:
-                raise RuntimeError("Issue meeting planning produced no valid meeting issues")
+            raise RuntimeError("Issue meeting planning repair produced no valid meeting issues")
 
         # Defines backlog rows function for this module workflow.
         def backlog_rows() -> List[Dict[str, Any]]:
@@ -1122,110 +1236,6 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
             "backlog": backlog_rows(),
             "discarded": discarded_rows(),
         }
-
-    # Builds a valid meeting issue from a selected proposal when LLM planning returns invalid rows.
-    def fallback_meeting_issue_from_proposal(
-        self,
-        proposal: Dict[str, Any],
-        *,
-        active_type_ids: List[str],
-        registered: List[str],
-        stakeholder_names: List[str],
-        index: int,
-    ) -> Optional[Dict[str, Any]]:
-        category = self.proposal_category(proposal, active_type_ids)
-        focus = str(proposal.get("issue_focus") or "").strip()
-        if not category:
-            if focus == "model_alignment":
-                category = "align_model"
-            elif focus == "boundary_responsibility":
-                category = "define_boundary"
-            elif focus == "tradeoff":
-                category = "tradeoff"
-        if not category:
-            return None
-        if category not in set(active_type_ids or issue_type_ids):
-            return None
-
-        proposed_by = str(proposal.get("proposed_by") or "").strip()
-        participants = [
-            str(agent).strip()
-            for agent in (
-                proposal.get("participants")
-                or proposal.get("suggested_participants")
-                or []
-            )
-            if str(agent).strip() in set(registered)
-        ]
-        if proposed_by and proposed_by != "mediator" and proposed_by in set(registered):
-            participants.insert(0, proposed_by)
-        if not participants:
-            participants = ["analyst"] if "analyst" in set(registered) else list(registered[:1])
-
-        source_ids: List[str] = []
-        for source in proposal.get("sources") or []:
-            if not isinstance(source, dict):
-                continue
-            source_ids.extend(
-                str(value).strip()
-                for value in (source.get("ids") or [])
-                if str(value).strip()
-            )
-        trace = {
-            "artifact_ids": list(dict.fromkeys(source_ids)),
-            "proposal_ids": [
-                str(proposal.get("issue_id") or proposal.get("id") or f"I-{index}").strip()
-            ],
-        }
-
-        expected_actions = proposal.get("expected_actions") if isinstance(proposal.get("expected_actions"), dict) else {}
-        reasoning = proposal.get("participant_reasoning") if isinstance(proposal.get("participant_reasoning"), dict) else {}
-        clean_reasoning = {
-            str(agent).strip(): str(reason or "").strip()
-            for agent, reason in reasoning.items()
-            if str(agent).strip() in set(participants) and str(reason or "").strip()
-        }
-        for agent in participants:
-            if agent not in clean_reasoning:
-                clean_reasoning[agent] = "依據候選議題內容參與釐清並形成可保存的會議結論。"
-
-        item = {
-            "id": proposal.get("id") or f"M-{index}",
-            "title": str(proposal.get("title") or f"一般議題 {index}").strip(),
-            "description": str(
-                proposal.get("description")
-                or proposal.get("expect_outcome")
-                or proposal.get("reason")
-                or ""
-            ).strip(),
-            "category": category,
-            "participants": list(dict.fromkeys(participants)),
-            "discussion_mode": proposal.get("discussion_mode") or "sequential",
-            "discussion_rounds": normalized_discussion_rounds(proposal.get("discussion_rounds")),
-            "target_stakeholders": proposal.get("target_stakeholders") or [],
-            "trace": trace,
-            "proposed_by": proposed_by if proposed_by in set(registered) else participants[0],
-            "issue_level": str(proposal.get("issue_level") or "blocking").strip(),
-            "expected_actions": expected_actions,
-            "participant_reasoning": clean_reasoning,
-        }
-        item = self.apply_issue_required_actions(
-            item,
-            registered_agents=registered,
-            stakeholder_names=stakeholder_names,
-        )
-        item = self.normalize_issue_participants(
-            item,
-            registered_agents=registered,
-            stakeholder_names=stakeholder_names,
-        )
-        return meeting_issue(
-            item,
-            allowed_categories=active_type_ids or issue_type_ids,
-            registered_agents=registered,
-            allowed_stakeholders=stakeholder_names,
-            index=index,
-        )
 
     # Defines plan issues internal function for this module workflow.
     def plan_issues_internal(

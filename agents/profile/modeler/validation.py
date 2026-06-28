@@ -214,7 +214,7 @@ def model_targets(values: Any) -> List[Dict[str, str]]:
             target = {
                 "operation": clean_text(item.get("operation")).lower(),
                 "type": clean_text(item.get("type")),
-                "target_model_id": clean_text(item.get("target_model_id") or item.get("id")),
+                "target_model_id": clean_text(item.get("target_model_id")),
                 "name": clean_text(item.get("name")),
                 "reason": clean_text(item.get("reason")),
                 "value_reason": clean_text(item.get("value_reason")),
@@ -393,7 +393,7 @@ def parse_diagram_model(
         raise ValueError("diagram description is required")
     if description:
         row["description"] = description
-    text_rows = raw.get("text") or raw.get("use_case_text")
+    text_rows = raw.get("text")
     if diagram_type == "use_case_diagram" and isinstance(text_rows, list):
         clean_rows: List[Dict[str, Any]] = []
         seen_text = set()

@@ -9,6 +9,7 @@ from agents.profile.base import (
     response_rules as base_response_rules,
     response_target_stakeholder_rule,
 )
+from agents.profile.base import forbidden_output_rules
 
 from ...rules import issue_rules, issue_task
 
@@ -44,10 +45,10 @@ def render_response_prompt(
 # 任務
 {task_block}
 
-# Response Boundary
-- 本 response 只代表 Expert 在會議中的發言與提問。
-- 不直接更新 artifact；若需要領域研究或 feedback 更新，應透過 research_domain action 執行。
-- 不輸出 research_plan、research_evidence、feedback、requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與領域/風險觀點建議。
+- 需要領域研究或 feedback 更新時，應透過 research_domain action 執行。
 - Related Context 只能作為會議發言依據，不可單獨創造外部證據或正式需求。
 
 {prompt_section("# Rules", extra_rules)}# Output JSON
@@ -55,12 +56,14 @@ def render_response_prompt(
 {output_fields}
 }}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 artifact patch。
-- 不輸出 research_evidence 或 feedback JSON。
-- 不把 feedback 或外部研究結果定案為正式需求。
-- 不編造外部 URL、法規、標準、REQ-*、URL-* 或 CR-*。"""
+{forbidden_output_rules(
+        [
+            "不輸出 artifact patch。",
+            "不輸出 research_evidence 或 feedback JSON。",
+            "不把 feedback 或外部研究結果定案為正式需求。",
+            "不編造外部 URL、法規、標準、REQ-*、URL-* 或 CR-*。",
+        ]
+    )}"""
 
 
 def category_rules(category: str) -> str:
@@ -74,11 +77,11 @@ def category_rules(category: str) -> str:
 - 若本議題涉及 NFR，協助釐清 category、metric、validation 或適用條件；明確 NFR 不需因為是 NFR 而開會。"""
     if category == "define_boundary":
         return """# 本議題特別要求（define_boundary）
-- 說明本系統、第三方服務、人工流程或角色責任的外部限制與風險邊界。
+- 說明本系統、第三方服務、人工流程或責任歸屬的外部限制與風險邊界。
 - 若本議題涉及 NFR，說明品質要求適用範圍與外部責任邊界；constraint 只討論成立、例外與遵守方式。"""
     if category == "align_model":
         return """# 本議題特別要求（align_model）
-- 說明模型揭露的流程、資料、狀態或角色責任是否受到外部限制或風險影響。
+- 說明模型揭露的流程、資料、狀態或責任歸屬是否受到外部限制或風險影響。
 - 若本議題涉及 NFR，說明品質要求對可靠性、安全性、可用性或驗證方式的外部依據。"""
     return ""
 
@@ -90,7 +93,7 @@ def expert_response_contract() -> str:
 - 若本輪沒有更新 feedback，但當前專案資料已有與本議題相關的 feedback.json 內容，可以引用既有 findings、constraints、risks 或 recommendations 來支撐發言；若引用既有 feedback，需明確說出引用的是哪一類內容與它支持或揭露的需求點。
 - 只有議題涉及法規、外部標準、支付/退款、資料保存、隱私、安全、稽核、可靠性或高風險營運限制時，才需要 domain research；一般需求語意或模型對齊問題優先使用既有 feedback 或直接發言。
 - 若進行新的 domain research，必須更新 feedback.json，並保留來源 URL；不要只在會議發言中描述研究結論。
-- 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以 Expert 觀點回答。
+- 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以外部限制、風險或證據觀點回答。
 - open_questions 只放真正需要後續回答、且會影響限制、風險、驗收邊界或本議題結論的具體問題；沒有就輸出空陣列。
 - ready_to_close 仍可提出 open_questions；若目前已有可落地結論，但某個具體答案會影響限制、風險、驗收邊界、合規假設或需求可接受條件，應輸出 open_questions，而不是只寫進風險或假設。
 - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。

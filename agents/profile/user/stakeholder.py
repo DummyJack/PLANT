@@ -57,17 +57,22 @@ def normalize_stakeholder_text(stakeholders: List[Dict[str, Any]]) -> List[Dict[
     for stakeholder_index, item in enumerate(stakeholders or [], start=1):
         if not isinstance(item, dict):
             continue
-        row = dict(item)
-        row["id"] = str(row.get("id") or "").strip() or f"stakeholder-{stakeholder_index}"
-        text_items = stakeholder_text_items(row)
+        row_id = str(item.get("id") or "").strip() or f"stakeholder-{stakeholder_index}"
+        name = str(item.get("name") or "").strip()
+        stakeholder_type = str(item.get("type") or "").strip()
+        text_items = stakeholder_text_items(item)
         normalized_text = []
-        for text_index, item in enumerate(text_items, start=1):
+        for text_index, text_item in enumerate(text_items, start=1):
             normalized_text.append({
-                "id": str(item.get("id") or "").strip() or f"ST-{stakeholder_index}-{text_index}",
-                "text": str(item.get("text") or "").strip(),
+                "id": str(text_item.get("id") or "").strip() or f"ST-{stakeholder_index}-{text_index}",
+                "text": str(text_item.get("text") or "").strip(),
             })
-        row["text"] = normalized_text
-        row.pop("statements", None)
+        row = {
+            "id": row_id,
+            "name": name,
+            "type": stakeholder_type,
+            "text": normalized_text,
+        }
         normalized.append(row)
     return normalized
 

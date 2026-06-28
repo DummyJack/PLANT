@@ -10,6 +10,7 @@ from agents.profile.base import (
     response_stance_rules,
     response_target_stakeholder_rule,
 )
+from agents.profile.base import forbidden_output_rules
 
 from ...rules import issue_rules, issue_task
 
@@ -41,10 +42,10 @@ def render_response_prompt(
 {prompt_section("# Previous Responses", sections["prev_text"])}{prompt_section("# Related Context", sections["context_text"])}{prompt_section("# Recent Questions", sections["recent_ask_history_text"])}{prompt_section("# Elicitation Context", elicitation_hint)}# 任務
 {task_block}
 
-# Response Boundary
-- 本 response 只代表 Modeler 在會議中的發言與提問。
-- 不直接更新 artifact；若需要建立或更新模型，應透過 system_modeling action 執行。
-- 不輸出 model_plan、system_models、requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與模型觀點建議。
+- 需要建立或更新模型時，應透過 system_modeling action 執行。
 - Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新模型或需求。
 
 # Rules
@@ -55,12 +56,14 @@ def render_response_prompt(
 {output_fields}
 }}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 artifact patch。
-- 不輸出 PlantUML 或 system model JSON。
-- 不從模型反推新增需求。
-- 不編造不存在的 SM-*、REQ-*、URL-* 或 CR-*。"""
+{forbidden_output_rules(
+        [
+            "不輸出 artifact patch。",
+            "不輸出 PlantUML 或 system model JSON。",
+            "不從模型反推新增需求。",
+            "不編造不存在的 SM-*、REQ-*、URL-* 或 CR-*。",
+        ]
+    )}"""
 
 
 def model_reference_rules() -> str:
@@ -105,7 +108,7 @@ def issue_response(
         rules_block += "\n- 本議題聚焦模型揭露的流程、狀態、actor、use case、資料或權限不一致；請明確指出需求與模型如何對齊。"
         rules_block += "\n- 若本議題涉及 NFR，請指出品質要求如何影響流程、狀態、互動、資料或驗證路徑。"
     elif category == "define_boundary":
-        rules_block += "\n- 本議題聚焦系統邊界、外部系統、人工流程與角色責任；請用模型觀點說明邊界影響。"
+        rules_block += "\n- 本議題聚焦系統邊界、外部系統、人工流程與責任邊界；請用模型觀點說明邊界影響。"
         rules_block += "\n- 若本議題涉及 NFR，請說明品質要求套用的系統邊界、外部責任與例外情境。"
     elif category == "clarify_requirement":
         rules_block += "\n- 本議題聚焦需求語意、條件、成功結果與驗收方式；請指出模型是否需要補充流程或狀態。"

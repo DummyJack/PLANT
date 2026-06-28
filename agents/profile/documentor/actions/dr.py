@@ -7,11 +7,11 @@ def design_rationale(requirements: List[dict[str, Any]]) -> str:
     return f"""# 任務
 根據 design rationale requirement context array 產生 Design Rationale 主體 Markdown。
 
-# Documentor Action Boundary
+# Action Boundary
 - action=documentor.generate_dr
-- 本 action 只輸出 Design Rationale 主體 Markdown，不輸出 JSON。
-- 不更新 artifact、不新增 REQ、不新增 trace evidence。
-- 不輸出 Appendix；runtime 會另外在每個 requirement 上方插入可點選的 trace topology。
+- 本 action 根據 Requirement Context 產生 Design Rationale 主體 Markdown。
+- Design Rationale 說明每個 FR/NFR/CON 的來源、會議決策、trace 形成脈絡與最終需求形成原因。
+- runtime 會另外在每個 requirement 上方插入可點選的 trace topology。
 
 # Source Boundary
 - Requirement Context 是唯一直接來源。
@@ -34,7 +34,7 @@ Requirement Context:
 - 若 topology 中有 CR、Feedback、System Model 或 Meeting，需說明它們如何由 URL 觸發、如何在會議中提供依據、建模或被解決。
 - Trace Explanation 必須優先依 trace_graph.edges 的可達路徑順序敘述：Source → User Requirement → Analysis → Meeting → Requirement。
 - 若有 Feedback 或 System Model 支線，請在它接回 meeting 的位置說明它補充了哪個決策、限制、模型依據或需求欄位，不要獨立寫成同等主線。
-- topology edge label 只能使用固定短語，不要自創長句或同義詞：ST→URL 為「整理」；URL→FB 為「依據」；URL→SM 為「建模」；URL→CR 不顯示文字；CR→resolve meeting 為「解決」；沒有衝突時 URL→formalize meeting 為「正式化」；有衝突時 resolve meeting→formalize meeting 為「正式化」；formalize meeting→clarify meeting 為「精練」；FB/SM→meeting 不顯示文字；最後 meeting→FR/NFR/CON 不顯示文字。
+- topology edge label 只能使用固定短語，不要自創長句或同義詞：ST→URL 為「分析」；URL→FB 為「依據」；URL→SM 為「建模」；URL→CR 不顯示文字；CR→resolve meeting 為「解決」；沒有衝突時 URL→formalize meeting 為「正式化」；有衝突時 resolve meeting→formalize meeting 為「正式化」；formalize meeting→clarify meeting 為「精練」；FB/SM→meeting 不顯示文字；最後 meeting→FR/NFR/CON 不顯示文字。
 - 若 trace_graph.edges 的 relation 為空字串，Trace Explanation 可以說明節點承接關係，但不得替該邊命名或寫成新的 edge label。
 - 若需要描述「依據」或「建模」支線，請在文字中說明它補充哪個 meeting decision、限制或模型依據；不要把支線寫成與主鏈同等的正式化步驟。
 - 只有 formalize_requirement meeting 才代表正式化；若有後續 clarify_requirement meeting，則由最後一個 clarify_requirement meeting 連到正式需求但不顯示文字，表示精練後收斂。clarify_requirement meeting 不要寫成正式化本身。
@@ -71,22 +71,22 @@ Requirement Context:
 #### Trace Explanation
 
 Stakeholder
-- ST-* 表達「...」，作為此需求的原始來源。
+- ST-* 表達具體利害關係人需求或限制，作為此需求的原始來源。
 
 User Requirement
-- URL-* 將 ST-* 整理為「...」，形成可分析的使用者需求。
+- URL-* 將 ST-* 整理為具體使用者需求，形成可分析的需求項目。
 
 Conflict
-- 只有有相關 CR-* 時輸出。CR-* 指出 URL-* 與 URL-* 在「...」上衝突，後續需要透過會議或正式化決策收斂。
+- 只有有相關 CR-* 時輸出。CR-* 指出 URL-* 與 URL-* 在具體需求邊界、資料責任、流程順序或品質取捨上衝突，後續需要透過會議或正式化決策收斂。
 
 System Model
-- 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到「...」流程、狀態或互動，建模此需求的系統設計。
+- 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到具體流程、狀態、資料結構或互動，建模此需求的系統設計。
 
 Meeting Discussion
-- 只有有相關 meeting 時輸出。若是解決衝突會議，寫「R*-M* 是衝突解決會議，討論輸入為 CR-*...」；若是需求正式化會議，寫「R*-M* 是需求正式化會議，正式化依據為 URL-*／前一場會議...」；若是後續 clarify/refine meeting，寫「R*-M* 承接前一版需求做更深入討論/精練...」。會議決定或確認「...」，因此「...」被保留、調整、補齊或推進到下一個 meeting/正式需求。
+- 只有有相關 meeting 時輸出。若是解決衝突會議，寫明「R*-M* 是衝突解決會議，討論輸入為 CR-*」並說明該衝突如何被處理；若是需求正式化會議，寫明「R*-M* 是需求正式化會議，正式化依據為 URL-*／前一場會議」並說明保留或調整了什麼；若是後續 clarify/refine meeting，寫明「R*-M* 承接前一版需求做更深入討論或精練」並說明補齊了哪個需求細節。會議決定或確認具體需求內容，因此該內容被保留、調整、補齊或推進到下一個 meeting/正式需求。
 
 Requirement Formation
-- URL-* 經由 R*-M* 或前述 trace 節點收斂為 FR/NFR/CON-*，正式要求系統「...」。
+- URL-* 經由 R*-M* 或前述 trace 節點收斂為 FR/NFR/CON-*，正式要求系統履行該 block 的具體功能、品質或限制。
 
 # Trace Section Rules
 - 每個 block 第一行必須使用 context 中的 srs_id，格式為 `### FR-N: title`、`### NFR-N: title` 或 `### CON-N: title`，不得用 REQ-* 當標題。

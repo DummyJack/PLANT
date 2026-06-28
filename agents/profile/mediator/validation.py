@@ -446,17 +446,17 @@ def judgment_data(
     for idx, option in enumerate(options, 1):
         if not isinstance(option, dict):
             continue
-        oid = str(option.get("id") or chr(64 + idx)).strip() or chr(64 + idx)
-        summary = str(option.get("summary") or "").strip()
-        if not summary:
+        option_id = str(option.get("option_id") or chr(64 + idx)).strip() or chr(64 + idx)
+        title = str(option.get("title") or "").strip()
+        if not title:
             continue
         risk = str(option.get("risk") or "").strip().lower()
         if risk not in impact_levels:
             raise ValueError(f"decision option risk 不合法: {risk or '<empty>'}")
         clean_options.append(
             {
-                "id": oid,
-                "summary": summary,
+                "option_id": option_id,
+                "title": title,
                 "pros": [str(x).strip() for x in (option.get("pros") or []) if str(x).strip()],
                 "cons": [str(x).strip() for x in (option.get("cons") or []) if str(x).strip()],
                 "impact": [str(x).strip() for x in (option.get("impact") or []) if str(x).strip()],
@@ -469,7 +469,7 @@ def judgment_data(
     recommendation = data.get("recommendation", {})
     if not isinstance(recommendation, dict):
         raise ValueError("decision option analysis recommendation 必須是 object")
-    option_ids = {row["id"] for row in clean_options}
+    option_ids = {row["option_id"] for row in clean_options}
     rec_option = str(recommendation.get("option_id") or "").strip()
     if rec_option not in option_ids:
         raise ValueError("decision option analysis recommendation.option_id 不合法")

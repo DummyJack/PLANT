@@ -1,8 +1,107 @@
 # Handles shared agent profile prompts and helper behavior.
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from utils.template import render_template
+from utils.language import current_output_language
+
+
+def _bullet_lines(items: Iterable[str]) -> str:
+    return "\n".join(f"- {str(item).strip()}" for item in items if str(item).strip())
+
+
+def render_template(template: str, context: dict[str, Any]) -> str:
+    out: list[str] = []
+    i = 0
+    n = len(template)
+    while i < n:
+        ch = template[i]
+        if ch == "{" and i + 1 < n and template[i + 1] == "{":
+            out.append("{")
+            i += 2
+            continue
+        if ch == "}" and i + 1 < n and template[i + 1] == "}":
+            out.append("}")
+            i += 2
+            continue
+        if ch != "{":
+            out.append(ch)
+            i += 1
+            continue
+        end = find_expr_end(template, i + 1)
+        if end < 0:
+            out.append(ch)
+            i += 1
+            continue
+        expr = template[i + 1 : end].strip()
+        try:
+            out.append(str(eval(expr, {}, dict(context))))
+        except Exception:
+            out.append("{" + template[i + 1 : end] + "}")
+        i = end + 1
+    return "".join(out)
+
+
+def find_expr_end(text: str, start: int) -> int:
+    quote = ""
+    escape = False
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if quote:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                quote = ""
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch in "([{":
+            depth += 1
+            continue
+        if ch in ")]}":
+            if ch == "}" and depth == 0:
+                return i
+            depth = max(0, depth - 1)
+    return -1
+
+
+def json_only_rules() -> str:
+    if current_output_language() == "en":
+        return (
+            "# Output Contract\n"
+            "- Output only valid JSON that matches the specified schema.\n"
+            "- Do not include Markdown explanations, code fences, prefaces, or extra text."
+        )
+    return (
+        "# 輸出契約\n"
+        "- 只輸出符合指定 schema 的合法 JSON。\n"
+        "- 不輸出 Markdown 說明、程式碼區塊、前言或額外文字。"
+    )
+
+
+def json_format_instruction() -> str:
+    if current_output_language() == "en":
+        return "Output only the valid JSON format specified by this task, with no extra text."
+    return "請只輸出本任務指定的合法 JSON 格式，不要其他文字。"
+
+
+def forbidden_output_rules(
+    items: Iterable[str] = (),
+    *,
+    forbid_markdown_explanation: bool = True,
+) -> str:
+    rules = []
+    if forbid_markdown_explanation:
+        rules.append(
+            "Do not output Markdown explanations."
+            if current_output_language() == "en"
+            else "不輸出 Markdown 說明。"
+        )
+    rules.extend(str(item).strip() for item in items if str(item).strip())
+    return "# Forbidden Output\n" + _bullet_lines(rules)
 
 
 def prompt_section(header: str, body: str) -> str:
@@ -48,7 +147,7 @@ def proposal_prompt(
 
 符合以下條件時應提出；接近門檻、證據尚不完整但可能影響 SRS 品質時，也可以提出交由 Mediator triage：
 {gates}
-- sources.evidence 必須指出 draft 中的具體缺口、弱欄位、矛盾、未決問題、角色衝突、限制、模型缺口或來源 id。
+- sources.evidence 必須指出 draft 中的具體缺口、弱欄位、矛盾、未決問題、參與者衝突、限制、模型缺口或來源 id。
 - 單一 REQ 的 acceptance criteria、NFR category、metric、validation、rationale、risks、assumptions、source trace 或模型關聯若影響 SRS 可驗收性或可追蹤性，可以提出。
 - NFR 不另開專屬會議類型；只有在品質要求不明確、不可驗收、metric/validation 缺失、priority 會影響 FR/NFR 版本取捨、或品質要求會影響設計/成本/模型/外部限制時才提出。
 - 明確且已有來源支持的 NFR 不要只因為是 NFR 就提出會議；應由 update_requirement 或 refine_requirement 直接寫回 type=non-functional。
@@ -97,7 +196,7 @@ close_gate = """# 收斂品質門檻
 
 response_rules = """# response.text 規則
 - text 是會議中的自然發言，不是 action 結果、JSON、報告或專案資料內容貼上。
-- text 必須依本 agent / speaking_as 的立場發言，說明此立場會關心的需求、風險、限制、模型影響、取捨或底線。
+- text 必須依目前發言身份或 speaking_as 的立場發言，說明此立場會關心的需求、風險、限制、模型影響、取捨或底線。
 - text 可使用短段落、條列或簡短表格輔助說明；只有在比較方案、列出缺口、限制、風險、模型不一致或衝突處理時才使用表格。
 - 不要在 text 中輸出 JSON、schema、程式碼區塊、大型表格或長篇報告。
 - 若本輪先執行 action，text 只用自然語言說明該 action 對本議題立場的影響；完整 action 產物會由 conversation 的 analysis / feedback / system_models 欄位保存。
@@ -122,7 +221,7 @@ conflict_updates = """# resolve_conflict 額外規則
   - revise：改寫 URL text，讓需求不再互相衝突。
   - remove：移除重複、被取代或不再成立的 URL。
 - url_updates 每筆使用 action、ids、text、reason。只有 revise 需要 text。
-- Analyst 若本次 action 是 discuss_conflict，必須在 stance.proposal.url_updates 輸出至少一筆可執行修改。
+- 若本次 action 是 discuss_conflict，必須在 stance.proposal.url_updates 輸出至少一筆可執行修改。
 - 不要把多筆 URL 串成一筆巨大需求；語意整合應反映在後續 REQ，不在 URL 層合併。"""
 
 
@@ -243,19 +342,19 @@ def response_stance_rules(*, issue_id: str, category: str, proposal_subject: str
 # ========
 # Defines pair review response contract function for this module workflow.
 # ========
-def pair_review_response_contract(*, known_pair_ids: list, include_reason_basis: bool = False) -> str:
+def pair_review_response_contract(*, known_pair_ids: list, include_reason_evidence: bool = False) -> str:
     known_pair_ids_text = json.dumps(
         [str(pair_id).strip() for pair_id in known_pair_ids if str(pair_id).strip()],
         ensure_ascii=False,
     )
-    reason_rule = "\n- reason 必須有依據，不可只表態或宣告最終決議。" if include_reason_basis else ""
+    reason_rule = "\n- reason 必須有依據，不可只表態或宣告最終決議。" if include_reason_evidence else ""
     return f"""- 外層輸出只包含 text 欄位的 JSON object。
 - text 必須是 JSON object 字串，不是巢狀 object。
 - text JSON 結構必須為 {{"pair_reviews":[...]}}。
 - pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。
 - 每筆 pair_reviews 都必須有 id、proposed_label、reason。
-- proposed_label 只能是 Conflict 或 Neutral；它不是最終裁決，而是該 agent 依自身職責範圍提出的審查標籤。
-- 若 pair 不屬於該 agent 的職責範圍，proposed_label 應維持 current_label；current_label 來自每筆 pair_card.current_label 或 conflict_review_contract.current_labels_by_id。{reason_rule}
+- proposed_label 只能是 Conflict 或 Neutral；它不是最終裁決，而是依本 action 判斷範圍提出的審查標籤。
+- 若 pair 不屬於本 action 判斷範圍，proposed_label 應維持 current_label；current_label 來自每筆 pair_card.current_label 或 conflict_review_contract.current_labels_by_id。{reason_rule}
 - 本輪必須涵蓋的 pair id：{known_pair_ids_text}"""
 
 
@@ -403,15 +502,15 @@ review_contract = """- 外層必須只有 text 欄位。
 - 不可用類 JSON 條列或文字摘要取代合法 JSON。"""
 
 
-label_rules = """- 先判斷兩項需求是否屬於同一需求槽位：同一主要功能、流程步驟、資料物件、輸出行為、角色權限、狀態、限制或驗收目標。
+label_rules = """- 先判斷兩項需求是否屬於同一需求槽位：同一主要功能、流程步驟、資料物件、輸出行為、使用者權限、狀態、限制或驗收目標。
 - 若不是同一需求槽位，且可在 SRS 中作為不同需求並存，支持 Neutral；不要因領域相關、同屬同一系統或可能互相補充就判 Conflict。
-- 若是同一需求槽位，再檢查是否存在不同限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界。
+- 若是同一需求槽位，再檢查是否存在不同限制、範圍、條件、使用者群體、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界。
 - 同一需求槽位內，只要上述差異會造成 SRS 需要合併、改寫、刪除或人工裁定，支持 Conflict；Conflict 不只表示執行時互斥。
 - 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，支持 Conflict。
 - 純同義重複、可無損合併的補充描述、不同上下文或不同流程階段的可並存要求，支持 Neutral；reason 必須說明為何不是同一槽位差異或為何可無衝突合併。"""
 
 
-reason_rules = """- proposed_label 可以和其他 agent 相同，但 reason 必須提供獨立判斷依據；不要只重複一般語意判斷。
+reason_rules = """- proposed_label 可以和其他審查者相同，但 reason 必須提供獨立判斷依據；不要只重複一般語意判斷。
 - reason 必須根據需求原文或會議中可追溯的證據，不可臆測不存在的需求、設計方案或外部情境。"""
 
 

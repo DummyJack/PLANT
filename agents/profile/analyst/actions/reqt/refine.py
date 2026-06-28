@@ -5,6 +5,7 @@ from ...rules import (
     requirement_quality_rules,
     requirement_refinement_rules,
 )
+from agents.profile.base import forbidden_output_rules
 
 
 def refine_requirement(*, source_id: str) -> str:
@@ -13,9 +14,9 @@ def refine_requirement(*, source_id: str) -> str:
 
 # Action Boundary
 - action=refine_requirement
-- 本 action 只負責 meeting resolution → update REQ，不掃全部 URL，不補全量 coverage，不更新 draft，不跑衝突辨識。
-- 不直接更新 artifact；runtime 會驗證 requirement_update 後才寫入 artifact.REQ / artifact.coverage。
-- 最外層只能輸出 requirement_update。
+- 本 action 將本議題的 meeting resolution 轉成 requirement_update JSON。
+- requirement_update 只描述受本議題影響的正式 REQ 修正、合併、移除與 coverage。
+- runtime 會驗證 requirement_update 後寫入 artifact.REQ / artifact.coverage。
 - current_REQ 是修正基底；只更新本議題影響到的 REQ。
 - current_URL 只作為本議題 trace 或來源查核，不是全量整理清單。
 - 若 context.mode=refine_granularity_cleanup 或 context.cleanup_issues 有值，本次只處理 cleanup_issues 點名的 REQ 粒度、類型或合併問題，不做其他需求精修。
@@ -43,9 +44,11 @@ def refine_requirement(*, source_id: str) -> str:
 
 {requirement_output_schema(source_id=source_id, include_remove_req=True)}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 draft_plan、scope_updates、conflicts 或 system_models。
-- 不輸出 artifact 全文。
-- 不輸出舊格式，例如最外層直接使用 REQ。
-- 不新增沒有 current_URL 或明確會議決議支持的 REQ。"""
+{forbidden_output_rules(
+        [
+            "不輸出 draft_plan、scope_updates、conflicts 或 system_models。",
+            "不輸出舊格式，例如最外層直接使用 REQ。",
+            "不補全量 coverage。",
+            "不新增沒有 current_URL 或明確會議決議支持的 REQ。",
+        ]
+    )}"""

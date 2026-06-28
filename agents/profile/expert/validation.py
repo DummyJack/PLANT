@@ -257,31 +257,26 @@ def source_records(values: Any) -> List[Dict[str, str]]:
     for value in values:
         title = ""
         url = ""
-        if isinstance(value, dict):
-            title = clean_source_text(value.get("title") or value.get("name") or value.get("label"))
-            raw_url = value.get("url") or value.get("link") or value.get("href") or value.get("source")
-            source_type = clean_source_text(value.get("type"))
-            if source_type == "file":
-                url = clean_source_text(raw_url)
-                if not url:
-                    continue
-                if not title:
-                    title = source_title_from_url(url)
-                filename = url.rstrip("/").split("/")[-1].lower()
-                key = f"file:{filename or url.lower()}"
-                if key in seen:
-                    continue
-                rows.append({"title": title, "url": url, "type": "file"})
-                seen.add(key)
+        if not isinstance(value, dict):
+            continue
+        title = clean_source_text(value.get("title"))
+        raw_url = value.get("url")
+        source_type = clean_source_text(value.get("type"))
+        if source_type == "file":
+            url = clean_source_text(raw_url)
+            if not url:
                 continue
-            urls = source_urls(raw_url)
-            url = urls[0] if urls else ""
-        else:
-            urls = source_urls(value)
-            url = urls[0] if urls else ""
-            title = clean_source_text(value)
-            if url and title == url:
-                title = ""
+            if not title:
+                title = source_title_from_url(url)
+            filename = url.rstrip("/").split("/")[-1].lower()
+            key = f"file:{filename or url.lower()}"
+            if key in seen:
+                continue
+            rows.append({"title": title, "url": url, "type": "file"})
+            seen.add(key)
+            continue
+        urls = source_urls(raw_url)
+        url = urls[0] if urls else ""
         if not url or not credible_source_url(url):
             continue
         if not title:
@@ -384,28 +379,24 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
     for value in compact_list(values):
-        if isinstance(value, dict):
-            text = clean_text(value.get("text") or value.get("finding") or value.get("note"))
-            if not text:
-                continue
-            source = clean_source_text(value.get("source"))
-            row = {
-                "text": text,
-                "related_requirement_ids": requirement_refs(value.get("related_requirement_ids")),
-            }
-            if source:
-                row["source"] = source
-            source_ids = requirement_refs(value.get("source_ids"))
-            if source_ids:
-                row["source_ids"] = source_ids
-            trace_reason = clean_text(value.get("trace_reason"))
-            if trace_reason:
-                row["trace_reason"] = trace_reason
-        else:
-            text = clean_text(value)
-            if not text:
-                continue
-            row = {"text": text, "related_requirement_ids": []}
+        if not isinstance(value, dict):
+            continue
+        text = clean_text(value.get("text"))
+        if not text:
+            continue
+        source = clean_source_text(value.get("source"))
+        row = {
+            "text": text,
+            "related_requirement_ids": requirement_refs(value.get("related_requirement_ids")),
+        }
+        if source:
+            row["source"] = source
+        source_ids = requirement_refs(value.get("source_ids"))
+        if source_ids:
+            row["source_ids"] = source_ids
+        trace_reason = clean_text(value.get("trace_reason"))
+        if trace_reason:
+            row["trace_reason"] = trace_reason
 
         key = json.dumps(row, ensure_ascii=False, sort_keys=True)
         if key not in seen:

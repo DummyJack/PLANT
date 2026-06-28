@@ -25,7 +25,7 @@ def issue_response(
         related_context=related_context,
         task_block=issue_task,
         rules_block=f"""# 回應契約
-{pair_review_response_contract(known_pair_ids=known_pair_ids, include_reason_basis=True)}""",
+{pair_review_response_contract(known_pair_ids=known_pair_ids, include_reason_evidence=True)}""",
         category_hint=conflict_rules,
         is_pair_review=True,
     )

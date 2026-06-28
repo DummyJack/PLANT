@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List
 
 from agents.profile.documentor.actions.dr import design_rationale
-from storage.artifact import ensure_trace_req
+from storage.trace_req.base import build_trace_req
 from utils.topology import (
     inject_trace_topologies,
     render_trace_topology_assets,
@@ -36,6 +36,42 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
         )
 
     @staticmethod
+    def trace_repair_reference_graph_payload(graph: Any) -> Dict[str, Any]:
+        if not isinstance(graph, dict):
+            return {}
+        nodes = []
+        for node in graph.get("all_nodes") or graph.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            nodes.append({
+                "id": node_id,
+                "type": str(node.get("type") or "").strip(),
+                "label": str(node.get("label") or "").strip(),
+                "column": str(node.get("column") or "").strip(),
+            })
+        edges = []
+        for edge in graph.get("edges") or []:
+            if not isinstance(edge, dict):
+                continue
+            from_id = str(edge.get("from") or "").strip()
+            to_id = str(edge.get("to") or "").strip()
+            if not from_id or not to_id:
+                continue
+            edges.append({
+                "from": from_id,
+                "to": to_id,
+                "relation": str(edge.get("relation") or edge.get("edge_label") or "").strip(),
+            })
+        return {
+            "source": "runtime_reference_only",
+            "nodes": nodes,
+            "edges": edges,
+        }
+
+    @staticmethod
     def trace_repair_prompt(requirements: List[Dict[str, Any]], previous_errors: List[str] | None = None) -> str:
         payload = [
             {
@@ -43,6 +79,9 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
                 "srs_id": req.get("srs_id"),
                 "trace_warnings": req.get("trace_warnings") or [],
                 "trace_repair_tasks": req.get("trace_repair_tasks") or [],
+                "trace_repair_reference_graph": DocumentorDr.trace_repair_reference_graph_payload(
+                    req.get("trace_repair_reference_graph")
+                ),
             }
             for req in requirements
             if isinstance(req, dict) and req.get("trace_repair_tasks")
@@ -51,8 +90,9 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             "# Trace Repair Proposal\n"
             "你是 trace repair agent。請只根據 trace_repair_tasks 提出可驗證的修補 proposal。\n"
             "不得新增不存在的 evidence id，不得把低信心推測當成正式 trace。\n"
+            "trace_repair_reference_graph 只可作為候選證據參考，不是正式 trace；是否採用哪條邊必須由你依 trace_repair_tasks 判斷。\n"
             "edge_label 只能依 repair_type 使用 runtime 允許值；不要自創長句、同義詞或說明文字。\n"
-            "connect_statement_to_url / identify_url_source 只能用「整理」；connect_resolve_to_formalize_meeting 只能用「正式化」；identify_conflict_resolution_meeting 只能用「解決」；connect_feedback_to_formalize_meeting、connect_model_to_formalize_meeting、identify_formalization_meeting 必須用空字串。\n"
+            "connect_statement_to_url / identify_url_source 只能用「分析」或「整理」；connect_resolve_to_formalize_meeting 只能用「正式化」；identify_conflict_resolution_meeting 只能用「解決」；connect_feedback_to_formalize_meeting、connect_model_to_formalize_meeting、identify_formalization_meeting 必須用空字串。\n"
             "只輸出 JSON，不要 Markdown。\n\n"
             "# Output JSON\n"
             "{\n"
@@ -62,7 +102,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             '      "repair_type": "connect_statement_to_url | connect_feedback_to_formalize_meeting | connect_model_to_formalize_meeting | connect_resolve_to_formalize_meeting | identify_url_source | identify_conflict_resolution_meeting | identify_formalization_meeting",\n'
             '      "candidate_from": "existing evidence id or empty",\n'
             '      "candidate_to": "existing evidence id or empty",\n'
-            '      "edge_label": "整理 | 解決 | 正式化 | empty string; must match repair_type",\n'
+            '      "edge_label": "分析 | 整理 | 解決 | 正式化 | empty string; must match repair_type",\n'
             '      "reason": "why this repair follows the task",\n'
             '      "confidence": "high | medium | low"\n'
             "    }\n"
@@ -121,7 +161,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             next_repaired: List[Dict[str, Any]] = []
             applied_any = False
             for req in repaired:
-                target = str(req.get("srs_id") or req.get("id") or "").strip()
+                target = str(req.get("srs_id") or "").strip()
                 req_proposals: List[Dict[str, Any]] = []
                 for alias in self.trace_target_aliases(req):
                     req_proposals.extend(proposals_by_target.get(alias, []))
@@ -145,7 +185,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
 
     def generate_dr(self, artifact: Dict[str, Any]) -> str:
         artifact_for_dr = dict(artifact or {})
-        ensure_trace_req(artifact_for_dr)
+        build_trace_req(artifact_for_dr)
         versioned_conflicts = self.versioned_conflict_report_rows()
         if versioned_conflicts:
             conflict_state = dict(artifact_for_dr.get("conflict") or {})

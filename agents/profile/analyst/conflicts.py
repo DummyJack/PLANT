@@ -1,14 +1,14 @@
 # Handles requirement conflict detection, review, and reporting.
 from agents.profile.analyst.repair import render_repair_prompt
-import json
 import re
 from typing import Any, Dict, List, Optional
 
 from storage.markdown import clean_llm_output
 from agents.skills.base import get_skill
+from utils.language import current_output_language
 
 from storage.requirements import requirement_discussion_pool
-from .rules import conflict_detection_base_task
+from .actions.conflict.detection_rules import conflict_detection_base_task
 from .validation import conflict_records, signoff_decisions
 from .actions.conflict.group_detection import group_detection
 from .actions.conflict.pair_detection import pair_detection
@@ -28,6 +28,30 @@ conflict_types = {
     "scope",
     "other",
 }
+
+
+resolution_strategy_translations = {
+    "prioritization": "優先順序決策",
+    "conditional logic": "條件邏輯",
+    "stakeholder negotiation": "利害關係人協商",
+    "technical solution": "技術方案",
+    "decomposition": "需求拆解",
+    "compromise": "折衷方案",
+    "scope adjustment": "範圍調整",
+    "sequencing": "分階段處理",
+    "parallel tracks": "並行處理",
+    "relaxation": "範圍調整",
+}
+
+
+def normalize_resolution_strategy(strategy: Any) -> str:
+    text = str(strategy or "").strip()
+    if not text:
+        return ""
+    if current_output_language() == "en":
+        return text
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    return resolution_strategy_translations.get(normalized, text)
 
 
 def clean_conflict_report_markdown(markdown: Any) -> str:
@@ -273,13 +297,10 @@ def normalize_conflict_type(
     value: Any,
     *,
     final_label: str,
-    fallback: Any = None,
 ) -> str:
     if final_label != "Conflict":
         return ""
     conflict_type = str(value or "").strip().lower()
-    if not conflict_type:
-        conflict_type = str(fallback or "").strip().lower()
     if not conflict_type:
         return "other"
     if conflict_type not in conflict_types:
@@ -460,6 +481,37 @@ class AnalystConflicts:
         rows_label: str,
         error_label: str,
     ) -> List[Dict[str, Any]]:
+        def parse_rows_or_raise(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+            parsed = conflict_records(
+                payload.get("conflicts", []),
+                pairwise_mode=True,
+                pair_count=pair_count,
+                pair_requirements={
+                    int(row.get("pair_index")): [
+                        str(req.get("id") or "").strip()
+                        for req in (row.get("requirements") or [])
+                        if isinstance(req, dict) and str(req.get("id") or "").strip()
+                    ]
+                    for row in pair_rows
+                    if isinstance(row, dict)
+                    and isinstance(row.get("pair_index"), int)
+                },
+            )
+            present = {
+                int(row.get("pair_index"))
+                for row in parsed
+                if isinstance(row, dict) and isinstance(row.get("pair_index"), int)
+            }
+            expected = {
+                int(row.get("pair_index"))
+                for row in pair_rows
+                if isinstance(row, dict) and isinstance(row.get("pair_index"), int)
+            }
+            missing = sorted(expected - present)
+            if missing:
+                raise ValueError(f"missing pair_index: {missing}")
+            return parsed
+
         rules = "\n".join(f"- {rule}" for rule in extra_rules)
         task = pair_detection(
             base_task=base_task,
@@ -472,6 +524,7 @@ class AnalystConflicts:
         try:
             raw = self.invoke_conflict_skill(task, context=context, mode="analysis")
             data = self.parse_issue_response_json(raw)
+            return parse_rows_or_raise(data)
         except Exception as first_error:
             repair_prompt = render_repair_prompt(
                 'pair_repair',
@@ -490,21 +543,12 @@ class AnalystConflicts:
                     f"{error_label}輸出格式不合格: {first_error}; "
                     f"修復失敗: {repair_error}; raw_preview={raw_preview}"
                 ) from repair_error
-        return conflict_records(
-            data.get("conflicts", []),
-            pairwise_mode=True,
-            pair_count=pair_count,
-            pair_requirements={
-                int(row.get("pair_index")): [
-                    str(req.get("id") or "").strip()
-                    for req in (row.get("requirements") or [])
-                    if isinstance(req, dict) and str(req.get("id") or "").strip()
-                ]
-                for row in pair_rows
-                if isinstance(row, dict)
-                and isinstance(row.get("pair_index"), int)
-            },
-        )
+        try:
+            return parse_rows_or_raise(data)
+        except Exception as repair_parse_error:
+            raise RuntimeError(
+                f"{error_label}修復後仍缺少必要 pair 結果: {repair_parse_error}"
+            ) from repair_parse_error
 
     # Defines conflict detection requirements function for this module workflow.
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
@@ -597,8 +641,8 @@ class AnalystConflicts:
             if isinstance(x, dict) and isinstance(x.get("pair_index"), int)
         }
         missing_pairs = [i for i in range(len(pair_rows)) if i not in present_pairs]
-        pair_conflict_count = len([x for x in pair_conflicts if x.get("label") == "Conflict"])
-        pair_neutral_count = len([x for x in pair_conflicts if x.get("label") == "Neutral"])
+        pair_conflict_count = len([x for x in pair_conflicts if x.get("final_label") == "Conflict"])
+        pair_neutral_count = len([x for x in pair_conflicts if x.get("final_label") == "Neutral"])
         self.logger.info(
             "兩兩衝突判斷 %s 對（Conflict: %s，Neutral: %s，Missing: %s）",
             len(pair_rows),
@@ -669,11 +713,11 @@ class AnalystConflicts:
             {
                 "id": row.get("id"),
                 "requirement_ids": row.get("requirement_ids"),
-                "type": row.get("initial_type"),
+                "final_type": row.get("final_type"),
                 "reason": row.get("initial_reason"),
             }
             for row in ((artifact.get("conflict") or {}).get("pairs") or [])
-            if isinstance(row, dict) and row.get("label") == "Conflict"
+            if isinstance(row, dict) and row.get("final_label") == "Conflict"
         ]
         context["pairwise_conflicts"] = pair_conflicts
         base_task = conflict_detection_base_task()
@@ -698,7 +742,7 @@ class AnalystConflicts:
                 ) from repair_error
         holistic_conflicts = [
             row for row in conflict_records(holistic_data.get("conflicts", []))
-            if row.get("label") == "Conflict"
+            if row.get("final_label") == "Conflict"
             and len(row.get("requirement_ids") or []) >= 2
         ]
         self.logger.info(
@@ -835,23 +879,11 @@ class AnalystConflicts:
                     (item for item in decision_list if isinstance(item, dict) and str(item.get("id") or "").strip() == pair_id),
                     {},
                 )
-                final_label = str(decision.get("new_label") or decision.get("final_label") or "").strip()
+                final_label = str(decision.get("final_label") or "").strip()
                 item = {"id": pair_id, "reason": description}
-                initial_type = ""
-                if isinstance(extracted_pair_reviews, list):
-                    initial_type = next(
-                        (
-                            str(review.get("initial_type") or review.get("type") or "").strip()
-                            for review in extracted_pair_reviews
-                            if isinstance(review, dict)
-                            and str(review.get("id") or "").strip() == pair_id
-                        ),
-                        "",
-                    )
                 final_type = normalize_conflict_type(
-                    row.get("final_type") or row.get("type"),
+                    row.get("final_type"),
                     final_label=final_label,
-                    fallback=initial_type,
                 )
                 if final_type:
                     item["final_type"] = final_type
@@ -880,7 +912,7 @@ class AnalystConflicts:
         conflict_rows = artifact.get("conflict_report", []) or []
         conflict_rows = [
             row for row in conflict_rows
-            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+            if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
         ]
         if not conflict_rows:
             return ""
@@ -899,43 +931,26 @@ class AnalystConflicts:
         ) or []
         conflict_rows = [
             row for row in report_rows
-            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+            if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
         ]
         if not conflict_rows:
             return artifact
         task = report_resolution()
         by_id: Dict[str, Dict[str, Any]] = {}
-        for conflict_row in conflict_rows:
-            conflict_id = str(conflict_row.get("id") or "").strip()
-            if not conflict_id:
-                continue
-            conflict_type = str(conflict_row.get("type") or "").strip().lower()
-            if conflict_type not in conflict_types:
-                raise ValueError(
-                    f"conflict resolution requires valid type: {conflict_id}"
-                )
-            try:
-                data = self.parse_issue_response_json(
-                    self.invoke_conflict_skill(
-                        task,
-                        context=conflict_row,
-                        mode=f"resolution:{conflict_type}",
-                    )
-                )
-            except Exception as e:
-                raise RuntimeError(f"conflict resolution 生成失敗: {conflict_id}: {e}") from e
+
+        def normalize_resolution_data(data: Any, conflict_id: str) -> Dict[str, Any]:
             if not isinstance(data, dict):
-                raise RuntimeError(f"conflict resolution 必須輸出 JSON object: {conflict_id}")
-            data = self.conflict_resolution_payload(data)
-            returned_id = str(data.get("id") or "").strip()
+                raise ValueError(f"conflict resolution 必須輸出 JSON object: {conflict_id}")
+            payload = self.conflict_resolution_payload(data)
+            returned_id = str(payload.get("id") or "").strip()
             if returned_id != conflict_id:
-                raise RuntimeError(f"conflict resolution id 不一致: {conflict_id}")
-            resolution_options = data.get("resolution_options")
-            recommended_resolution = str(data.get("recommended_resolution") or "").strip()
+                raise ValueError(f"conflict resolution id 不一致: {conflict_id}")
+            resolution_options = payload.get("resolution_options")
+            recommended_resolution = str(payload.get("recommended_resolution") or "").strip()
             if not isinstance(resolution_options, list) or not resolution_options:
-                raise RuntimeError(f"conflict resolution 缺少 resolution_options: {conflict_id}")
+                raise ValueError(f"conflict resolution 缺少 resolution_options: {conflict_id}")
             if not recommended_resolution:
-                raise RuntimeError(f"conflict resolution 缺少 recommended_resolution: {conflict_id}")
+                raise ValueError(f"conflict resolution 缺少 recommended_resolution: {conflict_id}")
             clean_options: List[Dict[str, Any]] = []
             for option_index, option in enumerate(resolution_options):
                 if not isinstance(option, dict):
@@ -945,11 +960,7 @@ class AnalystConflicts:
                     option_label = chr(ord("A") + max(0, int(raw_option) - 1))
                 else:
                     option_label = raw_option or chr(ord("A") + option_index)
-                strategy = str(option.get("strategy") or "").strip()
-                if re.fullmatch(r"[A-Za-z][A-Za-z\s/-]*", strategy):
-                    raise RuntimeError(
-                        f"conflict resolution strategy 使用舊英文格式: {conflict_id}: {strategy}"
-                    )
+                strategy = normalize_resolution_strategy(option.get("strategy"))
                 clean_option = {
                     "option": option_label,
                     "strategy": strategy,
@@ -969,11 +980,49 @@ class AnalystConflicts:
                 if clean_option["option"] and clean_option["strategy"] and clean_option["description"]:
                     clean_options.append(clean_option)
             if not clean_options:
-                raise RuntimeError(f"conflict resolution 沒有有效 options: {conflict_id}")
-            by_id[conflict_id] = {
+                raise ValueError(f"conflict resolution 沒有有效 options: {conflict_id}")
+            return {
                 "resolution_options": clean_options,
                 "recommended_resolution": recommended_resolution,
             }
+
+        for conflict_row in conflict_rows:
+            conflict_id = str(conflict_row.get("id") or "").strip()
+            if not conflict_id:
+                continue
+            conflict_type = str(conflict_row.get("final_type") or "").strip().lower()
+            if conflict_type not in conflict_types:
+                raise ValueError(
+                    f"conflict resolution requires valid type: {conflict_id}"
+                )
+            raw = ""
+            try:
+                raw = self.invoke_conflict_skill(
+                    task,
+                    context=conflict_row,
+                    mode=f"resolution:{conflict_type}",
+                )
+                data = self.parse_issue_response_json(raw)
+                by_id[conflict_id] = normalize_resolution_data(data, conflict_id)
+            except Exception as first_error:
+                repair_prompt = render_repair_prompt(
+                    "resolution_repair",
+                    conflict_id=conflict_id,
+                    raw=raw,
+                )
+                try:
+                    repaired = self.model.chat(
+                        self.build_direct_messages(repair_prompt),
+                        action=self.usage_action("conflict.repair_resolution_json"),
+                    ) or ""
+                    repaired_data = self.parse_issue_response_json(repaired)
+                    by_id[conflict_id] = normalize_resolution_data(repaired_data, conflict_id)
+                except Exception as repair_error:
+                    raw_preview = str(raw or "").strip().replace("\n", "\\n")[:500]
+                    raise RuntimeError(
+                        f"conflict resolution 生成失敗: {conflict_id}: {first_error}; "
+                        f"repair failed: {repair_error}; raw_preview={raw_preview}"
+                    ) from repair_error
 
         updated = dict(artifact)
         conflict_state = dict(conflict_payload)

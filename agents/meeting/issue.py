@@ -233,6 +233,11 @@ class IssueResponseSupport:
             "participants": issue.get("participants") or [],
             "target_stakeholders": issue.get("target_stakeholders") or [],
             "expected_actions": issue.get("expected_actions") or {},
+            "conflict_review_contract": (
+                issue.get("conflict_review_contract")
+                if isinstance(issue.get("conflict_review_contract"), dict)
+                else {}
+            ),
             "trace": issue.get("trace") if isinstance(issue.get("trace"), dict) else {},
         }
         return {
@@ -333,6 +338,11 @@ class IssueResponseSupport:
                 f"{role} issue response missing default action: {default_action}"
             )
         category = str(issue.get("category") or "").strip()
+        contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
+        is_pair_review = (
+            category == "resolve_conflict"
+            and str(contract.get("type") or "").strip() == "pair_reviews"
+        )
         if category != "resolve_conflict":
             actions.pop("discuss_conflict", None)
         expected_actions = issue.get("expected_actions") if isinstance(issue.get("expected_actions"), dict) else {}
@@ -396,6 +406,23 @@ class IssueResponseSupport:
                 actions.pop("refine_requirement", None)
             if category != "define_boundary":
                 actions.pop("refine_scope", None)
+            if is_pair_review and default_action in actions:
+                return {
+                    "action": "done",
+                    "params": {},
+                    "reasoning": "本議題是需求衝突再審查，Analyst 以 pair_reviews 專門回覆逐筆審查結果。",
+                    "action_plan": {
+                        "goal": "逐筆再審查需求衝突 pair",
+                        "steps": [
+                            {
+                                "id": default_action,
+                                "action": default_action,
+                                "params": {},
+                                "reasoning": "pair review 會議應使用 respond_issue 產生 pair_reviews，不使用一般 conflict resolution action。",
+                            }
+                        ],
+                    },
+                }
             if category == "resolve_conflict" and "discuss_conflict" in actions:
                 return {
                     "action": "done",
@@ -542,4 +569,35 @@ class IssueResponseSupport:
                     return parsed_decision
                 raise RuntimeError("action_plan has no valid steps")
             except Exception as retry_error:
+                fallback_action = (
+                    default_action
+                    if default_action in actions
+                    else ("respond_issue" if "respond_issue" in actions else "")
+                )
+                if fallback_action:
+                    self.logger.warning(
+                        "%s issue action plan retry failed; fallback to %s with needs_more_discussion: %s",
+                        role,
+                        fallback_action,
+                        retry_error,
+                    )
+                    return {
+                        "action": "done",
+                        "params": {},
+                        "reasoning": (
+                            "action plan 格式修復後仍無有效 steps；保守改為繼續討論，"
+                            "避免誤判為已完成。"
+                        ),
+                        "action_plan": {
+                            "goal": "補充一則 needs_more_discussion 發言",
+                            "steps": [
+                                {
+                                    "id": fallback_action,
+                                    "action": fallback_action,
+                                    "params": {},
+                                    "reasoning": "格式修復失敗，需由本輪發言說明仍需討論。",
+                                }
+                            ],
+                        },
+                    }
                 raise RuntimeError(f"{role} issue action plan retry failed: {retry_error}") from retry_error

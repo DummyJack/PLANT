@@ -2,7 +2,7 @@
 import json
 from typing import Any
 
-from utils.template import render_template
+from agents.profile.base import render_template
 
 
 requirement_update_output_schema = """# Output JSON
@@ -26,7 +26,7 @@ conflict_signoff_output_schema = """# Output JSON
 {
   "conflict_signoff": {
     "decisions": [
-      {"id": "衝突ID", "new_label": "Conflict 或 Neutral", "reason": "一句繁中裁定理由"}
+      {"id": "衝突ID", "final_label": "Conflict 或 Neutral", "reason": "一句繁中裁定理由"}
     ]
   }
 }"""
@@ -60,16 +60,17 @@ repair_prompts: dict[str, tuple[bool, str]] = {
     ),
     "pair_repair": (
         True,
-        """上一輪 {error_label} 輸出不是合法 JSON object。請只根據原始輸出與指定 pairs 修正格式，不要重新分析、不要新增 pair。
+        """上一輪 {error_label} 輸出不是合法或完整的 pairwise JSON object。請根據原始輸出與指定 pairs 修正為完整格式。
 
 # 必須輸出
 {{"conflicts":[...]}}
 
 # 欄位規則
 - conflicts 必須是 array。
-- 每筆必須包含 pair_index、label、reason。
-- label 只能是 "Conflict" 或 "Neutral"。
-- label 是 "Conflict" 時才可包含 type。
+- conflicts 必須逐筆涵蓋所有指定 pairs；即使 final_label 是 Neutral 也必須輸出。
+- 每筆必須包含 pair_index、final_label、reason。
+- final_label 只能是 "Conflict" 或 "Neutral"。
+- final_label 是 "Conflict" 時才可包含 final_type。
 - pair_index 只能來自指定 pairs。
 
 # 指定 pairs
@@ -80,14 +81,14 @@ repair_prompts: dict[str, tuple[bool, str]] = {
     ),
     "group_repair": (
         True,
-        """上一輪整體 Conflict 分析輸出不是合法 JSON object。請只修正格式，不要重新分析。
+        """上一輪整體 Conflict 分析輸出不是合法 JSON object。請修正為合法 JSON 格式。
 
 # 必須輸出
 {{"conflicts":[...]}}
 
 # Repair Rules
-- 若原始輸出沒有明確 group conflict，輸出 {{"conflicts":[]}}。
-- 每筆 Conflict 必須包含 label="Conflict" 與 requirement_ids。
+- 原始輸出沒有明確 group conflict 時，輸出 {{"conflicts":[]}}。
+- 每筆 Conflict 必須包含 final_label="Conflict" 與 requirement_ids。
 - requirement_ids 必須包含至少 2 個需求 id。
 - related_pairs 可選；只有原始輸出有明確 pair 來源時才保留。
 - 輸出只包含上述 JSON object。
@@ -104,7 +105,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 # Repair Rules
 - 最外層必須只有 conflict_signoff。
 - 必須對 proposal_list 中每個 id 輸出一筆 decision。
-- new_label 只能是 Conflict 或 Neutral。
+- final_label 只能是 Conflict 或 Neutral。
 - 輸出只包含上述 conflict_signoff JSON object。
 
 # proposal_list
@@ -129,6 +130,41 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # decision_list
 {json.dumps(decision_list, ensure_ascii=False, indent=2)}
+
+# 原始輸出
+{raw}""",
+    ),
+    "resolution_repair": (
+        True,
+        """上一輪 conflict resolution 輸出不是合法 conflict_resolution JSON object。請只修正格式，不要重新分析、不要新增解法。
+
+# 必須輸出
+{{
+  "conflict_resolution": {{
+    "id": "{conflict_id}",
+    "resolution_options": [
+      {{
+        "option": "A",
+        "strategy": "策略名稱",
+        "description": "處理方式",
+        "pros": ["優點"],
+        "cons": ["限制或代價"],
+        "recommendation": true
+      }}
+    ],
+    "recommended_resolution": "建議採用的 resolution 與理由"
+  }}
+}}
+
+# Repair Rules
+- 最外層必須只有 conflict_resolution。
+- id 必須等於 {conflict_id}。
+- resolution_options 必須是非空 array。
+- option 可用 A/B/C；若原始輸出使用 1/2/3，轉成 A/B/C。
+- strategy、description、recommended_resolution 不可空白。
+- pros 與 cons 必須是 array；沒有內容時可用 []。
+- recommendation 必須是 boolean。
+- 請只修正格式與欄位，不要新增原始輸出沒有支持的新方案。
 
 # 原始輸出
 {raw}""",

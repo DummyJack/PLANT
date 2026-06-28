@@ -5,6 +5,7 @@ from ..rules import (
     model_language_rules,
     model_output_schema,
 )
+from agents.profile.base import forbidden_output_rules
 
 
 def create_model(
@@ -22,10 +23,8 @@ def create_model(
 
 # Action Boundary
 - action=modeler.create_model
-- 本 action 只建立一個指定 type 的 system model JSON。
-- 不產生 model_plan。
-- 不更新 REQ、URL、scope、feedback 或 draft。
-- 不裁決需求衝突。
+- 本 action 根據需求輸入建立一個指定 type 的 system model JSON。
+- system model JSON 包含模型名稱、diagram type、PlantUML、related_requirement_ids 與說明欄位。
 - artifact 寫回由 runtime 負責。
 
 # Input
@@ -46,11 +45,15 @@ def create_model(
 
 {description_rule}
 
+# Output
+輸出 schema 如下：
+
 {model_output_schema(diagram_type=diagram_type, description_field=description_field)}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 model_plan。
-- 不輸出多個模型。
-- 不輸出 artifact 全文。
-- 不新增未被需求輸入支持的 actor、use case、流程、狀態、message 或資料物件。"""
+{forbidden_output_rules(
+        [
+            "不輸出 model_plan。",
+            "不輸出多個模型。",
+            "不新增未被需求輸入支持的 actor、use case、流程、狀態、message 或資料物件。",
+        ]
+    )}"""

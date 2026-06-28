@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List
 
+from utils.language import output_language_directive
+
 
 def clean_repeated_text(value: Any) -> str:
     text = str(value or "").strip()
@@ -106,10 +108,7 @@ def referenced_ids(
     for entry in conversation or []:
         if not isinstance(entry, dict):
             continue
-        resp = entry.get("response") if isinstance(entry.get("response"), dict) else {}
         action_results = entry.get("issue_action_results")
-        if not isinstance(action_results, list):
-            action_results = resp.get("issue_action_results")
         for result in action_results if isinstance(action_results, list) else []:
             if not isinstance(result, dict):
                 continue
@@ -121,7 +120,7 @@ def referenced_ids(
                     values.append(row.get("id"))
             for row in (result.get("system_models") or result.get("model_changes") or []):
                 if isinstance(row, dict):
-                    values.append(row.get("id") or row.get("target_model_id"))
+                    values.append(row.get("id"))
             for row in result.get("conflict_report") or []:
                 if isinstance(row, dict):
                     values.append(row.get("id"))
@@ -181,9 +180,9 @@ def sanitize_conflict_discussion_groups(
         for option_index, option in enumerate(conflict.get("options") or []):
             if not isinstance(option, dict):
                 continue
-            option_id = str(option.get("id") or option.get("option") or "").strip()
+            option_id = str(option.get("option_id") or "").strip()
             label = option_display_label(option_id, option_index)
-            detail = clean_repeated_text(option.get("summary") or option.get("description") or option.get("title") or "")
+            detail = clean_repeated_text(option.get("description") or option.get("title") or "")
             if label and detail:
                 option_details[label] = detail
 
@@ -316,7 +315,7 @@ def write_conflict_discussion_groups(
     if not discussion_rows:
         return []
 
-    prompt = """# 任務
+    prompt = f"""# 任務
 你要把需求衝突解決會議的原始發言，重組成以 CR 為單位的 MoM 討論紀錄；無法歸到單一 CR 的內容要改寫成「總結」。
 
 # 邊界
@@ -331,23 +330,23 @@ def write_conflict_discussion_groups(
 - 每個 discussion_groups item 的 conflict_id 必須使用 context.conflicts 中的 CR-N；若該 CR 有 title，title 必須保留。
 - 不要把 human decision 或最終裁決寫進討論紀錄；裁決留給 MoM 決議區。
 - speaker 必須沿用原始 speaker，例如 Analyst、Expert、Modeler、User。
-- 使用繁體中文。
+- {output_language_directive()}
 
 # 輸出 JSON
-{
+{{
   "discussion_groups": [
-    {
+    {{
       "conflict_id": "CR-1",
       "title": "衝突標題",
       "turns": [
-        {"speaker": "Analyst", "text": "Analyst 針對 CR-1 的觀點"}
+        {{"speaker": "Analyst", "text": "Analyst 針對 CR-1 的觀點"}}
       ]
-    }
+    }}
   ],
   "overall_turns": [
-    {"speaker": "總結", "text": "整體摘要與決議方向；若提到選項 A，需寫出選項 A 的內容"}
+    {{"speaker": "總結", "text": "整體摘要與決議方向；若提到選項 A，需寫出選項 A 的內容"}}
   ]
-}"""
+}}"""
     context = {
         "issue": {
             "title": issue.get("title", ""),

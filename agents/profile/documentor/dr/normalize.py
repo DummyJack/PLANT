@@ -44,9 +44,37 @@ class DocumentorDrNormalize:
     @staticmethod
     def _truncate_trace_text(raw: Any, max_len: int) -> str:
         text = str(raw or "").strip()
-        if max_len > 0 and len(text) > max_len:
-            text = text[: max_len - 1].rstrip(" ，、。") + "..."
-        return text
+        if max_len <= 0 or len(text) <= max_len:
+            return text
+        sentences = re.findall(r"[^。；;.!?！？]+[。；;.!?！？]?", text)
+        selected: List[str] = []
+        total = 0
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if selected and total + len(sentence) > max_len:
+                break
+            if not selected and len(sentence) > max_len:
+                boundary = max(
+                    sentence.rfind("，", 0, max_len),
+                    sentence.rfind("、", 0, max_len),
+                    sentence.rfind(",", 0, max_len),
+                    sentence.rfind(" ", 0, max_len),
+                )
+                if boundary >= max_len // 2:
+                    sentence = sentence[:boundary]
+                else:
+                    sentence = sentence[:max_len]
+                sentence = sentence.rstrip(" ，、,。；;.!?！？")
+                if sentence and re.search(r"[\u4e00-\u9fff]$", sentence):
+                    sentence += "。"
+                selected.append(sentence)
+                break
+            selected.append(sentence)
+            total += len(sentence)
+        summary = "".join(selected).strip()
+        return summary or text[:max_len].rstrip(" ，、,。；;.!?！？")
 
     @classmethod
     def _trace_node_summary(cls, node: Dict[str, Any], node_id: str = "", max_len: int = 220) -> str:
@@ -92,62 +120,8 @@ class DocumentorDrNormalize:
             raise ValueError("design rationale output contains old section headings")
         if re.search(r"(?im)^\*\*(?:Type|Source|Context|Decision|Rationale|Impact|SRS ID)\*\*\s*[:：]", text):
             raise ValueError("design rationale output contains old metadata fields")
-
-    @staticmethod
-    def strip_design_rationale_old_format(
-        markdown: str,
-        requirements: List[Dict[str, Any]],
-    ) -> str:
-        text = str(markdown or "")
-        srs_by_req = {
-            str(req.get("id") or "").strip(): str(req.get("srs_id") or "").strip()
-            for req in requirements
-            if str(req.get("id") or "").strip() and str(req.get("srs_id") or "").strip()
-        }
-
-        def replace_req_heading(match: re.Match[str]) -> str:
-            hashes = match.group("hashes")
-            req_id = match.group("req_id")
-            suffix = match.group("suffix") or ""
-            srs_id = srs_by_req.get(req_id)
-            if not srs_id:
-                return match.group(0)
-            return f"{hashes} {srs_id}{suffix}"
-
-        text = re.sub(
-            r"(?m)^(?P<hashes>#{1,6})\s*(?P<req_id>REQ-\d+)(?P<suffix>\s*[:：].*)$",
-            replace_req_heading,
-            text,
-        )
-        old_field = r"(?:Type|Source|Context|Decision|Rationale|Impact|SRS ID)"
-        text = re.sub(
-            rf"(?im)^\s*(?:[-*]\s*)?\*\*{old_field}\*\*\s*[:：].*$\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            rf"(?im)^\s*(?:[-*]\s*)?{old_field}\s*[:：].*$\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            rf"(?im)^\s*#{1,6}\s*{old_field}\s*$\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            rf"(?im)^\s*{old_field}\s*$\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?ims)^\s*\|[^\n]*(?:Type|Source|Context|Decision|Rationale|Impact|SRS ID)[^\n]*\|\s*\n"
-            r"\s*\|[-:|\s]+\|\s*\n"
-            r"(?:\s*\|.*\|\s*\n?)+",
-            "",
-            text,
-        )
-        return re.sub(r"\n{3,}", "\n\n", text).strip()
+        if re.search(r"(?im)^Description\s*[:：]", text):
+            raise ValueError("design rationale output contains old unbolded Description field")
 
     @staticmethod
     def extract_design_rationale_trace(block: str) -> str:
@@ -155,7 +129,6 @@ class DocumentorDrNormalize:
         text = re.sub(r"(?m)^#{1,6}\s*(?:FR|NFR|CON)-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^(?:FR|NFR|CON)-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^\*\*Description\*\*\s*[:：].*$", "", text)
-        text = re.sub(r"(?m)^Description\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^#{1,6}\s*Trace(?:\s+Explanation)?(?:\s*\{[^}]*\})?\s*$", "", text)
         return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -530,14 +503,14 @@ class DocumentorDrNormalize:
                 return "需求精練"
             if any(relation(edge) == "精練" for edge in outgoing):
                 return "模型對齊確認"
-            if any(edge_to(edge) == str(requirement.get("srs_id") or requirement.get("id") or "").strip() for edge in outgoing):
+            if any(edge_to(edge) == str(requirement.get("srs_id") or "").strip() for edge in outgoing):
                 return "最終確認"
             return "會議討論"
 
         def meeting_effect(meeting_id: str, outgoing: List[Dict[str, Any]]) -> str:
             if not outgoing:
                 return "作為後續需求判斷的會議紀錄"
-            target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+            target_id = str(requirement.get("srs_id") or "").strip()
             meeting_targets = [edge_to(edge) for edge in outgoing if node_type(edge_to(edge)) == "Meeting Discussion"]
             final_targets = [edge_to(edge) for edge in outgoing if edge_to(edge) == target_id]
             other_targets = [
@@ -649,7 +622,7 @@ class DocumentorDrNormalize:
             *all_conflict_ids,
         ]
         requirement_id = str(requirement.get("id") or "").strip()
-        requirement_srs_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        requirement_srs_id = str(requirement.get("srs_id") or "").strip()
         requirement_description = str(requirement.get("description") or "").strip()
         acceptance_criteria = [
             str(item or "").strip()
@@ -889,7 +862,7 @@ class DocumentorDrNormalize:
         if not nodes:
             return text
 
-        target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        target_id = str(requirement.get("srs_id") or "").strip()
         node_by_id = {
             str(node.get("id") or "").strip(): node
             for node in nodes
@@ -1154,15 +1127,15 @@ class DocumentorDrNormalize:
             rendered.append("")
         return re.sub(r"\n{3,}", "\n\n", "\n".join(rendered)).strip()
 
-    @staticmethod
-    def build_trace_explanation_from_topology(requirement: Dict[str, Any]) -> str:
+    @classmethod
+    def build_trace_explanation_from_topology(cls, requirement: Dict[str, Any]) -> str:
         graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
         nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict)]
         edges = [edge for edge in (graph.get("edges") or []) if isinstance(edge, dict)]
         if not nodes:
             return ""
 
-        target_id = str(requirement.get("srs_id") or requirement.get("id") or "").strip()
+        target_id = str(requirement.get("srs_id") or "").strip()
         description = str(requirement.get("description") or "").strip()
         node_by_id = {
             str(node.get("id") or "").strip(): node
@@ -1207,10 +1180,7 @@ class DocumentorDrNormalize:
             return text
 
         def truncate_text(raw: str, max_len: int) -> str:
-            text = str(raw or "").strip()
-            if max_len > 0 and len(text) > max_len:
-                text = text[: max_len - 1].rstrip(" ，、。") + "..."
-            return text
+            return cls._truncate_trace_text(raw, max_len)
 
         def node_summary(node_id: str, max_len: int = 220) -> str:
             node = node_by_id.get(node_id) or {}
@@ -1543,7 +1513,7 @@ class DocumentorDrNormalize:
         body: str,
         requirements: List[Dict[str, Any]],
     ) -> str:
-        raw_body = cls.strip_design_rationale_old_format(str(body or "").strip(), requirements)
+        raw_body = str(body or "").strip()
         if re.search(r"(?m)^#{1,6}\s*REQ-\d+\s*[:：]", raw_body):
             raise ValueError("design rationale output uses old REQ-* block headings")
         if not re.search(r"(?m)^#{1,6}\s*(?:FR|NFR|CON)-\d+\s*[:：]", raw_body):
@@ -1570,32 +1540,50 @@ class DocumentorDrNormalize:
             title = str(req.get("title") or "").strip()
             description = str(req.get("description") or "").strip()
             srs_id = str(req.get("srs_id") or "").strip()
+            requirement_kind = str(req.get("type") or "").strip().lower().replace("_", "-")
             if not req_id:
                 continue
             block = block_by_id.get(srs_id) or ""
             if not block:
                 raise ValueError(f"design rationale output missing block for {srs_id}")
-            trace = cls.extract_design_rationale_trace(block)
-            trace = cls.normalize_trace_explanation(trace, description)
-            has_prompt_trace = bool(trace)
-            if not trace:
-                trace = cls.build_trace_explanation_from_topology(req)
+            prompt_trace = cls.extract_design_rationale_trace(block)
+            prompt_trace = cls.normalize_trace_explanation(prompt_trace, description)
+            topology_trace = cls.build_trace_explanation_from_topology(req)
+            trace = topology_trace or prompt_trace
             trace = cls.normalize_trace_explanation_ids(trace, req)
             trace = cls.ensure_trace_explanation_conflicts(trace, req)
             trace = cls.ensure_trace_explanation_meetings(trace, req)
             trace = cls.clarify_trace_explanation_meetings(trace, req)
-            if not has_prompt_trace:
+            if not topology_trace:
                 trace = cls.ensure_trace_explanation_topology_coverage(trace, req)
             trace = cls.remove_trace_explanation_topology_artifacts(trace)
             trace = cls.merge_trace_explanation_sections(trace)
+            if not trace:
+                trace = cls.build_trace_explanation_from_topology(req)
+                trace = cls.normalize_trace_explanation_ids(trace, req)
+                trace = cls.merge_trace_explanation_sections(trace)
             trace = re.sub(r"(?m)^Stakeholder User Requirement\s*$\n?", "", trace).strip()
             header = [
                 f"### {srs_id}: {title}".rstrip(),
                 "",
                 f"**Description**: {description}  ",
                 "",
-                "#### Trace Explanation",
             ]
+            if requirement_kind == "functional":
+                criteria = [
+                    str(item or "").strip()
+                    for item in (req.get("acceptance_criteria") or [])
+                    if str(item or "").strip()
+                ]
+                if criteria:
+                    header.extend(["**Acceptance Criteria**:", ""])
+                    header.extend(f"{index}. {item}" for index, item in enumerate(criteria, 1))
+                    header.append("")
+            if requirement_kind == "non-functional":
+                metric = str(req.get("metric") or "").strip()
+                if metric:
+                    header.extend([f"**Metric**: {metric}", ""])
+            header.append("#### Trace Explanation")
             normalized.append("\n".join(header).strip() + ("\n\n" + trace if trace else ""))
         return cls.collapse_design_rationale_separators("\n\n---\n\n".join(normalized))
 

@@ -250,12 +250,10 @@ def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
     sources: List[Any] = []
     seen_sources = set()
     for source in feedback.get("sources") or []:
-        if isinstance(source, dict):
-            key = str(source.get("url") or source).strip()
-            clean_source = dict(source)
-        else:
-            key = str(source or "").strip()
-            clean_source = key
+        if not isinstance(source, dict):
+            continue
+        key = str(source.get("url") or "").strip()
+        clean_source = dict(source)
         if key and key not in seen_sources:
             sources.append(clean_source)
             seen_sources.add(key)
@@ -529,10 +527,8 @@ def markdown_source_link(source: Any, index: int) -> str:
     title = ""
     url = ""
     if isinstance(source, dict):
-        title = str(source.get("title") or source.get("name") or source.get("label") or "").strip()
-        url = str(source.get("url") or source.get("link") or source.get("href") or "").strip()
-    else:
-        url = str(source or "").strip()
+        title = str(source.get("title") or "").strip()
+        url = str(source.get("url") or "").strip()
     if not url:
         return ""
     if not title:
@@ -561,8 +557,7 @@ def stakeholder_label(row: Dict[str, Any]) -> str:
         name = str(stakeholder.get("name") or "").strip()
         if name:
             return name
-    name = str(row.get("stakeholder_name") or row.get("stakeholder") or "").strip()
-    return name
+    return ""
 
 
 # ========
@@ -800,6 +795,7 @@ def render_system_requirement_section(req_rows: List[Dict[str, Any]]) -> str:
         title = str(row.get("title") or "").strip()
         lines.append(f"### {req_id}: {title}" if title else f"### {req_id}")
         field_pairs = [
+            ("SRS ID", row.get("srs_id")),
             ("Type", row.get("type")),
             ("Priority", row.get("priority")),
             ("Description", row.get("description")),
@@ -942,12 +938,10 @@ def default_draft_plan(context: Dict[str, Any], *, mode: str) -> Dict[str, Any]:
         sections.append({
             "id": section_id,
             "include": include,
-            "reason": "artifact contains source rows" if include else "no source rows",
         })
     return {
         "section_order": order,
         "sections": sections,
-        "draft_notes": [],
     }
 
 
@@ -969,7 +963,6 @@ def normalize_draft_plan(raw: Any, context: Dict[str, Any], *, mode: str) -> Dic
             order.append(section_id)
 
     include_by_id: Dict[str, bool] = {}
-    reason_by_id: Dict[str, str] = {}
     for item in source.get("sections") or []:
         if not isinstance(item, dict):
             continue
@@ -977,9 +970,6 @@ def normalize_draft_plan(raw: Any, context: Dict[str, Any], *, mode: str) -> Dic
         if section_id not in allowed:
             continue
         include_by_id[section_id] = bool(item.get("include"))
-        reason = str(item.get("reason") or "").strip()
-        if reason:
-            reason_by_id[section_id] = reason
 
     req_present = context_has_draft_section(context, "system_requirement")
     sections = []
@@ -996,18 +986,11 @@ def normalize_draft_plan(raw: Any, context: Dict[str, Any], *, mode: str) -> Dic
         sections.append({
             "id": section_id,
             "include": include,
-            "reason": reason_by_id.get(section_id, "artifact contains source rows" if include else "no source rows"),
         })
 
-    notes = [
-        str(value).strip()
-        for value in (source.get("draft_notes") or [])
-        if str(value).strip()
-    ]
     return {
         "section_order": order,
         "sections": sections,
-        "draft_notes": notes,
     }
 
 

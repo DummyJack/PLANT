@@ -5,6 +5,7 @@ from ..rules import (
     model_output_schema,
     model_update_rules,
 )
+from agents.profile.base import forbidden_output_rules
 
 
 def update_model(
@@ -23,10 +24,8 @@ def update_model(
 
 # Action Boundary
 - action=modeler.update_model
-- 本 action 只修訂一個既有 system model JSON。
-- 不產生 model_plan。
-- 不更新 REQ、URL、scope、feedback 或 draft。
-- 不裁決需求衝突。
+- 本 action 根據更新後的需求輸入修訂一個既有 system model JSON。
+- system model JSON 包含模型名稱、diagram type、PlantUML、related_requirement_ids 與說明欄位。
 - artifact 寫回由 runtime 負責。
 
 # Current PlantUML
@@ -50,12 +49,16 @@ def update_model(
 
 {description_rule}
 
+# Output
+輸出 schema 如下：
+
 {model_output_schema(diagram_type=diagram_type, description_field=description_field)}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 model_plan。
-- 不輸出多個模型。
-- 不輸出 artifact 全文。
-- 不因格式整理改變原圖需求語意。
-- 不新增未被需求輸入支持的 actor、use case、流程、狀態、message 或資料物件。"""
+{forbidden_output_rules(
+        [
+            "不輸出 model_plan。",
+            "不輸出多個模型。",
+            "不因格式整理改變原圖需求語意。",
+            "不新增未被需求輸入支持的 actor、use case、流程、狀態、message 或資料物件。",
+        ]
+    )}"""

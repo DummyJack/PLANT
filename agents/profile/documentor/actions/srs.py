@@ -5,10 +5,10 @@ def generate_srs(*, draft_md: str) -> str:
     return f"""# 任務
 將下方「最新需求草稿」轉成正式軟體需求規格書。
 
-# Documentor Action Boundary
+# Action Boundary
 - action=documentor.generate_srs
-- 本 action 只輸出 Markdown SRS，不輸出 JSON。
-- 不更新 artifact、不產生 draft_plan、不新增或修改 REQ。
+- 本 action 將最新需求草稿轉成正式 Markdown SRS。
+- SRS 只做呈現轉換、章節整理與需求格式化。
 - runtime 只會做 Markdown 清理、連結修正、圖片路徑修正與 Design Rationale link insertion。
 
 # Source Boundary
@@ -52,8 +52,9 @@ def generate_srs(*, draft_md: str) -> str:
 # Requirement Conversion Rules
 - 每一筆草稿 REQ-* 必須對應到一筆 SRS 需求或一條系統限制；不得任意合併或拆分。
 - 若草稿有 N 筆 REQ-*，SRS 必須完整轉出 N 筆：functional 放入功能性需求，non-functional 放入非功能性需求，constraint 放入系統限制；不得因內容相似而省略、合併或只摘要。
-- functional 依出現順序顯示為 FR-1、FR-2、FR-3...
-- non-functional 依出現順序顯示為 NFR-1、NFR-2、NFR-3...
+- 若草稿 System Requirement 條目含 `SRS ID: FR-*`、`SRS ID: NFR-*` 或 `SRS ID: CON-*`，必須使用該既有 SRS ID；不得自行重新編號。
+- 若草稿缺少 SRS ID，functional 才依出現順序顯示為 FR-1、FR-2、FR-3...
+- 若草稿缺少 SRS ID，non-functional 才依出現順序顯示為 NFR-1、NFR-2、NFR-3...
 - constraint 只放在「## 系統限制」，不放入「## 需求」。
 - 系統限制每一條使用 constraint REQ 的完整 Description；不得改寫成短摘要，不顯示 REQ-*、Priority、Source、Rationale、Risks 或 Assumptions。
 - 功能性需求與非功能性需求不要使用表格；每筆需求使用四級標題。

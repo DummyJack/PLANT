@@ -213,10 +213,8 @@ class MediatorDecision:
             agent = c.get("agent", "?")
             response = c.get("response") or {}
             text = response.get("text", "")
-            proposal = response.get("proposal")
-            if proposal in (None, "", [], {}):
-                stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
-                proposal = stance.get("proposal")
+            stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+            proposal = stance.get("proposal")
             reply_label = "（回覆提問）" if c.get("is_reply") else ""
             discussion_text += f"\n【{agent}{reply_label}】\n{text}\n"
             if isinstance(proposal, dict) and proposal:

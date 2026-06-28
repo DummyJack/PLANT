@@ -41,7 +41,7 @@ class AnalystIssues:
             if not isinstance(c, dict):
                 continue
             cid = str(c.get("id") or "").strip()
-            if cid and str(c.get("label") or "").strip() == "Conflict":
+            if cid and str(c.get("final_label") or "").strip() == "Conflict":
                 signals.append(
                     {
                         "kind": "unresolved_conflict",

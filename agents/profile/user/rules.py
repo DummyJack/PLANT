@@ -70,7 +70,7 @@ def category_hint(
         if str(issue.get("title") or "").strip() == "需求正式化":
             return (
                 "\n# 本議題特別說明（需求正式化）\n"
-                "先閱讀前面 Analyst 產生或更新的 REQ-* 整理結果，再以 speaking_as 身份檢查："
+                "先閱讀前面產生或更新的 REQ-* 整理結果，再以 speaking_as 身份檢查："
                 "是否漏掉重要使用情境、業務規則或例外條件；"
                 "驗收條件是否可接受；優先級是否符合實際需要；"
                 "限制、風險或假設是否正確。"

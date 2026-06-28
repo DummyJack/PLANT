@@ -1,7 +1,7 @@
 # Defines modeler open-question answer prompt.
 from typing import Any, Dict, List, Optional
 
-from agents.profile.base import response_context, response_stance_rules, response_target_stakeholder_rule
+from agents.profile.base import response_context, response_target_stakeholder_rule
 
 from .issue import render_response_prompt
 
@@ -23,11 +23,6 @@ def issue_response(
 - 不更新專案資料，不輸出 stance。
 - open_questions 預設輸出空陣列；只有問題本身無法回答且答案會影響本議題結論時才提出。"""
     rules_block += response_target_stakeholder_rule(sections["target_stakeholders"], issue_id)
-    rules_block += response_stance_rules(
-        issue_id=issue_id,
-        category=str(issue.get("category") or "").strip(),
-        proposal_subject="模型或需求邊界處理方案",
-    )
     return render_response_prompt(
         issue=issue,
         previous_responses=previous_responses,

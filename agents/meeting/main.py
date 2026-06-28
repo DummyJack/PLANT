@@ -100,7 +100,7 @@ def adopted_resolution_option_text(
     for option in options:
         if not isinstance(option, dict):
             continue
-        option_id = str(option.get("option") or "").strip()
+        option_id = str(option.get("option_id") or "").strip()
         strategy = str(option.get("strategy") or "").strip()
         labels = [
             option_id,
@@ -129,7 +129,7 @@ def adopted_resolution_option_text(
     if matched is None:
         return ""
 
-    option_id = str(matched.get("option") or "").strip()
+    option_id = str(matched.get("option_id") or "").strip()
     description = str(matched.get("description") or "").strip()
     if not description:
         return ""
@@ -281,7 +281,7 @@ def execute_human_decision_queue(
         options = {
             "best_options": [],
             "compromise": {
-                "id": 1,
+                "option_id": "A",
                 "title": issue.get("title", ""),
                 "description": issue.get("description", ""),
                 "rationale": row.get("reason", ""),
@@ -294,9 +294,9 @@ def execute_human_decision_queue(
                     continue
                 best_options.append(
                     {
-                        "id": idx_opt,
-                        "title": opt.get("summary") or opt.get("title") or "",
-                        "description": opt.get("summary") or opt.get("description") or "",
+                        "option_id": chr(64 + idx_opt) if 1 <= idx_opt <= 26 else str(idx_opt),
+                        "title": opt.get("title") or "",
+                        "description": opt.get("description") or "",
                         "source": "judgment_options",
                     }
                 )
@@ -743,9 +743,9 @@ class MeetingRunner:
             if not isinstance(rows, list):
                 return set()
             return {
-                str(row.get("id") or row.get("issue_id") or "").strip()
+                str(row.get("id") or "").strip()
                 for row in rows
-                if isinstance(row, dict) and str(row.get("id") or row.get("issue_id") or "").strip()
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
             }
 
         conflict_state = self.artifact.get("conflict") if isinstance(self.artifact.get("conflict"), dict) else {}
@@ -1056,9 +1056,6 @@ class MeetingRunner:
     def response_state(response: Dict[str, Any]) -> str:
         if not isinstance(response, dict):
             return ""
-        state = str(response.get("state") or "").strip()
-        if state:
-            return state
         stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
         return str(stance.get("state") or "").strip()
 
@@ -1067,9 +1064,6 @@ class MeetingRunner:
     def response_proposal(response: Dict[str, Any]) -> Any:
         if not isinstance(response, dict):
             return {}
-        proposal = response.get("proposal")
-        if proposal not in (None, "", [], {}):
-            return proposal
         stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
         return stance.get("proposal")
 
@@ -1103,7 +1097,7 @@ class MeetingRunner:
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                row_id = str(row.get("id") or row.get("issue_id") or "").strip()
+                row_id = str(row.get("id") or "").strip()
                 if not row_id:
                     continue
                 if source_set and row_id not in source_set:
@@ -1920,19 +1914,20 @@ class MeetingRunner:
             if decision_action not in {"create_model", "update_model"}:
                 continue
             result = row.get("result") if isinstance(row.get("result"), dict) else {}
-            model_id = str(result.get("target_model_id") or result.get("id") or "").strip()
+            payload = result.get("result") if isinstance(result.get("result"), dict) else result
+            model_id = str(payload.get("target_model_id") or "").strip()
             if not model_id:
                 continue
-            operation = str(result.get("operation") or "").strip()
+            operation = str(payload.get("operation") or "").strip()
             if operation not in {"create", "update"}:
                 operation = "create" if decision_action == "create_model" else "update"
             model_changes.append(
                 {
                     "operation": operation,
                     "id": model_id,
-                    "type": str(result.get("type") or "").strip(),
-                    "name": str(result.get("name") or "").strip(),
-                    "related_requirement_ids": result.get("related_requirement_ids") or [],
+                    "type": str(payload.get("type") or "").strip(),
+                    "name": str(payload.get("name") or "").strip(),
+                    "related_requirement_ids": payload.get("related_requirement_ids") or [],
                 }
             )
         action_result = {
@@ -2087,14 +2082,14 @@ class MeetingRunner:
             row for row in report
             if isinstance(row, dict)
             and (not source_ids or str(row.get("id") or "").strip() in source_ids)
-            and str(row.get("label") or "").strip() == "Conflict"
+            and str(row.get("final_label") or "").strip() == "Conflict"
         ]
         if selected:
             return selected
         return [
             row for row in report
             if isinstance(row, dict)
-            and str(row.get("label") or "").strip() == "Conflict"
+            and str(row.get("final_label") or "").strip() == "Conflict"
             and str(row.get("status") or "").strip().lower() not in {"agreed", "human_decision"}
         ]
 
@@ -2540,14 +2535,13 @@ class MeetingRunner:
         for idx_opt, opt in enumerate(status_resolution.get("options") or [], start=1):
             if not isinstance(opt, dict):
                 continue
-            option_id = str(opt.get("option_id") or opt.get("id") or "").strip().upper()
+            option_id = str(opt.get("option_id") or "").strip().upper()
             if not option_id or option_id.isdigit():
                 option_id = chr(64 + idx_opt) if 1 <= idx_opt <= 26 else str(idx_opt)
             best_options.append(
                 {
-                    "id": option_id,
                     "option_id": option_id,
-                    "title": opt.get("summary") or opt.get("title") or "",
+                    "title": opt.get("title") or "",
                     "description": opt.get("description") or "",
                     "rationale": opt.get("rationale") or "",
                     "source": "judgment",
@@ -2802,8 +2796,7 @@ class MeetingRunner:
             "actions",
             "text",
             "open_questions",
-            "state",
-            "proposal",
+            "stance",
             "pair_reviews",
             "speaking_as",
             "reply_to_question",
@@ -2842,12 +2835,9 @@ class MeetingRunner:
                 record["actions"] = actions
             response_text = text_by_agent.get(name) or str(clean_response.get("text") or "").strip()
             response_record = {"text": response_text}
-            state = self.response_state(response)
-            if state:
-                response_record["state"] = state
-            proposal = self.response_proposal(response)
-            if proposal not in (None, "", [], {}):
-                response_record["proposal"] = proposal
+            stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+            if stance:
+                response_record["stance"] = self.json_safe_record_value(stance)
             for key in (
                 "open_questions",
                 "pair_reviews",
@@ -3118,7 +3108,7 @@ class MeetingRunner:
                 if not isinstance(option, dict):
                     continue
                 option_item = {}
-                for key in ("option", "description", "recommendation"):
+                for key in ("option_id", "title", "description", "recommendation"):
                     value = option.get(key)
                     if value not in (None, "", [], {}):
                         option_item[key] = value

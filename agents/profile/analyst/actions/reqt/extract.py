@@ -2,6 +2,7 @@
 import json
 
 from ...rules import requirement_candidates_output_schema
+from agents.profile.base import forbidden_output_rules
 
 
 def extract_requirement(
@@ -29,9 +30,9 @@ def extract_requirement(
 
 # Action Boundary
 - action=extract_requirement
-- 本 action 只抽取 requirement_candidates。
-- 不產生 REQ、不更新 scope、不更新 draft、不做衝突辨識。
-- 不直接更新 artifact；runtime 會驗證後才合併到 artifact.URL。
+- 本 action 將本輪利害關係人回答轉成 requirement_candidates JSON。
+- requirement_candidates 是尚未正式化的 User Requirement 候選項。
+- runtime 會驗證後合併到 artifact.URL。
 
 # Context Rules
 - Stakeholder 回答是唯一可新增候選需求的直接來源。
@@ -49,14 +50,15 @@ Stakeholder 回答:
 {rules}
 - 若回答只是重述、同義改寫或細化目前已有候選需求，且沒有形成新的 stakeholder goal、need、constraint 或責任邊界，回傳空陣列。
 - 若回答補充的條件、例外、處理方式、SOP 或量化門檻會改變 stakeholder goal、need、constraint、責任邊界或可接受/不可接受情況，必須抽成粗粒度 User Requirement。
-- 若只是單純補欄位、單一步驟、單一 UI 細節或驗收方式，且不形成新的需求目標或限制，才不要新增 User Requirement。
-- requirement_candidates 每筆只包含 text；不要輸出 priority、acceptance criteria、REQ 欄位、scope 或 reason。
+- 單純補欄位、單一步驟、單一 UI 細節或驗收方式，且不形成新的需求目標或限制時，回傳空陣列。
+- requirement_candidates 每筆只包含 text。
 
 {requirement_candidates_output_schema()}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 REQ、scope_updates、draft_plan 或 conflicts。
-- 不輸出 artifact 全文。
-- 不輸出舊格式，例如最外層直接使用陣列。
-- 不從產品情境或既有候選需求摘要單獨創造新需求。"""
+{forbidden_output_rules(
+        [
+            "不輸出 REQ、scope_updates、draft_plan 或 conflicts。",
+            "不輸出舊格式，例如最外層直接使用陣列。",
+            "不從產品情境或既有候選需求摘要單獨創造新需求。",
+        ]
+    )}"""

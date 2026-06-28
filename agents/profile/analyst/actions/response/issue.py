@@ -10,6 +10,7 @@ from agents.profile.base import (
     response_stance_rules,
     response_target_stakeholder_rule,
 )
+from agents.profile.base import forbidden_output_rules
 
 from ...rules import issue_rules, issue_task
 
@@ -41,10 +42,9 @@ def render_response_prompt(
 {prompt_section("# Previous Responses", sections["prev_text"])}{prompt_section("# Related Context", sections["context_text"])}{prompt_section("# Recent Questions", sections["recent_ask_history_text"])}{prompt_section("# Elicitation Context", elicitation_hint)}# 任務
 {task_block}
 
-# Response Boundary
-- 本 response 只代表 Analyst 在會議中的發言與提問。
-- 不直接更新 artifact；若需要更新需求、scope 或 draft，應透過對應 action 執行。
-- 不輸出 requirement_update、scope_updates、draft_plan 或其他 artifact patch。
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與需求處理建議。
 - Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
 
 # Rules
@@ -55,12 +55,14 @@ def render_response_prompt(
 {output_fields}
 }}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 artifact patch。
-- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
-- 不新增未被來源支持的新需求。
-- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。"""
+{forbidden_output_rules(
+        [
+            "不輸出 artifact patch。",
+            "不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。",
+            "不新增未被來源支持的新需求。",
+            "不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。",
+        ]
+    )}"""
 
 
 def issue_response(
@@ -89,8 +91,8 @@ def issue_response(
         rules_block += "\n- 本議題聚焦釐清需求語意、條件、成功結果與驗收方式；不要擴張未被來源支持的新需求。"
         rules_block += "\n- 若本議題涉及 NFR，只釐清 category、metric、validation、適用範圍或 FR/NFR priority；明確 NFR 應建議直接寫回 REQ。"
     elif category == "define_boundary":
-        rules_block += "\n- 本議題聚焦系統、外部服務、人工流程與角色責任邊界；請明確指出應寫入 scope、requirement 或 open question 的結果。"
-        rules_block += "\n- 若本議題涉及 NFR，請說明品質要求套用在哪些流程、角色、資料或情境；constraint 不討論 priority，只討論適用邊界與遵守方式。"
+        rules_block += "\n- 本議題聚焦系統、外部服務、人工流程與責任邊界；請明確指出應寫入 scope、requirement 或 open question 的結果。"
+        rules_block += "\n- 若本議題涉及 NFR，請說明品質要求套用在哪些流程、參與者、資料或情境；constraint 不討論 priority，只討論適用邊界與遵守方式。"
     elif category == "tradeoff":
         rules_block += "\n- 本議題聚焦方案比較、取捨與推薦；stance.proposal 必須提出可落地的需求處理方案。"
         rules_block += "\n- 若本議題涉及 NFR，請比較品質目標、成本、使用體驗、技術可行性與 FR/NFR priority；constraint 不作 priority 取捨。"

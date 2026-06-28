@@ -190,6 +190,7 @@ class MediatorAgent(
         *,
         role: str,
         proposer_role: str,
+        proposer_roles: Optional[List[str]] = None,
         role_focus: str,
         scenario: Dict[str, Any],
         requirements: List[Dict[str, Any]],
@@ -199,6 +200,7 @@ class MediatorAgent(
         return build_closure_vote(
             role=role,
             proposer_role=proposer_role,
+            proposer_roles=proposer_roles,
             role_focus=role_focus,
             scenario=scenario,
             requirements=requirements,

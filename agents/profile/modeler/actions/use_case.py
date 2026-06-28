@@ -1,5 +1,6 @@
 # Defines action prompts and output contracts.
 from ..rules import use_case_text_rules
+from agents.profile.base import forbidden_output_rules
 
 
 def use_case_text(
@@ -46,10 +47,11 @@ Use Case Diagram:
   ]
 }}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 PlantUML。
-- 不輸出 system model array。
-- 不新增圖中不存在的 actor 或 use case。
-- 不編造 related_requirement_ids。
-- 不輸出 artifact 全文。"""
+{forbidden_output_rules(
+        [
+            "不輸出 PlantUML。",
+            "不輸出 system model array。",
+            "不新增圖中不存在的 actor 或 use case。",
+            "不編造 related_requirement_ids。",
+        ]
+    )}"""

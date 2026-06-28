@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from agents.skills.prompts import skill_reference_task, skill_selection_prompt
+
 SKILLS_ROOT = Path(__file__).resolve().parent
 skill_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -247,26 +249,12 @@ class SkillSupport:
             "category": issue.get("category"),
             "trace": issue.get("trace") or {},
         }
-        policy_text = self.skill_usage_policy().strip()
-        policy_section = (
-            f"\n# 此 agent 的 skill 使用條件\n{policy_text}\n"
-            if policy_text
-            else ""
-        )
-        decision_prompt = (
-            "你正在準備會議討論發言。請判斷是否需要先使用你自己的 skill 產生簡短參考。\n\n"
-            f"# Agent\n{self.name}\n\n"
-            f"# 可用 skills\n{json.dumps(self.skill_names, ensure_ascii=False)}\n\n"
-            f"# Skill 說明\n{json.dumps(skill_summaries, ensure_ascii=False, indent=2)}\n"
-            f"{policy_section}\n"
-            f"# 議題\n{json.dumps(issue_summary, ensure_ascii=False, indent=2)}\n\n"
-            "# 判斷規則\n"
-            "- 只有 skill 能明顯改善本輪發言品質時才使用。\n"
-            "- 一次最多選一個 skill。\n"
-            "- 若目前只需要一般角色判斷，不要使用 skill。\n"
-            "- 不要為了形式而使用 skill。\n\n"
-            "# 輸出 JSON\n"
-            '{"use_skill": true/false, "skill_name": "可用 skill 名稱或空字串", "reason": "一句理由"}'
+        decision_prompt = skill_selection_prompt(
+            agent_name=self.name,
+            skill_names=self.skill_names,
+            skill_summaries=skill_summaries,
+            issue_summary=issue_summary,
+            policy_text=self.skill_usage_policy(),
         )
         try:
             decision = self.chat_json(self.build_direct_messages(decision_prompt))
@@ -285,11 +273,7 @@ class SkillSupport:
             "artifact_context": artifact_context or {},
             "usage_reason": decision.get("reason", ""),
         }
-        task = (
-            "請針對會議議題，依此 skill 產生本 agent 發言前可用的簡短參考。\n"
-            "只輸出 1 到 4 點重點；包含必要依據、風險、限制或建議方向。\n"
-            "不要產生最終決議，不要改寫 artifact，不要輸出 JSON。"
-        )
+        task = skill_reference_task()
         try:
             raw = self.invoke_skill(skill_name, task, context=context)
             text = (raw or "").strip()

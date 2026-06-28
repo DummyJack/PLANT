@@ -156,7 +156,7 @@ def conflict_records(
                 continue
             if pair_index < 0 or pair_index >= pair_count:
                 continue
-            label = clean_text(row.get("label"))
+            label = clean_text(row.get("final_label"))
             if label not in {"Conflict", "Neutral"}:
                 continue
             rel = row.get("requirement_ids")
@@ -168,16 +168,17 @@ def conflict_records(
                 continue
             entry: Dict[str, Any] = {
                 "id": f"PAIR-{pair_index + 1}",
-                "label": label,
+                "initial_label": label,
+                "final_label": label,
                 "pair_index": pair_index,
                 "requirement_ids": rel_ids,
             }
             reason = clean_text(row.get("reason"))
             if reason:
                 entry["initial_reason"] = reason
-            conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
+            conflict_type = clean_text(row.get("final_type")).lower()
             if label == "Conflict":
-                entry["initial_type"] = conflict_type if conflict_type in conflict_types else "other"
+                entry["final_type"] = conflict_type if conflict_type in conflict_types else "other"
             by_pair[pair_index] = entry
         return [by_pair[i] for i in range(pair_count) if i in by_pair]
 
@@ -185,13 +186,16 @@ def conflict_records(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        label = clean_text(row.get("label"))
+        label = clean_text(row.get("final_label"))
         if label not in {"Conflict", "Neutral"}:
             continue
         rel_ids = clean_list(row.get("requirement_ids"))
         if label == "Conflict" and len(rel_ids) < 2:
             continue
-        entry: Dict[str, Any] = {"label": label}
+        entry: Dict[str, Any] = {
+            "initial_label": label,
+            "final_label": label,
+        }
         cid = clean_text(row.get("id"))
         if cid:
             entry["id"] = cid
@@ -203,9 +207,9 @@ def conflict_records(
         related_pairs = clean_list(row.get("related_pairs"))
         if related_pairs:
             entry["related_pairs"] = related_pairs
-        conflict_type = clean_text(row.get("type") or row.get("conflict_type")).lower()
+        conflict_type = clean_text(row.get("final_type")).lower()
         if label == "Conflict":
-            entry["initial_type"] = conflict_type if conflict_type in conflict_types else "other"
+            entry["final_type"] = conflict_type if conflict_type in conflict_types else "other"
         conflicts.append(entry)
     return conflicts
 
@@ -222,13 +226,13 @@ def signoff_decisions(rows: Any) -> List[Dict[str, Any]]:
         if not isinstance(row, dict):
             continue
         cid = clean_text(row.get("id"))
-        label = clean_text(row.get("new_label"))
+        label = clean_text(row.get("final_label"))
         if not cid or label not in {"Conflict", "Neutral"}:
             continue
         decisions.append(
             {
                 "id": cid,
-                "new_label": label,
+                "final_label": label,
                 "reason": clean_text(row.get("reason")),
             }
         )

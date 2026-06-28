@@ -114,9 +114,11 @@ def research_prompt(*, state_text: str, obs_text: str) -> str:
     return f"""# 任務
 根據目前專案狀態與上一步結果，決定本輪 domain research 要做什麼。
 
-- research_domain 是流程 action，不是單一產物 action。
-- 本流程只規劃一次，之後依 action_plan 逐一執行 read_reference_docs、research_issue、update_feedback。
-- read_reference_docs 與 research_issue 只取得證據；只有 update_feedback 會寫回正式 feedback artifact。
+# Action Boundary
+- action=expert.plan_research_domain
+- 本 action 規劃 domain research 的 action_plan。
+- action_plan 可安排 read_reference_docs、research_issue、update_feedback 或 done。
+- read_reference_docs 與 research_issue 取得證據；update_feedback 寫回正式 feedback artifact。
 - 即使 has_existing_research=true，也必須先做一次全面 coverage/gap audit：檢查既有 feedback 是否已覆蓋目前 scenario、scope、URL、REQ、stakeholders 與 open_questions 的高風險外部限制、法規/合規、安全、隱私、第三方、責任歸屬與驗收風險。
 - 若全面檢查後沒有缺口、沒有高風險外部議題、也沒有 user_guidance / referenced_files 需要查證，才選 done，reasoning 必須明確說明已檢查既有 feedback 足夠。
 - 若有 referenced_files 並執行 read_reference_docs，最後必須 update_feedback，把文件證據整理成 feedback。
@@ -168,7 +170,7 @@ def research_prompt(*, state_text: str, obs_text: str) -> str:
   "research_plan": {{
     "action": "done",
     "params": {{}},
-    "reasoning": "一句繁體中文說明",
+    "reasoning": "使用目前輸出語系的一句說明",
     "action_plan": {{
       "goal": "本輪 domain research 目標",
       "steps": [

@@ -70,10 +70,7 @@ class MediatorRecords:
         for c in conversation or []:
             if not isinstance(c, dict) or c.get("is_reply"):
                 continue
-            resp = c.get("response") if isinstance(c.get("response"), dict) else {}
             action_results = c.get("issue_action_results")
-            if not isinstance(action_results, list):
-                action_results = resp.get("issue_action_results")
             for result in action_results if isinstance(action_results, list) else []:
                 if not isinstance(result, dict):
                     continue
@@ -160,7 +157,7 @@ class MediatorRecords:
             parts.append("更新使用者需求 " + "、".join(sorted(url_ids, key=cls.artifact_id_sort_key)))
         model_ids = cls.clean_id_list(
             [
-                row.get("id") or row.get("target_model_id")
+                row.get("id")
                 for row in (result.get("system_models") or result.get("model_changes") or [])
                 if isinstance(row, dict)
             ],
@@ -210,8 +207,6 @@ class MediatorRecords:
             if not c.get("is_reply"):
                 open_questions += len([q for q in (resp.get("open_questions") or []) if q])
             action_results = c.get("issue_action_results")
-            if not isinstance(action_results, list):
-                action_results = resp.get("issue_action_results")
             for result in action_results if isinstance(action_results, list) else []:
                 if not isinstance(result, dict):
                     continue
@@ -224,7 +219,7 @@ class MediatorRecords:
                 model_ids.extend(
                     cls.clean_id_list(
                         [
-                            row.get("id") or row.get("target_model_id")
+                            row.get("id")
                             for row in (result.get("system_models") or result.get("model_changes") or [])
                             if isinstance(row, dict)
                         ],
@@ -313,8 +308,6 @@ class MediatorRecords:
             if agent and text:
                 discussion_snippets.append({"agent": agent, "text": text})
             action_results = entry.get("issue_action_results")
-            if not isinstance(action_results, list):
-                action_results = resp.get("issue_action_results")
             for result in action_results if isinstance(action_results, list) else []:
                 line = self.action_result_summary(result)
                 if line:
@@ -330,7 +323,7 @@ class MediatorRecords:
                 )
             for option in human_choice.get("chosen_options") or []:
                 if isinstance(option, dict):
-                    option_id = str(option.get("id") or option.get("option_id") or "").strip()
+                    option_id = str(option.get("option_id") or "").strip()
                     title = self.clean_repeated_text(option.get("title", ""))
                     description = self.clean_repeated_text(option.get("description", ""))
                     note = "，".join(part for part in (title, description) if part)
@@ -537,15 +530,15 @@ class MediatorRecords:
                 for option in row.get("resolution_options") or []:
                     if not isinstance(option, dict):
                         continue
-                    option_id = str(option.get("option") or option.get("id") or "").strip()
-                    description = str(option.get("description") or option.get("summary") or "").strip()
+                    option_id = str(option.get("option_id") or "").strip()
+                    description = str(option.get("description") or "").strip()
                     if not any((option_id, description)):
                         continue
                     row_options.append(
                         {
-                            "id": option_id,
-                            "title": "",
-                            "summary": description,
+                            "option_id": option_id,
+                            "title": str(option.get("title") or "").strip(),
+                            "description": description,
                             "recommended": bool(option.get("recommendation")),
                         }
                     )
@@ -580,18 +573,18 @@ class MediatorRecords:
                     for nested_index, row in enumerate(option.get("options") or []):
                         if not isinstance(row, dict):
                             continue
-                        option_id = str(row.get("id") or row.get("option") or "").strip()
+                        option_id = str(row.get("option_id") or "").strip()
                         label = self.option_display_label(option_id, nested_index)
                         detail = self.clean_repeated_text(
-                            row.get("summary") or row.get("description") or row.get("title") or ""
+                            row.get("description") or row.get("title") or ""
                         )
                         if detail:
                             details[label] = detail
                     continue
-                option_id = str(option.get("id") or option.get("option_id") or option.get("option") or "").strip()
+                option_id = str(option.get("option_id") or "").strip()
                 label = self.option_display_label(option_id, option_index)
                 detail = self.clean_repeated_text(
-                    option.get("summary") or option.get("description") or option.get("title") or ""
+                    option.get("description") or option.get("title") or ""
                 )
                 if detail:
                     details[label] = detail
@@ -681,15 +674,15 @@ class MediatorRecords:
                     md += f"#### {heading}\n\n"
                     option_rows = [row for row in (option.get("options") or []) if isinstance(row, dict)]
                     for option_index, row in enumerate(option_rows, start=1):
-                        option_id = str(row.get("id") or "").strip()
+                        option_id = str(row.get("option_id") or "").strip()
                         label = self.option_display_label(option_id, option_index - 1)
-                        summary_text = str(row.get("summary") or "").strip()
+                        summary_text = str(row.get("description") or row.get("title") or "").strip()
                         line = f"{label}："
                         line += summary_text or label
                         md += line.rstrip() + "\n"
                     md += "\n"
                     continue
-                option_id = str(option.get("id") or option.get("option_id") or option.get("option") or "").strip()
+                option_id = str(option.get("option_id") or "").strip()
                 if not option_id:
                     option_id = chr(ord("A") + index)
                 title = str(option.get("title") or option.get("strategy") or "").strip()
@@ -697,7 +690,7 @@ class MediatorRecords:
                 if title:
                     heading += f"：{title}"
                 md += f"#### {heading}\n\n"
-                summary_text = str(option.get("summary") or option.get("description") or "").strip()
+                summary_text = str(option.get("description") or option.get("title") or "").strip()
                 if summary_text:
                     md += f"{summary_text}\n\n"
                 conflict_ids = [
@@ -730,7 +723,7 @@ class MediatorRecords:
                 md += "\n"
         if recommendation:
             md += "### 建議\n\n"
-            option_id = str(recommendation.get("option_id") or recommendation.get("option") or "").strip()
+            option_id = str(recommendation.get("option_id") or "").strip()
             if option_id:
                 md += f"- **建議選項**: {self.option_display_label(option_id)}\n"
             conflict_ids = [
@@ -771,7 +764,7 @@ class MediatorRecords:
                         if not isinstance(row, dict):
                             continue
                         title = str(row.get("id") or "").strip()
-                        label = str(row.get("proposed_label") or row.get("label") or "").strip()
+                        label = str(row.get("proposed_label") or "").strip()
                         reason = str(row.get("reason") or "").strip()
                         item = " / ".join(part for part in (title, label) if part)
                         if reason:
@@ -905,18 +898,18 @@ class MediatorRecords:
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                label = row.get("label") or row.get("type") or ""
+                label = row.get("final_label") or row.get("final_type") or ""
                 recommendation = row.get("recommended_resolution") or ""
                 option_texts = []
                 for option_index, option in enumerate(row.get("resolution_options") or [], start=1):
                     if not isinstance(option, dict):
                         continue
-                    option_id = str(option.get("option") or option.get("id") or "").strip()
+                    option_id = str(option.get("option_id") or "").strip()
                     if option_id.isdigit():
                         option_id = chr(ord("A") + max(0, int(option_id) - 1))
                     if not option_id:
                         option_id = chr(ord("A") + option_index - 1)
-                    text = str(option.get("description") or option.get("summary") or "").strip()
+                    text = str(option.get("description") or option.get("title") or "").strip()
                     if text:
                         option_texts.append(f"選項 {option_id}：{text}")
                 out.append(
@@ -1057,7 +1050,7 @@ class MediatorRecords:
                 operation = str(row.get("operation") or "").strip()
                 if operation not in {"create", "update"}:
                     continue
-                model_id = str(row.get("id") or row.get("target_model_id") or "").strip()
+                model_id = str(row.get("id") or "").strip()
                 if not model_id:
                     continue
                 key = (operation, model_id)
@@ -1070,7 +1063,7 @@ class MediatorRecords:
                 display_rows,
                 key=lambda row: (
                     0 if str(row.get("operation") or "").strip() == "create" else 1,
-                    self.artifact_id_sort_key(row.get("id") or row.get("target_model_id")),
+                    self.artifact_id_sort_key(row.get("id")),
                 ),
             )
             if not display_rows:
@@ -1098,7 +1091,7 @@ class MediatorRecords:
                         table_cell(value)
                         for value in (
                             change_label,
-                            row.get("id") or row.get("target_model_id"),
+                            row.get("id"),
                             row.get("type"),
                             row.get("name"),
                             related_requirement_ids,

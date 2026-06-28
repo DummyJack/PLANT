@@ -1,6 +1,6 @@
 # Defines available agent tools and tool execution behavior.
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 
 DEFAULT_AGENT_SKILL_MAPPING: Dict[str, List[str]] = {
@@ -64,6 +64,19 @@ class AgentSkillToolPolicy:
         if skill_name not in self.skill_tool_allowlist:
             return False
         return tool_name in set(self.skill_tool_allowlist.get(skill_name, []))
+
+    # Defines check tool access function for this module workflow.
+    def check_tool_access(
+        self,
+        agent_name: str,
+        tool_name: str,
+        active_skill: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        if not self.can_agent_use_tool(agent_name, tool_name):
+            return False, f"Policy 禁止 Agent '{agent_name}' 使用工具 '{tool_name}'"
+        if active_skill and not self.can_skill_use_tool(active_skill, tool_name):
+            return False, f"Policy 禁止在 skill '{active_skill}' 使用工具 '{tool_name}'"
+        return True, ""
 
     # Defines validate agent assignment function for this module workflow.
     def validate_agent_assignment(

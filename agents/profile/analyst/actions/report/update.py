@@ -6,7 +6,8 @@ def update_report() -> str:
 
 # Action Boundary
 - action=update_conflict_report
-- 本 action 只輸出修訂後的需求衝突 Markdown 報告。
+- 本 action 依最新 conflict report 資料修訂既有需求衝突 Markdown 報告。
+- Markdown 報告只呈現最新輸入中的衝突、涉及需求、描述、解決選項與建議解法。
 - 不重新分類 Conflict/Neutral。
 - 不新增、移除或改寫最新衝突資料以外的項目。
 - 不更新 URL、REQ、scope、draft 或 artifact。
@@ -21,7 +22,7 @@ def update_report() -> str:
 - 衝突描述、解決選項與建議解法視為已定案內容，不可改寫。
 - 報告 H1 標題固定使用「需求衝突報告」。
 - 每筆衝突使用 id 作為顯示編號；不要輸出 Source 欄位。
-- 不要輸出 Label 欄位，也不要輸出 Type 欄位；label/type 只供內部判斷，不放進 Markdown 報告。
+- 不要輸出 final_label 欄位，也不要輸出 final_type 欄位；final_label/final_type 只供內部判斷，不放進 Markdown 報告。
 - 解決選項每個選項必須用 Markdown bullet 獨立成行，例如「- 選項 A：處理方式」；不要把多個選項寫在同一段。
 - 解決選項只顯示「選項 A：處理方式」；不要顯示 strategy、策略名稱或方法分類。
 - 建議解法不要顯示 strategy、策略名稱或方法分類；若輸入含策略名稱，改以「建議採用選項 A」或具體處理方式描述。
@@ -53,7 +54,6 @@ def update_report() -> str:
 
 # Forbidden Output
 - 不輸出 JSON。
-- 不輸出 artifact 全文。
 - 不輸出最新衝突資料不存在的衝突、需求或解決方案。
 - 不保留已和最新資料不一致的上一版內容。
 - 不重新分析或改寫已定案內容。"""

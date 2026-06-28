@@ -25,9 +25,8 @@ def issue_response(
         related_context=related_context,
         task_block=conflict_task,
         rules_block=f"""# Conflict Response Boundary
-- 本 response 只提供 Analyst 對指定 pair/multiple conflict 的會議審查意見。
-- 不直接更新 artifact；後續 signoff action 才會裁定 label。
-- 不產生 resolution options、不改寫 URL 或 REQ。
+- 本 response 提供指定 pair/multiple conflict 的會議審查意見。
+- 後續 signoff action 會裁定 final_label。
 
 {conflict_rules}
 {pair_review_response_contract(known_pair_ids=known_pair_ids)}""",

@@ -8,9 +8,16 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from agents.profile.loop import AgentLoop
 from agents.meeting.issue import IssueResponseSupport
 from agents.skills.base import SkillSupport
+from agents.tools.base import (
+    build_tool_context_message,
+    build_tool_schemas,
+    is_tool_allowed,
+    tool_access_error,
+)
 from server.services.run_checkpoint import record_run_checkpoint
 from storage.artifact import save_artifact as save_split_artifact
-from utils.language import current_output_language
+from utils.language import output_language_directive
+from agents.profile.base import json_format_instruction
 
 if TYPE_CHECKING:
     from agents.tools.base import BaseTool
@@ -38,16 +45,11 @@ class AgentRegistry:
         return list(self.agents.keys())
 
 
-json_format = "請只輸出本任務指定的合法 JSON 格式，不要其他文字。"
-
-
 # ========
 # Defines response language directive function for this module workflow.
 # ========
 def response_language_directive() -> str:
-    if current_output_language() == "en":
-        return "Please respond in English."
-    return "請使用繁體中文回覆。"
+    return output_language_directive()
 
 
 def available_data_block(context: Dict[str, Any]) -> str:
@@ -144,15 +146,7 @@ class ToolCallingSupport:
         tool_name: str,
         active_skill: Optional[str] = None,
     ) -> bool:
-        if self.policy and not self.policy.can_agent_use_tool(self.name, tool_name):
-            return False
-        if (
-            active_skill
-            and self.policy
-            and not self.policy.can_skill_use_tool(active_skill, tool_name)
-        ):
-            return False
-        return True
+        return is_tool_allowed(self.policy, self.name, tool_name, active_skill)
 
     # Defines tool context message function for this module workflow.
     def tool_context_message(
@@ -162,30 +156,14 @@ class ToolCallingSupport:
         if not self.tools:
             return None
 
-        tool_lines = []
-        for tool_name, tool in self.tools.items():
-            if not self.is_tool_allowed_for_context(tool_name, active_skill):
-                continue
-            description = str(getattr(tool, "description", "") or "").strip()
-            tool_lines.append(f"- {tool_name}: {description}")
-
-        if not tool_lines:
-            return None
-
         policy_text = str(self.tool_usage_policy(active_skill) or "").strip()
-        skill_line = f"\n# 啟用的 Skill\n{active_skill}\n" if active_skill else ""
-        policy_section = (
-            f"\n# 工具使用規則\n{policy_text}\n" if policy_text else ""
+        return build_tool_context_message(
+            self.tools,
+            policy=self.policy,
+            agent_name=self.name,
+            active_skill=active_skill,
+            policy_text=policy_text,
         )
-        content = (
-            "# 工具使用資料\n"
-            "以下內容說明本輪可用工具與使用邊界，不是任務輸出格式。\n"
-            f"{skill_line}"
-            "\n# 可用工具\n"
-            + "\n".join(tool_lines)
-            + policy_section
-        )
-        return {"role": "user", "content": content}
 
     # Defines messages with tool context function for this module workflow.
     def messages_with_tool_context(
@@ -209,16 +187,9 @@ class ToolCallingSupport:
     ) -> str:
         if tool_name not in self.tools:
             return f"錯誤: 未知工具 '{tool_name}'，可用: {list(self.tools.keys())}"
-        if self.policy and not self.policy.can_agent_use_tool(self.name, tool_name):
-            return f"錯誤: Policy 禁止 Agent '{self.name}' 使用工具 '{tool_name}'"
-        if (
-            active_skill
-            and self.policy
-            and not self.policy.can_skill_use_tool(active_skill, tool_name)
-        ):
-            return (
-                f"錯誤: Policy 禁止在 skill '{active_skill}' 使用工具 '{tool_name}'"
-            )
+        access_error = tool_access_error(self.policy, self.name, tool_name, active_skill)
+        if access_error:
+            return f"錯誤: {access_error}"
 
         tool = self.tools[tool_name]
         if not tool.validate_args(**tool_args):
@@ -231,36 +202,12 @@ class ToolCallingSupport:
 
     # Defines get tool schemas function for this module workflow.
     def get_tool_schemas(self, active_skill: Optional[str] = None) -> List[Dict]:
-        schemas = []
-        for tool_name, tool in self.tools.items():
-            if not self.is_tool_allowed_for_context(tool_name, active_skill):
-                continue
-            properties = {}
-            required = []
-            for pname, pinfo in tool.parameters.items():
-                ptype = pinfo.get("type", "string")
-                prop = {
-                    "type": pinfo.get("type", "string"),
-                    "description": pinfo.get("description", ""),
-                }
-                if ptype == "array":
-                    prop["items"] = pinfo.get("items", {"type": "string"})
-                properties[pname] = prop
-                if pinfo.get("required", False):
-                    required.append(pname)
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    },
-                },
-            })
-        return schemas
+        return build_tool_schemas(
+            self.tools,
+            policy=self.policy,
+            agent_name=self.name,
+            active_skill=active_skill,
+        )
 
     # Defines supports tool calling function for this module workflow.
     def supports_tool_calling(self) -> bool:
@@ -572,7 +519,7 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
     # Defines ensure json messages function for this module workflow.
     def ensure_json_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         updated = list(messages or [])
-        updated.append({"role": "user", "content": json_format})
+        updated.append({"role": "user", "content": json_format_instruction()})
         return updated
 
     # Defines chat json function for this module workflow.

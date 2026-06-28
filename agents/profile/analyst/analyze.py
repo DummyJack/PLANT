@@ -339,7 +339,14 @@ class AnalystRequirements:
     def requirement_candidates_payload(data: Any, *, action_name: str) -> List[Dict[str, Any]]:
         if not isinstance(data, dict) or not isinstance(data.get("requirement_candidates"), list):
             raise ValueError(f"{action_name} output must contain requirement_candidates list")
-        return data["requirement_candidates"]
+        rows: List[Dict[str, Any]] = []
+        for item in data["requirement_candidates"]:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if text:
+                rows.append({"text": text})
+        return rows
 
     # Defines invoke requirements analyst text function for this module workflow.
     def invoke_requirements_analyst_text(

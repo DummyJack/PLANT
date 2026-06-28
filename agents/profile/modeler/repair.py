@@ -2,7 +2,7 @@
 import json
 from typing import Any
 
-from utils.template import render_template
+from agents.profile.base import render_template
 
 
 repair_prompts: dict[str, tuple[bool, str]] = {

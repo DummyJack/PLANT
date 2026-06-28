@@ -680,7 +680,7 @@ class AnalystRequirementFlow:
                 value = row.get(key)
                 if value not in (None, "", [], {}):
                     item[key] = value
-            text_rows = row.get("text") or row.get("use_case_text")
+            text_rows = row.get("text")
             if isinstance(text_rows, list) and text_rows:
                 item["use_case_count"] = len(text_rows)
             if item:
@@ -874,7 +874,7 @@ class AnalystRequirementFlow:
                 if isinstance(stakeholder, dict):
                     name = str(stakeholder.get("name") or "").strip()
                 else:
-                    name = str(stakeholder or row.get("stakeholder_name") or "").strip()
+                    name = str(stakeholder or "").strip()
                 if len(name) >= 2:
                     names.append(name)
         return list(dict.fromkeys(names))
@@ -1581,7 +1581,7 @@ class AnalystRequirementFlow:
         payload = conflict_payload(current if isinstance(current, dict) else artifact, include_report=True)
         report_rows = [
             row for row in (payload.get("report", []) or [])
-            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+            if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
         ]
         report_rows = unresolved_conflict_report_rows(report_rows, resolved_signatures)
         report_rows = reindex_conflict_report_rows(report_rows)
@@ -1601,7 +1601,7 @@ class AnalystRequirementFlow:
         )
         report_rows = [
             row for row in ((report_artifact.get("conflict", {}) or {}).get("report", []) or [])
-            if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+            if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
         ]
         report_rows = unresolved_conflict_report_rows(report_rows, resolved_signatures)
         report_rows = reindex_conflict_report_rows(report_rows)

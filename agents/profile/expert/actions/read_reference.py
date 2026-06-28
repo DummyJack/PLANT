@@ -3,6 +3,8 @@
 
 from typing import List, Optional
 
+from agents.profile.base import forbidden_output_rules
+
 
 def read_docs(*, query: str, attached_references: Optional[List[str]] = None) -> str:
     priority_block = ""
@@ -19,10 +21,8 @@ def read_docs(*, query: str, attached_references: Optional[List[str]] = None) ->
 
 # Action Boundary
 - action=expert.read_reference_docs
-- 本 action 只整理專案內部文件證據。
-- 不查外部 web。
-- 不產生 feedback。
-- 不新增或修改 REQ、URL、scope、conflict 或 draft。
+- 本 action 查找專案內部參考文件，輸出 document_evidence、coverage 與 gaps JSON。
+- document_evidence 是文件證據摘要；coverage 說明文件對相關需求或問題的支持、缺口或衝突。
 - artifact 寫回由 runtime 負責。
 
 # Input
@@ -37,7 +37,7 @@ def read_docs(*, query: str, attached_references: Optional[List[str]] = None) ->
 - 必須對相關 URL / REQ / open_questions 做 coverage 判斷，status 只能是 document_supported、not_found_in_documents、document_conflict、needs_external_validation。
 - 若文件只有局部支持、內容過時、互相矛盾，或涉及支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償或申訴，coverage 應標成 needs_external_validation 或 document_conflict，不要誤標為完全支持。
 - related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 id；不能編造 URL-*。
-- 不要根據文件證據產生正式需求；只做 evidence summary。
+- 文件證據只做 evidence summary。
 
 # Output JSON
 {{
@@ -59,8 +59,10 @@ def read_docs(*, query: str, attached_references: Optional[List[str]] = None) ->
   "gaps": ["文件未涵蓋或仍需外部驗證的具體缺口"]
 }}
 
-# Forbidden Output
-- 不輸出 Markdown 說明。
-- 不輸出 feedback 或 research_evidence。
-- 不輸出正式需求、決策或 artifact 全文。
-- 不編造文件來源、URL-* 或 requirement id。"""
+{forbidden_output_rules(
+        [
+            "不輸出 feedback 或 research_evidence。",
+            "不輸出正式需求或決策。",
+            "不編造文件來源、URL-* 或 requirement id。",
+        ]
+    )}"""

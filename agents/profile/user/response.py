@@ -321,6 +321,14 @@ class UserResponse:
             if target_set:
                 speaking_as = [name for name in speaking_as if name in target_set]
             if not speaking_as:
+                speaking_as = [
+                    str(sh.get("name") or "").strip()
+                    for sh in speaking_as_list
+                    if str(sh.get("name") or "").strip()
+                ]
+            if not speaking_as and target_stakeholders:
+                speaking_as = list(target_stakeholders)
+            if not speaking_as:
                 raise ValueError(
                     "user issue_response must include speaking_as with at least one valid assigned stakeholder name"
                 )

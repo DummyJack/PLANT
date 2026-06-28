@@ -1,5 +1,6 @@
 # Handles module workflow behavior.
 import ast
+import difflib
 from pathlib import Path
 import re
 import shutil
@@ -34,6 +35,49 @@ class DocumentorSrs:
     def fix_model_links(srs_md: str) -> str:
         return re.sub(r"\(\.\./models/", "(./models/", srs_md or "")
 
+    # Defines fix model image filenames function for this module workflow.
+    def fix_model_image_filenames(self, srs_md: str) -> str:
+        models_dir = Path(self.store.output_dir) / "models"
+        if not models_dir.exists():
+            return srs_md
+
+        existing = [
+            path.name
+            for path in models_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in self.image_suffixes
+        ]
+        if not existing:
+            return srs_md
+
+        def best_match(label: str, filename: str) -> str:
+            candidates = []
+            for existing_name in existing:
+                stem = Path(existing_name).stem
+                score = max(
+                    difflib.SequenceMatcher(None, label, stem).ratio(),
+                    difflib.SequenceMatcher(None, Path(filename).stem, stem).ratio(),
+                )
+                candidates.append((score, existing_name))
+            score, name = max(candidates, key=lambda item: item[0])
+            return name if score >= 0.45 else filename
+
+        def repl(match: re.Match) -> str:
+            alt = match.group("alt").strip()
+            path = match.group("path").strip()
+            filename = Path(path).name
+            if (models_dir / filename).exists():
+                return match.group(0)
+            fixed = best_match(alt, filename)
+            if fixed == filename:
+                return match.group(0)
+            return f"![{alt}](./models/{fixed})"
+
+        return re.sub(
+            r"!\[(?P<alt>[^\]]*)\]\((?P<path>\./models/[^)]+)\)",
+            repl,
+            srs_md or "",
+        )
+
     @staticmethod
     def validate_srs_new_format(srs_md: str) -> None:
         text = str(srs_md or "")
@@ -41,8 +85,12 @@ class DocumentorSrs:
             raise ValueError("SRS output uses old REQ-* requirement headings")
         if re.search(r"(?m)^Description\s*[:：]", text):
             raise ValueError("SRS output uses old unbolded Description field")
-        if re.search(r"\(\./design_rationale\.md(?:#[^)]+)?\)", text):
-            raise ValueError("SRS output links to old design_rationale.md artifact")
+        if re.search(r"\(\./design_rationale\.(?:md|html)(?:#[^)]+)?\)", text):
+            raise ValueError("SRS output links to old design_rationale artifact")
+        if re.search(r"(?mi)^#{2,6}\s+(?:Traceability|需求追蹤表)\s*$", text):
+            raise ValueError("SRS output contains old traceability section")
+        if re.search(r"(?mi)REQ ID\s*\|\s*Requirement\s*\|\s*Source", text):
+            raise ValueError("SRS output contains old traceability table")
 
     @staticmethod
     def retry_srs_prompt(prompt: str, error: Exception) -> str:
@@ -56,39 +104,9 @@ class DocumentorSrs:
             "- 必須使用新格式：SRS 需求標題只能是 `#### FR-*`、`#### NFR-*`；constraint 只放在系統限制。\n"
             "- 不得使用 `REQ-*` 作為 SRS 需求標題。\n"
             "- 需求欄位必須使用粗體欄位名，例如 `**Description**:`。\n"
-            "- 不得連到 `design_rationale.md`；追蹤連結使用 `design_rationale.html`。\n"
+            "- 不得連到 `design_rationale.md`；追蹤連結使用 `dr`。\n"
             "- 不要解釋錯誤，不要包程式碼區塊。\n"
         )
-
-    @staticmethod
-    def remove_traceability_sections(srs_md: str) -> str:
-        text = str(srs_md or "")
-        text = re.sub(
-            r"(?ms)^###\s+B\.\s+需求追蹤表\s*\n.*?(?=^###\s+|\Z)",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?ms)^###\s+需求追蹤表\s*\n.*?(?=^###\s+|\Z)",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?ms)^##\s+Traceability\s*\n.*?(?=^##\s+|\Z)",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?ms)^##\s+附錄\s*\n\s*$",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?ms)^##\s+附錄\s*\n+(?=^##\s+|\Z)",
-            "",
-            text,
-        )
-        return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
 
     @staticmethod
     def restore_appendix_heading(srs_md: str) -> str:
@@ -112,17 +130,12 @@ class DocumentorSrs:
             text,
         )
         text = re.sub(
-            r'(?m)^####\s+<a\s+[^>]*href="\./design_rationale\.html#((?:fr|nfr)-\d+)"[^>]*>(.*?)</a>\s*$',
-            lambda match: "#### " + match.group(2).strip(),
-            text,
-        )
-        text = re.sub(
-            r"(?m)^(####\s+(?:FR|NFR)-\d+\s*[:：].*?)\s+\[\[DR\]\]\(\./design_rationale\.html#(?:fr|nfr)-\d+\)\s*$",
+            r"(?m)^(####\s+(?:FR|NFR)-\d+\s*[:：].*?)\s+\[\[DR\]\]\(\./dr#(?:fr|nfr)-\d+\)\s*$",
             r"\1",
             text,
         )
         text = re.sub(
-            r"(?m)^(\d+\.\s+.*?)(?:\s+\[\[DR\]\]\(\./design_rationale\.html#con-\d+\)|\s*<a\s+[^>]*href=\"\./design_rationale\.html#con-\d+\"[^>]*>\s*\[?DR\]?\s*</a>)\s*$",
+            r"(?m)^(\d+\.\s+.*?)(?:\s+\[\[DR\]\]\(\./dr#con-\d+\))\s*$",
             r"\1",
             text,
         )
@@ -133,7 +146,7 @@ class DocumentorSrs:
             title = match.group(1).rstrip()
             srs_id = title.split(":", 1)[0].split("：", 1)[0].strip()
             anchor = srs_id.lower()
-            return f"#### {title} [[DR]](./design_rationale.html#{anchor})"
+            return f"#### {title} [[DR]](./dr#{anchor})"
 
         text = heading_pattern.sub(repl, text)
 
@@ -147,9 +160,9 @@ class DocumentorSrs:
                 counter += 1
                 marker = item_match.group("marker")
                 content = item_match.group("content").rstrip()
-                if "<a " in content and "design_rationale.html#con-" in content:
+                if "<a " in content and "dr#con-" in content:
                     return item_match.group(0)
-                return f'{marker}{content} [[DR]](./design_rationale.html#con-{counter})'
+                return f'{marker}{content} [[DR]](./dr#con-{counter})'
 
             linked_body = re.sub(
                 r"(?m)^(?P<marker>\d+\.\s+)(?P<content>.+)$",
@@ -167,29 +180,13 @@ class DocumentorSrs:
 
     @staticmethod
     def srs_id_map(req_rows: list[dict]) -> dict[str, str]:
-        counters = {"functional": 0, "non-functional": 0, "constraint": 0}
-        prefixes = {
-            "functional": "FR",
-            "non-functional": "NFR",
-            "constraint": "CON",
-        }
         out: dict[str, str] = {}
         for row in req_rows:
             req_id = str(row.get("id") or "").strip()
             existing_srs_id = str(row.get("srs_id") or "").strip()
             existing_match = re.fullmatch(r"(FR|NFR|CON)-(\d+)", existing_srs_id)
             if req_id and existing_match:
-                reverse_prefixes = {"FR": "functional", "NFR": "non-functional", "CON": "constraint"}
-                counter_key = reverse_prefixes.get(existing_match.group(1))
-                if counter_key in counters:
-                    counters[counter_key] = max(counters[counter_key], int(existing_match.group(2)))
                 out[req_id] = existing_srs_id
-                continue
-            req_type = str(row.get("type") or "").strip().lower()
-            if not req_id or req_type not in counters:
-                continue
-            counters[req_type] += 1
-            out[req_id] = f"{prefixes[req_type]}-{counters[req_type]}"
         return out
 
     @staticmethod
@@ -461,10 +458,10 @@ class DocumentorSrs:
                     raise
         srs_md = self.restore_model_heading_ids(srs_md, draft_md)
         srs_md = self.fix_model_links(srs_md)
+        srs_md = self.fix_model_image_filenames(srs_md)
         srs_md = normalize_model_image_markdown(srs_md)
         srs_md = self.normalize_scope_headings(srs_md)
         srs_md = self.normalize_system_purpose_paragraph(srs_md)
-        srs_md = self.remove_traceability_sections(srs_md)
         srs_md = self.restore_appendix_heading(srs_md)
         srs_md = self.remove_empty_sections(srs_md)
         srs_md = self.insert_design_rationale_links(srs_md)

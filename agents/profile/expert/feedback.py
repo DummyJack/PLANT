@@ -5,7 +5,7 @@ import re
 
 from agents.skills.base import get_skill
 from storage import parse_first_json
-from storage.artifact import append_trace_req_row, trace_req_public_signature
+from storage.trace_req.schema import append_trace_req_row, trace_req_public_signature
 
 from .actions.feedback import update_feedback
 from .actions.read_reference import read_docs
@@ -689,9 +689,17 @@ class ExpertDomainResearch(ExpertResearchPlan):
     def attach_url_sources(payload, urls):
         if not isinstance(payload, dict):
             return payload
+        url_payloads = [
+            {
+                "title": str(url).strip(),
+                "url": str(url).strip(),
+            }
+            for url in (urls or [])
+            if str(url or "").strip()
+        ]
         merged = []
         seen = set()
-        for source in source_records(list(payload.get("sources") or []) + list(urls or [])):
+        for source in source_records(list(payload.get("sources") or []) + url_payloads):
             url = str(source.get("url") or "").strip()
             source_type = str(source.get("type") or "web").strip() or "web"
             key = f"{source_type}:{url}"
@@ -865,7 +873,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
         for item in raw or []:
             if not isinstance(item, dict):
                 continue
-            target_id = str(item.get("target_id") or item.get("id") or "").strip()
+            target_id = str(item.get("target_id") or "").strip()
             status = str(item.get("status") or "").strip()
             reason = str(item.get("reason") or "").strip()
             if not target_id or status not in valid_status:

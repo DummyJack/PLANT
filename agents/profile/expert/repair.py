@@ -48,7 +48,7 @@ def repair_plan_output(*, raw: Any, error: str) -> str:
   "research_plan": {{
     "action": "done",
     "params": {{}},
-    "reasoning": "一句繁體中文說明",
+    "reasoning": "使用目前輸出語系的一句說明",
     "action_plan": {{
       "goal": "本輪 research_domain 目標",
       "steps": [

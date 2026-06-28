@@ -588,7 +588,7 @@ class ModelerModeling(ModelPlan):
         models: list[Dict[str, Any]],
         target: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        target_id = str(target.get("target_model_id") or target.get("id") or "").strip()
+        target_id = str(target.get("target_model_id") or "").strip()
         if target_id:
             for model in models or []:
                 if isinstance(model, dict) and str(model.get("id") or "").strip() == target_id:

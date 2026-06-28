@@ -2,6 +2,8 @@
 import json
 from typing import Any, Dict, Optional
 
+from agents.profile.base import json_only_rules
+
 
 max_model_targets = 4
 
@@ -61,7 +63,13 @@ def modeling_phase_policy(phase: str) -> Dict[str, Any]:
 # ========
 def target_prompt(*, context: dict) -> str:
     ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
-    return f"""分析需求輸入與現有模型，決定本輪 system_modeling 是否需要建立或更新 high-value system model。
+    return f"""# 任務
+分析需求輸入與現有模型，決定本輪 system_modeling 是否需要建立或更新 high-value system model。
+
+# Action Boundary
+- action=modeler.plan_system_modeling
+- 本 action 規劃本輪 system_modeling 的 model_targets。
+- model_targets 指定要 create 或 update 的 system model 類型、名稱、理由與需求來源。
 
 # 建模情境
 {ctx_text}
@@ -141,7 +149,7 @@ def target_prompt(*, context: dict) -> str:
     "gaps": ["缺口或不一致項目1", "缺口或不一致項目2"]
   }}
 }}
-只輸出 JSON。"""
+{json_only_rules()}"""
 
 
 # ========

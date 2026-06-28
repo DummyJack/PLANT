@@ -26,6 +26,11 @@ def build_elicitation_plan(
     return f"""# 任務
 安排本輪需求擷取會議，決定 participants、goal、actions、meeting_phase。
 
+# Action Boundary
+- action=mediator.plan_elicitation
+- 本 action 規劃下一輪需求擷取會議，輸出 participants、meeting_phase、goal 與各 agent action。
+- action 只能安排 ask_user、supplement_question 或 propose_finish。
+
 - turn: {turn}/{max_turns}
 - default_participants: {default_participants}
 
@@ -48,24 +53,24 @@ def build_elicitation_plan(
 {json.dumps(recent_ask_history or [], ensure_ascii=False, indent=2)}
 
 - 像真實需求訪談主持人一樣，根據已回答內容安排下一個最自然、最能補足需求理解的方向。
-- 優先在 scope.in_scope 內推進；不要安排 scope.out_of_scope 方向。
+- 優先在 scope.in_scope 內推進。
 - goal 是本輪需求擷取的主題標題，需簡短、具體、可指導 agent 提問；不要寫成「繼續訪談」「了解更多需求」。
 - 若 previous_turn_summary 已標記某方向為已確認、已關閉或不要重複，除非仍阻礙需求成形，否則本輪應往不同但重要的方向推進。
-- 先補足需求主幹，再進入細節審查；不要為了覆蓋分類而硬問。
+- 先補足需求主幹，再進入細節審查。
 - 不要把「動機」當成預設必問項；只有當動機會改變需求內容、優先級、成功標準或範圍時才追問。
 
 - analyst：使用者目標、需求語意、使用條件、成功結果與驗收邊界。
 - expert：外部限制、領域規則、政策/合規風險、營運風險、公平性與責任歸屬。
 - modeler：流程節點、狀態轉移、actor 責任、資料輸入輸出、例外流程與人工介入。
-- 每個 agent 只能被安排符合自身分工的提問；若某 agent 本輪沒有符合分工的高價值問題，請不要安排該 agent 提問。
+- 每個 agent 安排符合自身分工的提問；若某 agent 本輪沒有符合分工的高價值問題，可以不安排該 agent 提問。
 - 每個 ask_user/supplement_question 必須指定 target_stakeholders，且問題內容必須從該 stakeholder 的立場出發。
-- 不要把消費者情境問題丟給外送員、餐廳、第三方支付或營運主管回答；若要問這些 stakeholder，必須改寫成該 stakeholder 會關心的影響、責任、限制或底線。
+- 問題需符合 target stakeholder 會關心的影響、責任、限制或底線。
 
 同一輪內，不同 agent 不可追問同一個需求缺口。
 每個被安排提問的 agent 都必須能問出可轉成候選 User Requirement、限制、流程邊界或待確認缺口的資訊。
 
 - ask_user：本輪主要向 user 問一個主問題。
-- supplement_question：從該角色角度補一個不重複的 user 問題。
+- supplement_question：從該參與者角度補一個不重複的 user 問題。
 - propose_finish：提議結束需求擷取。
 
 meeting_phase 只用來標示本輪狀態：
@@ -77,8 +82,9 @@ meeting_phase 只用來標示本輪狀態：
 - participants 應包含 2-3 位非 user agent 與 user。
 - 除非本輪要 propose_finish，否則至少一個非 user agent 的 action 必須是 ask_user 或 supplement_question。
 - propose_finish 只能在資訊足夠收束時使用；若使用 propose_finish，該 agent 的發言只能輸出固定停止句。
-- 僅輸出 JSON，不要附加說明。
+- 輸出 JSON。
 
+# Output JSON
 {{
   "participants": {json.dumps(default_participants, ensure_ascii=False)},
   "meeting_phase": "initial_requirement | requirement_discussion | conclusion",
