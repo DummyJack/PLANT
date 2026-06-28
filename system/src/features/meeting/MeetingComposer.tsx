@@ -6,6 +6,7 @@ import { fetchConfig, updateConfig } from "@/api/config";
 import { fetchModelApiKeys } from "@/api/secrets";
 import { AGENT_LABELS, HEADER_AGENT_ORDER } from "@/constants/agents";
 import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
+import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import { useNoticeStore } from "@/stores/noticeStore";
 import type { RunCheckpoint } from "@/types/api";
@@ -87,52 +88,56 @@ function stageEnabled(
 
 function requiredAgentReasons(
   config: Awaited<ReturnType<typeof fetchConfig>>["config"] | undefined,
+  t: ReturnType<typeof useI18n>["t"],
   stageOverrides?: Record<string, boolean>,
 ): Record<string, string[]> {
   const reasons: Record<string, string[]> = {};
   const add = (agent: string, reason: string) => {
     reasons[agent] = [...(reasons[agent] ?? []), reason];
   };
-  if (stageEnabled(config, stageOverrides, "init")) add("user", "初始階段");
+  if (stageEnabled(config, stageOverrides, "init")) add("user", t.stageLabels.init);
   if (stageEnabled(config, stageOverrides, "elicitation")) {
-    add("user", "需求擷取");
-    add("analyst", "需求擷取");
-    add("mediator", "需求擷取");
+    add("user", t.stageLabels.elicitation);
+    add("analyst", t.stageLabels.elicitation);
+    add("mediator", t.stageLabels.elicitation);
   }
   if (stageEnabled(config, stageOverrides, "conflict_detection")) {
-    add("analyst", "衝突辨識");
-    add("mediator", "衝突辨識");
+    add("analyst", t.stageLabels.conflict_detection);
+    add("mediator", t.stageLabels.conflict_detection);
   }
   if (stageEnabled(config, stageOverrides, "research_domain")) {
-    add("expert", "領域研究");
+    add("expert", t.stageLabels.research_domain);
   }
   if (stageEnabled(config, stageOverrides, "system_model")) {
-    add("modeler", "系統模型");
+    add("modeler", t.stageLabels.system_model);
   }
   if (stageEnabled(config, stageOverrides, "draft")) {
-    add("analyst", "草稿化");
+    add("analyst", t.stageLabels.draft);
   }
   if (
     stageEnabled(config, stageOverrides, "default_formal_meeting") ||
     stageEnabled(config, stageOverrides, "general_formal_meeting")
   ) {
-    add("user", "會議");
-    add("analyst", "會議");
-    add("expert", "會議");
-    add("modeler", "會議");
-    add("mediator", "會議");
+    add("user", t.stageLabels.general_meeting);
+    add("analyst", t.stageLabels.general_meeting);
+    add("expert", t.stageLabels.general_meeting);
+    add("modeler", t.stageLabels.general_meeting);
+    add("mediator", t.stageLabels.general_meeting);
   }
   if (stageEnabled(config, stageOverrides, "DR") || stageEnabled(config, stageOverrides, "SRS")) {
-    add("documentor", "規格化");
+    add("documentor", "SRS / DR");
   }
   return reasons;
 }
 
-function apiKeyConfiguredMap(
-  providers?: Array<{ provider: string; configured: boolean }>,
+function apiKeyUsableMap(
+  providers?: Array<{ provider: string; configured: boolean; status?: string; valid?: boolean }>,
 ): Record<string, boolean> {
   return Object.fromEntries(
-    (providers ?? []).map((row) => [row.provider.toLowerCase(), row.configured]),
+    (providers ?? []).map((row) => [
+      row.provider.toLowerCase(),
+      row.configured && (row.valid === true || row.status === "valid"),
+    ]),
   );
 }
 
@@ -141,10 +146,9 @@ function agentReady(
   agentId: string,
   configuredProviders: Record<string, boolean>,
 ): boolean {
-  const modelConfig = config?.agent_models?.[agentId];
-  const provider = String(modelConfig?.provider ?? "").trim().toLowerCase();
-  const model = String(modelConfig?.model ?? "").trim();
-  return !!provider && !!model && configuredProviders[provider] === true;
+  void config;
+  void agentId;
+  return Object.values(configuredProviders).some(Boolean);
 }
 
 export function MeetingComposer({
@@ -182,6 +186,7 @@ export function MeetingComposer({
   stageOverrides,
   onDismissRunCheckpoint,
 }: MeetingComposerProps) {
+  const { t } = useI18n();
   const meetingRounds = useUiStore((s) => s.meetingRounds);
   const setMeetingRounds = useUiStore((s) => s.setMeetingRounds);
   const meetingMaxIssues = useUiStore((s) => s.meetingMaxIssues);
@@ -204,24 +209,32 @@ export function MeetingComposer({
   const configQuery = useQuery({
     queryKey: ["config"],
     queryFn: async () => (await fetchConfig()).config,
-    enabled: showAgentPopover,
+    enabled: true,
     refetchInterval: showAgentPopover ? 3000 : false,
   });
   const keyQuery = useQuery({
     queryKey: ["model-api-keys"],
     queryFn: fetchModelApiKeys,
-    enabled: showAgentPopover,
+    enabled: true,
     refetchInterval: showAgentPopover ? 3000 : false,
   });
 
   const displayAgents = HEADER_AGENT_ORDER;
-  const agentButtonDisabled = false;
-  const configuredProviders = apiKeyConfiguredMap(keyQuery.data?.providers);
-  const lockedAgentReasons = requiredAgentReasons(configQuery.data, stageOverrides);
-  const idleSubmitLabel = submitLabel ?? (noProject ? "執行" : "繼續");
+  const configuredProviders = apiKeyUsableMap(keyQuery.data?.providers);
+  const hasUsableProvider = Object.values(configuredProviders).some(Boolean);
+  const lockedAgentReasons = requiredAgentReasons(configQuery.data, t, stageOverrides);
+  const requiredAgentsReady =
+    configQuery.isSuccess &&
+    keyQuery.isSuccess &&
+    hasUsableProvider;
+  const agentButtonDisabled = !requiredAgentsReady;
+  const runSubmitDisabled = submitDisabled || !requiredAgentsReady;
+  const idleSubmitLabel = submitLabel ?? (noProject ? t.execute : t.continue);
   const readyToRecover = !!runCheckpoint && !running && !stopping;
   const submitTitle = readyToRecover
-    ? "會先清理上次未完成的產出，再從此階段重新執行"
+    ? t.cleanupBeforeContinue
+    : !requiredAgentsReady
+      ? t.agentApiKeyRequired("Agent")
     : idleSubmitLabel;
   const continueMode = !noProject && !running && !stopping;
   const inputDisabled =
@@ -300,14 +313,14 @@ export function MeetingComposer({
       });
       pushNotice({
         tone: "success",
-        title: "已儲存",
-        message: "代理人設定已更新",
+        title: t.saved,
+        message: t.agentSettingsUpdated,
       });
     } catch (e) {
       pushNotice({
         tone: "error",
-        title: "儲存失敗",
-        message: errorMessage(e, "無法儲存代理人設定"),
+        title: t.saveFailed,
+        message: errorMessage(e, t.unableSaveAgentSettings),
       });
     }
   };
@@ -321,14 +334,14 @@ export function MeetingComposer({
       });
       pushNotice({
         tone: "success",
-        title: "已儲存",
-        message: "會議設定已更新",
+        title: t.saved,
+        message: t.meetingSettingsUpdated,
       });
     } catch (e) {
       pushNotice({
         tone: "error",
-        title: "儲存失敗",
-        message: errorMessage(e, "無法儲存會議設定"),
+        title: t.saveFailed,
+        message: errorMessage(e, t.unableSaveMeetingSettings),
       });
     }
   };
@@ -534,7 +547,7 @@ export function MeetingComposer({
         <div className="relative" ref={agentRef}>
           <button
             type="button"
-            title="選擇啟用的代理（套用於下一次 Agent 執行）"
+            title={t.agentSettings}
             className={cn(
               "relative inline-flex h-[54px] shrink-0 items-center justify-center gap-1.5 rounded-bubble border text-sm font-medium transition-colors disabled:opacity-40",
               compactButtons ? "w-[54px] px-0" : "px-3",
@@ -554,13 +567,13 @@ export function MeetingComposer({
           {showAgentPopover && (
             <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-control border border-gray-200 bg-white shadow-lg">
               <div className="border-b border-gray-100 px-3 py-2">
-                <p className="text-center text-xs font-semibold text-slate-800">代理人設定</p>
+                <p className="text-center text-xs font-semibold text-slate-800">{t.agentSettings}</p>
               </div>
               <div className="border-b border-gray-100 px-3 py-2.5">
                 <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
                   <div className="flex items-center gap-2">
                     <label htmlFor="meeting-rounds" className="shrink-0 font-medium text-slate-700">
-                      回合數
+                      {t.rounds}
                     </label>
                     <input
                       id="meeting-rounds"
@@ -578,9 +591,9 @@ export function MeetingComposer({
                       }}
                     />
                   </div>
-                  <div className="flex items-center gap-2" title="每輪最大討論議題數">
+                  <div className="flex items-center gap-2" title={t.maxIssuesPerRound}>
                     <label htmlFor="meeting-max-issues" className="shrink-0 font-medium text-slate-700">
-                      議題數
+                      {t.issues}
                     </label>
                     <input
                       id="meeting-max-issues"
@@ -621,7 +634,7 @@ export function MeetingComposer({
                       )}
                       title={
                         locked
-                          ? `目前階段需要此代理：${lockReasons.join("、")}`
+                          ? t.requiredAgentReason(lockReasons.join(" / "))
                           : undefined
                       }
                     >
@@ -679,12 +692,12 @@ export function MeetingComposer({
                   onClick={openMentionPicker}
                   title={
                     isDomainReview
-                      ? "引用文件"
+                      ? t.quoteFiles
                       : reviewTarget === "requirements"
-                        ? "引用需求 ID"
+                        ? t.quoteRequirementId
                         : reviewTarget === "scope"
-                          ? "引用需求範圍"
-                        : "引用利害關係人發言 ID"
+                          ? t.quoteScope
+                        : t.quoteStakeholderId
                   }
                 >
                   @
@@ -714,8 +727,8 @@ export function MeetingComposer({
                             selectedReferences.filter((item) => item.name !== reference.name),
                           )
                         }
-                        aria-label={`移除 ${reference.name}`}
-                        title="移除引用"
+                        aria-label={`${t.removeQuote} ${reference.name}`}
+                        title={t.removeQuote}
                       >
                         ×
                       </button>
@@ -731,8 +744,8 @@ export function MeetingComposer({
                         type="button"
                         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                         onClick={() => removeMentionToken(token)}
-                        aria-label={`移除 ${token}`}
-                        title="移除引用"
+                        aria-label={`${t.removeQuote} ${token}`}
+                        title={t.removeQuote}
                       >
                         ×
                       </button>
@@ -751,34 +764,34 @@ export function MeetingComposer({
               )}
               placeholder={
                 !canWrite
-                  ? "請先到設定輸入啟動碼"
+                  ? t.enterActivationFirst
                   : noProject
-                  ? "輸入初步想法"
+                  ? t.initialIdea
                   : stopping
-                    ? "正在停止 Agent 執行，請稍候..."
+                    ? t.stoppingAgent
                   : reviewMode
                   ? reviewTarget === "requirements"
-                    ? "輸入建議(@：可以引用需求)"
+                    ? t.suggestionWithRequirements
                     : isScopeReview
-                      ? "輸入需求範圍建議"
+                      ? t.scopeSuggestion
                     : isDomainReview
-                      ? "輸入建議(@：可以引用文件)"
+                      ? t.suggestionWithFiles
                     : isMeetingIssueReview
-                      ? "輸入自訂議題"
-                      : "輸入建議(@：可以引用利害關係人發言)"
+                      ? t.customIssue
+                      : t.suggestionWithStakeholders
                   : humanDecisionMode
-                  ? "輸入自訂決策"
+                  ? t.customDecision
                   : stakeholderSelectionMode
-                  ? "自訂利害關係人"
+                  ? t.customStakeholder
                   : running
-                    ? "執行中，請稍候…"
+                    ? t.runningWait
                   : !noProject
                     ? readyToRecover
-                      ? "偵測到上次中斷，按「繼續」會清理並重跑"
-                      : "已選擇此專案，按「執行」可以繼續討論"
+                      ? t.recoverHint
+                      : t.selectedProjectHint
                     : disabled
-                    ? "已選擇此專案，按「執行」可以繼續討論"
-                    : "輸入初步想法"
+                    ? t.selectedProjectHint
+                    : t.initialIdea
               }
               disabled={inputDisabled}
               onChange={(e) => {
@@ -835,7 +848,7 @@ export function MeetingComposer({
                     return;
                   }
                 }
-                if (e.key === "Enter" && !e.shiftKey && !inputDisabled) {
+                if (e.key === "Enter" && !e.shiftKey && !inputDisabled && !runSubmitDisabled) {
                   e.preventDefault();
                   if (stakeholderSelectionMode) {
                     onAddCustomStakeholder?.();
@@ -864,7 +877,7 @@ export function MeetingComposer({
                 }
               >
                 <option value="" disabled hidden>
-                  選擇類別
+                  {t.selectCategory}
                 </option>
                 {stakeholderTypeOptions.map((type) => (
                   <option key={type.value} value={type.value}>
@@ -874,7 +887,7 @@ export function MeetingComposer({
               </select>
               <input
                 className="h-9 min-w-0 flex-[0.95] rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-                placeholder="理由，可留空"
+                placeholder={t.reasonOptional}
                 disabled={!canWrite}
                 value={customStakeholderDraft?.reason ?? ""}
                 onChange={(event) =>
@@ -899,7 +912,7 @@ export function MeetingComposer({
               )}
             >
               <div className="border-b border-gray-100 px-2 py-1.5 text-[10px] font-semibold text-slate-400">
-                引用
+                {t.quote}
               </div>
               <div className="max-h-48 overflow-y-auto p-1">
                 {mentionItems.map((id, index) => (
@@ -967,8 +980,8 @@ export function MeetingComposer({
                   !customStakeholderDraft?.type.trim()
                 }
                 onClick={onAddCustomStakeholder}
-                aria-label="加入自訂利害關係人"
-                title="加入"
+                aria-label={t.addCustomStakeholder}
+                title={t.add}
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -980,8 +993,8 @@ export function MeetingComposer({
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!canWrite || (!value.trim() && (!isDomainReview || !selectedReferences.length))}
                 onClick={addReviewSuggestion}
-                aria-label="加入建議"
-                title="加入"
+                aria-label={t.addSuggestion}
+                title={t.add}
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -994,7 +1007,7 @@ export function MeetingComposer({
                 disabled={!canWrite || skipAllHumanInterventionsLoading}
                 onClick={onSkipAllHumanInterventions}
               >
-                全部跳過
+                {t.skipAll}
               </button>
             ) : (!humanDecisionMode || running) && (
               <button
@@ -1010,15 +1023,15 @@ export function MeetingComposer({
                     ? true
                     : running
                       ? loading || stopping
-                      : disabled || submitDisabled || loading || (noProject && !value.trim())
+                      : disabled || runSubmitDisabled || loading || (noProject && !value.trim())
                 }
                 onClick={running ? onStop : onSubmit}
-                aria-label={stopping ? "停止中" : running ? "停止" : idleSubmitLabel}
-                title={stopping ? "停止中" : running ? "停止" : submitTitle}
+                aria-label={stopping ? t.stopping : running ? t.stop : idleSubmitLabel}
+                title={stopping ? t.stopping : running ? t.stop : submitTitle}
               >
                 {running ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
                 <span className={cn(compactButtons && "sr-only")}>
-                  {stopping ? "停止中..." : running ? "停止" : idleSubmitLabel}
+                  {stopping ? `${t.stopping}...` : running ? t.stop : idleSubmitLabel}
                 </span>
               </button>
             )}

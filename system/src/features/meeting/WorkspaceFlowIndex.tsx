@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ListTree } from "lucide-react";
+import { Bot, ListTree, UserRound } from "lucide-react";
+import { UI_TEXT, useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { ChatMessage, FileTreeNode, RunCheckpoint } from "@/types/api";
@@ -11,7 +12,9 @@ interface FlowItem {
   title: string;
   detail: string;
   dedupeKey: string;
+  children?: FlowItem[];
   orderHint?: number;
+  messageIndex?: number;
   outputPath?: string;
   scrollTargetId?: string;
   rawTitle?: string;
@@ -24,11 +27,17 @@ function snippet(text: string, fallback: string) {
   return compact.length > 48 ? `${compact.slice(0, 48)}...` : compact;
 }
 
+function tx() {
+  return UI_TEXT[useUiStore.getState().language];
+}
+
 function statusText(status?: ChatMessage["status"]) {
-  if (status === "done") return "完成";
-  if (status === "failed") return "失敗";
-  if (status === "waiting") return "等待你決議";
-  return "執行中";
+  const t = tx();
+  if (status === "done") return t.flowComplete;
+  if (status === "failed") return t.flowFailed;
+  if (status === "waiting") return t.flowWaiting;
+  if (status === "running") return t.flowRunning;
+  return t.flowComplete;
 }
 
 function actionKey(value: string) {
@@ -36,21 +45,23 @@ function actionKey(value: string) {
 }
 
 function stageTitle(stage?: string) {
+  const t = tx();
   if (!stage) return "";
   const value = stage.toLowerCase();
-  if (value === "init") return "初始分析";
-  if (value === "elicitation") return "需求擷取會議";
-  if (value === "conflict_review") return "衝突辨識";
-  if (value === "research_domain") return "領域研究";
-  if (value === "system_model") return "系統模型生成";
-  if (value === "draft") return "草稿建立";
-  if (value === "formal_meeting") return "正式會議";
-  if (value === "document_generation") return "規格化";
-  if (value === "export") return "輸出整理";
+  if (value === "init") return t.initialAnalysis;
+  if (value === "elicitation") return t.elicitationMeeting;
+  if (value === "conflict_review") return t.conflictDetection;
+  if (value === "research_domain") return t.domainResearch;
+  if (value === "system_model") return t.systemModelGeneration;
+  if (value === "draft") return t.draftCreation;
+  if (value === "formal_meeting") return t.stageLabels.general_meeting;
+  if (value === "document_generation") return t.specification;
+  if (value === "export") return t.exportOutputs;
   return "";
 }
 
 function actionDisplay(msg: ChatMessage): { title: string; detail: string } {
+  const t = tx();
   const raw = msg.action ?? msg.text;
   const key = actionKey(raw);
   const running = statusText(msg.status);
@@ -58,106 +69,106 @@ function actionDisplay(msg: ChatMessage): { title: string; detail: string } {
 
   const table: Record<string, { title: string; running: string; done: string }> = {
     suggest_stakeholders: {
-      title: "選擇利害關係人",
-      running: "正在產生候選利害關係人",
-      done: "已產生候選利害關係人",
+      title: t.selectStakeholders,
+      running: t.generatingStakeholderCandidates,
+      done: t.stakeholderCandidatesGenerated,
     },
     write_stakeholder_text: {
-      title: "利害關係人發言",
-      running: "正在整理利害關係人需求",
-      done: "已整理利害關係人需求",
+      title: t.stakeholderStatements,
+      running: t.organizingStakeholderRequirements,
+      done: t.stakeholderRequirementsOrganized,
     },
     analyze_scenario: {
-      title: "分析初始想法",
-      running: "正在整理情境與範圍",
-      done: "已整理情境與範圍",
+      title: t.analyzeInitialIdea,
+      running: t.organizingScenarioScope,
+      done: t.scenarioScopeOrganized,
     },
     analyze_requirements: {
-      title: "初步需求分析",
-      running: "正在整理需求候選",
-      done: "已整理需求候選",
+      title: t.initialRequirementAnalysis,
+      running: t.organizingRequirementCandidates,
+      done: t.requirementCandidatesOrganized,
     },
     generate_scope: {
-      title: "定義系統範圍",
-      running: "正在整理系統範圍",
-      done: "已更新 Scope",
+      title: t.defineSystemScope,
+      running: t.organizingSystemScope,
+      done: t.updatedScope,
     },
     extract_requirements: {
-      title: "需求擷取會議",
-      running: "正在擷取使用者需求",
-      done: "已擷取使用者需求",
+      title: t.elicitationMeeting,
+      running: t.extractingUserRequirements,
+      done: t.userRequirementsExtracted,
     },
     merge_requirements: {
-      title: "整併需求",
-      running: "正在整併需求",
-      done: "已更新 Requirements",
+      title: t.mergeRequirements,
+      running: t.mergingRequirements,
+      done: t.updatedRequirements,
     },
     run_review: {
-      title: "衝突辨識",
-      running: "正在辨識需求衝突",
-      done: "已辨識需求衝突",
+      title: t.conflictDetection,
+      running: t.detectingRequirementConflicts,
+      done: t.requirementConflictsDetected,
     },
     research_domain: {
-      title: "領域研究",
-      running: "正在整理領域研究",
-      done: "已更新領域研究",
+      title: t.domainResearch,
+      running: t.organizingDomainResearch,
+      done: t.updatedDomainResearch,
     },
     read_reference_docs: {
-      title: "領域研究",
-      running: "正在讀取參考文件",
-      done: "已讀取參考文件",
+      title: t.domainResearch,
+      running: t.readingReferenceDocs,
+      done: t.referenceDocsRead,
     },
     research_issue: {
-      title: "領域研究",
-      running: "正在研究外部限制與依據",
-      done: "已整理研究依據",
+      title: t.domainResearch,
+      running: t.researchingExternalConstraints,
+      done: t.researchEvidenceOrganized,
     },
     update_feedback: {
-      title: "領域研究",
-      running: "正在更新領域研究",
-      done: "已更新領域研究",
+      title: t.domainResearch,
+      running: t.updatingDomainResearch,
+      done: t.updatedDomainResearch,
     },
     system_modeling: {
-      title: "系統模型生成",
-      running: "正在產生系統模型",
-      done: "已更新 System Models",
+      title: t.systemModelGeneration,
+      running: t.generatingSystemModel,
+      done: t.updatedSystemModels,
     },
     create_model: {
-      title: "系統模型生成",
-      running: "正在產生系統模型",
-      done: "已更新 System Models",
+      title: t.systemModelGeneration,
+      running: t.generatingSystemModel,
+      done: t.updatedSystemModels,
     },
     update_model: {
-      title: "系統模型生成",
-      running: "正在更新系統模型",
-      done: "已更新 System Models",
+      title: t.systemModelGeneration,
+      running: t.updatingSystemModel,
+      done: t.updatedSystemModels,
     },
     default_update_draft: {
-      title: "草稿建立",
-      running: "正在更新 Draft",
-      done: "已更新 Draft",
+      title: t.draftCreation,
+      running: t.updatingDraft,
+      done: t.updatedDraft,
     },
     general_update_draft: {
-      title: "草稿建立",
-      running: "正在依會議結果更新 Draft",
-      done: "已更新 Draft",
+      title: t.draftCreation,
+      running: t.updatingDraftFromMeeting,
+      done: t.updatedDraft,
     },
     generate_dr: {
       title: "Design Rationale",
-      running: "正在產生設計緣由",
-      done: "已更新 Design Rationale",
+      running: t.generatingDesignRationale,
+      done: t.updatedDesignRationale,
     },
     generate_srs: {
       title: "SRS",
-      running: "正在產生規格文件",
-      done: "已更新 SRS",
+      running: t.generatingSpecDocument,
+      done: t.updatedSrs,
     },
   };
 
   if (round) {
     return {
-      title: `第 ${round} 輪會議`,
-      detail: `${running}：討論中`,
+      title: t.meetingRoundTitle(round),
+      detail: `${running}: ${t.discussionInProgress}`,
     };
   }
 
@@ -165,32 +176,46 @@ function actionDisplay(msg: ChatMessage): { title: string; detail: string } {
   if (matched) {
     return {
       title: matched.title,
-      detail: `${running}：${msg.status === "done" ? matched.done : matched.running}`,
+      detail: `${running}: ${msg.status === "done" ? matched.done : matched.running}`,
     };
   }
 
-  const fallbackTitle = stageTitle(msg.stage) || msg.label || msg.speaker || "Agent 執行";
+  const fallbackTitle = stageTitle(msg.stage) || msg.label || msg.speaker || t.agentExecution;
   return {
     title: fallbackTitle,
-    detail: `${running}：${snippet(msg.text, key || "正在處理")}`,
+    detail: `${running}: ${snippet(msg.text, key || t.processingFallback)}`,
   };
 }
 
 function outputLabel(path?: string, text?: string) {
-  if (!path) return snippet(text ?? "", "產出物");
+  const t = tx();
+  if (!path) return snippet(text ?? "", t.artifact);
   if (/project\.json$/i.test(path)) return "Project";
   if (/scope\.json$/i.test(path)) return "Scope";
-  if (/meeting\/elicitation_meeting\.json$/i.test(path)) return "需求擷取會議";
+  if (/meeting\/elicitation_meeting\.json$/i.test(path)) return t.elicitationMeeting;
+  const meetingRound = meetingRoundFromPath(path);
+  if (meetingRound) return t.meetingRoundTitle(meetingRound);
   if (/requirements\.json$/i.test(path)) return "Requirements";
-  if (/feedback\.json$/i.test(path)) return "領域研究";
-  if (/system_models\.json$/i.test(path)) return "系統模型生成";
+  if (/feedback\.json$/i.test(path)) return t.domainResearch;
+  if (/system_models\.json$/i.test(path)) return t.systemModelGeneration;
   if (/result\.json$/i.test(path)) return "Conflict";
   const draft = /draft_v(\d+)/i.exec(path)?.[1];
   if (draft) return `Draft v${draft}`;
   if (/srs\.(html|md)$/i.test(path)) return "SRS";
   if (/design_rationale\.(html|md)$/i.test(path)) return "Design Rationale";
-  if (/models\/.+\.(png|svg|plantuml|puml)$/i.test(path)) return "系統模型生成";
+  if (/models\/.+\.(png|svg|plantuml|puml)$/i.test(path)) return t.systemModelGeneration;
   return snippet(text ?? path, path);
+}
+
+function meetingRoundFromPath(path?: string) {
+  const value = /(?:formal_meeting_r|\/R)(\d+)/i.exec(path ?? "")?.[1];
+  return value ? Number(value) : null;
+}
+
+function meetingRoundFromTitle(title?: string) {
+  const value = /第\s*(\d+)\s*輪會議/.exec(title ?? "")?.[1] ??
+    /Round\s*(\d+)\s*Meeting/i.exec(title ?? "")?.[1];
+  return value ? Number(value) : null;
 }
 
 function outputTone(label: string): FlowItem["tone"] {
@@ -199,14 +224,17 @@ function outputTone(label: string): FlowItem["tone"] {
   return "output";
 }
 
+function draftVersionFromPath(path?: string) {
+  const value = /draft_v(\d+)/i.exec(path ?? "")?.[1];
+  return value ? Number(value) : null;
+}
+
 function isPrimaryOutput(path?: string) {
   if (!path) return false;
   return (
-    /scope\.json$/i.test(path) ||
     /meeting\/elicitation_meeting\.json$/i.test(path) ||
     /feedback\.json$/i.test(path) ||
     /system_models\.json$/i.test(path) ||
-    /draft_v\d+\.(?:md|html)$/i.test(path) ||
     /srs\.(?:html|md)$/i.test(path) ||
     /design_rationale\.(?:html|md)$/i.test(path) ||
     /models\/.+\.(?:png|svg|plantuml|puml)$/i.test(path)
@@ -217,7 +245,6 @@ function isPrimaryAction(msg: ChatMessage) {
   const raw = msg.action ?? msg.text;
   const key = actionKey(raw);
   return (
-    key === "suggest_stakeholders" ||
     key === "write_stakeholder_text" ||
     key === "analyze_requirements" ||
     key === "generate_scope" ||
@@ -239,13 +266,15 @@ function isPrimaryAction(msg: ChatMessage) {
 }
 
 function decisionDetail(msg: ChatMessage) {
+  const t = tx();
   if (msg.status === "waiting") {
-    if (msg.action === "stakeholder_selection_request") return "等待你決議：請選擇利害關係人";
-    if (/候選議題|議題/i.test(msg.text)) return "等待你決議：請選擇正式會議議題";
-    return `等待你決議：${snippet(msg.text, "請確認下一步")}`;
+    if (msg.action === "stakeholder_selection_request") return `${t.flowWaiting}: ${t.selectStakeholders}`;
+    if (/候選議題|議題/i.test(msg.text)) return `${t.flowWaiting}: ${t.selectMeetingIssues}`;
+    return `${t.flowWaiting}: ${snippet(msg.text, t.confirmNextStep)}`;
   }
-  if (/後續人類介入將自動跳過/.test(msg.text)) return "後續決議將自動跳過";
-  if (/已略過/.test(msg.text)) return "已略過本次決議";
+  if (decisionContextTitle(msg)) return t.humanSuggestion;
+  if (/後續人類介入將自動跳過/.test(msg.text)) return t.autoSkipFutureDecisions;
+  if (/已略過/.test(msg.text)) return t.skippedThisDecision;
   const selected = msg.text
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -254,13 +283,72 @@ function decisionDetail(msg: ChatMessage) {
   if (selected.length) {
     return `${selected.slice(0, 2).join("、")}${selected.length > 2 ? "..." : ""}`;
   }
-  return "完成";
+  return decisionCompletionDetail(msg);
 }
 
 function decisionTitle(msg: ChatMessage) {
-  if (msg.action === "human_decision_request" || msg.decision?.kind === "human_decision") return "人類決策";
-  if (/建議|候選議題|議題/i.test(msg.text)) return "人類介入";
-  return "人類選擇";
+  const t = tx();
+  if (msg.action === "human_decision_request" || msg.decision?.kind === "human_decision") return t.humanDecision;
+  if (msg.action === "stakeholder_selection_request" || msg.decision?.kind === "stakeholder_selection") return t.humanSelection;
+  if (isMeetingIssueDecision(msg)) return t.agentIssues;
+  const contextTitle = decisionContextTitle(msg);
+  if (contextTitle) return contextTitle;
+  return t.humanSuggestion;
+}
+
+function isMeetingIssueDecision(msg: ChatMessage) {
+  return msg.decision?.kind === "meeting_issue_proposal_review" || /候選議題|議題/i.test(msg.text);
+}
+
+function decisionContextTitle(msg: ChatMessage) {
+  const t = tx();
+  switch (msg.decision?.kind) {
+    case "stakeholder_statement_review":
+      return t.stakeholderStatements;
+    case "domain_research_review":
+      return t.domainResearch;
+    case "requirements_review":
+      return t.initialRequirementAnalysis;
+    case "scope_review":
+      return t.defineSystemScope;
+    default:
+      if (/利害關係人.*發言|stakeholder.*statement/i.test(msg.text)) return t.stakeholderStatements;
+      if (/領域|研究|Feedback/i.test(msg.text)) return t.domainResearch;
+      if (/需求範圍|Scope/i.test(msg.text)) return t.defineSystemScope;
+      if (/需求|Requirements?|URL|REQ/i.test(msg.text)) return t.initialRequirementAnalysis;
+      return "";
+  }
+}
+
+function decisionCompletionDetail(msg: ChatMessage) {
+  const t = tx();
+  switch (msg.decision?.kind) {
+    case "stakeholder_selection":
+      return t.selectionComplete;
+    case "requirements_review":
+      return t.analysisComplete;
+    case "domain_research_review":
+      return t.revisionComplete;
+    case "scope_review":
+      return t.revisionComplete;
+    case "meeting_issue_proposal_review":
+      return t.selectionComplete;
+    case "stakeholder_statement_review":
+      return t.statementComplete;
+    case "human_decision":
+      return t.decisionComplete;
+    default:
+      if (/候選議題|議題/i.test(msg.text)) return t.selectionComplete;
+      if (/需求範圍|Scope/i.test(msg.text)) return t.revisionComplete;
+      if (/需求|Requirements?|URL|REQ/i.test(msg.text)) return t.analysisComplete;
+      if (/領域|研究|Feedback/i.test(msg.text)) return t.revisionComplete;
+      if (/利害關係人/.test(msg.text)) return t.selectionComplete;
+      return t.suggestionComplete;
+  }
+}
+
+function isMeetingIssueFlowItem(item: FlowItem) {
+  return item.dedupeKey.startsWith("decision:meeting_issues");
 }
 
 function decisionDedupeKey(msg: ChatMessage) {
@@ -276,11 +364,25 @@ function decisionDedupeKey(msg: ChatMessage) {
 }
 
 function decisionRound(msg: ChatMessage) {
-  const rawRound = msg.decision?.issue?.round;
-  if (typeof rawRound === "number" && Number.isFinite(rawRound)) return rawRound;
-  if (typeof rawRound === "string") {
-    const parsed = Number(rawRound);
-    if (Number.isFinite(parsed)) return parsed;
+  const options = msg.decision?.options && typeof msg.decision.options === "object"
+    ? msg.decision.options as Record<string, unknown>
+    : {};
+  const values = [
+    msg.decision?.issue?.round,
+    msg.decision?.issue?.meeting_id,
+    msg.decision?.issue?.id,
+    options.round,
+    options.meeting_id,
+    options.issue_id,
+  ];
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const direct = Number(value);
+      if (Number.isFinite(direct)) return direct;
+      const fromId = /R(\d+)/i.exec(value)?.[1] ?? /round[_\s-]*(\d+)/i.exec(value)?.[1];
+      if (fromId) return Number(fromId);
+    }
   }
   return undefined;
 }
@@ -288,7 +390,18 @@ function decisionRound(msg: ChatMessage) {
 function decisionOrderHint(msg: ChatMessage) {
   const round = decisionRound(msg);
   if (!round) return undefined;
+  if (isMeetingIssueDecision(msg)) {
+    return 70 + (round - 1) * 2 - 0.5;
+  }
+  if (msg.decision?.kind === "human_decision") {
+    return 70 + (round - 1) * 2 + 0.5;
+  }
   return 70 + (round - 1) * 2 + 0.5;
+}
+
+function draftOrderHint(version: number) {
+  if (version <= 0) return 60;
+  return 70 + (version - 1) * 2 + 1;
 }
 
 function actionDedupeKey(msg: ChatMessage) {
@@ -305,8 +418,13 @@ function actionTone(title: string): FlowItem["tone"] {
 }
 
 function messageToFlowItem(msg: ChatMessage): FlowItem | null {
+  const t = tx();
   if (msg.role === "user") {
     if (msg.kind === "decision") {
+      if (msg.status === "waiting") return null;
+      if (msg.decision?.kind === "stakeholder_selection" || msg.action === "stakeholder_selection_request") {
+        return null;
+      }
       return {
         id: msg.id,
         title: decisionTitle(msg),
@@ -317,10 +435,10 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
         tone: "decision",
       };
     }
-    return {
-      id: msg.id,
-      title: "人類輸入",
-      detail: snippet(msg.text, "人類輸入"),
+      return {
+        id: msg.id,
+        title: t.humanInput,
+        detail: snippet(msg.text, t.humanInput),
       dedupeKey: `message:${msg.id}`,
       tone: "decision",
     };
@@ -341,6 +459,10 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
   }
 
   if (msg.kind === "decision") {
+    if (msg.status === "waiting") return null;
+    if (msg.decision?.kind === "stakeholder_selection" || msg.action === "stakeholder_selection_request") {
+      return null;
+    }
     return {
       id: msg.id,
       title: decisionTitle(msg),
@@ -355,22 +477,27 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
   if (msg.kind === "output" || msg.outputPath) {
     if (!isPrimaryOutput(msg.outputPath)) return null;
     const label = outputLabel(msg.outputPath, msg.text);
-    if (label === "領域研究" || label === "系統模型生成") {
+    if (/feedback\.json$/i.test(msg.outputPath ?? "") || /system_models\.json$/i.test(msg.outputPath ?? "")) {
       return {
         id: msg.id,
         title: label,
-        detail: "已更新",
+        detail: t.updated,
         dedupeKey: `output:${label}`,
         outputPath: msg.outputPath,
         rawTitle: msg.action,
         tone: "action",
       };
     }
-    if (label === "Scope" || label === "需求擷取會議" || /^Draft v\d+$/i.test(label) || label === "Design Rationale" || label === "SRS") {
+    if (
+      label === "Scope" ||
+      /meeting\/elicitation_meeting\.json$/i.test(msg.outputPath ?? "") ||
+      label === "Design Rationale" ||
+      label === "SRS"
+    ) {
       return {
         id: msg.id,
         title: label,
-        detail: "已更新",
+        detail: t.updated,
         dedupeKey: msg.outputPath ? `output:${msg.outputPath}` : `message:${msg.id}`,
         outputPath: msg.outputPath,
         rawTitle: msg.action,
@@ -383,8 +510,8 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
   if (msg.status === "waiting" || msg.status === "failed") {
     return {
       id: msg.id,
-      title: msg.status === "failed" ? "錯誤" : "等待中",
-      detail: snippet(msg.text, msg.status === "failed" ? "執行錯誤" : "等待中"),
+      title: msg.status === "failed" ? t.error : t.waiting,
+      detail: snippet(msg.text, msg.status === "failed" ? t.runtimeError : t.waiting),
       dedupeKey: `message:${msg.id}`,
       tone: "status",
     };
@@ -393,20 +520,42 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
   return null;
 }
 
-function findFlowTargetMessageId(messages: ChatMessage[], title: string, outputPath: string) {
+function findFlowTargetMessage(messages: ChatMessage[], title: string, outputPath: string) {
+  const targetDraftVersion = draftVersionFromPath(outputPath);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message) continue;
-    if (message.outputPath === outputPath) return message.id;
-    if (message.outputPath && outputLabel(message.outputPath, message.text) === title) return message.id;
+    if (message.outputPath === outputPath) return { id: message.id, index };
+    if (
+      targetDraftVersion !== null &&
+      draftVersionFromPath(message.outputPath) === targetDraftVersion
+    ) {
+      return { id: message.id, index };
+    }
+    if (message.outputPath && outputLabel(message.outputPath, message.text) === title) return { id: message.id, index };
     if (message.kind === "action" && isPrimaryAction(message) && actionDisplay(message).title === title) {
-      return message.id;
+      return { id: message.id, index };
     }
   }
   return undefined;
 }
 
+function applyFlowTarget(
+  item: Omit<FlowItem, "scrollTargetId" | "messageIndex">,
+  messages: ChatMessage[],
+  title: string,
+  outputPath: string,
+): FlowItem {
+  const target = findFlowTargetMessage(messages, title, outputPath);
+  return {
+    ...item,
+    scrollTargetId: target?.id,
+    messageIndex: target?.index,
+  };
+}
+
 function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): FlowItem[] {
+  const t = tx();
   const paths = new Set(
     items
       .filter((item) => item.kind === "file")
@@ -415,47 +564,126 @@ function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): Flow
   const hasModel =
     paths.has("artifact/system_models.json") ||
     Array.from(paths).some((path) => /^artifact\/models\/.+/i.test(path));
-  const draftPath = Array.from(paths)
-    .filter((path) => /^artifact\/drafts\/draft_v\d+\.md$/i.test(path) || /^results\/drafts\/draft_v\d+\.html$/i.test(path))
+  const meetingPaths = Array.from(paths)
+    .filter((path) => /^artifact\/meeting\/formal_meeting_r\d+\.json$/i.test(path) || /^results\/MoM\/R\d+-M\d+\.html$/i.test(path))
     .sort((a, b) => {
-      const aVersion = Number(/draft_v(\d+)/i.exec(a)?.[1] ?? 0);
-      const bVersion = Number(/draft_v(\d+)/i.exec(b)?.[1] ?? 0);
-      return bVersion - aVersion;
-    })[0];
+      const aRound = Number(/(?:formal_meeting_r|\/R)(\d+)/i.exec(a)?.[1] ?? 0);
+      const bRound = Number(/(?:formal_meeting_r|\/R)(\d+)/i.exec(b)?.[1] ?? 0);
+      return aRound - bRound || a.localeCompare(b);
+    });
   const flowItems: FlowItem[] = [];
 
-  if (paths.has("artifact/feedback.json")) {
-    flowItems.push({
-      id: "artifact-flow-feedback",
-      title: "領域研究",
-      detail: "已更新",
-      dedupeKey: "output:領域研究",
-      outputPath: "artifact/feedback.json",
-      scrollTargetId: findFlowTargetMessageId(messages, "領域研究", "artifact/feedback.json"),
+  if (paths.has("artifact/project.json")) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-project",
+      title: t.humanInput,
+      detail: t.projectCreated,
+      dedupeKey: "output:project",
+      outputPath: "artifact/project.json",
+      tone: "decision",
+    }, messages, t.humanInput, "artifact/project.json"));
+  }
+  if (paths.has("artifact/requirements.json")) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-requirements",
+      title: t.initialRequirementAnalysis,
+      detail: t.updatedRequirements,
+      dedupeKey: "output:requirements",
+      outputPath: "artifact/requirements.json",
       tone: "action",
-    });
+    }, messages, t.initialRequirementAnalysis, "artifact/requirements.json"));
+  }
+  if (paths.has("artifact/meeting/elicitation_meeting.json")) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-elicitation",
+      title: t.elicitationMeeting,
+      detail: t.updated,
+      dedupeKey: "output:elicitation",
+      outputPath: "artifact/meeting/elicitation_meeting.json",
+      tone: "action",
+    }, messages, t.elicitationMeeting, "artifact/meeting/elicitation_meeting.json"));
+  }
+  if (paths.has("artifact/result.json") || Array.from(paths).some((path) => /conflict_report_v\d+\.(?:html|md|json)$/i.test(path))) {
+    const outputPath = firstExistingPath(paths, ["artifact/result.json"]) ??
+      latestVersionedPath(paths, /conflict_report_v(\d+)\.(?:html|md|json)$/i);
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-conflict",
+      title: t.conflictDetection,
+      detail: t.updated,
+      dedupeKey: "output:conflict",
+      outputPath,
+      tone: "action",
+    }, messages, t.conflictDetection, outputPath ?? ""));
+  }
+  if (paths.has("artifact/feedback.json")) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-feedback",
+      title: t.domainResearch,
+      detail: t.updated,
+      dedupeKey: "output:feedback",
+      outputPath: "artifact/feedback.json",
+      tone: "action",
+    }, messages, t.domainResearch, "artifact/feedback.json"));
   }
   if (hasModel) {
-    flowItems.push({
+    flowItems.push(applyFlowTarget({
       id: "artifact-flow-system-models",
-      title: "系統模型生成",
-      detail: "已更新",
-      dedupeKey: "output:系統模型生成",
+      title: t.systemModelGeneration,
+      detail: t.updated,
+      dedupeKey: "output:system_models",
       outputPath: "artifact/system_models.json",
-      scrollTargetId: findFlowTargetMessageId(messages, "系統模型生成", "artifact/system_models.json"),
       tone: "action",
-    });
+    }, messages, t.systemModelGeneration, "artifact/system_models.json"));
   }
+  const draftPath = firstExistingPath(paths, [
+    "artifact/drafts/draft_v0.md",
+    "results/drafts/draft_v0.html",
+  ]);
   if (draftPath) {
-    flowItems.push({
+    flowItems.push(applyFlowTarget({
       id: "artifact-flow-draft",
-      title: "草稿建立",
-      detail: "已更新",
-      dedupeKey: "output:草稿建立",
+      title: t.draftCreation,
+      detail: t.updatedDraft,
+      dedupeKey: "output:draft",
       outputPath: draftPath,
-      scrollTargetId: findFlowTargetMessageId(messages, "草稿建立", draftPath),
       tone: "action",
-    });
+    }, messages, t.draftCreation, draftPath));
+  }
+  const seenRounds = new Set<number>();
+  meetingPaths.forEach((path) => {
+    const round = Number(/(?:formal_meeting_r|\/R)(\d+)/i.exec(path)?.[1] ?? 0);
+    if (!round || seenRounds.has(round)) return;
+    seenRounds.add(round);
+    flowItems.push(applyFlowTarget({
+      id: `artifact-flow-meeting-r${round}`,
+      title: t.meetingRoundTitle(round),
+      detail: t.completed,
+      dedupeKey: `output:formal_meeting:R${round}`,
+      outputPath: path,
+      tone: "action",
+    }, messages, t.meetingRoundTitle(round), path));
+  });
+  const drPath = firstExistingPath(paths, ["results/design_rationale.html", "output/design_rationale.md"]);
+  if (drPath) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-design-rationale",
+      title: "Design Rationale",
+      detail: t.updated,
+      dedupeKey: "output:design_rationale",
+      outputPath: drPath,
+      tone: "designRationale",
+    }, messages, "Design Rationale", drPath));
+  }
+  const srsPath = firstExistingPath(paths, ["results/srs.html", "output/srs.md"]);
+  if (srsPath) {
+    flowItems.push(applyFlowTarget({
+      id: "artifact-flow-srs",
+      title: "SRS",
+      detail: t.updated,
+      dedupeKey: "output:srs",
+      outputPath: srsPath,
+      tone: "srs",
+    }, messages, "SRS", srsPath));
   }
   return flowItems;
 }
@@ -463,23 +691,26 @@ function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): Flow
 function flowItemOrder(item: FlowItem) {
   if (item.orderHint !== undefined) return item.orderHint;
   const value = `${item.title} ${item.detail}`;
-  const isHumanDecision = item.title === "人類選擇" || item.title === "人類介入" || item.title === "人類決策";
-  const meetingRound = /第\s*(\d+)\s*輪會議/.exec(item.title)?.[1];
+  const isHumanDecision = item.tone === "decision";
+  const meetingRound = meetingRoundFromTitle(item.title);
   if (meetingRound) return 70 + (Number(meetingRound) - 1) * 2;
-  if (item.title === "人類輸入") return 0;
+  if (item.dedupeKey === "output:draft") return 60;
+  const draftVersion = /Draft v(\d+)/i.exec(item.title)?.[1] ??
+    /draft_v(\d+)/i.exec(item.outputPath ?? "")?.[1];
+  if (draftVersion !== undefined) return draftOrderHint(Number(draftVersion));
+  if (item.dedupeKey === "output:project" || item.dedupeKey.startsWith("message:")) return 0;
   if (item.dedupeKey === "decision:feedback") return 46;
   if (item.dedupeKey === "decision:conflict" || item.dedupeKey === "decision:requirements") return 21;
   if (item.dedupeKey === "decision:meeting_issues") return 71;
   if (item.dedupeKey === "decision:stakeholder_selection") return 11;
   if (/選擇利害關係人/.test(value)) return 10;
   if (isHumanDecision && /消費者|外送員|利害關係人/.test(value)) return 11;
-  if (/利害關係人發言/.test(value)) return 12;
+  if (/利害關係人發言/.test(value)) return 10;
   if (/需求分析|需求候選/.test(value)) return 20;
   if (isHumanDecision && /議題/.test(value)) return 71;
   if (isHumanDecision && /@資料來源|資料來源_|\.pdf|法令|法規|領域|研究/.test(value)) return 46;
   if (isHumanDecision && /衝突|Conflict|CR-/.test(value)) return 21;
   if (isHumanDecision) return 21;
-  if (/範圍|Scope/.test(value)) return 25;
   if (/需求擷取會議/.test(value)) return 30;
   if (/衝突辨識|衝突解決/.test(value)) return 45;
   if (/領域研究|Feedback/.test(value)) return 47;
@@ -491,15 +722,57 @@ function flowItemOrder(item: FlowItem) {
   return 100;
 }
 
-const toneClass: Record<FlowItem["tone"], string> = {
-  user: "bg-slate-900",
-  action: "bg-violet-500",
-  decision: "bg-amber-500",
-  output: "bg-emerald-500",
-  designRationale: "bg-emerald-500",
-  srs: "bg-emerald-500",
-  status: "bg-slate-400",
-};
+function stageCardStatus(item: FlowItem) {
+  const t = tx();
+  const detail = item.detail.trim();
+  if (/失敗|failed/i.test(detail)) return t.failed;
+  if (/等待|waiting/i.test(detail)) return t.waiting;
+  if (/執行中|正在|running|in progress/i.test(detail)) return t.inProgress;
+  if (/選擇完成|已選擇|已產生候選利害關係人|selection complete/i.test(detail)) return t.selectionComplete;
+  if (/發言完成|已整理利害關係人|statement complete/i.test(detail)) return t.statementComplete;
+  if (/人類建議|suggestion complete/i.test(detail)) return t.suggestionComplete;
+  if (/需求分析|需求候選|Requirements|analysis complete/i.test(`${item.title} ${detail}`)) return t.analysisComplete;
+  if (/修正完成|已更新|updated|Scope|領域研究|System Models|Draft|Design Rationale|SRS|revision complete/i.test(detail)) return t.revisionComplete;
+  if (/已完成|完成|completed|done/i.test(detail)) return t.generationComplete;
+  return t.generationComplete;
+}
+
+function stageCardSummary(item: FlowItem) {
+  const t = tx();
+  if (isMeetingIssueFlowItem(item)) return t.humanProposed;
+  const detail = item.detail
+    .replace(/^(?:完成|失敗|等待你決議|執行中|等待中|進行中)\s*[:：]\s*/g, "")
+    .replace(/^已/, "已")
+    .trim();
+  if (!detail || detail === stageCardStatus(item)) {
+    if (item.outputPath) return outputLabel(item.outputPath, item.title);
+    return item.rawTitle || item.title;
+  }
+  return detail.length > 54 ? `${detail.slice(0, 54)}...` : detail;
+}
+
+function flowItemTooltip(item: FlowItem) {
+  return item.title;
+}
+
+function isHumanFlowItem(item: FlowItem) {
+  return item.tone === "user" ||
+    item.tone === "decision" ||
+    item.dedupeKey.startsWith("decision:");
+}
+
+function shouldShowFlowSummary(item: FlowItem) {
+  if (item.dedupeKey.startsWith("decision:") && item.title === tx().humanDecision) return false;
+  return isHumanFlowItem(item);
+}
+
+function FlowItemIcon({ item, className }: { item: FlowItem; className?: string }) {
+  if (isHumanFlowItem(item)) return <UserRound className={className} />;
+  if (item.dedupeKey === "group:formal_meeting") {
+    return <img src="/meeting.png" alt="" className={className} draggable={false} />;
+  }
+  return <Bot className={className} />;
+}
 
 function latestVersionedPath(paths: Set<string>, pattern: RegExp) {
   return Array.from(paths)
@@ -515,32 +788,32 @@ function firstExistingPath(paths: Set<string>, candidates: string[]) {
 function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
   if (item.outputPath && paths.has(item.outputPath)) return item.outputPath;
   const value = `${item.title} ${item.detail} ${item.dedupeKey}`;
-  const meetingRound = /第\s*(\d+)\s*輪會議/.exec(item.title)?.[1];
+  const meetingRound = meetingRoundFromTitle(item.title);
 
-  if (/人類輸入|選擇利害關係人|利害關係人發言/.test(value)) {
+  if (item.dedupeKey === "output:project" || item.dedupeKey === "decision:stakeholder_selection") {
     return firstExistingPath(paths, ["artifact/project.json"]);
   }
-  if (/需求分析|需求候選|decision:requirements/.test(value)) {
+  if (/decision:requirements/.test(value) || item.dedupeKey === "output:requirements") {
     return firstExistingPath(paths, ["artifact/requirements.json"]);
   }
-  if (/範圍|Scope/.test(value)) {
-    return firstExistingPath(paths, ["artifact/scope.json"]);
-  }
-  if (/需求擷取會議/.test(value)) {
+  if (item.dedupeKey === "output:elicitation") {
     return firstExistingPath(paths, ["artifact/meeting/elicitation_meeting.json"]);
   }
   if (/衝突報告|衝突辨識|衝突解決|Conflict|CR-|decision:conflict/.test(value)) {
     return firstExistingPath(paths, ["artifact/result.json"]) ??
       latestVersionedPath(paths, /conflict_report_v(\d+)\.(?:html|md|json)$/i);
   }
-  if (/領域研究|Feedback|decision:feedback/.test(value)) {
+  if (/Feedback|decision:feedback|output:feedback/.test(value)) {
     return firstExistingPath(paths, ["artifact/feedback.json"]);
   }
-  if (/系統模型生成|模型生成|系統模型|System Models/.test(value)) {
+  if (/System Models|output:system_models/.test(value)) {
     return firstExistingPath(paths, ["artifact/system_models.json"]);
   }
   if (/Draft|草稿/.test(value)) {
-    return latestVersionedPath(paths, /draft_v(\d+)\.(?:html|md)$/i);
+    return firstExistingPath(paths, [
+      "artifact/drafts/draft_v0.md",
+      "results/drafts/draft_v0.html",
+    ]);
   }
   if (meetingRound) {
     return firstExistingPath(paths, [
@@ -558,24 +831,113 @@ function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
   return undefined;
 }
 
+function flowIdentity(item: FlowItem) {
+  const meetingRound = meetingRoundFromTitle(item.title);
+  if (meetingRound) return `meeting:R${meetingRound}`;
+  if (item.dedupeKey === "output:draft") return "artifact:draft";
+  const draftVersion = /Draft v(\d+)/i.exec(item.title)?.[1] ??
+    /draft_v(\d+)/i.exec(item.outputPath ?? "")?.[1];
+  if (draftVersion) return `draft:v${draftVersion}`;
+  if (item.title === "Design Rationale" || /design_rationale/i.test(item.outputPath ?? "")) {
+    return "document:design_rationale";
+  }
+  if (item.title === "SRS" || /(?:^|\/)srs\.(?:html|md)$/i.test(item.outputPath ?? "")) {
+    return "document:srs";
+  }
+  if (item.dedupeKey === "output:system_models") return "artifact:system_models";
+  if (item.dedupeKey === "output:feedback") return "artifact:feedback";
+  if (item.dedupeKey === "output:conflict") return "artifact:conflict";
+  if (item.dedupeKey === "output:elicitation") return "artifact:elicitation";
+  if (item.dedupeKey === "output:requirements") return "artifact:requirements";
+  if (item.dedupeKey === "output:project") return "artifact:project";
+  return item.dedupeKey;
+}
+
+function normalizeMeetingIssuePlacement(items: FlowItem[]) {
+  const sortedByMessage = items
+    .filter((item) => item.messageIndex !== undefined)
+    .sort((a, b) => (a.messageIndex ?? 0) - (b.messageIndex ?? 0));
+
+  return items.map((item) => {
+    if (!isMeetingIssueFlowItem(item) || item.orderHint !== undefined || item.messageIndex === undefined) return item;
+    const nextMeeting = sortedByMessage.find((candidate) =>
+      (candidate.messageIndex ?? -1) > (item.messageIndex ?? -1) &&
+      meetingRoundFromTitle(candidate.title) !== null,
+    );
+    const round = meetingRoundFromTitle(nextMeeting?.title);
+    if (!round) return item;
+    return {
+      ...item,
+      dedupeKey: `decision:meeting_issues:R${round}`,
+      orderHint: 70 + (Number(round) - 1) * 2 - 0.5,
+    };
+  });
+}
+
+function isFormalMeetingFlowItem(item: FlowItem) {
+  const isMeetingHumanAssist =
+    (item.dedupeKey.startsWith("decision:meeting_issues") || item.title === tx().humanDecision || item.title === tx().humanSuggestion) &&
+    item.orderHint !== undefined &&
+    item.orderHint >= 69 &&
+    item.orderHint < 80;
+  return meetingRoundFromTitle(item.title) !== null ||
+    item.dedupeKey.startsWith("decision:meeting_issues") ||
+    isMeetingHumanAssist;
+}
+
+function groupFormalMeetingItems(items: FlowItem[]) {
+  const meetingItems = items
+    .filter(isFormalMeetingFlowItem)
+    .sort((a, b) => {
+      const orderDiff = flowItemOrder(a) - flowItemOrder(b);
+      if (orderDiff) return orderDiff;
+      const aIndex = a.messageIndex ?? Number.MAX_SAFE_INTEGER;
+      const bIndex = b.messageIndex ?? Number.MAX_SAFE_INTEGER;
+      return aIndex - bIndex;
+    });
+  if (meetingItems.length === 0) return items;
+
+  const first = meetingItems[0];
+  const last = meetingItems[meetingItems.length - 1];
+  const group: FlowItem = {
+    id: "flow-group-formal-meeting",
+    title: tx().formalMeeting,
+    detail: tx().meetingItemsOrganized(meetingItems.length),
+    dedupeKey: "group:formal_meeting",
+    children: meetingItems,
+    orderHint: 70,
+    messageIndex: first.messageIndex,
+    outputPath: first.outputPath,
+    scrollTargetId: first.scrollTargetId ?? first.id,
+    rawTitle: tx().rangeTo(first.title, last.title),
+    tone: "action",
+  };
+
+  return [
+    ...items.filter((item) => !isFormalMeetingFlowItem(item)),
+    group,
+  ];
+}
+
 export function WorkspaceFlowIndex({
   compact = false,
+  inline = false,
   runCheckpoint = null,
   artifactItems = [],
-  completedDisplayOnly = false,
 }: {
   compact?: boolean;
+  inline?: boolean;
   runCheckpoint?: RunCheckpoint | null;
   artifactItems?: FileTreeNode[];
-  completedDisplayOnly?: boolean;
 }) {
+  const { language, t } = useI18n();
   const [open, setOpen] = useState(false);
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const messages = useChatStore((s) => s.messages);
   const activeFlowMessageId = useUiStore((s) => s.activeFlowMessageId);
   const setScrollTargetMessageId = useUiStore((s) => s.setScrollTargetMessageId);
-  const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
 
   const items = useMemo(() => {
     const availablePaths = new Set(
@@ -583,34 +945,37 @@ export function WorkspaceFlowIndex({
         .filter((item) => item.kind === "file")
         .map((item) => item.path),
     );
-    const byKey = new Map<string, FlowItem>();
-    messages.forEach((message) => {
+    const messageItems: FlowItem[] = [];
+    messages.forEach((message, index) => {
       const item = messageToFlowItem(message);
-      if (!item) return;
-      byKey.set(item.dedupeKey, item);
+      if (item) messageItems.push({ ...item, messageIndex: index });
     });
-    artifactFlowItems(artifactItems, messages).forEach((item) => {
-      if (!byKey.has(item.dedupeKey)) byKey.set(item.dedupeKey, item);
+    const artifactItemsForFlow = artifactFlowItems(artifactItems, messages);
+    const byKey = new Map<string, FlowItem>();
+    messageItems.forEach((item) => byKey.set(flowIdentity(item), item));
+    artifactItemsForFlow.forEach((item) => {
+      const key = flowIdentity(item);
+      if (!byKey.has(key)) byKey.set(key, item);
     });
-    return Array.from(byKey.values())
-      .filter((item) => {
-        if (!completedDisplayOnly) return true;
-        if (/第\s*\d+\s*輪會議/.test(item.title)) return true;
-        return item.title === "Design Rationale" ||
-          item.title === "SRS" ||
-          item.dedupeKey === "decision:meeting_issues" ||
-          item.dedupeKey === "decision:conflict";
-      })
+    const combinedItems = groupFormalMeetingItems(normalizeMeetingIssuePlacement(Array.from(byKey.values())));
+    return combinedItems
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
         const orderDiff = flowItemOrder(a.item) - flowItemOrder(b.item);
-        return orderDiff || a.index - b.index;
+        if ((a.item.orderHint !== undefined || b.item.orderHint !== undefined) && orderDiff) return orderDiff;
+        if (a.item.messageIndex !== undefined && b.item.messageIndex !== undefined) {
+          return a.item.messageIndex - b.item.messageIndex || orderDiff || a.index - b.index;
+        }
+        if (orderDiff) return orderDiff;
+        if (a.item.messageIndex !== undefined) return -1;
+        if (b.item.messageIndex !== undefined) return 1;
+        return a.index - b.index;
       })
       .map(({ item }) => ({
         ...item,
         outputPath: outputPathForFlowItem(item, availablePaths),
       }));
-  }, [artifactItems, completedDisplayOnly, messages]);
+  }, [artifactItems, language, messages]);
   const activeItemId = useMemo(() => {
     if (!activeFlowMessageId) return items[0]?.id ?? null;
     const itemIds = new Set(items.map((item) => item.id));
@@ -629,27 +994,281 @@ export function WorkspaceFlowIndex({
   }, [activeFlowMessageId, items, messages]);
 
   useEffect(() => {
+    if (inline) {
+      if (!expandedGroupId) return;
+      const handler = (event: MouseEvent) => {
+        if (!rootRef.current?.contains(event.target as Node)) setExpandedGroupId(null);
+      };
+      document.addEventListener("mousedown", handler);
+      return () => document.removeEventListener("mousedown", handler);
+    }
     if (!open) return;
     const handler = (event: MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+  }, [expandedGroupId, inline, open]);
 
   useEffect(() => {
-    if (!open || !activeItemId) return;
+    if ((!open && !inline) || !activeItemId) return;
     itemRefs.current[activeItemId]?.scrollIntoView({
       block: "nearest",
       behavior: "smooth",
     });
-  }, [activeItemId, open]);
+  }, [activeItemId, inline, open]);
 
   const jumpTo = (item: FlowItem) => {
+    if (item.children?.length) {
+      setExpandedGroupId((current) => current === item.id ? null : item.id);
+      return;
+    }
+    setExpandedGroupId(null);
     setScrollTargetMessageId(item.scrollTargetId ?? item.id);
-    if (item.outputPath) setSelectedOutputPath(item.outputPath);
-    setOpen(false);
+    if (!inline) setOpen(false);
   };
+
+  const jumpToChild = (item: FlowItem) => {
+    setScrollTargetMessageId(item.scrollTargetId ?? item.id);
+  };
+
+  const railContent = (
+    <>
+      {items.length === 0 ? (
+        runCheckpoint ? (
+          <button
+            type="button"
+            className="flex w-full items-start gap-2 rounded-control bg-amber-50 px-2 py-2 text-left"
+            disabled
+            title={checkpointCleanupLabel(runCheckpoint)}
+          >
+            <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-semibold text-amber-950">
+                {t.continueRerun(checkpointStageLabel(runCheckpoint))}
+              </span>
+              <span className="block truncate text-[11px] text-amber-800">
+                {checkpointCleanupLabel(runCheckpoint)}
+              </span>
+            </span>
+          </button>
+        ) : (
+          <p className="px-2 py-3 text-xs text-slate-500">{t.noContent}</p>
+        )
+      ) : (
+        <div className="relative space-y-1">
+          <div className="absolute bottom-2 left-1/2 top-2 w-px -translate-x-1/2 bg-slate-200" />
+          {runCheckpoint && (
+            <button
+              type="button"
+              className="flex w-full items-start gap-2 rounded-control bg-amber-50 px-2 py-2 text-left"
+              disabled
+              title={checkpointCleanupLabel(runCheckpoint)}
+            >
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-semibold text-amber-950">
+                  {t.continueRerun(checkpointStageLabel(runCheckpoint))}
+                </span>
+                <span className="block truncate text-[11px] text-amber-800">
+                  {checkpointCleanupLabel(runCheckpoint)}
+                </span>
+              </span>
+            </button>
+          )}
+          {items.map((item) => {
+            const active = item.id === activeItemId;
+            const summary = stageCardSummary(item);
+            const showSummary = shouldShowFlowSummary(item);
+            return (
+              <button
+                key={item.id}
+                type="button"
+                ref={(node) => {
+                  itemRefs.current[item.id] = node;
+                }}
+                aria-current={item.id === activeItemId ? "true" : undefined}
+                title={flowItemTooltip(item)}
+                className={cn(
+                  "group relative flex h-6 w-full items-center justify-center rounded-control text-left transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300",
+                  active && "bg-slate-50",
+                )}
+                onClick={() => jumpTo(item)}
+              >
+                <span
+                  className={cn(
+                    "relative z-10 h-0.5 rounded-full transition-all",
+                    active ? "w-5 bg-slate-900" : "w-3.5 bg-slate-300 group-hover:w-5 group-hover:bg-slate-600 group-focus-visible:w-5 group-focus-visible:bg-slate-600",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
+                    active
+                      ? "border-slate-300 bg-white shadow-sm"
+                      : "border-gray-200 bg-white",
+                  )}
+                >
+                  <span className="flex min-w-0 items-start justify-between gap-3">
+                    <span className={cn(
+                      "min-w-0 truncate text-[13px] font-semibold",
+                      active ? "text-slate-950" : "text-slate-800",
+                    )}>
+                      {item.title}
+                    </span>
+                  </span>
+                    {showSummary && (
+                      <span className="mt-1 block truncate text-[11px] leading-4 text-slate-500">
+                        {summary}
+                      </span>
+                    )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+
+  const inlineRailContent = items.length === 0 ? null : (
+    <div className="relative h-full w-full">
+      {items.slice(0, -1).map((item, index) => {
+        const span = 88;
+        const start = 6;
+        const top = items.length === 1 ? 50 : start + (index / (items.length - 1)) * span;
+        const nextTop = start + ((index + 1) / (items.length - 1)) * span;
+        return (
+          <span
+            key={`${item.id}-connector`}
+            className="pointer-events-none absolute left-1/2 w-px -translate-x-1/2 bg-slate-200"
+            style={{
+              top: `calc(${top}% + 0.5rem)`,
+              height: `calc(${nextTop - top}% - 1rem)`,
+            }}
+          />
+        );
+      })}
+      {items.map((item, index) => {
+        const active = item.id === activeItemId;
+        const summary = stageCardSummary(item);
+        const human = isHumanFlowItem(item);
+        const showSummary = shouldShowFlowSummary(item);
+        const groupExpanded = expandedGroupId === item.id;
+        const span = 88;
+        const start = 6;
+        const top = items.length === 1 ? 50 : start + (index / (items.length - 1)) * span;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            ref={(node) => {
+              itemRefs.current[item.id] = node;
+            }}
+            aria-current={item.id === activeItemId ? "true" : undefined}
+            title={flowItemTooltip(item)}
+            style={{ top: `${top}%` }}
+            className={cn(
+              "group absolute left-0 flex w-full -translate-y-1/2 items-center justify-center text-left focus-visible:outline-none",
+              item.children?.length ? "h-7" : "h-5",
+            )}
+            onClick={(event) => {
+              jumpTo(item);
+              if (!item.children?.length) event.currentTarget.blur();
+            }}
+          >
+            <span
+              className={cn(
+                "relative z-10 flex h-4 w-4 items-center justify-center rounded-full border bg-white shadow-sm transition",
+                active
+                  ? "border-slate-900 text-slate-900"
+                  : human
+                    ? "border-violet-200 text-violet-500 group-hover:border-violet-300 group-hover:text-violet-600 group-focus-visible:border-violet-300 group-focus-visible:text-violet-600"
+                    : "border-slate-200 text-slate-500 group-hover:border-slate-300 group-hover:text-slate-700 group-focus-visible:border-slate-300 group-focus-visible:text-slate-700",
+              )}
+            >
+              <FlowItemIcon item={item} className="h-2.5 w-2.5" />
+            </span>
+            {!item.children?.length ? (
+              <span
+                className={cn(
+                  "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
+                  active
+                    ? "border-slate-300 bg-white shadow-sm"
+                    : "border-gray-200 bg-white",
+                )}
+              >
+                <span className="flex min-w-0 items-start justify-between gap-3">
+                  <span className={cn(
+                    "min-w-0 truncate text-[13px] font-semibold",
+                    active ? "text-slate-950" : "text-slate-800",
+                  )}>
+                    {item.title}
+                  </span>
+                </span>
+                {showSummary && (
+                  <span className="mt-1 block truncate text-[11px] leading-4 text-slate-500">
+                    {summary}
+                  </span>
+                )}
+              </span>
+            ) : null}
+            {item.children?.length && groupExpanded ? (
+              <span className="absolute left-full top-1/2 z-50 ml-4 flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-1.5 py-2 shadow-lg backdrop-blur">
+                {item.children.map((child) => {
+                  const childHuman = isHumanFlowItem(child);
+                  return (
+                    <button
+                      key={child.id}
+                      type="button"
+                      title={flowItemTooltip(child)}
+                      className="group/child relative flex h-6 w-6 items-center justify-center rounded-full"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        jumpToChild(child);
+                        event.currentTarget.blur();
+                      }}
+                    >
+                      <span
+                        className={cn(
+                          "flex h-4 w-4 items-center justify-center rounded-full border bg-white shadow-sm",
+                          childHuman
+                            ? "border-violet-200 text-violet-500"
+                            : "border-slate-200 text-slate-500",
+                        )}
+                      >
+                        <FlowItemIcon item={child} className="h-2.5 w-2.5" />
+                      </span>
+                      <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 w-44 -translate-y-1/2 rounded-control border border-gray-200 bg-white px-2.5 py-1.5 text-left opacity-0 shadow-lg transition group-hover/child:opacity-100">
+                        <span className="block truncate text-[12px] font-semibold text-slate-800">{child.title}</span>
+                        {shouldShowFlowSummary(child) && (
+                          <span className="mt-1 block truncate text-[11px] text-slate-500">{stageCardSummary(child)}</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (inline) {
+    return (
+      <div
+        ref={rootRef}
+        className="group/flow-rail pointer-events-auto absolute bottom-6 left-0 top-6 z-20 w-9 overflow-visible"
+        aria-label={t.workspaceFlow}
+      >
+        <div className="h-full w-8 px-1 py-2 opacity-0 transition-opacity duration-150 group-hover/flow-rail:opacity-100 group-focus-within/flow-rail:opacity-100">
+          {inlineRailContent}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} className="relative">
@@ -662,96 +1281,17 @@ export function WorkspaceFlowIndex({
             ? "border-slate-300 bg-slate-50 text-slate-800"
             : "border-gray-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-800",
         )}
-        aria-label="流程"
-        title="流程"
+        aria-label={t.flow}
+        title={t.flow}
         onClick={() => setOpen((v) => !v)}
       >
         <ListTree className="h-3.5 w-3.5" />
-        <span className={cn(compact && "sr-only")}>流程</span>
+        <span className={cn(compact && "sr-only")}>{t.flow}</span>
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-72 overflow-y-auto rounded-card border border-gray-200 bg-white p-2 shadow-lg">
-          {items.length === 0 ? (
-            runCheckpoint ? (
-              <button
-                type="button"
-                className="flex w-full items-start gap-2 rounded-control bg-amber-50 px-2 py-2 text-left"
-                disabled
-                title={checkpointCleanupLabel(runCheckpoint)}
-              >
-                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-semibold text-amber-950">
-                    繼續時重跑：{checkpointStageLabel(runCheckpoint)}
-                  </span>
-                  <span className="block truncate text-[11px] text-amber-800">
-                    {checkpointCleanupLabel(runCheckpoint)}
-                  </span>
-                </span>
-              </button>
-            ) : (
-              <p className="px-2 py-3 text-xs text-slate-500">無任何內容</p>
-            )
-          ) : (
-            <div className="space-y-1">
-              {runCheckpoint && (
-                <button
-                  type="button"
-                  className="flex w-full items-start gap-2 rounded-control bg-amber-50 px-2 py-2 text-left"
-                  disabled
-                  title={checkpointCleanupLabel(runCheckpoint)}
-                >
-                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-semibold text-amber-950">
-                      繼續時重跑：{checkpointStageLabel(runCheckpoint)}
-                    </span>
-                    <span className="block truncate text-[11px] text-amber-800">
-                      {checkpointCleanupLabel(runCheckpoint)}
-                    </span>
-                  </span>
-                </button>
-              )}
-              {items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  ref={(node) => {
-                    itemRefs.current[item.id] = node;
-                  }}
-                  aria-current={item.id === activeItemId ? "true" : undefined}
-                  title={item.rawTitle || `${item.title}：${item.detail}`}
-                  className={cn(
-                    "flex w-full items-start gap-2 rounded-control px-2 py-2 text-left transition-colors hover:bg-slate-50",
-                    item.id === activeItemId && "bg-slate-50",
-                  )}
-                  onClick={() => jumpTo(item)}
-                >
-                  <span
-                    className={cn(
-                      "mt-1 h-2 w-2 shrink-0 rounded-full transition",
-                      toneClass[item.tone],
-                      item.id === activeItemId && "ring-2 ring-slate-200 ring-offset-1",
-                    )}
-                  />
-                  <span className="min-w-0">
-                    <span className={cn(
-                      "block truncate text-xs font-semibold",
-                      item.id === activeItemId ? "text-slate-900" : "text-slate-700",
-                    )}>
-                      {item.title}
-                    </span>
-                    {!["action", "designRationale", "srs"].includes(item.tone) && (
-                      <span className="block truncate text-[11px] text-slate-500">
-                        {item.detail}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="absolute left-0 top-full z-30 mt-2 max-h-96 w-16 overflow-visible rounded-card border border-gray-200 bg-white px-2 py-2.5 shadow-lg">
+          {railContent}
         </div>
       )}
     </div>

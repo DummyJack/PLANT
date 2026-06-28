@@ -14,6 +14,7 @@ from model import validate_provider_api_keys
 from storage import Store
 
 from .routes import artifacts, config, documents, projects, runs, secrets
+from .services.run_config import normalize_agent_models_to_valid_provider
 from .services.run_manager import RunManager
 
 
@@ -33,6 +34,28 @@ app.state.base_dir = BASE_DIR
 app.state.run_manager = run_manager
 
 BLOCKED_BROWSER_PATHS = {"/", "/api", "/docs", "/redoc", "/openapi.json"}
+
+
+def is_browser_navigation(request: Request) -> bool:
+    fetch_mode = request.headers.get("sec-fetch-mode", "").strip().lower()
+    if fetch_mode == "navigate":
+        return True
+    accept = request.headers.get("accept", "").lower()
+    return "text/html" in accept and "application/json" not in accept
+
+
+def is_api_navigation_allowed(path: str) -> bool:
+    if path.startswith("/api/manual/"):
+        return True
+    parts = path.strip("/").split("/")
+    if len(parts) < 5 or parts[0] != "api" or parts[1] != "projects":
+        return False
+    route = parts[3]
+    if route == "manual":
+        return True
+    if route == "references" and len(parts) >= 5:
+        return True
+    return False
 
 
 def forbidden_page() -> HTMLResponse:
@@ -95,28 +118,23 @@ def forbidden_page() -> HTMLResponse:
     )
 
 
-def use_localhost(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def frontend_origins() -> list[str]:
-    if use_localhost("devlop_frontend", True):
-        return [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
+    frontend_host = os.getenv("frontend_host", "plant.dummyjack.com").strip() or "plant.dummyjack.com"
     return [
-        "https://plant.dummyjack.com",
-        "http://plant.dummyjack.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        f"https://{frontend_host}",
+        f"http://{frontend_host}",
     ]
 
 
 @app.middleware("http")
 async def block_direct_backend_pages(request: Request, call_next):
-    if request.url.path in BLOCKED_BROWSER_PATHS:
+    path = request.url.path
+    if path in BLOCKED_BROWSER_PATHS or (
+        path.startswith("/api/") and is_browser_navigation(request)
+        and not is_api_navigation_allowed(path)
+    ):
         return forbidden_page()
     return await call_next(request)
 
@@ -151,7 +169,7 @@ def health(request: Request):
         config = Store(base_dir).load_config()
         checks["config"]["loaded"] = True
         try:
-            validate_provider_api_keys(config)
+            validate_provider_api_keys(normalize_agent_models_to_valid_provider(config))
             checks["api_keys"]["valid"] = True
         except Exception as exc:
             checks["api_keys"]["error"] = str(exc)
@@ -172,3 +190,6 @@ def health(request: Request):
         checks["projects_dir"]["error"] = str(exc)
 
     return checks
+
+
+app.include_router(artifacts.public_router)

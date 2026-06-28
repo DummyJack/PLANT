@@ -11,7 +11,7 @@ from storage import Store
 from utils import Logger, export_enabled
 from utils.language import sync_output_language
 
-from .security import sanitize_filename, validate_project_id
+from .security import sanitize_filename, validate_project_id, write_upload_file
 
 
 ALLOWED_REFERENCE_EXTS = {
@@ -25,7 +25,6 @@ ALLOWED_REFERENCE_EXTS = {
     ".csv",
 }
 REFERENCE_EXTS_LABEL = ", ".join(sorted(ALLOWED_REFERENCE_EXTS))
-MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 
 
 class ProjectService:
@@ -212,7 +211,7 @@ class ProjectService:
         project_id: str,
         *,
         html: bool = True,
-        cost: bool = True,
+        cost: bool = False,
         manual: bool = True,
     ) -> Dict[str, Any]:
         self.assert_no_active_run(project_id)
@@ -259,12 +258,9 @@ class ProjectService:
                 status_code=400,
                 detail=f"Unsupported reference file type. Allowed: {REFERENCE_EXTS_LABEL}",
             )
-        data = await file.read()
-        if len(data) > MAX_REFERENCE_BYTES:
-            raise HTTPException(status_code=400, detail="File is too large")
         target = self.references_dir(project_id) / name
-        target.write_bytes(data)
-        return {"project_id": project_id, "saved": True, "name": name, "size": len(data)}
+        size = await write_upload_file(file, target)
+        return {"project_id": project_id, "saved": True, "name": name, "size": size}
 
     def delete_reference(self, project_id: str, name: str) -> Dict[str, Any]:
         self.ensure_project(project_id)

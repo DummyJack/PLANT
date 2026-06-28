@@ -9,6 +9,7 @@ import { PanelChrome } from "@/components/PanelChrome";
 import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
 import { useProjectData } from "@/hooks/useProjectData";
 import { useActiveRun } from "@/hooks/useActiveRun";
+import { useI18n } from "@/i18n";
 import { useProjectChatHydration } from "@/hooks/useProjectChatHydration";
 import { useRunEvents } from "@/hooks/useRunEvents";
 import { useChatStore } from "@/stores/chatStore";
@@ -256,6 +257,7 @@ function stageOverridesWithForce(
 }
 
 export function MeetingPanel({ projectId }: MeetingPanelProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const configQuery = useQuery({
     queryKey: ["config"],
@@ -593,8 +595,8 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       else clearMessages();
       const trimmed = projectId ? "" : input.trim();
       const runIdea = projectId ? "" : (trimmed || roughIdea);
-      if (!canWrite) throw new Error("需要啟動碼才能執行此操作");
-      if (!projectId && !runIdea) throw new Error("請先輸入初步想法");
+      if (!canWrite) throw new Error(t.activationRequiredAction);
+      if (!projectId && !runIdea) throw new Error(t.enterInitialIdeaFirst);
       const runConfig = projectId
         ? (await queryClient.fetchQuery({
             queryKey: ["config"],
@@ -643,6 +645,48 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       }
       clearAttachedDocs();
       clearStagedReferenceFiles();
+      queryClient.setQueryData<BootstrapResponse | undefined>(["bootstrap"], (current) => {
+        if (!current) return current;
+        const projectExists = current.projects.some(
+          (project) => project.project_id === run.project_id,
+        );
+        return {
+          ...current,
+          projects: projectExists
+            ? current.projects.map((project) =>
+                project.project_id === run.project_id
+                  ? {
+                      ...project,
+                      rough_idea: project.rough_idea ?? initialIdea,
+                      active_run: {
+                        run_id: run.run_id,
+                        status: run.status,
+                        pending_decision: run.pending_decision,
+                      },
+                    }
+                  : project,
+              )
+            : [
+                {
+                  project_id: run.project_id,
+                  rough_idea: initialIdea,
+                  active_run: {
+                    run_id: run.run_id,
+                    status: run.status,
+                    pending_decision: run.pending_decision,
+                  },
+                },
+                ...current.projects,
+              ],
+          active_runs: {
+            ...(current.active_runs ?? {}),
+            [run.project_id]: {
+              run_id: run.run_id,
+              status: run.status,
+            },
+          },
+        };
+      });
       setActiveProjectId(run.project_id);
       await queryClient.fetchQuery({
         queryKey: ["bootstrap"],
@@ -656,8 +700,8 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       if (e.message !== "cancelled") {
         pushNotice({
           tone: "error",
-          title: "啟動失敗",
-          message: errorMessage(e, "無法啟動 Agent 執行"),
+          title: t.startFailed,
+          message: errorMessage(e, t.unableStartRun),
         });
       }
     },
@@ -675,15 +719,15 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     onError: (e: Error) => {
       pushNotice({
         tone: "error",
-        title: "停止失敗",
-        message: errorMessage(e, "無法停止 Agent 執行"),
+        title: t.stopFailed,
+        message: errorMessage(e, t.unableStopRun),
       });
     },
   });
 
   const skipAllHumanInterventionsMut = useMutation({
     mutationFn: () => {
-      if (!activeRun?.pending_decision) throw new Error("目前沒有可跳過的人類介入");
+      if (!activeRun?.pending_decision) throw new Error(t.noHumanInterventionToSkip);
       return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
         skip_all_human_interventions: true,
       });
@@ -699,15 +743,15 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     onError: (e: Error) => {
       pushNotice({
         tone: "error",
-        title: "跳過失敗",
-        message: errorMessage(e, "無法跳過後續人類介入"),
+        title: t.skipFailed,
+        message: errorMessage(e, t.unableSkipHumanIntervention),
       });
     },
   });
 
   const deleteProjectMut = useMutation({
     mutationFn: async () => {
-      if (!projectId) throw new Error("未選擇專案");
+      if (!projectId) throw new Error(t.projectNotSelected);
       const deletedProjectId = projectId;
       await deleteProject(deletedProjectId);
       return deletedProjectId;
@@ -738,32 +782,31 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     onError: (e: Error) => {
       pushNotice({
         tone: "error",
-        title: "刪除失敗",
-        message: errorMessage(e, "刪除失敗"),
+        title: t.deleteFailed,
+        message: errorMessage(e, t.deleteFailed),
       });
     },
   });
 
   const stopping = activeRun?.status === "cancelling" || cancelMut.isPending;
   const continueStageSyncPending = !!projectId && !artifacts.isSuccess;
-  const stageDisabled = runActive || !canWrite || continueStageSyncPending;
+  const continueStageLocked = !!projectId;
+  const stageDisabled = runActive || !canWrite || continueStageSyncPending || continueStageLocked;
   const stageDisabledReason = !canWrite
-    ? "需要啟動碼才能調整階段"
+    ? t.activationRequiredStages
     : continueStageSyncPending
-      ? "讀取專案階段中"
+      ? t.loadingProjectStages
+      : runActive
+        ? t.runningStageDisabled
+      : continueStageLocked
+        ? t.continueStageDisabled
       : undefined;
 
   return (
     <PanelChrome
-      title="工作區"
+      title={t.workspace}
       actions={
         <>
-          <WorkspaceFlowIndex
-            compact={headerCompact}
-            runCheckpoint={runCheckpoint}
-            artifactItems={artifactItems ?? []}
-            completedDisplayOnly={docsComplete}
-          />
           <StageToggleMenu
             disabled={stageDisabled}
             disabledReason={stageDisabledReason}
@@ -793,6 +836,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         onDrop={handleReviewDockDrop}
       >
         <div className="relative min-h-0 flex-1 flex flex-col bg-slate-50/50">
+          <WorkspaceFlowIndex
+            inline
+            runCheckpoint={runCheckpoint}
+            artifactItems={artifactItems ?? []}
+          />
           <div className="min-h-0 flex-1">
             <ChatFeed
               key={projectId || "new-project"}
@@ -856,7 +904,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               dismissRunCheckpoint(projectId, rawRunCheckpointKey);
             }
           }}
-          submitLabel={projectId && docsComplete ? "執行" : undefined}
+          submitLabel={projectId && docsComplete ? t.execute : undefined}
           submitDisabled={false}
           reviewMode={reviewMode}
           humanDecisionMode={activeRun?.pending_decision?.kind === "human_decision"}
@@ -896,9 +944,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               onClick={(event) => event.stopPropagation()}
             >
               <div className="mb-3">
-                <p className="text-[15px] font-semibold text-slate-900">刪除專案？</p>
+                <p className="text-[15px] font-semibold text-slate-900">{t.deleteProjectTitle}</p>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  此動作無法復原。
+                  {t.irreversibleAction}
                 </p>
               </div>
               <div className="flex justify-center gap-2">
@@ -907,7 +955,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
                   className="rounded-control border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-gray-50"
                   onClick={() => setConfirmDeleteProjectOpen(false)}
                 >
-                  取消
+                  {t.cancel}
                 </button>
                 <button
                   type="button"
@@ -915,7 +963,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
                   disabled={deleteProjectMut.isPending || !canWrite}
                   onClick={() => deleteProjectMut.mutate()}
                 >
-                  刪除
+                  {t.remove}
                 </button>
               </div>
             </div>

@@ -8,6 +8,73 @@ KNOWN_AGENTS = frozenset(
     {"user", "analyst", "expert", "mediator", "modeler", "documentor"}
 )
 
+PROVIDER_PRIORITY = ("openai", "gemini", "claude")
+DEFAULT_PROVIDER_MODELS = {
+    "openai": "gpt-5.5",
+    "claude": "claude-opus-4-8",
+    "gemini": "gemini-3.5-flash",
+}
+PROVIDER_MODEL_PREFIXES = {
+    "openai": ("gpt-", "o1", "o3", "o4"),
+    "claude": ("claude-",),
+    "gemini": ("gemini-",),
+}
+
+
+def first_valid_api_provider(config: Dict[str, Any]) -> Optional[str]:
+    state = config.get("api_state") if isinstance(config.get("api_state"), dict) else {}
+    for provider in PROVIDER_PRIORITY:
+        if state.get(provider) == "valid":
+            return provider
+    return None
+
+
+def default_model_for_provider(config: Dict[str, Any], provider: str) -> str:
+    return DEFAULT_PROVIDER_MODELS.get(provider, DEFAULT_PROVIDER_MODELS["openai"])
+
+
+def model_matches_provider(provider: str, model: str) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip().lower()
+    if not normalized_model:
+        return False
+    own_prefixes = PROVIDER_MODEL_PREFIXES.get(normalized_provider)
+    if own_prefixes and normalized_model.startswith(own_prefixes):
+        return True
+    for other_provider, prefixes in PROVIDER_MODEL_PREFIXES.items():
+        if other_provider == normalized_provider:
+            continue
+        if normalized_model.startswith(prefixes):
+            return False
+    return True
+
+
+def normalize_agent_models_to_valid_provider(config: Dict[str, Any]) -> Dict[str, Any]:
+    default_provider = first_valid_api_provider(config)
+    if not default_provider:
+        raise ValueError("請先完成至少一個 API Key 測試")
+
+    state = config.get("api_state") if isinstance(config.get("api_state"), dict) else {}
+    updated = dict(config)
+    agent_models = dict(updated.get("agent_models") or {})
+    targets = set(KNOWN_AGENTS) | set(agent_models.keys()) | {"default"}
+    fallback_model = default_model_for_provider(config, default_provider)
+
+    for agent in targets:
+        current = agent_models.get(agent)
+        row = dict(current) if isinstance(current, dict) else {}
+        provider = str(row.get("provider") or "").strip().lower()
+        provider_valid = state.get(provider) == "valid"
+        if not provider_valid:
+            row["provider"] = default_provider
+            row["model"] = fallback_model
+        elif not model_matches_provider(provider, str(row.get("model") or "")):
+            row["model"] = default_model_for_provider(config, provider)
+        agent_models[agent] = row
+
+    updated["agent_models"] = agent_models
+    return updated
+
 
 def required_agents_for_enabled_stages(config: Dict[str, Any]) -> set[str]:
     required: set[str] = set()

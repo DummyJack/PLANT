@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { fetchFile } from "@/api/projects";
 import { agentLabel } from "@/constants/agents";
+import { useI18n } from "@/i18n";
+import { sortStakeholdersByType } from "@/utils/stakeholders";
 import { useEffect } from "react";
 import type { ReactNode } from "react";
 
@@ -86,17 +88,19 @@ function markdownSectionText(value: string, heading: string) {
     .trim();
 }
 
-function stopReasonLabel(reason: string): string {
+type UiTexts = ReturnType<typeof useI18n>["t"];
+
+function stopReasonLabel(reason: string, t: UiTexts): string {
   switch (reason) {
     case "judge_finish":
-      return "收束投票通過";
+      return t.stopReasonJudgeFinish;
     case "no_new_info":
-      return "連續未產生新候選需求";
+      return t.stopReasonNoNewInfo;
     case "max_turn":
     case "max_turns_reached":
-      return "達到最大訪談輪次";
+      return t.stopReasonMaxTurn;
     case "":
-      return "尚未記錄結束原因";
+      return t.stopReasonMissing;
     default:
       return reason;
   }
@@ -180,39 +184,20 @@ function idList(value: unknown): string {
 
 function sourceLabel(item: Record<string, unknown>) {
   const source = text(item.source);
-  const sourceIds = idList(item.source_ids ?? item.source_id ?? item.related_requirement_ids);
+  const sourceIds = idList(item.source_ids);
   if (sourceIds) return sourceIds;
   return source;
-}
-
-function stakeholderTypeLabel(value: string) {
-  switch (value) {
-    case "primary_user":
-      return "核心使用者";
-    case "system_owner":
-      return "系統所有者與管理者";
-    case "external_party":
-      return "外部相關單位";
-    default:
-      return value;
-  }
 }
 
 function stakeholderStatementText(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (!isRecord(value)) return String(value ?? "").trim();
-  return (
-    text(value.text) ||
-    text(value.statement) ||
-    text(value.content) ||
-    text(value.description) ||
-    text(value.requirement)
-  );
+  return text(value.text);
 }
 
 function stakeholderStatementId(value: unknown): string {
   if (!isRecord(value)) return "";
-  return text(value.id) || text(value.statement_id) || text(value.source_id);
+  return text(value.id);
 }
 
 function titleCaseLabel(value: string) {
@@ -244,6 +229,7 @@ function modelDescriptionText(value: string) {
 }
 
 function RequirementsView({ data, anchor }: { data: Record<string, unknown>; anchor?: string | null }) {
+  const { t } = useI18n();
   const urls = list(data.URL);
   const reqs = list(data.REQ);
   useEffect(() => {
@@ -257,7 +243,7 @@ function RequirementsView({ data, anchor }: { data: Record<string, unknown>; anc
   }, [anchor]);
   const renderRows = (rows: unknown[], kind: "URL" | "REQ") => {
     if (rows.length === 0) {
-      return <p className="text-sm text-slate-500">無任何內容</p>;
+      return <p className="text-sm text-slate-500">{t.noContent}</p>;
     }
     const records = rows.map((row) => (isRecord(row) ? row : {}));
     return (
@@ -273,9 +259,9 @@ function RequirementsView({ data, anchor }: { data: Record<string, unknown>; anc
           <thead className="bg-slate-50 text-xs text-slate-500">
             <tr>
               <th className="border-b px-3 py-2 text-left">ID</th>
-              {kind === "REQ" && <th className="border-b px-3 py-2 text-left">類型</th>}
-              <th className="border-b px-3 py-2 text-left">描述</th>
-              {kind === "URL" && <th className="border-b px-3 py-2 text-left">來源</th>}
+              {kind === "REQ" && <th className="border-b px-3 py-2 text-left">{t.type}</th>}
+              <th className="border-b px-3 py-2 text-left">{t.description}</th>
+              {kind === "URL" && <th className="border-b px-3 py-2 text-left">{t.source}</th>}
             </tr>
           </thead>
           <tbody>
@@ -326,9 +312,9 @@ function RequirementsView({ data, anchor }: { data: Record<string, unknown>; anc
 
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="使用者需求" titleAlign="center" titleSize="sm">{renderRows(urls, "URL")}</Section>
+      <Section title={t.userRequirements} titleAlign="center" titleSize="sm">{renderRows(urls, "URL")}</Section>
       <div id="requirements-req">
-        <Section title="正式需求" titleAlign="center" titleSize="sm">{renderRows(reqs, "REQ")}</Section>
+        <Section title={t.formalRequirements} titleAlign="center" titleSize="sm">{renderRows(reqs, "REQ")}</Section>
       </div>
     </div>
   );
@@ -371,11 +357,12 @@ function externalDocumentSources(projectData: Record<string, unknown>): Array<Re
 }
 
 function FeedbackView({ projectId, data }: { projectId: string | null; data: Record<string, unknown> }) {
+  const { t } = useI18n();
   const sections: Array<[string, unknown[]]> = [
-    ["發現", list(data.findings)],
-    ["限制", list(data.constraints)],
-    ["風險", list(data.risks)],
-    ["建議", list(data.recommendations)],
+    [t.findings, list(data.findings)],
+    [t.constraints, list(data.constraints)],
+    [t.risks, list(data.risks)],
+    [t.suggestions, list(data.recommendations)],
   ];
   const project = useQuery({
     queryKey: ["file", projectId, "artifact/project.json"],
@@ -401,11 +388,11 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
   });
   return (
     <div className="min-h-0 overflow-y-auto">
-      <ArtifactHeading border={false}>領域研究</ArtifactHeading>
+      <ArtifactHeading border={false}>{t.domainResearch}</ArtifactHeading>
       {sections.map(([title, rows]) => (
         <Section key={title} title={title}>
           {rows.length === 0 ? (
-            <p className="text-sm text-slate-500">無任何內容</p>
+            <p className="text-sm text-slate-500">{t.noContent}</p>
           ) : (
             <div className="space-y-2">
               {rows.map((row, index) => {
@@ -418,7 +405,7 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
                     {list(item.related_requirement_ids).length > 0 && (
                       <div className="mt-4">
                         <div className="mb-2 text-xs font-semibold text-slate-500">
-                          相關需求
+                          {t.relatedRequirements}
                         </div>
                         <div className="flex flex-wrap gap-1">
                         {list(item.related_requirement_ids).map((id) => (
@@ -434,9 +421,9 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
           )}
         </Section>
       ))}
-      <Section title="來源">
+      <Section title={t.source}>
         {uniqueSources.length === 0 ? (
-          <p className="text-sm text-slate-500">無任何來源</p>
+          <p className="text-sm text-slate-500">{t.noSources}</p>
         ) : (
           <div className="space-y-2">
             {uniqueSources.map((row, index) => {
@@ -470,6 +457,7 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
 }
 
 function ScopeView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useI18n();
   const render = (rows: unknown[]) => (
     <div className="space-y-2">
       {rows.map((row, index) => (
@@ -481,34 +469,37 @@ function ScopeView({ data }: { data: Record<string, unknown> }) {
   );
   return (
     <div className="min-h-0 overflow-y-auto">
-      <ArtifactHeading border={false}>需求範圍</ArtifactHeading>
-      <Section title="範圍內">{render(list(data.in_scope))}</Section>
-      <Section title="範圍外">{render(list(data.out_of_scope))}</Section>
+      <ArtifactHeading border={false}>{t.requirementScope}</ArtifactHeading>
+      <Section title={t.inScope}>{render(list(data.in_scope))}</Section>
+      <Section title={t.outOfScope}>{render(list(data.out_of_scope))}</Section>
     </div>
   );
 }
 
 function ProjectView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useI18n();
   return (
     <div className="min-h-0 overflow-y-auto">
       <section className="border-b border-gray-100 px-4 py-3">
         <Card>
-          <div className="text-xs font-semibold text-slate-500">初始想法</div>
+          <div className="text-xs font-semibold text-slate-500">{t.initialThought}</div>
           <p className="mt-1 text-sm text-slate-800">{text(data.rough_idea)}</p>
-          <div className="mt-3 text-xs font-semibold text-slate-500">情境</div>
+          <div className="mt-3 text-xs font-semibold text-slate-500">{t.scenario}</div>
           <p className="mt-1 text-sm text-slate-800">{text(data.scenario)}</p>
         </Card>
       </section>
-      <Section title="利害關係人" titleSize="sm">
+      <Section title={t.stakeholders} titleSize="sm">
         <div className="space-y-2">
-          {list(data.stakeholders).map((row, index) => {
+          {sortStakeholdersByType(list(data.stakeholders), (row) =>
+            isRecord(row) ? row.type : "",
+          ).map((row, index) => {
             const item = isRecord(row) ? row : {};
             const type = text(item.type);
             return (
               <Card key={index}>
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-sm font-semibold text-slate-800">{text(item.name)}</span>
-                  {type && <Chip>{stakeholderTypeLabel(type)}</Chip>}
+                  {type && <Chip>{(t.stakeholderTypeLabels as Record<string, string>)[type] ?? type}</Chip>}
                 </div>
                 <div className="mt-3 space-y-2">
                   {list(item.text).map((line, i) => {
@@ -537,9 +528,10 @@ function ProjectView({ data }: { data: Record<string, unknown> }) {
 }
 
 function SystemModelsView({ data }: { data: unknown[] }) {
+  const { t } = useI18n();
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="系統模型" titleAlign="center" titleSize="sm">
+      <Section title={t.systemModelGeneration} titleAlign="center" titleSize="sm">
         <div className="space-y-2">
           {data.map((row, index) => {
             const item = isRecord(row) ? row : {};
@@ -560,7 +552,7 @@ function SystemModelsView({ data }: { data: unknown[] }) {
                 {list(item.related_requirement_ids).length > 0 && (
                   <div className="mt-4">
                     <div className="mb-2 text-xs font-semibold text-slate-500">
-                      相關需求
+                      {t.relatedRequirements}
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {list(item.related_requirement_ids).map((id) => (
@@ -579,16 +571,17 @@ function SystemModelsView({ data }: { data: unknown[] }) {
 }
 
 function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useI18n();
   const versions = Object.entries(data)
     .filter(([key, value]) => /^v\d+$/i.test(key) && isRecord(value))
     .sort(([a], [b]) => Number(a.slice(1)) - Number(b.slice(1)));
   const sections = versions.length ? versions : [["", data] as [string, unknown]];
   const isConflict = (item: Record<string, unknown>) =>
-    /conflict/i.test(text(item.final_label) || text(item.initial_label));
+    /conflict/i.test(text(item.final_label));
 
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="衝突辨識結果" titleAlign="center" titleSize="sm">
+      <Section title={t.conflictResults} titleAlign="center" titleSize="sm">
         <div className="space-y-4">
           {sections.map(([version, payload]) => {
             const versionData = isRecord(payload) ? payload : {};
@@ -609,10 +602,10 @@ function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
                 )}
                 <div className="mb-3 grid grid-cols-4 gap-px overflow-hidden rounded-control border border-slate-200 bg-slate-100 text-center text-xs">
                   {[
-                    ["兩兩比對", pairs.length],
-                    ["多方比對", multipleCount],
-                    ["衝突", conflictCount],
-                    ["非衝突", nonConflictCount],
+                    [t.pairwiseComparison, pairs.length],
+                    [t.multiPartyComparison, multipleCount],
+                    [t.conflict, conflictCount],
+                    [t.nonConflict, nonConflictCount],
                   ].map(([label, value]) => (
                     <div key={label} className="bg-white px-2 py-2">
                       <div className="font-semibold text-slate-800">{value}</div>
@@ -626,7 +619,7 @@ function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
                       isRecord(req) ? req : {},
                     );
                     const conflict = isConflict(item);
-                    const label = conflict ? "衝突" : "非衝突";
+                    const label = conflict ? t.conflict : t.nonConflict;
                     const reason =
                       text(item.initial_reason) ||
                       text(item.description) ||
@@ -662,7 +655,7 @@ function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
                         {reason && (
                           <div className="mt-3">
                             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              判斷理由
+                              {t.rationale}
                             </div>
                             <p className="mt-0.5 text-sm leading-relaxed text-slate-700">
                               {reason}
@@ -683,6 +676,7 @@ function ConflictPairsView({ data }: { data: Record<string, unknown> }) {
 }
 
 function ConflictReportView({ data }: { data: unknown[] }) {
+  const { t } = useI18n();
   return (
     <div className="min-h-0 overflow-y-auto">
       <Section title="Conflict Report">
@@ -724,8 +718,8 @@ function ConflictReportView({ data }: { data: unknown[] }) {
                       return (
                         <div key={optionIndex} className="rounded-control bg-slate-50 p-2">
                           <div className="flex flex-wrap gap-1">
-                            <Chip>選項 {optionLabel(text(opt.option), optionIndex)}</Chip>
-                            {opt.recommendation === true && <Chip>建議</Chip>}
+                            <Chip>{t.optionLabel(optionLabel(text(opt.option), optionIndex))}</Chip>
+                            {opt.recommendation === true && <Chip>{t.suggestions}</Chip>}
                           </div>
                           <p className="mt-1 text-xs leading-relaxed text-slate-700">
                             {text(opt.description)}
@@ -745,10 +739,11 @@ function ConflictReportView({ data }: { data: unknown[] }) {
 }
 
 function IssuesView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useI18n();
   const groups = isRecord(data.meeting_issues) ? data.meeting_issues : data;
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="議題" titleAlign="center" titleSize="sm">
+      <Section title={t.issues} titleAlign="center" titleSize="sm">
         <div className="space-y-3">
           {Object.entries(groups).filter(([, value]) => Array.isArray(value)).map(([round, rows]) => (
             <div key={round}>
@@ -763,11 +758,11 @@ function IssuesView({ data }: { data: Record<string, unknown> }) {
                         <span className="text-sm font-semibold text-slate-800">
                           {[text(item.issue_id) || text(item.id), text(item.title)].filter(Boolean).join(" ")}
                         </span>
-                        {text(item.proposed_by) && <Chip>提出者：{agentLabel(text(item.proposed_by))}</Chip>}
-                        {text(item.category) && <Chip>類型：{text(item.category)}</Chip>}
-                        {text(item.discussion_mode) && <Chip>模式：{text(item.discussion_mode)}</Chip>}
+                        {text(item.proposed_by) && <Chip>{t.proposedBy}: {agentLabel(text(item.proposed_by))}</Chip>}
+                        {text(item.category) && <Chip>{t.category}: {text(item.category)}</Chip>}
+                        {text(item.discussion_mode) && <Chip>{t.mode}: {text(item.discussion_mode)}</Chip>}
                         {participants.length > 0 && (
-                          <Chip>參與者：{participants.map(agentLabel).join(", ")}</Chip>
+                          <Chip>{t.participants}: {participants.map(agentLabel).join(", ")}</Chip>
                         )}
                       </div>
                     </Card>
@@ -783,6 +778,7 @@ function IssuesView({ data }: { data: Record<string, unknown> }) {
 }
 
 function ElicitationView({ data }: { data: Record<string, unknown> }) {
+  const { t } = useI18n();
   const plan = isRecord(data.plan) ? data.plan : {};
   const meeting = isRecord(data.meeting) ? data.meeting : {};
   const elicited = Array.isArray(data.elicited_reqts) ? data.elicited_reqts : [];
@@ -790,23 +786,23 @@ function ElicitationView({ data }: { data: Record<string, unknown> }) {
 
   return (
     <div className="min-h-0 overflow-y-auto">
-      <Section title="訪談狀態">
+      <Section title={t.elicitationStatus}>
         <div className="flex flex-wrap gap-2 text-xs text-slate-600">
           <span className="rounded-full border border-gray-200 bg-white px-2 py-1">
-            輪次上限：{String(plan.round_limit ?? "未設定")}
+            {t.roundLimit}: {String(plan.round_limit ?? t.notConfigured)}
           </span>
           <span className="rounded-full border border-gray-200 bg-white px-2 py-1">
-            模式：{text(plan.mode) || "未記錄"}
+            {t.mode}: {text(plan.mode) || t.notRecorded}
           </span>
           <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-800">
-            結束：{stopReasonLabel(stopReason)}
+            {t.finish}: {stopReasonLabel(stopReason, t)}
           </span>
         </div>
       </Section>
 
-      <Section title="訪談紀錄">
+      <Section title={t.elicitationRecords}>
         {Object.keys(meeting).length === 0 ? (
-          <p className="text-sm text-slate-500">尚無訪談問答紀錄</p>
+          <p className="text-sm text-slate-500">{t.noElicitationRecords}</p>
         ) : (
           <div className="space-y-3">
             {Object.entries(meeting).map(([roundKey, rows]) => (
@@ -842,9 +838,9 @@ function ElicitationView({ data }: { data: Record<string, unknown> }) {
         )}
       </Section>
 
-      <Section title="候選需求">
+      <Section title={t.candidateRequirements}>
         {elicited.length === 0 ? (
-          <p className="text-sm text-slate-500">尚無擷取候選需求</p>
+          <p className="text-sm text-slate-500">{t.noCandidateRequirements}</p>
         ) : (
           <div className="space-y-2">
             {elicited.map((row, index) => (
@@ -923,9 +919,10 @@ function MeetingHeading({
 }
 
 function MeetingSummarySection({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   return (
     <div className="rounded-control border border-gray-200 bg-white px-3 py-2">
-      <div className="text-xs font-semibold text-slate-500">摘要</div>
+      <div className="text-xs font-semibold text-slate-500">{t.summary}</div>
       <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
         {children}
       </div>
@@ -942,6 +939,7 @@ function FormalMeetingIssueCard({
   issue: Record<string, unknown>;
   index: number;
 }) {
+  const { t } = useI18n();
   const participants = valueList(issue.participants);
   const meetingId = text(issue.meeting_id) || `Meeting ${index + 1}`;
   const momMeta = useMeetingMomMeta(projectId, meetingId);
@@ -982,12 +980,12 @@ function FormalMeetingIssueCard({
           )}
           {text(issue.proposed_by) && (
             <span className="rounded-full bg-slate-100 px-2 py-0.5">
-              提出者：{agentLabel(text(issue.proposed_by))}
+              {t.proposedBy}: {agentLabel(text(issue.proposed_by))}
             </span>
           )}
           {participants.length > 0 && (
             <span className="rounded-full bg-slate-100 px-2 py-0.5">
-              參與者：{participants.map(agentLabel).join(", ")}
+              {t.participants}: {participants.map(agentLabel).join(", ")}
             </span>
           )}
         </div>
@@ -996,14 +994,14 @@ function FormalMeetingIssueCard({
         {summary && <MeetingSummarySection>{summary}</MeetingSummarySection>}
         {isRecord(issue.resolution) && (
           <div className="rounded-control border border-emerald-100 bg-emerald-50 px-3 py-2">
-            <div className="text-xs font-semibold text-emerald-800">決議</div>
+            <div className="text-xs font-semibold text-emerald-800">{t.resolution}</div>
             <div className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-emerald-900">
               {resolutionText}
             </div>
           </div>
         )}
         {!isRecord(issue.resolution) && (
-          <p className="text-sm text-slate-500">尚無決議摘要</p>
+          <p className="text-sm text-slate-500">{t.noResolutionSummary}</p>
         )}
       </div>
     </article>
@@ -1017,6 +1015,7 @@ function FormalMeetingView({
   projectId: string | null;
   data: unknown;
 }) {
+  const { t } = useI18n();
   const issues = Array.isArray(data)
     ? data
     : isRecord(data) && Array.isArray(data.issues)
@@ -1027,7 +1026,7 @@ function FormalMeetingView({
     <div className="min-h-0 overflow-y-auto">
       <div className="px-4 py-2">
         {issues.length === 0 ? (
-          <p className="text-sm text-slate-500">尚無正式會議議題</p>
+          <p className="text-sm text-slate-500">{t.noFormalMeetingIssues}</p>
         ) : (
           <div className="space-y-3">
             {issues.map((issue, index) => {

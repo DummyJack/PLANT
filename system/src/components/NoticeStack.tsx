@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useI18n } from "@/i18n";
 import { useNoticeStore, type NoticeTone } from "@/stores/noticeStore";
 import { cn } from "@/utils/cn";
 
@@ -25,6 +26,7 @@ function NoticeIcon({ tone }: { tone: NoticeTone }) {
 }
 
 export function NoticeStack() {
+  const { t } = useI18n();
   const notices = useNoticeStore((s) => s.notices);
   const dismissNotice = useNoticeStore((s) => s.dismissNotice);
   const [now, setNow] = useState(Date.now());
@@ -80,7 +82,7 @@ export function NoticeStack() {
                 type="button"
                 className="shrink-0 rounded p-1 opacity-60 hover:bg-white/50 hover:opacity-100"
                 onClick={() => dismissNotice(notice.id)}
-                aria-label="關閉提示"
+                aria-label={t.closeNotice}
               >
                 <X className="h-3.5 w-3.5" />
               </button>

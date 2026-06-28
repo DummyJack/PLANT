@@ -3,15 +3,12 @@ import type { ReactNode } from "react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { UI_TEXT } from "@/i18n";
+import { useUiStore } from "@/stores/uiStore";
 import App from "./App";
 import "./index.css";
 
-const DUMMYJACK_HOST = "plant.dummyjack.com";
-
-function useLocalhost(value: string | undefined, fallback: boolean): boolean {
-  if (value == null || value.trim() === "") return fallback;
-  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-}
+const FRONTEND_HOST = (import.meta.env.frontend_host ?? "plant.dummyjack.com").trim();
 
 function isLocalFrontendHost(hostname: string): boolean {
   return (
@@ -23,11 +20,8 @@ function isLocalFrontendHost(hostname: string): boolean {
 }
 
 function isAllowedFrontendHost(): boolean {
-  const useLocalFrontend = useLocalhost(import.meta.env.devlop_frontend, true);
   const hostname = window.location.hostname;
-  return useLocalFrontend
-    ? isLocalFrontendHost(hostname)
-    : hostname === DUMMYJACK_HOST;
+  return isLocalFrontendHost(hostname) || hostname === FRONTEND_HOST;
 }
 
 function isKnownFrontendPath(): boolean {
@@ -71,6 +65,7 @@ function ForbiddenFrontendMode() {
 }
 
 function NotFoundPage() {
+  const t = UI_TEXT[useUiStore.getState().language];
   return (
     <StatusPage
       title="Not Found (404)"
@@ -80,7 +75,7 @@ function NotFoundPage() {
           href="/"
           className="inline-flex h-11 items-center justify-center rounded-control bg-slate-950 px-6 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
         >
-          返回首頁
+          {t.backHome}
         </a>
       }
     />

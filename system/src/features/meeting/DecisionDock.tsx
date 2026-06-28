@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { DragEvent } from "react";
 import { submitDecision } from "@/api/runs";
 import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
+import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { sortStakeholdersByType } from "@/utils/stakeholders";
 
 interface DecisionDockProps {
   run: RunState;
@@ -26,19 +28,17 @@ interface DecisionDockProps {
   onReviewDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
 
-const STAKEHOLDER_TYPES = [
-  { value: "primary_user", label: "核心使用者" },
-  { value: "system_owner", label: "系統所有者與管理者" },
-  { value: "external_party", label: "外部相關單位" },
-];
+const STAKEHOLDER_TYPES = ["primary_user", "system_owner", "external_party"] as const;
 const OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-function optionDisplayLabel(value: string, index: number) {
+type UiTexts = ReturnType<typeof useI18n>["t"];
+
+function optionDisplayLabel(value: string, index: number, t: UiTexts) {
   const raw = value.trim().toUpperCase();
   const letter = /^\d+$/.test(raw)
     ? OPTION_LETTERS[Math.max(0, Number(raw) - 1)]
     : raw || OPTION_LETTERS[index] || String(index + 1);
-  return `選項 ${letter}`;
+  return t.optionLabel(letter);
 }
 
 interface CustomStakeholder {
@@ -168,6 +168,7 @@ export function DecisionDock({
   onReviewDragLeave,
   onReviewDrop,
 }: DecisionDockProps) {
+  const { t } = useI18n();
   const decision = run.pending_decision;
   const queryClient = useQueryClient();
   const canWrite = useUiStore((s) => s.canWrite);
@@ -232,14 +233,14 @@ export function DecisionDock({
     );
     const scopeChanged = isScopeReview && !sameScopeDraft(originalScopeDraft, editedScopeDraft);
     const reviewHelpText = isDomainReview
-      ? "右側可查看領域研究文件，支援拖移引用，按確定送出"
+      ? t.reviewHelpDomain
       : isRequirementsReview
-        ? "右側可查看使用者需求，支援拖移引用，按確定送出"
+        ? t.reviewHelpRequirements
         : isScopeReview
-          ? "右側可逐條編輯需求範圍；下方可加入建議，按確定送出"
+          ? t.reviewHelpScope
         : isMeetingIssueReview
-          ? "右側可查看候選議題，按確定送出"
-          : "右側可查看利害關係人發言，支援拖移引用與編輯，按確定送出";
+          ? t.reviewHelpMeetingIssues
+          : t.reviewHelpStakeholders;
     const renderSuggestion = (suggestion: ReviewSuggestion) => {
       const value = suggestion.text;
       const tokens = Array.from(new Set(value.match(/@[A-Za-z0-9_-]+/g) ?? []));
@@ -339,17 +340,17 @@ export function DecisionDock({
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-[13px] font-semibold text-slate-900">
                 {isDomainReview
-                  ? "建議（領域研究）"
+                  ? t.reviewSuggestionDomain
                   : isRequirementsReview
-                    ? "建議（使用者需求）"
+                    ? t.reviewSuggestionRequirements
                     : isScopeReview
-                      ? "建議（需求範圍）"
+                      ? t.reviewSuggestionScope
                     : isMeetingIssueReview
-                      ? "候選議題"
-                    : "建議（利害關係人發言）"}
+                      ? t.agentIssues
+                    : t.reviewSuggestionStakeholders}
               </div>
               <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                使用者介入
+                {t.userIntervention}
               </span>
             </div>
             <p className="mt-0.5 text-[11px] leading-5 text-slate-500">
@@ -364,7 +365,7 @@ export function DecisionDock({
               onClick={submitReview}
             >
               {waitingForResume && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              確定
+              {t.confirm}
             </button>
           </div>
         </div>
@@ -386,8 +387,8 @@ export function DecisionDock({
                       className="inline-flex h-5 w-5 items-center justify-center rounded-md text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-40"
                       disabled={actionDisabled}
                       onClick={() => onEditReviewSuggestion?.(index)}
-                      aria-label="編輯建議"
-                      title="編輯建議"
+                      aria-label={t.editSuggestion}
+                      title={t.editSuggestion}
                     >
                       <Edit3 className="h-3 w-3" />
                     </button>
@@ -396,8 +397,8 @@ export function DecisionDock({
                       className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-red-100 bg-white text-sm font-semibold leading-none text-red-600 hover:bg-red-50 disabled:opacity-40"
                       disabled={actionDisabled}
                       onClick={() => onRemoveReviewSuggestion?.(index)}
-                      aria-label="移除建議"
-                      title="移除建議"
+                      aria-label={t.removeSuggestion}
+                      title={t.removeSuggestion}
                     >
                       -
                     </button>
@@ -406,7 +407,7 @@ export function DecisionDock({
               ))
             ) : (
               <div className="rounded-md bg-slate-50 px-2 py-3 text-center text-[11px] leading-4 text-slate-400">
-                {isMeetingIssueReview ? "在下方對話匡輸入自訂議題後按「+」。" : "在下方對話匡輸入建議後按「+」。"}
+                {isMeetingIssueReview ? t.addCustomIssueHint : t.addSuggestionHint}
               </div>
             )}
           </div>
@@ -417,6 +418,10 @@ export function DecisionDock({
 
   if (decision.kind === "stakeholder_selection") {
     const proposed = decision.proposed ?? [];
+    const proposedDisplayRows = sortStakeholdersByType(
+      proposed.map((row, originalIndex) => ({ row, originalIndex })),
+      (item) => item.row.type,
+    );
     const maxSelect = decision.max_select ?? 5;
     const submitStakeholders = () => {
       const selectedProposed = Object.entries(stakeholders)
@@ -432,21 +437,21 @@ export function DecisionDock({
         .map((row) => ({
           name: row.name.trim(),
           type: row.type.trim(),
-          reason: row.reason.trim() || "使用者自訂",
+          reason: row.reason.trim() || t.userCustom,
         }))
-        .filter((row) => row.name || row.type || row.reason !== "使用者自訂");
+        .filter((row) => row.name || row.type || row.reason !== t.userCustom);
       const invalidCustom = customRows.find((row) => !row.name || !row.type);
       if (invalidCustom) {
-        setStakeholderError("自訂利害關係人需要填寫名稱並選擇類別");
+        setStakeholderError(t.customStakeholderInvalid);
         return;
       }
       const payloadRows = [...selectedProposed, ...customRows];
       if (!payloadRows.length) {
-        setStakeholderError("請至少選擇或新增一位利害關係人");
+        setStakeholderError(t.stakeholderRequired);
         return;
       }
       if (payloadRows.length > maxSelect) {
-        setStakeholderError(`最多只能選擇 ${maxSelect} 位利害關係人`);
+        setStakeholderError(t.stakeholderMaxSelect(maxSelect));
         return;
       }
       submitMut.mutate({ stakeholders: payloadRows });
@@ -459,10 +464,10 @@ export function DecisionDock({
           <div className="mb-2 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-slate-900">
-                請選擇利害關係人（最多 {maxSelect} 位）
+                {t.selectStakeholdersTitle(maxSelect)}
               </div>
               <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
-                按確定送出
+                {t.submitWithConfirm}
               </p>
             </div>
             <button
@@ -472,38 +477,38 @@ export function DecisionDock({
               onClick={submitStakeholders}
             >
               {waitingForResume && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              確認
+              {t.confirm}
             </button>
           </div>
 
         <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto min-[640px]:grid-cols-2">
-          {proposed.map((p, i) => (
+          {proposedDisplayRows.map(({ row: p, originalIndex }, displayIndex) => (
             <button
               key={p.name}
               type="button"
               disabled={!canWrite}
               className={cn(
                 "flex min-h-0 w-full items-start gap-2 rounded-control border px-2 py-1.5 text-left transition",
-                stakeholders[String(i)]
+                stakeholders[String(originalIndex)]
                   ? "border-slate-800 bg-slate-900 text-white"
                   : "border-gray-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50",
               )}
               onClick={() =>
                 setStakeholders((s) => ({
                   ...s,
-                  [String(i)]: !(s[String(i)] ?? false),
+                  [String(originalIndex)]: !(s[String(originalIndex)] ?? false),
                 }))
               }
             >
               <span
                 className={cn(
                   "flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold",
-                  stakeholders[String(i)]
+                  stakeholders[String(originalIndex)]
                     ? "bg-white/15 text-white"
                     : "bg-slate-100 text-slate-500",
                 )}
               >
-                {OPTION_LETTERS[i] ?? i + 1}
+                {OPTION_LETTERS[displayIndex] ?? displayIndex + 1}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-2">
@@ -511,19 +516,19 @@ export function DecisionDock({
                   <span
                     className={cn(
                       "rounded-full px-1.5 py-0.5 text-[10px] leading-4",
-                      stakeholders[String(i)]
+                      stakeholders[String(originalIndex)]
                         ? "bg-white/15 text-white/80"
                         : "bg-slate-100 text-slate-500",
                     )}
                   >
-                    {STAKEHOLDER_TYPES.find((type) => type.value === p.type)?.label ?? p.type}
+                    {(t.stakeholderTypeLabels as Record<string, string>)[p.type] ?? p.type}
                   </span>
                 </span>
                 {p.reason && (
                   <span
                     className={cn(
                       "mt-0.5 block line-clamp-2 text-[11px] leading-4",
-                      stakeholders[String(i)] ? "text-white/75" : "text-slate-500",
+                      stakeholders[String(originalIndex)] ? "text-white/75" : "text-slate-500",
                     )}
                   >
                     {p.reason}
@@ -538,7 +543,7 @@ export function DecisionDock({
           {customStakeholders.length > 0 && (
             <div className="space-y-1">
               <div className="text-[10px] font-medium text-slate-500">
-                利害關係人自訂 {customStakeholders.length} 位
+                {t.customStakeholderCount(customStakeholders.length)}
               </div>
               {customStakeholders.map((row) => (
                 <div key={row.id} className="grid grid-cols-1 gap-1 min-[640px]:grid-cols-[1fr_180px_1fr_auto]">
@@ -552,7 +557,7 @@ export function DecisionDock({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") e.currentTarget.blur();
                     }}
-                    title="可直接編輯自訂利害關係人名稱，按 Enter 完成"
+                    title={t.editCustomStakeholderNameTitle}
                   />
                   <select
                     className="h-8 min-w-0 rounded-lg border border-gray-200 bg-white px-2 text-xs text-slate-700 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
@@ -561,18 +566,18 @@ export function DecisionDock({
                     onChange={(e) =>
                       onUpdateCustomStakeholder?.(row.id, { type: e.target.value })
                     }
-                    title="可直接編輯類別"
+                    title={t.editCategoryTitle}
                   >
                     {STAKEHOLDER_TYPES.map((type) => (
-                      <option key={type.value} value={type.value}>
-                        {type.label}
+                      <option key={type} value={type}>
+                        {(t.stakeholderTypeLabels as Record<string, string>)[type] ?? type}
                       </option>
                     ))}
                   </select>
                   <input
                     className="h-8 min-w-0 rounded-lg border border-gray-200 bg-white px-2 text-xs text-slate-600 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
                     disabled={!canWrite}
-                    placeholder="省略"
+                    placeholder={t.optional}
                     value={row.reason}
                     onChange={(e) =>
                       onUpdateCustomStakeholder?.(row.id, { reason: e.target.value })
@@ -580,15 +585,15 @@ export function DecisionDock({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") e.currentTarget.blur();
                     }}
-                    title="可直接編輯理由，按 Enter 完成"
+                    title={t.editReasonTitle}
                   />
                   <button
                     type="button"
                     disabled={!canWrite}
                     className="inline-flex h-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-2 text-[11px] text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-white disabled:text-slate-300"
                     onClick={() => onRemoveCustomStakeholder?.(row.id)}
-                    aria-label="移除自訂利害關係人"
-                    title="移除自訂利害關係人"
+                    aria-label={t.removeCustomStakeholder}
+                    title={t.removeCustomStakeholder}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -607,7 +612,7 @@ export function DecisionDock({
             <div className="mt-1 text-[11px] text-slate-500">
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                已送出，等待 Agent 團隊繼續生成...
+                {t.submittedWaitingAgent}
               </span>
             </div>
           )}
@@ -670,7 +675,7 @@ export function DecisionDock({
               disabled={actionDisabled}
               onClick={() => submitMut.mutate({ skipped: true })}
             >
-              本次跳過
+              {t.skipThisTime}
             </button>
             <button
               type="button"
@@ -679,7 +684,7 @@ export function DecisionDock({
               onClick={submitHumanDecision}
             >
               {waitingForResume && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              確認
+              {t.confirm}
             </button>
           </div>
         </div>
@@ -693,7 +698,7 @@ export function DecisionDock({
               (recommendedId === optionValue ||
                 recommendedId === String(i + 1) ||
                 recommendedId.toUpperCase() === (OPTION_LETTERS[i] ?? "").toUpperCase());
-            const optionLabel = optionDisplayLabel(optionValue, i);
+            const optionLabel = optionDisplayLabel(optionValue, i, t);
             const title = opt.title || opt.summary || optionLabel;
             const rawDescription = opt.description || (opt.summary && opt.summary !== title ? opt.summary : "") || "";
             const description = rawDescription.trim() === title.trim() ? "" : rawDescription;
@@ -739,7 +744,7 @@ export function DecisionDock({
                             : "bg-emerald-100 text-emerald-700",
                         )}
                       >
-                        推薦
+                        {t.recommended}
                       </span>
                     )}
                   </span>
@@ -762,7 +767,7 @@ export function DecisionDock({
                         active ? "text-white/70" : "text-emerald-700",
                       )}
                     >
-                      建議理由：{recommendationRationale}
+                      {t.recommendationReason(recommendationRationale)}
                     </span>
                   )}
                 </span>
@@ -775,7 +780,7 @@ export function DecisionDock({
             {waitingForResume && (
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                已送出，等待 Agent 團隊繼續生成...
+                {t.submittedWaitingAgent}
               </span>
             )}
         </div>

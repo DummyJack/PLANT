@@ -70,7 +70,25 @@ export function referencePreviewUrl(projectId: string, name: string) {
 }
 
 export function manualIndexUrl(projectId: string) {
-  return apiUrl(`/api/projects/${projectId}/manual/index.html`);
+  return apiUrl(`/${encodeURIComponent(projectId)}/manual`);
+}
+
+function encodePathSegments(path: string) {
+  return path
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+export function manualFileUrl(projectId: string, path: string) {
+  if (/^results\/srs\.html$/i.test(path)) {
+    return apiUrl(`/${encodeURIComponent(projectId)}/manual/srs`);
+  }
+  if (/^results\/design_rationale\.html$/i.test(path)) {
+    return apiUrl(`/${encodeURIComponent(projectId)}/manual/dr`);
+  }
+  return apiUrl(`/${encodeURIComponent(projectId)}/manual/${encodePathSegments(path)}`);
 }
 
 export function fetchCostSummary(projectId: string) {
@@ -104,6 +122,6 @@ export function exportProject(
 ) {
   return apiFetch(`/api/projects/${projectId}/export`, {
     method: "POST",
-    body: JSON.stringify({ html: true, cost: true, manual: true, ...opts }),
+    body: JSON.stringify({ html: true, cost: false, manual: true, ...opts }),
   });
 }

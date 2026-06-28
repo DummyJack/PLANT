@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from storage import Store
 from server.services.run_manager import sse_done, sse_format, sse_heartbeat
+from server.services.run_config import normalize_agent_models_to_valid_provider
 from .auth import require_project_read_access, require_write_access
 
 
@@ -34,6 +35,8 @@ def manager(request: Request):
 
 @router.get("/runs")
 def list_runs(request: Request, project_id: Optional[str] = Query(default=None)):
+    if project_id:
+        require_project_read_access(request, project_id)
     return {"runs": manager(request).list_runs(project_id=project_id)}
 
 
@@ -43,7 +46,9 @@ def create_run(payload: RunCreate, request: Request):
     if payload.mode not in {"new", "continue"}:
         raise HTTPException(status_code=400, detail="mode must be new or continue")
     try:
-        config = Store(request.app.state.base_dir).load_config()
+        config = normalize_agent_models_to_valid_provider(
+            Store(request.app.state.base_dir).load_config(),
+        )
         return manager(request).start_run(
             project_id=payload.project_id,
             mode=payload.mode,
@@ -66,6 +71,7 @@ def get_run(run_id: str, request: Request):
     run = manager(request).get(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    require_project_read_access(request, str(run.get("project_id") or ""))
     return run
 
 

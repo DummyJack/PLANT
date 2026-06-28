@@ -13,6 +13,7 @@ import { ReferencePanel } from "@/features/upload/ReferencePanel";
 import { NoticeStack } from "@/components/NoticeStack";
 import { useProjectData } from "@/hooks/useProjectData";
 import { useBootstrap } from "@/hooks/useBootstrap";
+import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
@@ -58,6 +59,7 @@ export default function App() {
   const setMeetingDefaults = useUiStore((s) => s.setMeetingDefaults);
   const visiblePanels = useUiStore((s) => s.visiblePanels);
   const darkMode = useUiStore((s) => s.darkMode);
+  const { t } = useI18n();
   const layoutMode = useLayoutMode();
   const bootstrap = useBootstrap();
   const configQuery = useQuery({
@@ -277,7 +279,7 @@ export default function App() {
       <div className="min-h-0 flex-1 p-1">
         {panelCount === 0 ? (
           <div className="flex h-full items-center justify-center rounded-surface border border-gray-200 bg-white text-sm font-medium text-slate-400">
-            尚未開啟任何面板
+            {t.noPanelOpen}
           </div>
         ) : layoutMode === "mobile" ? (
           renderMobileLayout()

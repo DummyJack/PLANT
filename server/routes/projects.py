@@ -12,7 +12,7 @@ from utils.language import sync_output_language
 
 from server.services.project_service import ProjectService
 from server.services.run_config import general_formal_meeting_enabled
-from .auth import require_write_access
+from .auth import require_project_read_access, require_write_access
 
 
 router = APIRouter()
@@ -29,7 +29,7 @@ class ProjectUpdate(BaseModel):
 
 class ProjectExport(BaseModel):
     html: bool = True
-    cost: bool = True
+    cost: bool = False
     manual: bool = True
 
 
@@ -112,11 +112,13 @@ def create_project(payload: ProjectCreate, request: Request):
 
 @router.get("/projects/{project_id}/summary")
 def get_project_summary(project_id: str, request: Request):
+    require_project_read_access(request, project_id)
     return project_service(request).get_summary(project_id)
 
 
 @router.get("/projects/{project_id}/active-run")
 def get_active_run(project_id: str, request: Request):
+    require_project_read_access(request, project_id)
     project_service(request).ensure_project(project_id)
     active_run = request.app.state.run_manager.get_active_run(project_id)
     return {"project_id": project_id, "active_run": active_run}
@@ -124,6 +126,7 @@ def get_active_run(project_id: str, request: Request):
 
 @router.get("/projects/{project_id}/cost-summary")
 def get_cost_summary(project_id: str, request: Request):
+    require_project_read_access(request, project_id)
     return project_service(request).get_cost_summary(project_id)
 
 
@@ -140,11 +143,13 @@ def export_project(project_id: str, payload: ProjectExport, request: Request):
 
 @router.get("/projects/{project_id}/references")
 def list_references(project_id: str, request: Request):
+    require_project_read_access(request, project_id)
     return project_service(request).list_references(project_id)
 
 
 @router.get("/projects/{project_id}/references/{name}")
 def download_reference(project_id: str, name: str, request: Request, inline: bool = False):
+    require_project_read_access(request, project_id)
     target = project_service(request).reference_path(project_id, name)
     return FileResponse(
         target,
@@ -189,9 +194,7 @@ def delete_project(project_id: str, request: Request):
 
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, request: Request):
-    project_dir = base_dir(request) / "projects" / project_id
-    if not project_dir.exists() or not project_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Project not found")
+    require_project_read_access(request, project_id)
     store = Store(base_dir(request), project_id)
     return {
         "project_id": project_id,

@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DiscussionMode } from "@/types/api";
 
+export type UiLanguage = "zh" | "en";
+
 export interface ScopeReviewDraft {
   in_scope: string[];
   out_of_scope: string[];
@@ -30,6 +32,7 @@ interface UiState {
     output: boolean;
   };
   darkMode: boolean;
+  language: UiLanguage;
   dismissedRunCheckpointKeys: Record<string, string>;
   scopeReviewDrafts: Record<string, ScopeReviewDraft>;
   canWrite: boolean;
@@ -52,6 +55,7 @@ interface UiState {
   toggleAgent: (agent: string) => void;
   togglePanelVisibility: (panel: "references" | "workspace" | "output") => void;
   toggleDarkMode: () => void;
+  setLanguage: (language: UiLanguage) => void;
   dismissRunCheckpoint: (projectId: string, checkpointKey: string) => void;
   setScopeReviewDraft: (decisionId: string, draft: ScopeReviewDraft) => void;
   clearScopeReviewDraft: (decisionId: string) => void;
@@ -92,6 +96,7 @@ export const useUiStore = create<UiState>()(
         output: true,
       },
       darkMode: false,
+      language: "zh",
       dismissedRunCheckpointKeys: {},
       scopeReviewDrafts: {},
       canWrite: false,
@@ -180,6 +185,7 @@ export const useUiStore = create<UiState>()(
           },
         })),
       toggleDarkMode: () => set((s) => ({ darkMode: !s.darkMode })),
+      setLanguage: (language) => set({ language }),
       dismissRunCheckpoint: (projectId, checkpointKey) =>
         set((s) => ({
           dismissedRunCheckpointKeys: {
@@ -216,6 +222,7 @@ export const useUiStore = create<UiState>()(
       partialize: (state) => ({
         activeProjectId: state.activeProjectId,
         darkMode: state.darkMode,
+        language: state.language,
         dismissedRunCheckpointKeys: state.dismissedRunCheckpointKeys,
       }),
     },

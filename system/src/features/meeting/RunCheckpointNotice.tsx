@@ -1,4 +1,5 @@
 import { RotateCcw, X } from "lucide-react";
+import { useI18n } from "@/i18n";
 import type { RunCheckpoint } from "@/types/api";
 import { cn } from "@/utils/cn";
 
@@ -38,6 +39,30 @@ function cleanupLabel(paths?: string[]) {
   return `將清理 ${rows.length} 個可能未完成的產出`;
 }
 
+function stageLabelText(stageId: string | undefined, t: ReturnType<typeof useI18n>["t"]) {
+  const key = String(stageId || "").trim();
+  const labels = t.checkpointStageLabels as Record<string, string>;
+  return (labels[key] ?? key) || t.previousStage;
+}
+
+function cleanupLabelText(paths: string[] | undefined, t: ReturnType<typeof useI18n>["t"]) {
+  const rows = paths ?? [];
+  if (!rows.length) return t.cleanupUnfinishedOutputs;
+  if (rows.some((path) => /\/MoM\/|artifact\/MoM\//i.test(path))) {
+    return t.cleanupMomPreview;
+  }
+  if (rows.some((path) => /draft_v\d+\.(?:md|html)$/i.test(path))) {
+    return t.cleanupDraftPreview;
+  }
+  if (rows.some((path) => /(?:srs|design_rationale)\.(?:md|html)$/i.test(path))) {
+    return t.cleanupSrsPreview;
+  }
+  if (rows.some((path) => /^results(?:\/|$)/i.test(path))) {
+    return t.cleanupResultsPreview;
+  }
+  return t.cleanupOutputCount(rows.length);
+}
+
 export function checkpointStageLabel(checkpoint?: RunCheckpoint | null) {
   return stageLabel(checkpoint?.stage_id);
 }
@@ -55,10 +80,12 @@ export function RunCheckpointNotice({
   compact?: boolean;
   onDismiss?: () => void;
 }) {
+  const { t } = useI18n();
   if (!checkpoint) return null;
   const failed = checkpoint.status === "failed";
-  const title = `上次執行在「${stageLabel(checkpoint.stage_id)}」${failed ? "失敗" : "停止"}，繼續時會重跑此步驟`;
-  const detail = `${cleanupLabel(checkpoint.dirty_outputs)}，按「繼續」會先清理再執行。`;
+  const stage = stageLabelText(checkpoint.stage_id, t);
+  const title = failed ? t.checkpointFailedTitle(stage) : t.checkpointStoppedTitle(stage);
+  const detail = t.checkpointDetail(cleanupLabelText(checkpoint.dirty_outputs, t));
 
   return (
     <div
@@ -77,8 +104,8 @@ export function RunCheckpointNotice({
         <button
           type="button"
           className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100 hover:text-amber-950"
-          aria-label="關閉恢復提示"
-          title="關閉提示"
+          aria-label={t.closeRecoveryNotice}
+          title={t.closeNotice}
           onClick={onDismiss}
         >
           <X className="h-3.5 w-3.5" />

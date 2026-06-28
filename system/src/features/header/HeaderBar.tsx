@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, LayoutPanelLeft, Moon, Settings, Sun } from "lucide-react";
+import { ChevronDown, LayoutPanelLeft, Settings } from "lucide-react";
 import { fetchConfig, updateConfig } from "@/api/config";
 import {
   activateCode,
@@ -7,6 +7,7 @@ import {
   deleteModelApiKey,
   fetchActivationStatus,
   fetchModelApiKeys,
+  testModelApiKey,
   updateModelApiKey,
 } from "@/api/secrets";
 import {
@@ -16,6 +17,7 @@ import {
 } from "@/constants/agents";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useActiveRun } from "@/hooks/useActiveRun";
+import { useI18n } from "@/i18n";
 import { useNoticeStore } from "@/stores/noticeStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { AgentModelConfig, PlantConfig } from "@/types/api";
@@ -32,21 +34,28 @@ const ACTIVE_STATUSES = new Set([
 
 const API_KEY_PROVIDERS = [
   { provider: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
-  { provider: "claude", label: "Claude", envKey: "ANTHROPIC_API_KEY" },
   { provider: "gemini", label: "Gemini", envKey: "GEMINI_API_KEY" },
+  { provider: "claude", label: "Claude", envKey: "ANTHROPIC_API_KEY" },
 ] as const;
 
 const RECOMMENDED_MODELS: Record<string, string[]> = {
-  openai: ["gpt-4.1", "gpt-4.1-mini", "o4-mini"],
-  claude: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
-  gemini: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"],
+  openai: ["gpt-5.5", "gpt-4.1"],
+  claude: ["claude-opus-4-8", "claude-sonnet-4-6"],
+  gemini: ["gemini-3.5-flash", "gemini-3.1-pro-preview"],
 };
 
 type ApiKeyProvider = (typeof API_KEY_PROVIDERS)[number]["provider"];
+type ApiKeyValidationStatus = "untested" | "valid" | "invalid";
+type ApiKeyMessage = { tone: "success" | "error" | "pending"; text: string };
 type InlineMessage = { tone: "success" | "error"; text: string };
 type ConfirmAction =
   | { type: "api-key"; provider: ApiKeyProvider }
   | { type: "activation" };
+
+const API_KEY_INLINE_INPUT_CLASS =
+  "min-w-0 flex-1 rounded-control border border-gray-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none disabled:opacity-50";
+const API_KEY_INLINE_BUTTON_CLASS =
+  "shrink-0 rounded-control px-2.5 py-1 text-[11px] font-medium";
 
 function providerLabel(provider: ApiKeyProvider): string {
   return API_KEY_PROVIDERS.find((item) => item.provider === provider)?.label ?? provider;
@@ -66,8 +75,28 @@ function apiKeyConfiguredMap(
   );
   return {
     openai: rows.get("openai") === true,
-    claude: rows.get("claude") === true,
     gemini: rows.get("gemini") === true,
+    claude: rows.get("claude") === true,
+  };
+}
+
+function apiKeyValidationMap(
+  providers?: Array<{ provider: string; configured: boolean; status?: string; valid?: boolean }>,
+): Record<ApiKeyProvider, ApiKeyValidationStatus> {
+  const rows = new Map(
+    (providers ?? []).map((row) => [row.provider.toLowerCase(), row]),
+  );
+  const statusFor = (provider: ApiKeyProvider): ApiKeyValidationStatus => {
+    const row = rows.get(provider);
+    if (!row?.configured) return "untested";
+    if (row.valid === true || row.status === "valid") return "valid";
+    if (row.status === "invalid") return "invalid";
+    return "untested";
+  };
+  return {
+    openai: statusFor("openai"),
+    gemini: statusFor("gemini"),
+    claude: statusFor("claude"),
   };
 }
 
@@ -76,10 +105,36 @@ function agentModelReady(
   agentId: string,
   configuredProviders: Record<ApiKeyProvider, boolean>,
 ): boolean {
-  const modelConfig = config?.agent_models?.[agentId];
-  const provider = String(modelConfig?.provider ?? "").trim().toLowerCase() as ApiKeyProvider;
-  const model = String(modelConfig?.model ?? "").trim();
-  return !!provider && !!model && configuredProviders[provider] === true;
+  void config;
+  void agentId;
+  return API_KEY_PROVIDERS.some((item) => configuredProviders[item.provider] === true);
+}
+
+function defaultProvider(
+  configuredProviders: Record<ApiKeyProvider, boolean>,
+): ApiKeyProvider | "" {
+  return API_KEY_PROVIDERS.find((item) => configuredProviders[item.provider])?.provider ?? "";
+}
+
+function defaultModel(provider: string): string {
+  return RECOMMENDED_MODELS[provider.toLowerCase()]?.[0] ?? "";
+}
+
+function unifiedModelProvider(
+  config: PlantConfig | null | undefined,
+  provider: ApiKeyProvider,
+  model: string,
+): boolean {
+  const agentModels = config?.agent_models ?? {};
+  const targetModel = model.trim();
+  if (!targetModel) return false;
+  return HEADER_AGENT_ORDER.every((agentId) => {
+    const row = agentModels[agentId];
+    return (
+      String(row?.provider ?? "").trim().toLowerCase() === provider &&
+      String(row?.model ?? "").trim() === targetModel
+    );
+  });
 }
 
 function ModelOptionGroup({
@@ -115,29 +170,32 @@ function AgentConfigPopover({
   agentId,
   config,
   configuredProviders,
+  defaultModels,
   disabled,
   onSave,
 }: {
   agentId: AgentId;
   config: PlantConfig | null;
   configuredProviders: Record<ApiKeyProvider, boolean>;
+  defaultModels: Record<ApiKeyProvider, string>;
   disabled?: boolean;
   onSave: (next: PlantConfig) => void;
 }) {
+  const { t } = useI18n();
   const enabledAgents = useUiStore((s) => s.enabledAgents);
   const modelConfig = config?.agent_models?.[agentId];
-  const configuredProvider = configuredProviders[
-    (modelConfig?.provider ?? "").toLowerCase() as ApiKeyProvider
-  ]
-    ? (modelConfig?.provider ?? "").toLowerCase()
-    : "";
-  const [provider, setProvider] = useState(configuredProvider);
-  const [model, setModel] = useState(configuredProvider ? (modelConfig?.model ?? "") : "");
+  const configuredProvider = (modelConfig?.provider ?? "").toLowerCase() as ApiKeyProvider;
+  const fallbackProvider = defaultProvider(configuredProviders);
+  const activeProvider = configuredProviders[configuredProvider]
+    ? configuredProvider
+    : fallbackProvider;
+  const [provider, setProvider] = useState(activeProvider);
+  const [model, setModel] = useState(activeProvider ? (modelConfig?.model ?? defaultModel(activeProvider)) : "");
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const on = enabledAgents[agentId] !== false;
-  const providerOptions: string[] = API_KEY_PROVIDERS
+  const providerOptions: ApiKeyProvider[] = API_KEY_PROVIDERS
     .map((item) => item.provider)
     .filter((value) => configuredProviders[value]);
   const recentModelOptions = Array.from(
@@ -148,25 +206,20 @@ function AgentConfigPopover({
     ),
   ).slice(0, 2);
   const recommendedModelOptions = (RECOMMENDED_MODELS[provider.toLowerCase()] ?? [
-    "gpt-4.1",
-    "claude-3-5-sonnet-latest",
-    "gemini-1.5-pro",
+    "gpt-5.5",
+    "claude-opus-4-8",
+    "gemini-3.5-flash",
   ])
     .filter((value) => value !== model && !recentModelOptions.includes(value))
-    .slice(0, 3);
+    .slice(0, 4);
   const hasModelOptions = recentModelOptions.length > 0 || recommendedModelOptions.length > 0;
-  if (provider && !providerOptions.includes(provider.toLowerCase())) {
-    providerOptions.push(provider);
-  }
 
   useEffect(() => {
-    const nextProvider = configuredProviders[
-      (modelConfig?.provider ?? "").toLowerCase() as ApiKeyProvider
-    ]
-      ? (modelConfig?.provider ?? "").toLowerCase()
-      : "";
+    const configured = (modelConfig?.provider ?? "").toLowerCase() as ApiKeyProvider;
+    const fallback = defaultProvider(configuredProviders);
+    const nextProvider = configuredProviders[configured] ? configured : fallback;
     setProvider(nextProvider);
-    setModel(nextProvider ? (modelConfig?.model ?? "") : "");
+    setModel(nextProvider ? (configured === nextProvider ? (modelConfig?.model ?? defaultModel(nextProvider)) : defaultModel(nextProvider)) : "");
   }, [configuredProviders, modelConfig?.provider, modelConfig?.model, agentId]);
 
   useEffect(() => {
@@ -215,7 +268,7 @@ function AgentConfigPopover({
               onClick={() => setProviderMenuOpen((open) => !open)}
             >
               <span className={provider ? "text-slate-700" : "text-slate-400"}>
-                {provider ? displayProvider(provider) : "未選擇"}
+                {provider ? displayProvider(provider) : t.selectedNone}
               </span>
               <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
             </button>
@@ -227,12 +280,12 @@ function AgentConfigPopover({
                     type="button"
                     className="block w-full truncate px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      setProvider(value);
-                      setModel("");
-                      setProviderMenuOpen(false);
-                      setModelMenuOpen(false);
-                    }}
+	                    onClick={() => {
+	                      setProvider(value);
+	                      setModel(defaultModel(value));
+	                      setProviderMenuOpen(false);
+	                      setModelMenuOpen(false);
+	                    }}
                   >
                     {displayProvider(value)}
                   </button>
@@ -250,7 +303,7 @@ function AgentConfigPopover({
               className="block h-8 w-full rounded-control border border-gray-200 px-2 pr-7 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
               value={model}
               disabled={disabled || !provider}
-              placeholder="未選擇"
+              placeholder={provider ? defaultModels[provider as ApiKeyProvider] : t.selectedNone}
               onChange={(e) => {
                 if (!provider) return;
                 setModel(e.target.value);
@@ -267,7 +320,7 @@ function AgentConfigPopover({
             {modelMenuOpen && hasModelOptions && (
               <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-52 overflow-y-auto rounded-control border border-gray-200 bg-white py-1 shadow-lg">
                 <ModelOptionGroup
-                  title="最近使用"
+                  title={t.recent}
                   options={recentModelOptions}
                   onSelect={(value) => {
                     setModel(value);
@@ -277,7 +330,7 @@ function AgentConfigPopover({
                 <div className="my-1 border-t border-gray-100" />
                 {recommendedModelOptions.length > 0 && (
                   <ModelOptionGroup
-                    title="推薦"
+                    title={t.recommended}
                     options={recommendedModelOptions}
                     onSelect={(value) => {
                       setModel(value);
@@ -297,7 +350,7 @@ function AgentConfigPopover({
           className="rounded-control bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-40"
           onClick={() => save()}
         >
-          儲存
+          {t.save}
         </button>
       </div>
     </div>
@@ -306,37 +359,79 @@ function AgentConfigPopover({
 
 function ApiKeySettingsPanel({
   providers,
+  validation,
+  config,
   savingProvider,
   deletingProvider,
+  testingProvider,
+  savingConfig,
   values,
+  modelValues,
   messages,
-  expandedProvider,
+  expandedProviders,
   onToggle,
   onChange,
+  onModelChange,
   onSave,
   onDelete,
+  onDefaultModelChange,
+  onToggleUnifiedModel,
   locked,
 }: {
   providers: Record<ApiKeyProvider, boolean>;
+  validation: Record<ApiKeyProvider, ApiKeyValidationStatus>;
+  config: PlantConfig | null;
   savingProvider: ApiKeyProvider | null;
   deletingProvider: ApiKeyProvider | null;
+  testingProvider: ApiKeyProvider | null;
+  savingConfig: boolean;
   values: Record<ApiKeyProvider, string>;
-  messages: Partial<Record<ApiKeyProvider, { tone: "success" | "error"; text: string }>>;
-  expandedProvider: ApiKeyProvider | null;
+  modelValues: Record<ApiKeyProvider, string>;
+  messages: Partial<Record<ApiKeyProvider, ApiKeyMessage>>;
+  expandedProviders: Record<ApiKeyProvider, boolean>;
   onToggle: (provider: ApiKeyProvider) => void;
   onChange: (provider: ApiKeyProvider, value: string) => void;
+  onModelChange: (provider: ApiKeyProvider, value: string) => void;
   onSave: (provider: ApiKeyProvider) => void;
   onDelete: (provider: ApiKeyProvider) => void;
+  onDefaultModelChange: (provider: ApiKeyProvider, model: string) => void;
+  onToggleUnifiedModel: (provider: ApiKeyProvider, model: string, enabled: boolean) => void;
   locked: boolean;
 }) {
+  const { t } = useI18n();
+  const [modelMenuOpen, setModelMenuOpen] = useState<ApiKeyProvider | null>(null);
   return (
     <div className="space-y-1.5">
       {API_KEY_PROVIDERS.map((item) => {
         const configured = providers[item.provider];
-        const expanded = expandedProvider === item.provider;
+        const status = configured ? validation[item.provider] : "untested";
+        const expanded = expandedProviders[item.provider] === true;
         const saving = savingProvider === item.provider;
         const deleting = deletingProvider === item.provider;
-        const message = messages[item.provider];
+        const testing = testingProvider === item.provider;
+        const message = locked ? undefined : messages[item.provider];
+        const valid = !locked && configured && status === "valid";
+        const invalid = !locked && configured && status === "invalid";
+        const modelValue = modelValues[item.provider];
+        const placeholderModel = defaultModel(item.provider);
+        const selectedModel = modelValue.trim() || placeholderModel;
+        const unified = unifiedModelProvider(config, item.provider, selectedModel);
+        const recommendedModelOptions = RECOMMENDED_MODELS[item.provider]
+          .filter((value) => value !== modelValue)
+          .slice(0, 2);
+        const hasModelOptions = recommendedModelOptions.length > 0;
+        const modelControlsDisabled = locked || savingConfig || !valid;
+        const commitDefaultModel = () => {
+          if (modelControlsDisabled) return;
+          const next = modelValue.trim();
+          if (!next) {
+            onDefaultModelChange(item.provider, "");
+            return;
+          }
+          if (next && next !== selectedModel) {
+            onDefaultModelChange(item.provider, next);
+          }
+        };
         return (
           <div
             key={item.provider}
@@ -351,13 +446,13 @@ function ApiKeySettingsPanel({
                 <span
                   className={cn(
                     "h-2 w-2 rounded-full",
-                    !locked && configured ? "bg-emerald-500" : "bg-gray-200",
+                    valid ? "bg-emerald-500" : invalid ? "bg-amber-500" : "bg-gray-200",
                   )}
                 />
                 <span
                   className={cn(
                     "text-xs font-semibold",
-                    !locked && configured ? "text-emerald-800" : "text-slate-700",
+                    valid ? "text-emerald-800" : invalid ? "text-amber-700" : "text-slate-700",
                   )}
                 >
                   {item.label}
@@ -375,8 +470,8 @@ function ApiKeySettingsPanel({
                 <div className="flex items-center gap-2">
                   <input
                     type="password"
-                    className="min-w-0 flex-1 rounded-control border border-gray-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-slate-400 focus:outline-none"
-                    placeholder={`輸入 ${item.label} API Key`}
+                    className={API_KEY_INLINE_INPUT_CLASS}
+                    placeholder={t.providerApiKeyPlaceholder(item.label)}
                     value={values[item.provider]}
                     disabled={locked}
                     onChange={(event) => onChange(item.provider, event.target.value)}
@@ -384,25 +479,95 @@ function ApiKeySettingsPanel({
                   <button
                     type="button"
                     disabled={locked || !values[item.provider].trim() || saving || deleting}
-                    className="shrink-0 rounded-control bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:bg-gray-300 disabled:text-white"
+                    className={cn(
+                      API_KEY_INLINE_BUTTON_CLASS,
+                      "bg-slate-900 text-white hover:bg-slate-800 disabled:bg-gray-300 disabled:text-white",
+                    )}
                     onClick={() => onSave(item.provider)}
                   >
-                    {saving ? "儲存中" : "儲存"}
+                    {saving ? t.saving : t.save}
                   </button>
                   <button
                     type="button"
-                    disabled={locked || !configured || saving || deleting}
-                    className="shrink-0 rounded-control border border-red-100 bg-white px-2.5 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:border-gray-100 disabled:text-gray-300"
+                    disabled={locked || !configured || saving || deleting || testing}
+                    className={cn(
+                      API_KEY_INLINE_BUTTON_CLASS,
+                      "border border-red-100 bg-white text-red-600 hover:bg-red-50 disabled:border-gray-100 disabled:text-gray-300",
+                    )}
                     onClick={() => onDelete(item.provider)}
                   >
-                    {deleting ? "移除中" : "移除"}
+                    {deleting ? t.removing : t.remove}
+                  </button>
+                </div>
+                <div className="my-2 border-t border-gray-100" />
+                <div className="flex items-center gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <input
+                      className={cn(API_KEY_INLINE_INPUT_CLASS, "block w-full pr-7")}
+                      value={modelValue}
+                      disabled={modelControlsDisabled}
+                      placeholder={t.defaultModel}
+                      onBlur={commitDefaultModel}
+                      onChange={(event) => onModelChange(item.provider, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitDefaultModel();
+                          setModelMenuOpen(null);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={modelControlsDisabled || !hasModelOptions}
+                      className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-gray-50 hover:text-slate-700 disabled:opacity-30"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() =>
+                        setModelMenuOpen((current) =>
+                          current === item.provider ? null : item.provider,
+                        )
+                      }
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                    {modelMenuOpen === item.provider && hasModelOptions && (
+                      <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-52 overflow-y-auto rounded-control border border-gray-200 bg-white py-1 shadow-lg">
+                        {recommendedModelOptions.length > 0 && (
+                          <ModelOptionGroup
+                            title={t.recommended}
+                            options={recommendedModelOptions}
+                            onSelect={(model) => {
+                              onModelChange(item.provider, model);
+                              onDefaultModelChange(item.provider, model);
+                              setModelMenuOpen(null);
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={modelControlsDisabled}
+                    aria-pressed={unified}
+                    className={cn(
+                      API_KEY_INLINE_BUTTON_CLASS,
+                      "border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 disabled:opacity-40",
+                    )}
+                    onClick={() => onToggleUnifiedModel(item.provider, selectedModel, !unified)}
+                  >
+                    {t.switch}
                   </button>
                 </div>
                 {message && (
                   <p
                     className={cn(
                       "mt-1.5 text-[11px]",
-                      message.tone === "success" ? "text-emerald-700" : "text-red-600",
+                      message.tone === "success"
+                        ? "text-emerald-700"
+                        : message.tone === "pending"
+                          ? "text-slate-500"
+                          : "text-amber-700",
                     )}
                   >
                     {message.text}
@@ -434,13 +599,14 @@ function ActivationCodePanel({
   onSubmit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="border-t border-gray-100 pt-3">
       <div className="flex items-center gap-2">
         <input
           type="password"
           className="min-w-0 flex-1 rounded-control border border-gray-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-slate-400 focus:outline-none"
-          placeholder="輸入啟動碼"
+          placeholder={t.activationPlaceholder}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -453,7 +619,7 @@ function ActivationCodePanel({
           className="shrink-0 rounded-control bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:bg-gray-300 disabled:text-white"
           onClick={onSubmit}
         >
-          {saving ? "啟動中" : "啟動"}
+          {saving ? t.activating : t.activate}
         </button>
         {activated && (
           <button
@@ -462,7 +628,7 @@ function ActivationCodePanel({
             className="shrink-0 rounded-control border border-red-100 bg-white px-2.5 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:border-gray-100 disabled:text-gray-300"
             onClick={onDelete}
           >
-            移除
+            {t.remove}
           </button>
         )}
       </div>
@@ -483,7 +649,7 @@ function ActivationCodePanel({
 function ConfirmBox({
   title,
   description,
-  confirmLabel = "確定",
+  confirmLabel,
   loading,
   onCancel,
   onConfirm,
@@ -495,6 +661,7 @@ function ConfirmBox({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div
       className="absolute inset-0 z-50 flex items-center justify-center rounded-control bg-white/80 px-4 backdrop-blur-sm"
@@ -514,7 +681,7 @@ function ConfirmBox({
             className="rounded-control border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-gray-50"
             onClick={onCancel}
           >
-            取消
+            {t.cancel}
           </button>
           <button
             type="button"
@@ -522,7 +689,7 @@ function ConfirmBox({
             className="rounded-control bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onConfirm}
           >
-            {loading ? "處理中" : confirmLabel}
+            {loading ? t.processing : (confirmLabel ?? t.confirm)}
           </button>
         </div>
       </div>
@@ -531,6 +698,7 @@ function ConfirmBox({
 }
 
 export function HeaderBar() {
+  const { language, t } = useI18n();
   const queryClient = useQueryClient();
   const bootstrap = useBootstrap();
   const projectId = useUiStore((s) => s.activeProjectId);
@@ -540,22 +708,43 @@ export function HeaderBar() {
   const setEnabledAgents = useUiStore((s) => s.setEnabledAgents);
   const togglePanelVisibility = useUiStore((s) => s.togglePanelVisibility);
   const toggleDarkMode = useUiStore((s) => s.toggleDarkMode);
+  const setLanguage = useUiStore((s) => s.setLanguage);
   const setCanWrite = useUiStore((s) => s.setCanWrite);
   const pushNotice = useNoticeStore((s) => s.pushNotice);
   const { activeRun } = useActiveRun(projectId);
   const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [expandedApiKeyProvider, setExpandedApiKeyProvider] =
-    useState<ApiKeyProvider | null>(null);
+  const [expandedApiKeyProviders, setExpandedApiKeyProviders] =
+    useState<Record<ApiKeyProvider, boolean>>({
+      openai: false,
+      gemini: false,
+      claude: false,
+    });
   const [apiKeyValues, setApiKeyValues] = useState<Record<ApiKeyProvider, string>>({
     openai: "",
-    claude: "",
     gemini: "",
+    claude: "",
+  });
+  const [defaultModelValues, setDefaultModelValues] = useState<Record<ApiKeyProvider, string>>({
+    openai: "",
+    gemini: "",
+    claude: "",
+  });
+  const [dirtyDefaultModels, setDirtyDefaultModels] = useState<Record<ApiKeyProvider, boolean>>({
+    openai: false,
+    gemini: false,
+    claude: false,
   });
   const [apiKeyMessages, setApiKeyMessages] = useState<
-    Partial<Record<ApiKeyProvider, { tone: "success" | "error"; text: string }>>
+    Partial<Record<ApiKeyProvider, ApiKeyMessage>>
   >({});
+  const [apiKeyValidation, setApiKeyValidation] = useState<Record<ApiKeyProvider, ApiKeyValidationStatus>>({
+    openai: "untested",
+    gemini: "untested",
+    claude: "untested",
+  });
+  const [testingAllKeys, setTestingAllKeys] = useState(false);
   const [activationCode, setActivationCode] = useState("");
   const [activationMessage, setActivationMessage] = useState<InlineMessage | undefined>();
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -583,8 +772,8 @@ export function HeaderBar() {
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
       pushNotice({
         tone: "success",
-        title: "已儲存",
-        message: "代理模型設定已更新",
+        title: t.saved,
+        message: t.savedAgentModel,
       });
     },
   });
@@ -601,42 +790,133 @@ export function HeaderBar() {
     refetchInterval: settingsOpen ? 3000 : false,
   });
 
+  const configuredProviderMap = useMemo(
+    () => apiKeyConfiguredMap(keyQuery.data?.providers),
+    [keyQuery.data?.providers],
+  );
+  const savedApiKeyValidation = useMemo(
+    () => apiKeyValidationMap(keyQuery.data?.providers),
+    [keyQuery.data?.providers],
+  );
+
   const saveKeyMut = useMutation({
     mutationFn: ({ provider, apiKey }: { provider: ApiKeyProvider; apiKey: string }) =>
       updateModelApiKey(provider, apiKey),
+    onMutate: (variables) => {
+      setApiKeyValidation((current) => ({
+        ...current,
+        [variables.provider]: "untested",
+      }));
+    },
     onSuccess: (_result, variables) => {
       queryClient.setQueryData(
         ["model-api-keys"],
         (current: Awaited<ReturnType<typeof fetchModelApiKeys>> | undefined) => ({
           providers: (current?.providers ?? API_KEY_PROVIDERS.map((item) => ({
             provider: item.provider,
+            env_key: item.envKey,
             configured: false,
           }))).map((row) =>
             row.provider.toLowerCase() === variables.provider
-              ? { ...row, configured: true }
+              ? {
+                  ...row,
+                  configured: true,
+                  status: "untested",
+                  valid: false,
+                  error: null,
+                  tested_at: null,
+                }
               : row,
           ),
         }),
       );
       setApiKeyValues((current) => ({ ...current, [variables.provider]: "" }));
-      setApiKeyMessages((current) => ({
-        ...current,
-        [variables.provider]: {
-          tone: "success",
-          text: "已儲存",
-        },
-      }));
+      setApiKeyMessages((current) => ({ ...current, [variables.provider]: undefined }));
       queryClient.invalidateQueries({ queryKey: ["model-api-keys"] });
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+      testKeyMut.mutate({ provider: variables.provider });
     },
     onError: (error, variables) => {
       setApiKeyMessages((current) => ({
         ...current,
         [variables.provider]: {
           tone: "error",
-          text: errorMessage(error, "儲存失敗"),
+          text: errorMessage(error, t.saveFailed),
         },
       }));
+    },
+  });
+
+  const testKeyMut = useMutation({
+    mutationFn: ({ provider }: { provider: ApiKeyProvider }) => testModelApiKey(provider),
+    onMutate: (variables) => {
+      setApiKeyMessages((current) => ({
+        ...current,
+        [variables.provider]: {
+          tone: "pending",
+          text: t.testingApiKey,
+        },
+      }));
+    },
+    onSuccess: (result, variables) => {
+      const valid = result.valid === true;
+      queryClient.setQueryData(
+        ["model-api-keys"],
+        (current: Awaited<ReturnType<typeof fetchModelApiKeys>> | undefined) => ({
+          providers: (current?.providers ?? API_KEY_PROVIDERS.map((item) => ({
+            provider: item.provider,
+            env_key: item.envKey,
+            configured: false,
+          }))).map((row) =>
+            row.provider.toLowerCase() === variables.provider
+              ? {
+                  ...row,
+                  configured: true,
+                  status: valid ? "valid" : "invalid",
+                  valid,
+                  error: result.error ?? null,
+                  tested_at: result.tested_at ?? null,
+                }
+              : row,
+          ),
+        }),
+      );
+      setApiKeyValidation((current) => ({
+        ...current,
+        [variables.provider]: valid ? "valid" : "invalid",
+      }));
+      if (!valid) {
+        setExpandedApiKeyProviders((current) => ({
+          ...current,
+          [variables.provider]: true,
+        }));
+      }
+      setApiKeyMessages((current) => ({
+        ...current,
+        [variables.provider]: {
+          tone: valid ? "success" : "error",
+          text: valid ? t.testPassed : t.invalidApiKey,
+        },
+      }));
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+    },
+    onError: (_error, variables) => {
+      setApiKeyValidation((current) => ({
+        ...current,
+        [variables.provider]: "invalid",
+      }));
+      setExpandedApiKeyProviders((current) => ({
+        ...current,
+        [variables.provider]: true,
+      }));
+      setApiKeyMessages((current) => ({
+        ...current,
+        [variables.provider]: {
+          tone: "error",
+          text: t.invalidApiKey,
+        },
+      }));
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
     },
   });
 
@@ -650,10 +930,18 @@ export function HeaderBar() {
         (current: Awaited<ReturnType<typeof fetchModelApiKeys>> | undefined) => ({
           providers: (current?.providers ?? API_KEY_PROVIDERS.map((item) => ({
             provider: item.provider,
+            env_key: item.envKey,
             configured: false,
           }))).map((row) =>
             row.provider.toLowerCase() === variables.provider
-              ? { ...row, configured: false }
+              ? {
+                  ...row,
+                  configured: false,
+                  status: "untested",
+                  valid: false,
+                  error: null,
+                  tested_at: null,
+                }
               : row,
           ),
         }),
@@ -663,8 +951,12 @@ export function HeaderBar() {
         ...current,
         [variables.provider]: {
           tone: "success",
-          text: "成功移除",
+          text: t.successRemoved,
         },
+      }));
+      setApiKeyValidation((current) => ({
+        ...current,
+        [variables.provider]: "untested",
       }));
       queryClient.invalidateQueries({ queryKey: ["model-api-keys"] });
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
@@ -674,7 +966,7 @@ export function HeaderBar() {
         ...current,
         [variables.provider]: {
           tone: "error",
-          text: errorMessage(error, "移除失敗"),
+          text: errorMessage(error, t.removeFailed ?? "Remove failed"),
         },
       }));
     },
@@ -686,13 +978,13 @@ export function HeaderBar() {
       setActivated(true);
       setCanWrite(true);
       setActivationCode("");
-      setActivationMessage({ tone: "success", text: "成功啟動" });
+      setActivationMessage({ tone: "success", text: t.successActivated });
       queryClient.invalidateQueries({ queryKey: ["activation-status"] });
     },
     onError: (error) => {
       setActivationMessage({
         tone: "error",
-        text: errorMessage(error, "無效的啟動碼"),
+        text: errorMessage(error, t.invalidActivationCode),
       });
     },
   });
@@ -704,13 +996,13 @@ export function HeaderBar() {
       setActivated(false);
       setCanWrite(false);
       setActivationCode("");
-      setActivationMessage({ tone: "success", text: "成功移除" });
+      setActivationMessage({ tone: "success", text: t.successRemoved });
       queryClient.invalidateQueries({ queryKey: ["activation-status"] });
     },
     onError: (error) => {
       setActivationMessage({
         tone: "error",
-        text: errorMessage(error, "移除失敗"),
+        text: errorMessage(error, t.removeFailed ?? "Remove failed"),
       });
     },
   });
@@ -722,15 +1014,54 @@ export function HeaderBar() {
   }, [activationQuery.data?.activated, setCanWrite]);
 
   useEffect(() => {
+    if (!activated) {
+      setApiKeyValidation({
+        openai: "untested",
+        claude: "untested",
+        gemini: "untested",
+      });
+      setApiKeyMessages({});
+      return;
+    }
+    setApiKeyValidation(savedApiKeyValidation);
+    setApiKeyMessages((current) => {
+      const next = { ...current };
+      for (const item of API_KEY_PROVIDERS) {
+        if (savedApiKeyValidation[item.provider] === "invalid") {
+          next[item.provider] = {
+            tone: "error",
+            text: t.invalidApiKey,
+          };
+        } else if (current[item.provider]?.text === t.invalidApiKey || current[item.provider]?.text === "無效的 API Key") {
+          next[item.provider] = undefined;
+        }
+      }
+      return next;
+    });
+  }, [activated, savedApiKeyValidation]);
+
+  useEffect(() => {
+    if (!activated) return;
+    setExpandedApiKeyProviders((current) => {
+      const next = { ...current };
+      for (const item of API_KEY_PROVIDERS) {
+        if (savedApiKeyValidation[item.provider] === "invalid") {
+          next[item.provider] = true;
+        }
+      }
+      return next;
+    });
+  }, [activated, savedApiKeyValidation]);
+
+  useEffect(() => {
     const timers = Object.entries(apiKeyMessages).map(([provider, message]) => {
-      if (!message) return null;
-      const delay = message.tone === "success" ? 1000 : 3000;
+      if (!message || message.tone !== "success") return null;
       return window.setTimeout(() => {
         setApiKeyMessages((current) => ({
           ...current,
           [provider as ApiKeyProvider]: undefined,
         }));
-      }, delay);
+      }, 1000);
     });
     return () => timers.forEach((timer) => timer && window.clearTimeout(timer));
   }, [apiKeyMessages]);
@@ -771,19 +1102,79 @@ export function HeaderBar() {
     if (!settingsOpen) setConfirmAction(null);
   }, [settingsOpen]);
 
+  useEffect(() => {
+    setDefaultModelValues((current) => ({
+      openai: dirtyDefaultModels.openai ? current.openai : "",
+      claude: dirtyDefaultModels.claude ? current.claude : "",
+      gemini: dirtyDefaultModels.gemini ? current.gemini : "",
+    }));
+  }, [dirtyDefaultModels]);
+
   const apiOk = bootstrap.data?.api_keys.valid !== false;
   const runActive = !!activeRun && ACTIVE_STATUSES.has(activeRun.status);
   const settingsLocked = !activated;
-  const configuredProviderMap = useMemo(
-    () => apiKeyConfiguredMap(keyQuery.data?.providers),
-    [keyQuery.data?.providers],
+  const usableProviderMap = useMemo(
+    () => ({
+      openai: configuredProviderMap.openai && apiKeyValidation.openai === "valid",
+      gemini: configuredProviderMap.gemini && apiKeyValidation.gemini === "valid",
+      claude: configuredProviderMap.claude && apiKeyValidation.claude === "valid",
+    }),
+    [apiKeyValidation, configuredProviderMap],
   );
+  const configuredApiKeyProviders = API_KEY_PROVIDERS
+    .map((item) => item.provider)
+    .filter((provider) => configuredProviderMap[provider]);
+  const currentTestingProvider = testKeyMut.isPending
+    ? (testKeyMut.variables?.provider ?? null)
+    : null;
+  const testConfiguredApiKeys = async () => {
+    if (settingsLocked || testingAllKeys || testKeyMut.isPending) return;
+    const providersToTest = configuredApiKeyProviders;
+    if (providersToTest.length === 0) return;
+    setTestingAllKeys(true);
+    try {
+      for (const provider of providersToTest) {
+        await testKeyMut.mutateAsync({ provider });
+      }
+    } finally {
+      setTestingAllKeys(false);
+    }
+  };
+  const saveProviderDefaultModel = (provider: ApiKeyProvider, model: string) => {
+    setDefaultModelValues((current) => ({ ...current, [provider]: model }));
+    setDirtyDefaultModels((current) => ({ ...current, [provider]: false }));
+  };
+  const toggleUnifiedProviderModel = (
+    provider: ApiKeyProvider,
+    model: string,
+    _enabled: boolean,
+  ) => {
+    const config = configQuery.data;
+    if (!config || settingsLocked || saveConfigMut.isPending) return;
+    const agent_models = { ...(config.agent_models ?? {}) };
+    for (const agentId of HEADER_AGENT_ORDER) {
+      agent_models[agentId] = {
+        ...(agent_models[agentId] ?? {}),
+        provider,
+        model,
+      } as AgentModelConfig;
+    }
+    agent_models.default = {
+      ...(agent_models.default ?? {}),
+      provider,
+      model,
+    } as AgentModelConfig;
+    saveConfigMut.mutate({
+      ...config,
+      agent_models,
+    });
+  };
 
   return (
     <header className="shrink-0 bg-slate-50">
       {!apiOk && (
         <div className="bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
-          API 金鑰或設定異常：{bootstrap.data?.api_keys.error ?? "請檢查 .env"}
+          {t.apiConfigError}：{bootstrap.data?.api_keys.error ?? t.checkEnv}
         </div>
       )}
       <div className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2">
@@ -797,13 +1188,13 @@ export function HeaderBar() {
         >
 	          {HEADER_AGENT_ORDER.map((id) => {
 	            const enabled = enabledAgents[id] !== false;
-	            const ready = agentModelReady(configQuery.data, id, configuredProviderMap);
-	            const locked = runActive;
+	            const ready = agentModelReady(configQuery.data, id, usableProviderMap);
+		            const locked = runActive || settingsLocked || !ready;
 	            return (
 	          <div key={id} className="relative shrink-0">
 	                <button
 	                  type="button"
-	                  disabled={locked}
+		                  disabled={locked}
 	                  className={cn(
 	                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed",
 	                    settingsLocked || !ready
@@ -812,14 +1203,14 @@ export function HeaderBar() {
 	                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
 	                      : "border-red-200 bg-red-50 text-red-700",
 	                  )}
-	                  title={
-	                    locked
-	                      ? `${HEADER_AGENT_LABELS[id]} — 執行中不可操作`
-                        : settingsLocked
-                          ? `${HEADER_AGENT_LABELS[id]} — 可查看，輸入啟動碼後可修改`
-                          : !ready
-                            ? `${HEADER_AGENT_LABELS[id]} — 請先設定 Provider、Model 與 API Key`
-	                      : `${HEADER_AGENT_LABELS[id]} — 點擊設定 provider/model`
+                    title={
+                    runActive
+                      ? t.agentRunningLocked(HEADER_AGENT_LABELS[id])
+                      : settingsLocked
+                        ? t.agentSettingsLocked(HEADER_AGENT_LABELS[id])
+                        : !ready
+                          ? t.agentApiKeyRequired(HEADER_AGENT_LABELS[id])
+                          : t.agentConfigTitle(HEADER_AGENT_LABELS[id])
 	                  }
 	                  onClick={() => {
 	                    if (!locked) setOpenAgent((current) => (current === id ? null : id));
@@ -841,7 +1232,8 @@ export function HeaderBar() {
                   <AgentConfigPopover
                     agentId={id}
                     config={configQuery.data ?? null}
-                    configuredProviders={configuredProviderMap}
+	                    configuredProviders={usableProviderMap}
+                    defaultModels={defaultModelValues}
                     disabled={saveConfigMut.isPending || settingsLocked}
                     onSave={(next) => saveConfigMut.mutate(next)}
                   />
@@ -852,27 +1244,11 @@ export function HeaderBar() {
         </div>
 
         <div className="flex items-center justify-end gap-2 justify-self-end">
-          <button
-            type="button"
-            className={cn(
-              "inline-flex h-7 w-7 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 hover:text-slate-900",
-              darkMode && "border-slate-700 bg-slate-900 text-amber-200 hover:bg-slate-800 hover:text-amber-100",
-            )}
-            title={darkMode ? "切換亮色模式" : "切換深色模式"}
-            aria-pressed={darkMode}
-            onClick={() => {
-              setOpenAgent(null);
-              setLayoutOpen(false);
-              toggleDarkMode();
-            }}
-          >
-            {darkMode ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </button>
           <div className="relative">
             <button
               type="button"
               className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 hover:text-slate-900"
-              title="面板顯示"
+              title={t.layout}
               onClick={() => {
                 setOpenAgent(null);
                 setLayoutOpen((open) => !open);
@@ -883,9 +1259,9 @@ export function HeaderBar() {
             {layoutOpen && (
               <div className="absolute right-0 top-full z-40 mt-2 w-44 rounded-control border border-gray-200 bg-white p-2 shadow-lg">
                 {[
-                  ["references", "文件庫"],
-                  ["workspace", "工作區"],
-                  ["output", "產出物"],
+                  ["references", t.references],
+                  ["workspace", t.workspace],
+                  ["output", t.output],
                 ].map(([id, label]) => {
                   const key = id as "references" | "workspace" | "output";
                   const on = visiblePanels[key];
@@ -905,7 +1281,7 @@ export function HeaderBar() {
                             : "bg-gray-100 text-slate-400",
                         )}
                       >
-                        {on ? "開啟" : "關閉"}
+                          {on ? t.on : t.off}
                       </span>
                     </button>
                   );
@@ -917,7 +1293,7 @@ export function HeaderBar() {
             <button
               type="button"
               className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 hover:text-slate-900"
-              title="設定"
+              title={t.settings}
               onClick={() => {
                 setOpenAgent(null);
                 setSettingsOpen((open) => {
@@ -931,19 +1307,36 @@ export function HeaderBar() {
             {settingsOpen && (
               <div className="absolute right-0 top-full z-40 mt-2 w-80 rounded-control border border-gray-200 bg-white p-3 shadow-lg">
                 <div className="border-b border-gray-100 pb-2">
-                  <p className="text-sm font-semibold text-slate-900">設定</p>
+                  <p className="text-sm font-semibold text-slate-900">{t.settingsTitle}</p>
                 </div>
                 <div className="mt-3 space-y-3">
                   <div>
-                    <p className="text-xs font-semibold text-slate-700">API Key 設定</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-700">{t.apiKey}</p>
+                      <button
+                        type="button"
+                        disabled={
+                          settingsLocked ||
+                          testingAllKeys ||
+                          testKeyMut.isPending ||
+                          configuredApiKeyProviders.length === 0
+                        }
+                        className="shrink-0 rounded-control border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-gray-50 disabled:border-gray-100 disabled:text-gray-300"
+                        onClick={testConfiguredApiKeys}
+                      >
+                        {testingAllKeys ? t.testing : t.test}
+                      </button>
+                    </div>
                     {settingsLocked && (
                       <p className="mt-0.5 text-[11px] text-slate-400">
-                        請先輸入啟動碼，才能修改 API Key。
+                        {t.apiKeyLockedHint}
                       </p>
                     )}
                   </div>
                   <ApiKeySettingsPanel
                     providers={configuredProviderMap}
+                    validation={apiKeyValidation}
+                    config={configQuery.data ?? null}
                     savingProvider={
                       saveKeyMut.isPending
                         ? (saveKeyMut.variables?.provider ?? null)
@@ -954,13 +1347,17 @@ export function HeaderBar() {
                         ? (deleteKeyMut.variables?.provider ?? null)
                         : null
                     }
+                    testingProvider={currentTestingProvider}
+                    savingConfig={saveConfigMut.isPending}
                     values={apiKeyValues}
+                    modelValues={defaultModelValues}
                     messages={apiKeyMessages}
-                    expandedProvider={expandedApiKeyProvider}
+                    expandedProviders={expandedApiKeyProviders}
                     onToggle={(provider) =>
-                      setExpandedApiKeyProvider((current) =>
-                        current === provider ? null : provider,
-                      )
+                      setExpandedApiKeyProviders((current) => ({
+                        ...current,
+                        [provider]: !current[provider],
+                      }))
                     }
                     onChange={(provider, value) => {
                       setApiKeyValues((current) => ({ ...current, [provider]: value }));
@@ -969,6 +1366,18 @@ export function HeaderBar() {
                         [provider]: undefined,
                       }));
                     }}
+                    onModelChange={(provider, value) =>
+                      {
+                        setDefaultModelValues((current) => ({
+                          ...current,
+                          [provider]: value,
+                        }));
+                        setDirtyDefaultModels((current) => ({
+                          ...current,
+                          [provider]: true,
+                        }));
+                      }
+                    }
                     onSave={(provider) =>
                       saveKeyMut.mutate({
                         provider,
@@ -976,8 +1385,72 @@ export function HeaderBar() {
                       })
                     }
                     onDelete={(provider) => setConfirmAction({ type: "api-key", provider })}
+                    onDefaultModelChange={saveProviderDefaultModel}
+                    onToggleUnifiedModel={toggleUnifiedProviderModel}
                     locked={settingsLocked}
                   />
+                  <div className="border-t border-gray-100 pt-3 pb-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold text-slate-700">{t.darkMode}</p>
+                      <button
+                        type="button"
+                        className={cn(
+                          "relative inline-flex h-6 w-14 shrink-0 items-center rounded-full border transition-colors",
+                          darkMode
+                            ? "border-[var(--accent)] bg-[var(--accent)]"
+                            : "border-gray-200 bg-gray-100 text-slate-500",
+                        )}
+                        role="switch"
+                        aria-checked={darkMode}
+                        title={darkMode ? t.lightModeTitle : t.darkModeTitle}
+                        onClick={() => {
+                          setOpenAgent(null);
+                          setLayoutOpen(false);
+                          toggleDarkMode();
+                        }}
+                      >
+                        <span
+                          className={cn(
+                            "pointer-events-none absolute text-[11px] font-semibold leading-none",
+                            darkMode
+                              ? "left-1.5 text-slate-950"
+                              : "right-1.5 text-slate-500",
+                          )}
+                        >
+                          {darkMode ? t.on : t.off}
+                        </span>
+                        <span
+                          className={cn(
+                            "h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+                            darkMode ? "translate-x-8" : "translate-x-0.5",
+                          )}
+                        />
+                      </button>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold text-slate-700">{t.language}</p>
+                      <div className="inline-flex rounded-control border border-gray-200 bg-gray-100 p-0.5">
+                        {[
+                          ["zh", t.chinese],
+                          ["en", t.english],
+                        ].map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            className={cn(
+                              "rounded-[6px] px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                              language === value
+                                ? "bg-white text-slate-900 shadow-sm"
+                                : "text-slate-500 hover:text-slate-700",
+                            )}
+                            onClick={() => setLanguage(value as "zh" | "en")}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                   <ActivationCodePanel
                     activated={activated}
                     value={activationCode}
@@ -997,13 +1470,13 @@ export function HeaderBar() {
                     <ConfirmBox
                       title={
                         confirmAction.type === "api-key"
-                          ? `移除 ${providerLabel(confirmAction.provider)} API Key？`
-                          : "移除啟動碼？"
+                          ? t.removeApiKeyTitle(providerLabel(confirmAction.provider))
+                          : t.removeActivationTitle
                       }
                       description={
                         confirmAction.type === "api-key"
-                          ? "移除後，使用此 Provider 的 Agent 將無法呼叫模型，直到重新設定 API Key。"
-                          : "移除後，網站會回到唯讀模式，需重新輸入啟動碼才能執行。"
+                          ? t.removeApiKeyDescription
+                          : t.removeActivationDescription
                       }
                       loading={deleteKeyMut.isPending || deactivateMut.isPending}
                       onCancel={() => setConfirmAction(null)}

@@ -1,4 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { UI_TEXT } from "@/i18n";
+import { useUiStore } from "@/stores/uiStore";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -21,12 +23,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render() {
     if (this.state.error) {
+      const language = useUiStore.getState().language;
+      const t = UI_TEXT[language];
       return (
         <div className="flex h-full items-center justify-center bg-slate-50 p-6">
           <div className="max-w-xl rounded-card border border-red-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold text-red-700">畫面載入失敗</p>
+            <p className="text-sm font-semibold text-red-700">{t.screenLoadFailed}</p>
             <p className="mt-2 text-xs leading-5 text-slate-600">
-              {this.state.error.message || "請重新整理頁面後再試一次。"}
+              {this.state.error.message || t.refreshAndTryAgain}
             </p>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import type { FileTreeNode } from "@/types/api";
 import {
@@ -68,6 +69,7 @@ function isSelectableOutputFile(file: OutputFile, files: OutputFile[]) {
 }
 
 export function OutputFilePicker({ projectId, items, compact }: OutputFilePickerProps) {
+  const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
   const [compactMenu, setCompactMenu] = useState(false);
   const [menuWidth, setMenuWidth] = useState<number | undefined>(undefined);
@@ -172,10 +174,10 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
           "flex h-8 w-full items-center justify-between rounded-control border border-gray-200 bg-white px-2 text-left text-xs text-slate-700 hover:border-gray-300 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:opacity-50",
         )}
         onClick={() => setOpen((v) => !v)}
-        title={selectedFile?.label ?? "選擇檔案"}
+        title={selectedFile?.label ?? t.selectFilePlaceholder}
       >
         <span className="min-w-0 flex-1 truncate">
-          {selectedFile?.label ?? "選擇檔案"}
+          {selectedFile?.label ?? t.selectFilePlaceholder}
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
       </button>
@@ -192,7 +194,7 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
         >
           {grouped.length === 0 ? (
             <div className="col-span-2 px-3 py-4 text-xs text-slate-500">
-              無任何內容
+              {t.noContent}
             </div>
           ) : compactMenu ? (
             <div className="max-h-72 overflow-y-auto p-1">
@@ -270,7 +272,7 @@ export function OutputFilePicker({ projectId, items, compact }: OutputFilePicker
                     </button>
                   ))
                 ) : (
-                  <p className="px-2 py-3 text-xs text-slate-500">無任何內容</p>
+                  <p className="px-2 py-3 text-xs text-slate-500">{t.noContent}</p>
                 )}
               </div>
             </>

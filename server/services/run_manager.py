@@ -286,6 +286,7 @@ class RunManager:
             )
             flow = Flow(config, store, logger)
             flow.run_id = run_id
+            flow.run_mode = str(self._runs[run_id].get("mode") or "")
             with self._lock:
                 self._runs[run_id]["_flow"] = flow
             register_cancel_checker(project_id, lambda: self._cancelled(run_id))
@@ -705,9 +706,6 @@ class RunManager:
             "max_select": max_select,
             "response_schema": {
                 "stakeholders": [{"name": "string", "type": "primary_user|system_owner|external_party", "reason": "string"}],
-                "selections": [{"index": 1}, {"name": "string", "type": "primary_user|system_owner|external_party"}],
-                "selection": "1,3,系統管理員",
-                "custom_types": {"系統管理員": "system_owner"},
             },
         }
         response = self._wait_for_decision(run_id, payload)
@@ -726,8 +724,7 @@ class RunManager:
                 "skipped": True,
                 "choices": ["A", "B"],
                 "custom_decision": "string",
-                "chosen_options": [{"id": "A", "option_id": "A", "index": 1, "title": "string", "description": "string", "rationale": "string"}],
-                "decision": "string",
+                "chosen_options": [{"option_id": "A", "index": 1, "title": "string", "description": "string", "rationale": "string"}],
             },
         }
         response = self._wait_for_decision(run_id, payload)
@@ -773,7 +770,8 @@ class RunManager:
                 "requirements": requirements,
             },
             "response_schema": {
-                "action": "approve|submit_suggestions",
+                "action": "approve|direct_edit|submit_suggestions",
+                "requirements": [{"id": "string", "text": "string"}],
                 "suggestions": [{"text": "string", "target_ids": ["string"], "references": [{"name": "string"}]}],
             },
         }

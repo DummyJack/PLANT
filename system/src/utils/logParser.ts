@@ -311,7 +311,8 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
         event.step_id === "init.generate_scope_review"
       )
     ) {
-      const speaker = event.agent || "analyst";
+      const isScopeReview = event.step_id === "init.generate_scope_review";
+      const speaker = isScopeReview ? "analyst" : event.agent || "analyst";
       return {
         id: `workspace-review-output-${event.id}`,
         role: "agent",
@@ -321,7 +322,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
         action: event.step_id ?? event.action,
         stage: event.stage_id,
         status: "done",
-        text: workspaceEventText(event, "修正結果"),
+        text: isScopeReview ? "需求範圍修正" : workspaceEventText(event, "修正結果"),
         outputPath: event.output_path,
         timestamp: event.timestamp,
       };

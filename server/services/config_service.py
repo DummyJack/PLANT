@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from model import validate_provider_api_keys
+from server.services.run_config import normalize_agent_models_to_valid_provider
 
 
 def validate_config(config: Any) -> Dict[str, Any]:
@@ -41,7 +42,7 @@ def validate_config(config: Any) -> Dict[str, Any]:
             errors.append("max_issues must be an integer")
 
     try:
-        validate_provider_api_keys(config)
+        validate_provider_api_keys(normalize_agent_models_to_valid_provider(config))
     except Exception as exc:
         errors.append(str(exc))
 

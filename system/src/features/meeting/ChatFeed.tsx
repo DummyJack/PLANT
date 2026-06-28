@@ -14,11 +14,13 @@ import {
 } from "lucide-react";
 import { fetchFile } from "@/api/projects";
 import { agentLabel } from "@/constants/agents";
+import { UI_TEXT, useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { ChatMessage, FileTreeNode, RunState } from "@/types/api";
 import { buildOutputFiles, findModelPair, resolvePreferredOutputPath, type OutputFile } from "@/utils/buildOutputFiles";
 import { cn } from "@/utils/cn";
+import { sortStakeholdersByType } from "@/utils/stakeholders";
 
 const ROLE_STYLES: Record<string, { bubble: string; avatar: string }> = {
   user: {
@@ -81,6 +83,10 @@ function runActivityLabel(run: RunState | null) {
 
 function chatScrollKey(projectId: string | null) {
   return `${CHAT_SCROLL_KEY_PREFIX}:${projectId || "new"}`;
+}
+
+function tx() {
+  return UI_TEXT[useUiStore.getState().language];
 }
 
 function readSavedScrollTop(key: string): number | null {
@@ -396,10 +402,18 @@ function markdownTablePreviewLines(lines: string[]) {
 }
 
 function shouldSkipDocumentPreviewHeading(heading: string, outputPath?: string) {
-  return /^output\/design_rationale\.md$/i.test(outputPath ?? "") ||
-    /^results\/design_rationale\.html$/i.test(outputPath ?? "")
-    ? /^Topology$/i.test(heading.trim())
-    : false;
+  if (!isDesignRationalePreview(outputPath)) return false;
+  return /^(?:Topology|Requirements Traceability Map)$/i.test(heading.trim());
+}
+
+function isDesignRationalePreview(outputPath?: string) {
+  return /^(?:output|results)\/design_rationale\.(?:md|html)$/i.test(outputPath ?? "");
+}
+
+function shouldSkipDocumentPreviewLine(line: string, outputPath?: string) {
+  if (!isDesignRationalePreview(outputPath)) return false;
+  const text = previewHeadingText(line).replace(/:$/, "").trim();
+  return /^Acceptance Criteria$/i.test(text);
 }
 
 function documentPreviewBlocksFromMarkdownLines(
@@ -411,6 +425,7 @@ function documentPreviewBlocksFromMarkdownLines(
   let bodyCount = 0;
   let currentHeading = "";
   let skippingSection = false;
+  let skippingBodyUntilHeading = false;
 
   for (let i = 0; i < lines.length && sectionCount < DOCUMENT_PREVIEW_SECTIONS; i += 1) {
     const line = lines[i].trim();
@@ -418,6 +433,7 @@ function documentPreviewBlocksFromMarkdownLines(
 
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
     if (heading) {
+      skippingBodyUntilHeading = false;
       currentHeading = previewHeadingText(heading[2]);
       if (!currentHeading) continue;
       skippingSection = shouldSkipDocumentPreviewHeading(currentHeading, outputPath);
@@ -431,7 +447,17 @@ function documentPreviewBlocksFromMarkdownLines(
       continue;
     }
 
-    if (skippingSection || !currentHeading || bodyCount >= DOCUMENT_PREVIEW_BODY_PER_SECTION) continue;
+    if (shouldSkipDocumentPreviewLine(line, outputPath)) {
+      skippingBodyUntilHeading = true;
+      continue;
+    }
+
+    if (
+      skippingSection ||
+      skippingBodyUntilHeading ||
+      !currentHeading ||
+      bodyCount >= DOCUMENT_PREVIEW_BODY_PER_SECTION
+    ) continue;
 
     if (line.includes("|")) {
       const tableLines = [];
@@ -507,6 +533,7 @@ function htmlDocumentPreviewBlocks(content: string, outputPath?: string): HtmlPr
 }
 
 function titleFromMessage(msg: ChatMessage) {
+  if (msg.action === "init.generate_scope_review") return "需求範圍修正";
   return (
     msg.text
       .replace(/^已(整理|產生|生成|完成)\s*/g, "")
@@ -830,34 +857,59 @@ function optionLetter(index: number) {
 }
 
 function decisionKindLabel(kind?: string) {
+  const t = tx();
   switch (kind) {
     case "stakeholder_selection":
-      return "利害關係人選擇";
+      return t.selectStakeholders;
     case "requirements_review":
-      return "初始需求分析";
+      return t.initialRequirementAnalysis;
     case "domain_research_review":
-      return "領域研究";
+      return t.domainResearch;
     case "scope_review":
-      return "需求範圍";
+      return t.requirementScope;
     case "meeting_issue_proposal_review":
-      return "候選議題";
+      return t.agentIssues;
     case "stakeholder_statement_review":
-      return "利害關係人發言";
+      return t.stakeholderStatements;
     case "human_decision":
-      return "人類裁決";
+      return t.humanDecision;
     default:
-      return "人類介入";
+      return t.userIntervention;
   }
 }
 
 function decisionViewLabel() {
-  return "查看內容";
+  return tx().viewContent;
 }
 
 function humanInterventionBadge(kind?: string) {
-  if (kind === "stakeholder_selection") return "選擇";
-  if (kind === "human_decision") return "決策";
-  return "建議";
+  const t = tx();
+  if (kind === "human_decision") return t.humanDecision;
+  if (kind === "stakeholder_selection") return t.humanSelection;
+  return t.humanSuggestion;
+}
+
+function humanInterventionStatus(kind?: string, completed = false) {
+  const t = tx();
+  if (!completed) return t.waiting;
+  switch (kind) {
+    case "stakeholder_selection":
+      return t.selectionComplete;
+    case "requirements_review":
+      return t.analysisComplete;
+    case "domain_research_review":
+      return t.revisionComplete;
+    case "scope_review":
+      return t.revisionComplete;
+    case "meeting_issue_proposal_review":
+      return t.selectionComplete;
+    case "stakeholder_statement_review":
+      return t.statementComplete;
+    case "human_decision":
+      return t.decisionComplete;
+    default:
+      return t.suggestionComplete;
+  }
 }
 
 function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<string, unknown>) {
@@ -867,11 +919,11 @@ function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<s
   const bestOptions = jsonList((options as Record<string, unknown>).best_options)
     .map((row, index) => {
       const item = jsonRecord(row);
-      const id = jsonText(item.option_id) || jsonText(item.id) || optionLetter(index);
+      const id = jsonText(item.option_id) || optionLetter(index);
       return {
         id,
-        label: `選項 ${id || optionLetter(index)}`,
-        title: jsonText(item.title) || jsonText(item.summary) || jsonText(item.description),
+        label: tx().optionLabel(id || optionLetter(index)),
+        title: jsonText(item.title),
       };
     });
   const byId = new Map(bestOptions.map((row) => [row.id, row]));
@@ -879,10 +931,10 @@ function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<s
   const chosenOptions = jsonList(payload.chosen_options)
     .map((row, index) => {
       const item = jsonRecord(row);
-      const id = jsonText(item.option_id) || jsonText(item.id) || optionLetter(index);
+      const id = jsonText(item.option_id) || optionLetter(index);
       const matched = byId.get(id);
-      const title = jsonText(item.title) || jsonText(item.summary) || jsonText(item.description) || matched?.title || "";
-      return `${matched?.label || `選項 ${id}`}：${title}`.replace(/：$/, "");
+      const title = jsonText(item.title) || matched?.title || "";
+      return `${matched?.label || tx().optionLabel(id)}: ${title}`.replace(/:\s*$/, "");
     })
     .filter(Boolean);
   if (chosenOptions.length) return chosenOptions;
@@ -891,7 +943,7 @@ function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<s
     .map((choice, index) => {
       const id = jsonText(choice) || optionLetter(index);
       const matched = byId.get(id);
-      return `${matched?.label || `選項 ${id}`}：${matched?.title || ""}`.replace(/：$/, "");
+      return `${matched?.label || tx().optionLabel(id)}: ${matched?.title || ""}`.replace(/:\s*$/, "");
     })
     .filter(Boolean);
   if (choices.length) return choices;
@@ -902,12 +954,16 @@ function decisionOptionRows(decision: ChatMessage["decision"], payload: Record<s
 }
 
 function payloadRows(payload?: Record<string, unknown>, decision?: ChatMessage["decision"]) {
+  const t = tx();
   if (!payload) return [];
-  const stakeholders = jsonList(payload.stakeholders)
+  const stakeholders = sortStakeholdersByType(
+    jsonList(payload.stakeholders),
+    (row) => jsonRecord(row).type,
+  )
     .map((row) => jsonRecord(row).name)
     .map((value) => jsonText(value))
     .filter(Boolean)
-    .map((value) => `選擇：${value}`);
+    .map((value) => `${t.humanSelection}: ${value}`);
   if (stakeholders.length) return stakeholders;
 
   const suggestions = jsonList(payload.suggestions)
@@ -919,7 +975,7 @@ function payloadRows(payload?: Record<string, unknown>, decision?: ChatMessage["
         .filter(Boolean)
         .map((name) => `@${name}`)
         .join(" ");
-      return [`建議 ${index + 1}：`, refs, text].filter(Boolean).join(" ");
+      return [`${t.suggestions} ${index + 1}:`, refs, text].filter(Boolean).join(" ");
     })
     .filter(Boolean);
   if (suggestions.length) return suggestions;
@@ -927,7 +983,7 @@ function payloadRows(payload?: Record<string, unknown>, decision?: ChatMessage["
   const customIssues = jsonList(payload.custom_issues)
     .map((row, index) => {
       const title = jsonText(jsonRecord(row).title);
-      return `議題 ${index + 1}：${title}`;
+      return `${t.issues} ${index + 1}: ${title}`;
     })
     .filter((row) => !/：\s*$/.test(row));
   if (customIssues.length) return customIssues;
@@ -936,9 +992,9 @@ function payloadRows(payload?: Record<string, unknown>, decision?: ChatMessage["
   if (decisionRows.length) return decisionRows;
   const humanDecision = jsonText(payload.human_decision);
   if (humanDecision) return humanDecision.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (payload.skip_all_human_interventions === true) return ["後續人類介入將自動跳過"];
-  if (payload.skipped === true) return ["已略過本次裁決"];
-  if (payload.action === "approve") return ["無補充建議"];
+  if (payload.skip_all_human_interventions === true) return [t.autoSkipFutureDecisions];
+  if (payload.skipped === true) return [t.skippedThisDecision];
+  if (payload.action === "approve") return [t.noAdditionalSuggestions];
   return [];
 }
 
@@ -960,9 +1016,12 @@ function stakeholderStatementReferences(decision?: ChatMessage["decision"]) {
   const options = decision?.options && typeof decision.options === "object"
     ? decision.options
     : {};
-  return jsonList(options.stakeholders).flatMap((row, stakeholderIndex) => {
+  return sortStakeholdersByType(
+    jsonList(options.stakeholders),
+    (row) => jsonRecord(row).type,
+  ).flatMap((row, stakeholderIndex) => {
     const item = jsonRecord(row);
-    const name = jsonText(item.name) || `利害關係人 ${stakeholderIndex + 1}`;
+    const name = jsonText(item.name) || tx().stakeholderFallback(stakeholderIndex + 1);
     const lines = Array.isArray(item.text)
       ? item.text
       : jsonText(item.text)
@@ -1119,17 +1178,16 @@ function stakeholderStatementPreviewLine(value: unknown) {
   const item = jsonRecord(value);
   return {
     id: jsonText(item.id),
-    text:
-      jsonText(item.text) ||
-      jsonText(item.content) ||
-      jsonText(item.body) ||
-      jsonText(item.statement),
+    text: jsonText(item.text),
   };
 }
 
 function ProjectCompactPreview({ data }: { data: Record<string, unknown> }) {
   const scenario = jsonText(data.scenario) || jsonText(data.rough_idea);
-  const stakeholders = jsonList(data.stakeholders).slice(0, 4);
+  const stakeholders = sortStakeholdersByType(
+    jsonList(data.stakeholders),
+    (row) => jsonRecord(row).type,
+  ).slice(0, 4);
   return (
     <div className="space-y-3">
       {scenario && (
@@ -1175,7 +1233,10 @@ function ProjectCompactPreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function StakeholderStatementCompactPreview({ data }: { data: Record<string, unknown> }) {
-  const stakeholders = jsonList(data.stakeholders).slice(0, 6);
+  const stakeholders = sortStakeholdersByType(
+    jsonList(data.stakeholders),
+    (row) => jsonRecord(row).type,
+  ).slice(0, 6);
   if (!stakeholders.length) return <div className="text-sm text-slate-500">無任何內容</div>;
   return (
     <div className="space-y-2">
@@ -1313,7 +1374,7 @@ function ConflictCompactPreview({ data }: { data: Record<string, unknown> }) {
   const totalPairs = latestPairs.length;
   const multipleCount = latestMultiples.length;
   const conflictCount = latestRows.filter((pair) =>
-    /conflict/i.test(jsonText(pair.final_label) || jsonText(pair.initial_label)),
+    /conflict/i.test(jsonText(pair.final_label)),
   ).length;
   const nonConflictCount = latestRows.length - conflictCount;
 
@@ -1341,7 +1402,7 @@ function ConflictCompactPreview({ data }: { data: Record<string, unknown> }) {
         <div className="space-y-1.5 px-3 py-2.5">
           {latestPairs.slice(0, 2).map((pair, index) => {
             const reqs = jsonList(pair.requirements).map(jsonRecord);
-            const label = jsonText(pair.final_label) || jsonText(pair.initial_label) || "未標記";
+            const label = jsonText(pair.final_label) || "未標記";
             return (
               <div
                 key={jsonText(pair.id) || index}
@@ -1891,6 +1952,7 @@ function OutputPreview({
     return truncatePreview(source) || msg.text;
   }, [file.data?.content, file.data?.type, file.isError, file.isLoading, msg, previewPath]);
   const cardTitle = useMemo(() => {
+    if (msg.action === "init.generate_scope_review") return "需求範圍修正";
     if (stakeholderStatementCard) return msg.text;
     if (/^artifact\/meeting\/elicitation_meeting\.json$/i.test(previewPath ?? "")) {
       return msg.action === "elicit_end" ? "需求擷取會議結束" : "需求擷取會議";
@@ -2464,7 +2526,7 @@ function HumanInterventionReplayModal({
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-slate-100 text-slate-500",
               )}>
-                {completed ? "已完成" : "等待中"}
+                {humanInterventionStatus(decision?.kind, completed)}
               </span>
             </div>
             <h2 className="text-lg font-semibold leading-snug text-slate-950">{title}</h2>
@@ -2488,7 +2550,7 @@ function HumanInterventionReplayModal({
             <section className="mb-4">
               <h3 className="mb-2 text-xs font-semibold text-slate-500">候選利害關係人</h3>
               <div className="grid gap-2 sm:grid-cols-2">
-                {decision.proposed.map((row, index) => (
+                {sortStakeholdersByType(decision.proposed, (row) => row.type).map((row, index) => (
                   <div key={`${row.name}-${index}`} className="rounded-control border border-gray-200 bg-slate-50 px-3 py-2">
                     <div className="text-sm font-semibold text-slate-900">{row.name}</div>
                     <div className="mt-1 text-xs leading-relaxed text-slate-500">{row.reason}</div>
@@ -2780,7 +2842,11 @@ function Bubble({
   const isAction = msg.kind === "action";
   const isDecision = msg.kind === "decision";
   const styles = isStakeholderAgent ? ROLE_STYLES.agent : ROLE_STYLES[msg.role] ?? ROLE_STYLES.agent;
-  const label = isHumanUser ? "您" : (msg.label ?? agentLabel("analyst"));
+  const label = isHumanUser
+    ? "您"
+    : msg.action === "init.generate_scope_review"
+      ? agentLabel("analyst")
+      : (msg.label ?? agentLabel("analyst"));
   const action =
     msg.action === "human_decision_request" || msg.action === "stakeholder_selection_request"
       ? ""
@@ -2831,7 +2897,9 @@ function Bubble({
             {humanDecisionRequest.title}
           </div>
           {replayAvailable && (
-            <div className="mt-2 text-xs font-medium text-emerald-600">已完成</div>
+            <div className="mt-2 text-xs font-medium text-emerald-600">
+              {humanInterventionStatus(msg.decision?.kind, true)}
+            </div>
           )}
         </button>
         {replayOpen && replayAvailable && (
@@ -2965,6 +3033,7 @@ export function ChatFeed({
   historyLoading = false,
   activeRun = null,
 }: ChatFeedProps) {
+  const { language } = useI18n();
   const messages = useChatStore((s) => s.messages);
   const scrollTargetMessageId = useUiStore((s) => s.scrollTargetMessageId);
   const setScrollTargetMessageId = useUiStore((s) => s.setScrollTargetMessageId);
@@ -3101,7 +3170,7 @@ export function ChatFeed({
 
   const arrangedMessages = useMemo(
     () => arrangeMeetingPlanMomMessages(messages.filter((message) => !shouldHideChatMessage(message))),
-    [messages],
+    [language, messages],
   );
   const collapsedView = useMemo(
     () => applyCollapsedStagePills(arrangedMessages, collapsedStagePills),
@@ -3145,7 +3214,7 @@ export function ChatFeed({
       }
     });
     return rows;
-  }, [messages]);
+  }, [language, messages]);
 
   useEffect(() => {
     const root = scrollRef.current;

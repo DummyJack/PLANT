@@ -103,6 +103,7 @@ export function useRunEvents(
           queryClient.invalidateQueries({ queryKey: ["artifacts", run.project_id] });
           queryClient.invalidateQueries({ queryKey: ["project", run.project_id] });
           queryClient.invalidateQueries({ queryKey: ["runs", run.project_id] });
+          queryClient.invalidateQueries({ queryKey: ["cost-summary", run.project_id] });
         } else {
           queryClient.invalidateQueries({ queryKey: ["artifacts"] });
         }

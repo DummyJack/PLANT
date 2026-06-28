@@ -1,4 +1,6 @@
 import re
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -140,3 +142,29 @@ def ensure_extension(path: Path, allowed: Iterable[str]) -> None:
     suffix = path.suffix.lower()
     if suffix not in set(allowed):
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
+
+
+async def write_upload_file(upload: Any, target: Path, *, chunk_size: int = 1024 * 1024) -> int:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".upload",
+        dir=str(target.parent),
+    )
+    tmp_path = Path(tmp_name)
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            while True:
+                chunk = await upload.read(chunk_size)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                total += len(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+        return total
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise

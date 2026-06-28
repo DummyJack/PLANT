@@ -4,14 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { apiUrl } from "@/api/client";
-import { fetchFile } from "@/api/projects";
+import { fetchFile, manualFileUrl } from "@/api/projects";
 import { submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
 import { agentLabel } from "@/constants/agents";
 import { JsonArtifactView } from "@/features/output/JsonArtifactView";
 import { OutputFilePicker } from "@/features/output/OutputFilePicker";
 import { useActiveRun } from "@/hooks/useActiveRun";
+import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { ScopeReviewDraft } from "@/stores/uiStore";
@@ -23,6 +23,7 @@ import {
 } from "@/utils/buildOutputFiles";
 import type { FileContent, FileTreeNode } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { sortStakeholdersByType, stakeholderTypeLabel } from "@/utils/stakeholders";
 
 interface ResultPreviewProps {
   projectId: string | null;
@@ -50,6 +51,7 @@ interface RequirementReviewRow {
   id: string;
   text: string;
   sourceId: string;
+  raw: Record<string, unknown>;
 }
 
 interface AgentIssueProposalRow {
@@ -58,6 +60,8 @@ interface AgentIssueProposalRow {
   title: string;
   detail: string;
 }
+
+type UiTexts = ReturnType<typeof useI18n>["t"];
 
 const emptyScopeDraft: ScopeReviewDraft = {
   in_scope: [],
@@ -105,6 +109,16 @@ function handleMentionDragStart(
   event.dataTransfer.setData("text/plain", `@${normalizedId}`);
 }
 
+function pathFromManualPreviewUrl(pathname: string, projectId: string): string | null {
+  const prefix = `/${encodeURIComponent(projectId)}/manual/`;
+  if (!pathname.startsWith(prefix)) return null;
+  const value = decodeURIComponent(pathname.slice(prefix.length));
+  if (value === "srs") return "results/srs.html";
+  if (value === "dr") return "results/design_rationale.html";
+  if (/^(results|artifact|output)\//i.test(value)) return value;
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -113,46 +127,28 @@ function textValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : String(value ?? "").trim();
 }
 
-function stakeholderTypeLabel(value: string) {
-  switch (value) {
-    case "primary_user":
-      return "核心使用者";
-    case "system_owner":
-      return "系統所有者與管理者";
-    case "external_party":
-      return "外部相關單位";
-    default:
-      return value;
-  }
-}
-
 function statementText(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (!isRecord(value)) return String(value ?? "").trim();
-  return (
-    textValue(value.text) ||
-    textValue(value.statement) ||
-    textValue(value.content) ||
-    textValue(value.description)
-  );
+  return textValue(value.text);
 }
 
 function statementId(value: unknown, stakeholderIndex: number, lineIndex: number) {
   if (isRecord(value)) {
-    const id =
-      textValue(value.id) ||
-      textValue(value.statement_id) ||
-      textValue(value.source_id);
+    const id = textValue(value.id);
     if (id) return id;
   }
   return `ST-${stakeholderIndex + 1}-${lineIndex + 1}`;
 }
 
-function stakeholderStatementDrafts(decision: NonNullable<ReturnType<typeof useActiveRun>["activeRun"]>["pending_decision"]) {
+function stakeholderStatementDrafts(
+  decision: NonNullable<ReturnType<typeof useActiveRun>["activeRun"]>["pending_decision"],
+  t: UiTexts,
+) {
   if (decision?.kind !== "stakeholder_statement_review") return [];
   const options = isRecord(decision.options) ? decision.options : {};
   const rows = Array.isArray(options.stakeholders) ? options.stakeholders : [];
-  return rows.map((row, stakeholderIndex) => {
+  return sortStakeholdersByType(rows, (row) => (isRecord(row) ? row.type : "")).map((row, stakeholderIndex) => {
     const item = isRecord(row) ? row : {};
     const rawLines = Array.isArray(item.text)
       ? item.text
@@ -160,7 +156,7 @@ function stakeholderStatementDrafts(decision: NonNullable<ReturnType<typeof useA
         ? [item.text]
         : [];
     return {
-      name: textValue(item.name) || `利害關係人 ${stakeholderIndex + 1}`,
+      name: textValue(item.name) || t.stakeholderFallback(stakeholderIndex + 1),
       type: textValue(item.type),
       text: rawLines.map((line, lineIndex) => ({
         id: statementId(line, stakeholderIndex, lineIndex),
@@ -181,8 +177,9 @@ function requirementReviewRows(
       const item = isRecord(row) ? row : {};
       return {
         id: textValue(item.id) || `URL-${index + 1}`,
-        text: textValue(item.text) || textValue(item.description),
-        sourceId: textValue(item.source_id) || textValue(item.source),
+        text: textValue(item.text),
+        sourceId: textValue(item.source_id),
+        raw: item,
       };
     })
     .filter((row) => row.text);
@@ -190,6 +187,7 @@ function requirementReviewRows(
 
 function parseMeetingIssueProposalRows(
   decision: NonNullable<ReturnType<typeof useActiveRun>["activeRun"]>["pending_decision"],
+  t: UiTexts,
 ) {
   if (decision?.kind !== "meeting_issue_proposal_review") return [];
   const options = isRecord(decision.options) ? decision.options : {};
@@ -197,28 +195,15 @@ function parseMeetingIssueProposalRows(
   return rows
     .map((row, index): AgentIssueProposalRow => {
       const item = isRecord(row) ? row : {};
-      const rawAgent =
-        textValue(item.proposed_by) ||
-        textValue(item.agent) ||
-        textValue(item.proposer) ||
-        textValue(item.role) ||
-        textValue(item.speaker) ||
-        "Agent";
+      const rawAgent = textValue(item.proposed_by) || "Agent";
       const agent = agentLabel(rawAgent);
-      const title =
-        textValue(item.issue_title) ||
-        textValue(item.title) ||
-        textValue(item.issue) ||
-        textValue(item.summary) ||
-        `議題 ${index + 1}`;
+      const title = textValue(item.title) || t.issueFallback(index + 1);
       const detail =
-        textValue(item.description) ||
         textValue(item.reason) ||
-        textValue(item.rationale) ||
         textValue(item.expect_outcome) ||
-        textValue(item.detail);
+        textValue(item.issue_focus);
       return {
-        id: textValue(item.issue_id) || textValue(item.id) || `ISSUE-${index + 1}`,
+        id: textValue(item.id) || `ISSUE-${index + 1}`,
         agent,
         title,
         detail,
@@ -370,6 +355,7 @@ function StakeholderStatementEditor({
   showValidation?: boolean;
   onChange: (drafts: StakeholderStatementDraft[]) => void;
 }) {
+  const { t } = useI18n();
   const updateLine = (stakeholderIndex: number, lineIndex: number, value: string) => {
     onChange(
       drafts.map((stakeholder, currentStakeholderIndex) =>
@@ -389,7 +375,7 @@ function StakeholderStatementEditor({
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
-          尚無可編輯發言
+          {t.noEditableStatements}
         </div>
       ) : (
         <div className="space-y-3">
@@ -434,7 +420,7 @@ function StakeholderStatementEditor({
                       />
                       {showValidation && empty && (
                         <span className="mt-1 block text-xs font-medium text-red-600">
-                          不可為空
+                          {t.requiredField}
                         </span>
                       )}
                     </label>
@@ -454,11 +440,12 @@ function StakeholderStatementPreview({
 }: {
   drafts: StakeholderStatementDraft[];
 }) {
+  const { t } = useI18n();
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
-          尚無利害關係人發言
+          {t.noStakeholderStatements}
         </div>
       ) : (
         <div className="space-y-3">
@@ -486,7 +473,7 @@ function StakeholderStatementPreview({
                     onDragStart={(event) =>
                       handleMentionDragStart(event, "stakeholders", line.id)
                     }
-                    title={`拖曳引用 @${line.id}`}
+                    title={t.dragReferenceTitle(line.id)}
                   >
                     <div className="mb-1 text-xs font-semibold text-slate-400">
                       {line.id}
@@ -512,6 +499,7 @@ function ScopeReviewEditor({
   draft: ScopeReviewDraft;
   onChange: (draft: ScopeReviewDraft) => void;
 }) {
+  const { t } = useI18n();
   const [editingItems, setEditingItems] = useState<Record<string, boolean>>({});
   const itemKey = (key: keyof ScopeReviewDraft, index: number) => `${key}-${index}`;
   const updateItem = (key: keyof ScopeReviewDraft, index: number, value: string) => {
@@ -550,8 +538,8 @@ function ScopeReviewEditor({
     const canAdd = !draft[key].some((item) => !item.trim());
     const placeholder =
       key === "in_scope"
-        ? "輸入需求範圍內"
-        : "輸入需求範圍外";
+        ? t.inputInScope
+        : t.inputOutOfScope;
     return (
       <section className="rounded-control border border-gray-200 bg-white p-3">
       <div className="relative mb-3 flex items-center justify-end gap-3">
@@ -568,8 +556,8 @@ function ScopeReviewEditor({
           )}
           disabled={!canAdd}
           onClick={() => addItem(key)}
-          aria-label={`新增${title}`}
-          title={canAdd ? "新增" : "請先填寫新增項目"}
+          aria-label={t.addSectionItem(title)}
+          title={canAdd ? t.addItem : t.fillNewItemFirst}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -617,8 +605,8 @@ function ScopeReviewEditor({
                       [itemKey(key, index)]: true,
                     }))
                   }
-                  aria-label="編輯此項"
-                  title="編輯"
+                  aria-label={t.editItem}
+                  title={t.edit}
                 >
                   <Edit3 className="h-3.5 w-3.5" />
                 </button>
@@ -627,8 +615,8 @@ function ScopeReviewEditor({
                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-red-100 bg-white text-red-500 hover:bg-red-50 hover:text-red-600"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => removeItem(key, index)}
-                  aria-label="移除此項"
-                  title="移除"
+                  aria-label={t.removeItem}
+                  title={t.remove}
                 >
                   <Minus className="h-3.5 w-3.5" />
                 </button>
@@ -644,19 +632,20 @@ function ScopeReviewEditor({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       <div className="space-y-3">
-        {renderSection("in_scope", "範圍內", "尚無範圍內項目")}
-        {renderSection("out_of_scope", "範圍外", "尚無範圍外項目")}
+        {renderSection("in_scope", t.inScope, t.noInScopeItems)}
+        {renderSection("out_of_scope", t.outOfScope, t.noOutOfScopeItems)}
       </div>
     </div>
   );
 }
 
 function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
+  const { t } = useI18n();
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
-          尚無使用者需求
+          {t.noUserRequirements}
         </div>
       ) : (
         <div className="space-y-2">
@@ -668,7 +657,7 @@ function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
               onDragStart={(event) =>
                 handleMentionDragStart(event, "requirements", row.id)
               }
-              title={`拖曳引用 @${row.id}`}
+              title={t.dragReferenceTitle(row.id)}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold text-slate-400">
@@ -691,12 +680,83 @@ function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
   );
 }
 
-function AgentIssueProposalPreview({ rows }: { rows: AgentIssueProposalRow[] }) {
+function RequirementReviewEditor({
+  rows,
+  saving,
+  showValidation,
+  onChange,
+}: {
+  rows: RequirementReviewRow[];
+  saving?: boolean;
+  showValidation?: boolean;
+  onChange: (rows: RequirementReviewRow[]) => void;
+}) {
+  const { t } = useI18n();
+  const updateText = (index: number, value: string) => {
+    onChange(
+      rows.map((row, currentIndex) =>
+        currentIndex === index ? { ...row, text: value } : row,
+      ),
+    );
+  };
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
-          尚無 Agent 議題
+          {t.noEditableRequirements}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row, index) => {
+            const empty = !row.text.trim();
+            return (
+              <label
+                key={row.id}
+                className="block rounded-control border border-gray-200 bg-white p-3"
+              >
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-xs font-semibold text-slate-400">
+                    {row.id}
+                  </div>
+                  {row.sourceId && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                      {row.sourceId}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  className={cn(
+                    "min-h-24 w-full resize-y rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
+                    showValidation && empty
+                      ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                      : "border-gray-200 focus:border-slate-400 focus:ring-slate-200",
+                  )}
+                  disabled={saving}
+                  value={row.text}
+                  onChange={(event) => updateText(index, event.target.value)}
+                />
+                {showValidation && empty && (
+                  <span className="mt-1 block text-xs font-medium text-red-600">
+                    {t.requiredField}
+                  </span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentIssueProposalPreview({ rows }: { rows: AgentIssueProposalRow[] }) {
+  const { t } = useI18n();
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      {rows.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
+          {t.noAgentIssues}
         </div>
       ) : (
         <div className="space-y-2">
@@ -707,7 +767,7 @@ function AgentIssueProposalPreview({ rows }: { rows: AgentIssueProposalRow[] }) 
             >
               <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2">
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                  提出者：{row.agent}
+                  {t.proposedBy}: {row.agent}
                 </span>
                 {row.id && (
                   <span className="text-[11px] font-medium text-slate-400">
@@ -742,6 +802,7 @@ function ModelDualView({
   imagePath?: string;
   title: string;
 }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<"diagram" | "source">(
     imagePath ? "diagram" : "source",
   );
@@ -773,7 +834,7 @@ function ModelDualView({
           )}
           onClick={() => setTab("diagram")}
         >
-          模型
+          {t.model}
         </button>
         <button
           type="button"
@@ -792,9 +853,9 @@ function ModelDualView({
       {tab === "diagram" ? (
         <div className="flex flex-1 items-center justify-center overflow-auto p-4">
           {!imagePath ? (
-            <p className="text-sm text-slate-500">圖形尚無法預覽</p>
+            <p className="text-sm text-slate-500">{t.graphPreviewUnavailable}</p>
           ) : image.isLoading ? (
-            <p className="text-sm text-slate-500">載入模型中…</p>
+            <p className="text-sm text-slate-500">{t.loadingModel}</p>
           ) : image.data?.content ? (
             <img
               src={`data:${image.data.mime ?? "image/png"};base64,${image.data.content}`}
@@ -802,16 +863,16 @@ function ModelDualView({
               className="max-h-full max-w-full rounded-control object-contain"
             />
           ) : (
-            <p className="text-sm text-slate-500">圖形尚無法預覽</p>
+            <p className="text-sm text-slate-500">{t.graphPreviewUnavailable}</p>
           )}
         </div>
       ) : (
         <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed text-slate-700">
           {!sourcePath
-            ? "無 PlantUML"
+            ? t.noPlantUml
             : source.isLoading
-              ? "載入中…"
-              : (source.data?.content ?? "無法載入 PlantUML")}
+              ? t.loading
+              : (source.data?.content ?? t.unableLoadPlantUml)}
         </pre>
       )}
     </div>
@@ -1035,6 +1096,7 @@ function MarkdownImage({
   src?: string;
   alt?: string;
 }) {
+  const { t } = useI18n();
   const resolvedPath = normalizeMarkdownImagePath(selectedPath, src);
   const image = useQuery({
     queryKey: ["markdown-image", projectId, selectedPath, src],
@@ -1046,7 +1108,7 @@ function MarkdownImage({
   if (image.isLoading) {
     return (
       <div className="my-3 rounded-control border border-gray-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
-        載入圖片中...
+        {t.loadingImage}
       </div>
     );
   }
@@ -1054,7 +1116,7 @@ function MarkdownImage({
   if (!image.data?.content || image.data.type !== "image") {
     return (
       <div className="my-3 rounded-control border border-gray-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
-        圖片無法載入：{alt || src}
+        {t.unableLoadImage(alt || src || "")}
       </div>
     );
   }
@@ -1074,6 +1136,7 @@ function MarkdownImage({
 }
 
 export function ResultPreview({ projectId, items }: ResultPreviewProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const selectedOutputPath = useUiStore((s) => s.selectedOutputPath);
   const selectedOutputAnchor = useUiStore((s) => s.selectedOutputAnchor);
@@ -1104,6 +1167,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const [pendingHtmlHash, setPendingHtmlHash] = useState<string | null>(null);
   const [statementDrafts, setStatementDrafts] = useState<StakeholderStatementDraft[]>([]);
   const [statementEditing, setStatementEditing] = useState(false);
+  const [requirementDrafts, setRequirementDrafts] = useState<RequirementReviewRow[]>([]);
+  const [requirementEditing, setRequirementEditing] = useState(false);
   const stakeholderReviewDecision =
     activeRun?.status === "waiting_for_human" &&
     activeRun.pending_decision?.kind === "stakeholder_statement_review"
@@ -1142,8 +1207,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     [requirementsReviewDecision],
   );
   const meetingIssueProposalRows = useMemo(
-    () => parseMeetingIssueProposalRows(meetingIssueProposalDecision),
-    [meetingIssueProposalDecision],
+    () => parseMeetingIssueProposalRows(meetingIssueProposalDecision, t),
+    [meetingIssueProposalDecision, t],
   );
 
   const files = useMemo(() => buildOutputFiles(items), [items]);
@@ -1200,7 +1265,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   });
   const statementEditMut = useMutation({
     mutationFn: (stakeholders: StakeholderStatementDraft[]) => {
-      if (!activeRun?.pending_decision) throw new Error("沒有可編輯的使用者介入");
+      if (!activeRun?.pending_decision) throw new Error(t.noEditableHumanIntervention);
       return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
         action: "direct_edit",
         stakeholders: stakeholders.map((row) => ({
@@ -1222,29 +1287,39 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/project.json"] });
     },
   });
+  const requirementEditMut = useMutation({
+    mutationFn: (rows: RequirementReviewRow[]) => {
+      if (!activeRun?.pending_decision) throw new Error(t.noEditableHumanIntervention);
+      return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
+        action: "direct_edit",
+        requirements: rows
+          .map((row) => ({
+            ...row.raw,
+            id: row.id,
+            text: row.text.trim(),
+          }))
+          .filter((row) => row.text),
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["runs"] });
+      await queryClient.invalidateQueries({ queryKey: ["run"] });
+      await queryClient.invalidateQueries({ queryKey: ["artifacts", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/project.json"] });
+      await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/requirements.json"] });
+    },
+  });
 
   const fileData = file.data?.path === selectedOutputPath ? file.data : undefined;
   const content = fileData?.content ?? "";
   const fileLoading = !isHtmlArtifact && !isModelArtifact && !fileData && file.isFetching;
   const htmlPreviewUrl =
     projectId && selectedOutputPath?.startsWith("results/")
-      ? apiUrl(
-          `/api/projects/${encodeURIComponent(projectId)}/results/${selectedOutputPath
-            .slice("results/".length)
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`,
-        )
+      ? manualFileUrl(projectId, selectedOutputPath)
       : null;
   const fileDownloadUrl = (path: string) =>
     projectId && path.startsWith("results/")
-      ? apiUrl(
-          `/api/projects/${encodeURIComponent(projectId)}/results/${path
-            .slice("results/".length)
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`,
-        )
+      ? manualFileUrl(projectId, path)
       : null;
   const downloadArtifactPath = async (path: string) => {
     if (!projectId) return;
@@ -1321,7 +1396,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         await downloadArtifactPath(path);
       }
     } catch (error) {
-      setDownloadError(error instanceof Error ? error.message : "下載失敗");
+      setDownloadError(error instanceof Error ? error.message : t.downloadFailed);
       console.error(error);
     }
   };
@@ -1345,9 +1420,14 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   }, [actionMenuOpen]);
 
   useEffect(() => {
-    setStatementDrafts(stakeholderStatementDrafts(stakeholderReviewDecision));
+    setStatementDrafts(stakeholderStatementDrafts(stakeholderReviewDecision, t));
     setStatementEditing(false);
-  }, [stakeholderReviewDecision?.id]);
+  }, [stakeholderReviewDecision?.id, t]);
+
+  useEffect(() => {
+    setRequirementDrafts(requirementRows);
+    setRequirementEditing(false);
+  }, [requirementsReviewDecision?.id, requirementRows]);
 
   useEffect(() => {
     if (!scopeReviewDecision) return;
@@ -1469,19 +1549,10 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     } catch {
       return null;
     }
-    const prefix = projectId
-      ? new URL(
-          apiUrl(`/api/projects/${encodeURIComponent(projectId)}/results/`),
-          window.location.origin,
-        )
-      : null;
     let targetPath = "";
-    if (
-      prefix &&
-      url.origin === prefix.origin &&
-      url.pathname.startsWith(prefix.pathname)
-    ) {
-      targetPath = `results/${decodeURIComponent(url.pathname.slice(prefix.pathname.length))}`;
+    const manualPath = projectId ? pathFromManualPreviewUrl(url.pathname, projectId) : null;
+    if (url.origin === window.location.origin && manualPath) {
+      targetPath = manualPath;
     } else if (url.origin !== window.location.origin) {
       return null;
     } else if (!url.pathname || url.pathname === window.location.pathname) {
@@ -1595,14 +1666,14 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           type="button"
           className="rounded-control border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
           onClick={resumeOutputAutoFollow}
-          title="恢復跟隨流程進度產出物"
+          title={t.resumeFollowProgressTitle}
         >
-          跟隨進度
+          {t.followProgress}
         </button>
       )}
       {!manualOutputLock && autoFollowOutput && currentAutoOutputPath && (
         <span className="rounded-control border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-          跟隨中
+          {t.following}
         </span>
       )}
       {relatedMessageId && (
@@ -1611,7 +1682,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           className="rounded-control border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-gray-50"
           onClick={() => setScrollTargetMessageId(relatedMessageId)}
         >
-          回到對話
+          {t.backToChat}
         </button>
       )}
       {showToc && (
@@ -1621,14 +1692,14 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
             className="rounded-control border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-gray-50"
             onClick={() => setTocOpen((open) => !open)}
           >
-            目錄
+            {t.tableOfContents}
           </button>
           {tocOpen && (
             <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-64 overflow-y-auto rounded-card border border-gray-200 bg-white p-2 shadow-lg">
               {isMarkdownArtifact && file.isLoading ? (
-                <p className="px-2 py-3 text-xs text-slate-500">目錄載入中...</p>
+                <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
               ) : tocItems.length === 0 ? (
-                <p className="px-2 py-3 text-xs text-slate-500">尚無目錄</p>
+                <p className="px-2 py-3 text-xs text-slate-500">{t.noToc}</p>
               ) : (
                 <div className="space-y-0.5">
                   {tocItems.map((item) => (
@@ -1674,8 +1745,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       type="button"
       disabled={!canDownloadOutput}
       className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-      aria-label="下載結果"
-      title="下載結果"
+      aria-label={t.downloadResult}
+      title={t.downloadResult}
       onClick={() => void downloadSelectedOutput()}
     >
       <Download className="h-3.5 w-3.5" />
@@ -1697,8 +1768,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       <button
         type="button"
         className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700"
-        aria-label="更多產出物操作"
-        title="更多"
+        aria-label={t.moreOutputActions}
+        title={t.more}
         onClick={() => setActionMenuOpen((open) => !open)}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
@@ -1714,7 +1785,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                 setActionMenuOpen(false);
               }}
             >
-              跟隨進度
+              {t.followProgress}
             </button>
           )}
           {canDownloadOutput && (
@@ -1727,7 +1798,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
               }}
             >
               <Download className="h-3.5 w-3.5" />
-              下載
+              {t.download}
             </button>
           )}
           {relatedMessageId && (
@@ -1739,19 +1810,19 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                 setActionMenuOpen(false);
               }}
             >
-              回到對話
+              {t.backToChat}
             </button>
           )}
           {showToc && (
             <div className="border-t border-gray-100 first:border-t-0">
               <div className="px-2 py-2 text-xs font-medium text-slate-700">
-                目錄
+                {t.tableOfContents}
               </div>
               <div className="max-h-64 overflow-y-auto">
                 {isMarkdownArtifact && file.isLoading ? (
-                  <p className="px-2 py-3 text-xs text-slate-500">目錄載入中...</p>
+                  <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
                 ) : tocItems.length === 0 ? (
-                  <p className="px-2 py-3 text-xs text-slate-500">尚無目錄</p>
+                  <p className="px-2 py-3 text-xs text-slate-500">{t.noToc}</p>
                 ) : (
                   <div className="space-y-0.5">
                     {tocItems.map((item) => (
@@ -1786,12 +1857,12 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       stakeholder.text.some((line) => !line.text.trim()),
     );
     const resetDrafts = () => {
-      setStatementDrafts(stakeholderStatementDrafts(stakeholderReviewDecision));
+      setStatementDrafts(stakeholderStatementDrafts(stakeholderReviewDecision, t));
       setStatementEditing(false);
     };
     return (
       <PanelChrome
-        title={statementEditing ? "編輯中" : "利害關係人發言"}
+        title={statementEditing ? t.editing : t.stakeholderStatements}
         centerTitle
         headerClassName="min-h-10 py-2"
         titleClassName="text-base"
@@ -1810,7 +1881,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                   onClick={() => statementEditMut.mutate(statementDrafts)}
                 >
                   {statementEditMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  儲存
+                  {t.save}
                 </button>
                 <button
                   type="button"
@@ -1818,7 +1889,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                   disabled={statementEditMut.isPending}
                   onClick={resetDrafts}
                 >
-                  取消
+                  {t.cancel}
                 </button>
               </>
             ) : (
@@ -1828,7 +1899,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                 onClick={() => setStatementEditing(true)}
               >
                 <Edit3 className="h-3.5 w-3.5" />
-                編輯
+                {t.edit}
               </button>
             )}
           </div>
@@ -1852,7 +1923,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   if (scopeReviewDecision) {
     return (
       <PanelChrome
-        title="需求範圍"
+        title={t.requirementScope}
         centerTitle
         headerClassName="min-h-10 py-2"
         titleClassName="text-base"
@@ -1869,15 +1940,67 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   }
 
   if (requirementsReviewDecision) {
+    const hasEmptyRequirement = requirementDrafts.some((row) => !row.text.trim());
+    const resetRequirementDrafts = () => {
+      setRequirementDrafts(requirementReviewRows(requirementsReviewDecision));
+      setRequirementEditing(false);
+    };
     return (
       <PanelChrome
-        title="使用者需求"
+        title={requirementEditing ? t.editing : t.userRequirements}
         centerTitle
         headerClassName="min-h-10 py-2"
         titleClassName="text-base"
+        trailing={
+          <div className="flex items-center gap-1.5">
+            {requirementEditing ? (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-control bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  disabled={
+                    requirementEditMut.isPending ||
+                    requirementDrafts.length === 0 ||
+                    hasEmptyRequirement
+                  }
+                  onClick={() => requirementEditMut.mutate(requirementDrafts)}
+                >
+                  {requirementEditMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {t.save}
+                </button>
+                <button
+                  type="button"
+                  className="h-8 rounded-control border border-gray-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={requirementEditMut.isPending}
+                  onClick={resetRequirementDrafts}
+                >
+                  {t.cancel}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-gray-50"
+                onClick={() => setRequirementEditing(true)}
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+                {t.edit}
+              </button>
+            )}
+          </div>
+        }
         bodyClassName="flex min-h-0 flex-col"
       >
-        <RequirementReviewPreview rows={requirementRows} />
+        {requirementEditing ? (
+          <RequirementReviewEditor
+            rows={requirementDrafts}
+            saving={requirementEditMut.isPending}
+            showValidation={hasEmptyRequirement}
+            onChange={setRequirementDrafts}
+          />
+        ) : (
+          <RequirementReviewPreview rows={requirementDrafts} />
+        )}
       </PanelChrome>
     );
   }
@@ -1885,7 +2008,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   if (meetingIssueProposalDecision) {
     return (
       <PanelChrome
-        title="Agent 議題"
+        title={t.agentIssues}
         centerTitle
         headerClassName="min-h-10 py-2"
         titleClassName="text-base"
@@ -1898,7 +2021,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
 
   return (
     <PanelChrome
-      title="產出物"
+      title={t.output}
       centerTitle
       headerClassName={cn("min-h-10 py-2", controlsStacked && "border-b-0")}
       titleClassName="text-base"
@@ -1925,11 +2048,11 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       )}
       {!projectId ? (
         <div className="grid min-h-0 flex-1 place-items-center p-4 text-center text-sm text-slate-500">
-          未選擇任何檔案
+          {t.noSelectedFile}
         </div>
       ) : !selectedOutputPath ? (
         <div className="grid min-h-0 flex-1 place-items-center p-4 text-center text-sm text-slate-500">
-          未選擇任何檔案
+          {t.noSelectedFile}
         </div>
       ) : isModelArtifact ? (
         <ModelDualView
@@ -1946,14 +2069,14 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         />
       ) : fileLoading ? (
         <div className="grid min-h-0 flex-1 place-items-center p-4 text-center text-sm text-slate-500">
-          載入中…
+          {t.loading}
         </div>
       ) : !fileData && file.isError ? (
-        <p className="p-4 text-sm text-slate-500">無法載入檔案</p>
+        <p className="p-4 text-sm text-slate-500">{t.unableLoadFile}</p>
       ) : isHtmlArtifact || fileData?.type === "html" ? (
         <iframe
           ref={iframeRef}
-          title={title || "產出物"}
+          title={title || t.artifact}
           src={htmlPreviewUrl ?? undefined}
           sandbox="allow-same-origin allow-scripts allow-downloads"
           onLoad={collectHtmlToc}
@@ -1975,7 +2098,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
               className="max-h-full max-w-full rounded-control object-contain"
             />
           ) : (
-            <p className="text-sm text-slate-500">圖形尚無法預覽</p>
+            <p className="text-sm text-slate-500">{t.graphPreviewUnavailable}</p>
           )}
         </div>
       ) : isMarkdownArtifact || fileData?.type === "md" ? (

@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Check, ChevronDown, Coins, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ApiError } from "@/api/client";
 import { fetchArtifacts, fetchCostSummary, manualIndexUrl } from "@/api/projects";
 import { useBootstrap } from "@/hooks/useBootstrap";
 import { useActiveRun } from "@/hooks/useActiveRun";
+import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import { errorMessage } from "@/utils/errorMessage";
 import { CostSummaryModal } from "./CostSummaryModal";
@@ -43,6 +45,17 @@ function uniqueProjectsById<T extends { project_id: string }>(projects: T[]): T[
   });
 }
 
+function costSummaryErrorMessage(
+  error: unknown,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  if (!error) return null;
+  if (error instanceof ApiError && error.status === 404) {
+    return t.costSummaryMissing;
+  }
+  return errorMessage(error, t.costSummaryReadFailed);
+}
+
 interface ProjectHeaderActionsProps {
   onRequestDeleteProject?: () => void;
   deletingProject?: boolean;
@@ -54,6 +67,7 @@ export function ProjectHeaderActions({
   deletingProject = false,
   compact = false,
 }: ProjectHeaderActionsProps) {
+  const { t } = useI18n();
   const bootstrap = useBootstrap();
   const projectId = useUiStore((s) => s.activeProjectId);
   const setActiveProjectId = useUiStore((s) => s.setActiveProjectId);
@@ -92,15 +106,11 @@ export function ProjectHeaderActions({
   const hasManual = (artifactsQuery.data?.items ?? []).some(
     (item) => item.kind === "file" && item.path === "manual/index.html",
   );
-  const hasCostSummary =
-    current?.has_cost_summary === true ||
-    (artifactsQuery.data?.items ?? []).some(
-      (item) => item.kind === "file" && item.path === "cost_summary.json",
-    );
+  const hasCostSummary = !!current?.has_cost_summary;
   const costQuery = useQuery({
     queryKey: ["cost-summary", projectId],
     queryFn: () => fetchCostSummary(projectId!),
-    enabled: !!projectId && costModalOpen && hasCostSummary,
+    enabled: !!projectId && hasCostSummary && costModalOpen,
   });
 
   useEffect(() => {
@@ -137,12 +147,12 @@ export function ProjectHeaderActions({
         <button
           type="button"
           className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
-          aria-label="成本"
-          title="成本"
+          aria-label={t.cost}
+          title={t.cost}
           onClick={() => setCostModalOpen(true)}
         >
           <Coins className="h-3.5 w-3.5" />
-          <span>成本</span>
+          <span>{t.cost}</span>
         </button>
       )}
 
@@ -150,14 +160,14 @@ export function ProjectHeaderActions({
         <button
           type="button"
           className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
-          aria-label="說明文件"
-          title="說明文件"
+          aria-label={t.manual}
+          title={t.manual}
           onClick={() => {
-            window.open(manualIndexUrl(projectId), "_blank", "noopener,noreferrer");
+            window.open(manualIndexUrl(projectId), "_blank", "noopener");
           }}
         >
           <BookOpen className="h-3.5 w-3.5" />
-          <span>說明文件</span>
+          <span>{t.manual}</span>
         </button>
       )}
 
@@ -166,22 +176,22 @@ export function ProjectHeaderActions({
           type="button"
           disabled={runActive || !hasProjects}
           className="flex h-8 w-full items-center justify-between rounded-control border border-gray-200 bg-white px-2 text-left text-xs text-slate-700 hover:border-gray-300 focus:border-slate-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="選擇專案"
+          aria-label={t.selectProject}
           title={
             current
               ? `${current.project_id} — ${current.scenario ?? current.rough_idea ?? ""}`
               : projectId
                 ? projectId
               : hasProjects
-                ? "選擇專案"
-                : "目前沒有可選擇的專案"
+                ? t.selectProject
+                : t.noProjects
           }
           onClick={() => {
             if (!runActive && hasProjects) setProjectMenuOpen((open) => !open);
           }}
         >
           <span className={projectId ? "min-w-0 truncate text-slate-700" : "text-slate-400"}>
-            {current ? projectOptionLabel(current, true) : projectId ?? "選擇專案"}
+            {current ? projectOptionLabel(current, true) : projectId ?? t.selectProject}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
         </button>
@@ -220,15 +230,15 @@ export function ProjectHeaderActions({
           <button
             type="button"
             className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700"
-            aria-label="專案操作"
-            title="專案操作"
+            aria-label={t.projectActions}
+            title={t.projectActions}
             onClick={() => setActionMenuOpen((open) => !open)}
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
           {actionMenuOpen && (
             <div className="absolute right-0 top-full z-40 mt-3 w-32 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
-              {hasCostSummary && compact && (
+              {projectId && hasCostSummary && compact && (
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
@@ -238,7 +248,7 @@ export function ProjectHeaderActions({
                   }}
                 >
                   <Coins className="h-3.5 w-3.5" />
-                  成本
+                  {t.cost}
                 </button>
               )}
               {hasManual && compact && (
@@ -247,11 +257,11 @@ export function ProjectHeaderActions({
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
                   onClick={() => {
                     setActionMenuOpen(false);
-                    window.open(manualIndexUrl(projectId), "_blank", "noopener,noreferrer");
+                    window.open(manualIndexUrl(projectId), "_blank", "noopener");
                   }}
                 >
                   <BookOpen className="h-3.5 w-3.5" />
-                  說明文件
+                  {t.manual}
                 </button>
               )}
               <button
@@ -264,7 +274,7 @@ export function ProjectHeaderActions({
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                新增專案
+                {t.newProject}
               </button>
               <button
                 type="button"
@@ -276,17 +286,17 @@ export function ProjectHeaderActions({
                 }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                刪除專案
+                {t.deleteProject}
               </button>
             </div>
           )}
         </div>
       )}
-      {costModalOpen && (
+      {costModalOpen && hasCostSummary && (
         <CostSummaryModal
           summary={costQuery.data?.cost_summary}
           loading={costQuery.isLoading || costQuery.isFetching}
-          error={costQuery.error ? errorMessage(costQuery.error, "讀取成本摘要失敗") : null}
+          error={costSummaryErrorMessage(costQuery.error, t)}
           onClose={() => setCostModalOpen(false)}
         />
       )}

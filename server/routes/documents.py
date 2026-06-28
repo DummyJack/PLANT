@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from server.services.security import sanitize_filename
+from server.services.security import sanitize_filename, write_upload_file
 from .auth import require_write_access
 
 
@@ -19,7 +19,6 @@ ALLOWED_DOC_EXTS = {
     ".csv",
 }
 DOC_EXTS_LABEL = ", ".join(sorted(ALLOWED_DOC_EXTS))
-MAX_DOC_BYTES = 20 * 1024 * 1024
 
 
 def doc_dir(request: Request) -> Path:
@@ -47,12 +46,9 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
             status_code=400,
             detail=f"Unsupported document type. Allowed: {DOC_EXTS_LABEL}",
         )
-    data = await file.read()
-    if len(data) > MAX_DOC_BYTES:
-        raise HTTPException(status_code=400, detail="File is too large")
     target = doc_dir(request) / name
-    target.write_bytes(data)
-    return {"saved": True, "name": name, "size": len(data)}
+    size = await write_upload_file(file, target)
+    return {"saved": True, "name": name, "size": size}
 
 
 @router.delete("/documents/{name}")

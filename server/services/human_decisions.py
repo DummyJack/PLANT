@@ -11,115 +11,34 @@ def parse_stakeholder_response(
     max_select: int,
 ) -> List[Dict[str, Any]]:
     structured = response.get("stakeholders")
-    if isinstance(structured, list) and structured:
-        selected: List[Dict[str, Any]] = []
-        seen = set()
-        for row in structured:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            stakeholder_type = str(row.get("type") or "").strip()
-            if not name or name in seen:
-                continue
-            if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
-                raise ValueError(f"stakeholder type is invalid: {name}")
-            selected.append(
-                {
-                    "name": name,
-                    "type": stakeholder_type,
-                    "reason": str(row.get("reason") or "使用者自訂").strip() or "使用者自訂",
-                }
-            )
-            seen.add(name)
-        if not selected:
-            raise ValueError("未選擇合法 stakeholder")
-        if len(selected) > max_select:
-            raise ValueError(f"選擇超過 {max_select} 個 stakeholder")
-        return selected
-
-    selections = response.get("selections")
-    if isinstance(selections, list) and selections:
-        selected = []
-        seen = set()
-        for row in selections:
-            if not isinstance(row, dict):
-                continue
-            if "index" in row:
-                idx = int(row["index"]) - 1
-                if 0 <= idx < len(proposed):
-                    candidate = dict(proposed[idx])
-                    name = str(candidate.get("name") or "").strip()
-                    stakeholder_type = str(candidate.get("type") or "").strip()
-                    if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
-                        raise ValueError(f"proposed stakeholder type is invalid: {name}")
-                    if name and name not in seen:
-                        selected.append(candidate)
-                        seen.add(name)
-                continue
-            name = str(row.get("name") or "").strip()
-            stakeholder_type = str(row.get("type") or "primary_user").strip()
-            if not name or name in seen:
-                continue
-            if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
-                raise ValueError(f"stakeholder type is invalid: {name}")
-            selected.append(
-                {
-                    "name": name,
-                    "type": stakeholder_type,
-                    "reason": str(row.get("reason") or "使用者自訂").strip() or "使用者自訂",
-                }
-            )
-            seen.add(name)
-        if not selected:
-            raise ValueError("未選擇合法 stakeholder")
-        if len(selected) > max_select:
-            raise ValueError(f"選擇超過 {max_select} 個 stakeholder")
-        return selected[:max_select]
-
-    raw = str(response.get("text") or response.get("selection") or "").strip()
-    if not raw:
+    if not isinstance(structured, list) or not structured:
         raise ValueError("未選擇 stakeholder")
 
-    custom_types = response.get("custom_types")
-    if not isinstance(custom_types, dict):
-        custom_types = {}
-
-    selected = []
+    selected: List[Dict[str, Any]] = []
     seen = set()
-    for part in [item.strip() for item in re.split(r"[,，\s]+", raw) if item.strip()]:
-        try:
-            idx = int(part) - 1
-            if 0 <= idx < len(proposed):
-                row = proposed[idx]
-                name = str(row.get("name") or "").strip()
-                stakeholder_type = str(row.get("type") or "").strip()
-                if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
-                    raise ValueError(f"proposed stakeholder type is invalid: {name}")
-                if name and name not in seen:
-                    selected.append(row)
-                    seen.add(name)
+    for row in structured:
+        if not isinstance(row, dict):
             continue
-        except ValueError as exc:
-            if "proposed stakeholder" in str(exc):
-                raise
-        name = part.strip()
+        name = str(row.get("name") or "").strip()
+        stakeholder_type = str(row.get("type") or "").strip()
         if not name or name in seen:
             continue
-        stakeholder_type = str(custom_types.get(name) or "primary_user").strip()
         if stakeholder_type not in STAKEHOLDER_CATEGORY_VALUES:
             raise ValueError(f"stakeholder type is invalid: {name}")
         selected.append(
             {
                 "name": name,
                 "type": stakeholder_type,
-                "reason": "使用者自訂",
+                "reason": str(row.get("reason") or "使用者自訂").strip() or "使用者自訂",
             }
         )
         seen.add(name)
 
     if not selected:
         raise ValueError("未選擇合法 stakeholder")
-    return selected[:max_select]
+    if len(selected) > max_select:
+        raise ValueError(f"選擇超過 {max_select} 個 stakeholder")
+    return selected
 
 
 def _clean_option_title(value: Any) -> str:
@@ -165,10 +84,9 @@ def _normalize_options(options: Any) -> List[Dict[str, Any]]:
             continue
         option = dict(opt)
         index = len(all_options) + 1
-        option_id = str(option.get("option_id") or option.get("id") or "").strip().upper()
+        option_id = str(option.get("option_id") or "").strip().upper()
         if not re.fullmatch(r"[A-Z]+", option_id):
             option_id = _option_letter(index)
-        option["id"] = option_id
         option["option_id"] = option_id
         option["index"] = index
         option["title"] = _clean_option_title(opt.get("title", ""))
@@ -177,10 +95,9 @@ def _normalize_options(options: Any) -> List[Dict[str, Any]]:
     if isinstance(compromise, dict) and compromise:
         option = dict(compromise)
         index = len(all_options) + 1
-        option_id = str(option.get("option_id") or option.get("id") or "").strip().upper()
+        option_id = str(option.get("option_id") or "").strip().upper()
         if not re.fullmatch(r"[A-Z]+", option_id):
             option_id = _option_letter(index)
-        option["id"] = option_id
         option["option_id"] = option_id
         option["index"] = index
         option["title"] = _clean_option_title(compromise.get("title", ""))
@@ -197,7 +114,7 @@ def _normalize_choice(value: Any, options: List[Dict[str, Any]]) -> str:
         return "0"
     raw = raw.upper()
     for opt in options:
-        option_id = str(opt.get("id") or "").strip().upper()
+        option_id = str(opt.get("option_id") or "").strip().upper()
         if raw == option_id:
             return option_id
     return ""
@@ -205,8 +122,7 @@ def _normalize_choice(value: Any, options: List[Dict[str, Any]]) -> str:
 
 def _selected_option_payload(opt: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "id": opt.get("id"),
-        "option_id": opt.get("option_id") or opt.get("id"),
+        "option_id": opt.get("option_id"),
         "index": opt.get("index"),
         "title": _clean_option_title(opt.get("title", "")),
         "description": str(opt.get("description") or "").strip(),
@@ -235,7 +151,7 @@ def normalize_decision_options_payload(options: Any) -> Any:
         for option in normalized:
             if option.get("recommendation") is True:
                 recommendation = {
-                    "option_id": option.get("id") or option.get("option_id"),
+                    "option_id": option.get("option_id"),
                     "rationale": str(
                         option.get("recommendation_rationale")
                         or option.get("recommended_rationale")
@@ -244,12 +160,7 @@ def normalize_decision_options_payload(options: Any) -> Any:
                     ).strip(),
                 }
                 break
-    raw_recommended = (
-        recommendation.get("option_id")
-        or recommendation.get("id")
-        or recommendation.get("choice")
-        or recommendation.get("option")
-    )
+    raw_recommended = recommendation.get("option_id")
     recommended_id = _normalize_choice(raw_recommended, normalized)
     if recommended_id:
         recommendation["option_id"] = recommended_id
@@ -281,13 +192,13 @@ def parse_human_decision_response(
         for opt in structured_options:
             if not isinstance(opt, dict):
                 continue
-            normalized_id = _normalize_choice(opt.get("id"), all_options)
+            normalized_id = _normalize_choice(opt.get("option_id"), all_options)
             if not normalized_id:
                 raise ValueError("invalid human decision choices")
             source = next(
                 (
                     row for row in all_options
-                    if str(row.get("id") or "").strip().upper() == normalized_id
+                    if str(row.get("option_id") or "").strip().upper() == normalized_id
                 ),
                 opt,
             )
@@ -309,7 +220,7 @@ def parse_human_decision_response(
                 decision_items.append(option_text)
             selected_options.append(_selected_option_payload({
                 **source,
-                "id": normalized_id or source.get("id") or opt.get("id"),
+                "option_id": normalized_id,
                 "description": desc,
                 "rationale": rationale,
             }))
@@ -324,7 +235,9 @@ def parse_human_decision_response(
             f"{index}. {text}" for index, text in enumerate(decision_items, 1)
         )
         choice_label = ",".join(
-            str(opt.get("id")) for opt in selected_options if opt.get("id") is not None
+            str(opt.get("option_id"))
+            for opt in selected_options
+            if opt.get("option_id") is not None
         )
         title_label = "；".join(
             _clean_option_title(opt.get("title", "")) for opt in selected_options
@@ -368,7 +281,7 @@ def parse_human_decision_response(
                 "chosen_option_title": "自行輸入裁決",
             }
         chosen_options = [
-            opt for choice in parsed_choices for opt in all_options if opt.get("id") == choice
+            opt for choice in parsed_choices for opt in all_options if opt.get("option_id") == choice
         ]
         if len(chosen_options) != len(parsed_choices):
             raise ValueError("invalid human decision choices")
@@ -389,7 +302,7 @@ def parse_human_decision_response(
                 decision_items.append(option_text)
             selected_options.append(
                 {
-                    "id": opt.get("id"),
+                    "option_id": opt.get("option_id"),
                     "index": opt.get("index"),
                     "title": title,
                     "description": desc,
@@ -412,7 +325,7 @@ def parse_human_decision_response(
             "chosen_options": selected_options,
         }
 
-    decision = str(response.get("text") or response.get("decision") or custom_decision).strip()
+    decision = custom_decision
     if not decision:
         return {
             "summary": "人類選擇暫不裁決",
@@ -424,6 +337,6 @@ def parse_human_decision_response(
         "status": "human_decision",
         "summary": f"由人類裁決: {decision}",
         "decision": decision,
-        "chosen_option_id": response.get("chosen_option_id", "custom"),
-        "chosen_option_title": response.get("chosen_option_title", "前端輸入裁決"),
+        "chosen_option_id": "custom",
+        "chosen_option_title": "前端輸入裁決",
     }

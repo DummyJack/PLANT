@@ -1,8 +1,8 @@
 import { agentLabel } from "@/constants/agents";
+import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
-import { runStageActivityLabel } from "@/utils/runStageLabel";
 
 interface StatusBarProps {
   run: RunState | null;
@@ -10,31 +10,33 @@ interface StatusBarProps {
   historyLoading?: boolean;
 }
 
-function statusLabel(run: RunState | null): string {
-  if (!run) return "待命";
+type UiTexts = ReturnType<typeof useI18n>["t"];
+
+function statusLabel(run: RunState | null, t: UiTexts): string {
+  if (!run) return t.idle;
   switch (run.status) {
     case "queued":
-      return "排隊中";
+      return t.queued;
     case "running":
-      return "執行中";
+      return t.flowRunning;
     case "waiting_for_human":
-      return "等待決策";
+      return t.waitingDecision;
     case "cancelling":
-      return "取消中";
+      return t.cancelling;
     case "completed":
-      return "已完成";
+      return t.completed;
     case "failed":
-      return "執行失敗";
+      return t.failed;
     case "cancelled":
-      return "已取消";
+      return t.cancelled;
     case "interrupted":
-      return "已中斷";
+      return t.interrupted;
     default:
       return run.status;
   }
 }
 
-function parseAgentAction(message?: string): { agent: string; action: string } | null {
+function parseAgentAction(message: string | undefined, t: UiTexts): { agent: string; action: string } | null {
   const text = String(message || "").trim();
   const match = /^(\w+)\s*\[\d+\/\d+\]:\s*(.+)$/i.exec(text);
   if (match) {
@@ -52,25 +54,25 @@ function parseAgentAction(message?: string): { agent: string; action: string } |
     };
   }
 
-  const mapped = mapLogToAgentAction(text);
+  const mapped = mapLogToAgentAction(text, t);
   if (mapped) return mapped;
 
   return null;
 }
 
-function mapLogToAgentAction(message: string): { agent: string; action: string } | null {
+function mapLogToAgentAction(message: string, t: UiTexts): { agent: string; action: string } | null {
   const text = message.trim();
   if (!text) return null;
   if (/^=+|^Round\s+\d+|^第[一二三四五六七八九十]+輪/.test(text)) return null;
   if (/正式會議議程|本次會議結束|流程完成|初步情境分析/.test(text)) return null;
 
   const rules: Array<{ pattern: RegExp; agent: string; action: string }> = [
-    { pattern: /需求衝突再審查|需求衝突辨識|Conflict Gate/i, agent: "analyst", action: "衝突辨識" },
+    { pattern: /需求衝突再審查|需求衝突辨識|Conflict Gate/i, agent: "analyst", action: t.conflictDetection },
     { pattern: /MoM|會議紀錄|已保存：R\d+-M\d+\.md/i, agent: "mediator", action: "MoM" },
-    { pattern: /formalize_requirement|需求正式化/i, agent: "mediator", action: "需求正式化" },
-    { pattern: /領域研究|domain|research/i, agent: "expert", action: "領域研究" },
-    { pattern: /系統模型|PlantUML|use case|用例圖|情境圖|model/i, agent: "modeler", action: "系統模型產生" },
-    { pattern: /draft|草稿/i, agent: "analyst", action: "更新草稿" },
+    { pattern: /formalize_requirement|需求正式化/i, agent: "mediator", action: t.formalizeRequirement },
+    { pattern: /領域研究|domain|research/i, agent: "expert", action: t.domainResearch },
+    { pattern: /系統模型|PlantUML|use case|用例圖|情境圖|model/i, agent: "modeler", action: t.systemModelGeneration },
+    { pattern: /draft|草稿/i, agent: "analyst", action: t.updateDraft },
     { pattern: /SRS|軟體需求規格/i, agent: "documentor", action: "SRS" },
     { pattern: /Design Rationale|design_rationale|設計緣由/i, agent: "documentor", action: "Design Rationale" },
   ];
@@ -83,11 +85,24 @@ function mapLogToAgentAction(message: string): { agent: string; action: string }
   };
 }
 
+function runStageActivityLabel(stageValue: string | null | undefined, t: UiTexts): string | null {
+  const stage = String(stageValue || "").trim();
+  if (!stage) return null;
+  if (/SRS|software.requirements|規格/i.test(stage)) return t.generatingSpecDocument;
+  if (/DR|design.rationale|design_rationale|設計緣由/i.test(stage)) {
+    return t.generatingDesignRationale;
+  }
+  if (/document|document_generation|規格化/i.test(stage)) return t.generatingSpecDocument;
+  if (/meeting|會議|開會/i.test(stage)) return t.elicitationMeeting;
+  return null;
+}
+
 export function StatusBar({
   run,
   lastLogMessage,
   historyLoading,
 }: StatusBarProps) {
+  const { t } = useI18n();
   const latestActionText = useChatStore((s) => {
     for (let i = s.messages.length - 1; i >= 0; i -= 1) {
       const msg = s.messages[i];
@@ -109,22 +124,22 @@ export function StatusBar({
   if (!runActive && !historyLoading) return null;
 
   const statusMessage = (() => {
-    if (historyLoading && !runActive) return "載入既有討論紀錄";
+    if (historyLoading && !runActive) return t.loadingExistingChat;
     if (run) {
       if (run.status === "cancelling") {
         return {
-          text: "停止中",
+          text: t.stopping,
           pulse: true,
         };
       }
-      const parsed = parseAgentAction(lastLogMessage);
+      const parsed = parseAgentAction(lastLogMessage, t);
       if (parsed) {
         return {
           text: `${parsed.agent}: ${parsed.action}`,
           pulse: false,
         };
       }
-      const stageLabel = runStageActivityLabel(run.current_stage);
+      const stageLabel = runStageActivityLabel(run.current_stage, t);
       if (stageLabel) {
         return {
           text: stageLabel,
@@ -137,15 +152,15 @@ export function StatusBar({
           pulse: false,
         };
       }
-      if (waiting) return "等待你的決策";
+      if (waiting) return t.waitingYourDecision;
       if (run.current_agent) {
         return {
-          text: `${agentLabel(run.current_agent)}: 執行中`,
+          text: t.agentRunning(agentLabel(run.current_agent)),
           pulse: true,
         };
       }
       return {
-        text: "執行中",
+        text: t.flowRunning,
         pulse: true,
       };
     }
@@ -178,7 +193,7 @@ export function StatusBar({
                 : "bg-slate-300",
           )}
         />
-        {statusLabel(run)}
+        {statusLabel(run, t)}
       </span>
 
       <span

@@ -12,6 +12,7 @@ import { PanelChrome } from "@/components/PanelChrome";
 import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
 import { ReferenceFileIcon } from "@/features/documents/ReferenceFileIcon";
 import { useActiveRun } from "@/hooks/useActiveRun";
+import { useI18n } from "@/i18n";
 import { useProjectData } from "@/hooks/useProjectData";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
@@ -230,6 +231,7 @@ function triggerDownload(url: string, filename: string) {
 }
 
 export function ReferencePanel({ projectId }: ReferencePanelProps) {
+  const { t } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const panelMeasureRef = useRef<HTMLDivElement>(null);
@@ -352,7 +354,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       queryClient.invalidateQueries({ queryKey: ["references", projectId] });
     },
     onError: (e: Error) => {
-      setFormatError(errorMessage(e, `文件庫僅支援：${REFERENCE_EXTS_LABEL}`));
+      setFormatError(errorMessage(e, t.referenceSupportedOnly(REFERENCE_EXTS_LABEL)));
     },
   });
 
@@ -376,7 +378,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       queryClient.invalidateQueries({ queryKey: ["references", projectId] });
     },
     onError: (e: Error) => {
-      setFormatError(errorMessage(e, "刪除失敗"));
+      setFormatError(errorMessage(e, t.deleteFailed));
     },
   });
 
@@ -386,9 +388,9 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     const validFiles = files.filter((file) => isSupportedReferenceName(file.name));
     if (invalidFiles.length) {
       setFormatError(
-        `文件庫僅支援：${REFERENCE_EXTS_LABEL}\n不支援：${invalidFiles
+        `${t.referenceSupportedOnly(REFERENCE_EXTS_LABEL)}\n${t.unsupportedFiles(invalidFiles
           .map((file) => file.name)
-          .join("、")}`,
+          .join(", "))}`,
       );
     }
     if (!validFiles.length) return;
@@ -455,7 +457,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         const url = referencePreviewUrl(projectId, name);
         if (kind === "text") {
           const response = await fetch(url);
-          if (!response.ok) throw new Error("讀取文件失敗");
+          if (!response.ok) throw new Error(t.readFileFailed);
           setPreview({ name, kind, loading: false, content: await response.text() });
           return;
         }
@@ -465,7 +467,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         }
       } else {
         const file = stagedReferenceFiles.find((item) => item.name === name);
-        if (!file) throw new Error("找不到文件");
+        if (!file) throw new Error(t.fileNotFound);
         if (kind === "text") {
           setPreview({ name, kind, loading: false, content: await file.text() });
           return;
@@ -484,14 +486,14 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         name,
         kind,
         loading: false,
-        error: "此檔案格式目前無法直接預覽，請下載後查看。",
+        error: t.unsupportedPreview,
       });
     } catch (error) {
       setPreview({
         name,
         kind,
         loading: false,
-        error: errorMessage(error, "讀取文件失敗"),
+        error: errorMessage(error, t.readFileFailed),
       });
     }
   };
@@ -507,7 +509,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         <Search className="h-3.5 w-3.5 shrink-0" />
         <input
           className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none"
-          placeholder="搜尋"
+          placeholder={t.search}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -527,7 +529,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       <button
         type="button"
         disabled={uploadDisabled}
-        title="上傳文件"
+        title={t.uploadFile}
         className={cn(
           "inline-flex h-8 shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40",
           controlsNarrow && "w-8 justify-center px-0",
@@ -535,14 +537,14 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         onClick={() => fileRef.current?.click()}
       >
         <FileUp className="h-3.5 w-3.5" />
-        <span className={cn(controlsNarrow && "sr-only")}>上傳</span>
+        <span className={cn(controlsNarrow && "sr-only")}>{t.upload}</span>
       </button>
     </div>
   );
 
   return (
     <PanelChrome
-      title="文件庫"
+      title={t.references}
       bodyClassName="flex flex-col bg-slate-50/50"
       centerTitle={controlsStacked}
       headerClassName={cn(controlsStacked && "min-h-10 border-b-0 py-2")}
@@ -601,12 +603,12 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               <FileUp className="mb-3 h-6 w-6 text-slate-400" />
               <p className="text-sm font-semibold text-slate-600">
                 {!canWrite
-                  ? "請先啟動後上傳"
+                  ? t.activateBeforeUpload
                   : dragOver
-                    ? "放開以上傳"
+                    ? t.releaseToUpload
                     : dragRejected
-                      ? "此格式不支援"
-                    : "拖曳檔案至此區域上傳"}
+                      ? t.unsupportedFormat
+                    : t.dragFilesToUpload}
               </p>
             </div>
           ) : (
@@ -621,7 +623,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               >
                 <input
                   type="checkbox"
-                  aria-label="選取全部文件"
+                  aria-label={t.selectAllFiles}
                   className={cn(
                     "h-4 w-4 rounded border-gray-300 text-slate-900 focus:ring-slate-300",
                     !someVisibleSelected && "opacity-0 hover:opacity-100",
@@ -641,14 +643,14 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     });
                   }}
                 />
-                <span>名稱</span>
-                {!controlsStacked && <span>種類</span>}
+                <span>{t.name}</span>
+                {!controlsStacked && <span>{t.type}</span>}
                 <div className="relative flex justify-end">
                   {someVisibleSelected && (
                     <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-control bg-white">
                       <button
                         type="button"
-                        title="下載選取文件"
+                        title={t.downloadSelectedFiles}
                         className="rounded p-1 text-slate-500 hover:bg-gray-50 hover:text-slate-900"
                         onClick={() => downloadNames(selectedVisibleNames)}
                       >
@@ -656,7 +658,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                       </button>
                       <button
                         type="button"
-                        title="刪除選取文件"
+                        title={t.deleteSelectedFiles}
                         disabled={writeDisabled}
                         className="rounded p-1 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={() =>
@@ -671,7 +673,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               </div>
               {filteredRows.length === 0 ? (
                 <p className="px-1 py-4 text-center text-xs text-slate-400">
-                  找不到符合的文件
+                  {t.noMatchingFiles}
                 </p>
               ) : (
                 <ul>
@@ -695,7 +697,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                       >
                         <input
                           type="checkbox"
-                          aria-label={`選取 ${row.name}`}
+                          aria-label={t.selectFile(row.name)}
                           className={cn(
                             "h-4 w-4 rounded border-gray-300 text-slate-900 focus:ring-slate-300",
                             !selected && "opacity-0 group-hover:opacity-100",
@@ -727,7 +729,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                         <div className="relative flex justify-end">
                           <button
                             type="button"
-                            aria-label={`${row.name} 更多操作`}
+                            aria-label={t.moreActions(row.name)}
                             className={cn(
                               "rounded p-1 text-slate-400 opacity-0 hover:bg-white hover:text-slate-700 group-hover:opacity-100",
                               menuOpen && "bg-white opacity-100",
@@ -746,7 +748,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                                 onClick={() => downloadNames([row.name])}
                               >
                                 <Download className="h-3.5 w-3.5" />
-                                下載
+                                {t.download}
                               </button>
                               <button
                                 type="button"
@@ -757,7 +759,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                                 }
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
-                                刪除
+                                {t.remove}
                               </button>
                             </div>
                           )}
@@ -782,7 +784,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
           }}
         >
           <p className="truncate whitespace-nowrap text-[11px] leading-4 text-slate-400">
-            <span className="font-medium">可支援檔案：</span>
+            <span className="font-medium">{t.supportedFiles}</span>
             {REFERENCE_EXTS_LABEL}
           </p>
         </div>
@@ -797,7 +799,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
             >
               <div className="mb-3">
                 <p className="text-[15px] font-semibold text-slate-900">
-                  {deleteTarget.kind === "multiple" ? "刪除這些文件？" : "刪除文件？"}
+                  {deleteTarget.kind === "multiple" ? t.deleteFilesTitle : t.deleteFileTitle}
                 </p>
                 {deleteTarget.kind === "single" && (
                   <p className="mt-1 break-words text-xs leading-5 text-slate-500">
@@ -806,8 +808,8 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                 )}
                 <p className="mt-0.5 text-xs leading-5 text-slate-500">
                   {deleteTarget.kind === "multiple"
-                    ? `將刪除 ${deleteTarget.names.length} 個文件，此動作無法復原。`
-                    : "動作無法復原。"}
+                    ? t.deleteFilesDescription(deleteTarget.names.length)
+                    : t.irreversibleAction}
                 </p>
               </div>
               <div className="flex justify-center gap-2">
@@ -816,7 +818,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   className="rounded-control border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-gray-50"
                   onClick={() => setDeleteTarget(null)}
                 >
-                  取消
+                  {t.cancel}
                 </button>
                 <button
                   type="button"
@@ -824,7 +826,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   className="rounded-control bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={confirmDelete}
                 >
-                  刪除
+                  {t.remove}
                 </button>
               </div>
             </div>
@@ -840,7 +842,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                 <button
                   type="button"
                   className="inline-flex h-7 w-7 items-center justify-center rounded-control text-slate-500 hover:bg-gray-50 hover:text-slate-900"
-                  aria-label="關閉"
+                  aria-label={t.close}
                   onClick={closePreview}
                 >
                   <X className="h-4 w-4" />
@@ -848,7 +850,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4">
                 {preview.loading ? (
-                  <p className="text-sm text-slate-500">讀取文件中...</p>
+                  <p className="text-sm text-slate-500">{t.readingFile}</p>
                 ) : preview.error ? (
                   <div className="flex flex-col items-center gap-3 text-center">
                     <p className="text-sm leading-6 text-slate-500">{preview.error}</p>
@@ -858,7 +860,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                       onClick={() => downloadNames([preview.name])}
                     >
                       <Download className="h-3.5 w-3.5" />
-                      下載
+                      {t.download}
                     </button>
                   </div>
                 ) : preview.kind === "pdf" && preview.url ? (
@@ -869,7 +871,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   />
                 ) : (
                   <pre className="whitespace-pre-wrap break-words rounded-control bg-slate-50 p-3 text-xs leading-5 text-slate-700">
-                    {preview.content || "無內容"}
+                    {preview.content || t.noContent}
                   </pre>
                 )}
               </div>
@@ -880,7 +882,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/80 px-4 backdrop-blur-sm">
             <div className="w-full max-w-[280px] rounded-card border border-gray-200 bg-white p-4 shadow-lg">
               <div className="mb-3">
-                <p className="text-sm font-semibold text-slate-900">無法處理文件</p>
+                <p className="text-sm font-semibold text-slate-900">{t.unableProcessFile}</p>
                 <div className="mt-2 space-y-2 text-xs leading-5 text-slate-500">
                   {formatError.split("\n").map((line) => (
                     <p key={line} className="break-words">
@@ -895,7 +897,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                   className="rounded-control bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
                   onClick={() => setFormatError(null)}
                 >
-                  確定
+                  {t.confirm}
                 </button>
               </div>
             </div>
