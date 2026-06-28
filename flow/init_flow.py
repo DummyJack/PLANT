@@ -340,6 +340,41 @@ def apply_stakeholder_statement_review(
     return normalize_stakeholder_text(revised)
 
 
+def apply_requirements_review_direct_edit(
+    requirements: list[Dict[str, Any]],
+    review: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    if not isinstance(review, dict):
+        return requirements
+    action = str(review.get("action") or "").strip()
+    if action != "direct_edit":
+        return requirements
+
+    edited = review.get("requirements")
+    if not isinstance(edited, list) or not edited:
+        return requirements
+
+    existing_by_id = {
+        str(row.get("id") or "").strip(): row
+        for row in requirements or []
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    revised: list[Dict[str, Any]] = []
+    for item in edited:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        req_id = str(item.get("id") or "").strip()
+        base = dict(existing_by_id.get(req_id, {}))
+        base.update({key: value for key, value in item.items() if key != "text"})
+        base["text"] = text
+        revised.append(base)
+
+    return ensure_requirement_candidate_ids(revised) if revised else requirements
+
+
 def domain_research_review_feedback(review: Dict[str, Any]) -> str:
     if not isinstance(review, dict):
         return ""
@@ -706,7 +741,25 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         action = str((review or {}).get("action") or "approve").strip()
         artifact.setdefault("requirements_reviews", []).append(review)
         artifact["requirements_review"] = review
-        if action != "approve":
+        if action == "direct_edit":
+            edited_candidates = apply_requirements_review_direct_edit(initial_candidates, review or {})
+            artifact["URL"] = list(edited_candidates)
+            flow.store.save_artifact(artifact)
+            emit_requirement_deltas(
+                flow,
+                "init",
+                "init.analyze_requirements_review",
+                list(edited_candidates),
+            )
+            flow.logger.step_completed(
+                "init",
+                "init.analyze_requirements_review",
+                "初始需求直接修正",
+                agent="analyst",
+                output_path="artifact/requirements.json",
+            )
+            initial_candidates = edited_candidates
+        elif action != "approve":
             consideration_rows = normalize_review_considerations(
                 review or {},
                 stage="requirements_review",
@@ -806,8 +859,8 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             flow.logger.step_completed(
                 "init",
                 "init.generate_scope_review",
-                "需求範圍確認",
-                agent="user",
+                "需求範圍修正",
+                agent="analyst",
                 output_path="artifact/scope.json",
             )
             flow.logger.artifact_created(

@@ -142,7 +142,7 @@ def unresolved_conflict_report_rows(conflict_report: Any) -> List[Dict[str, Any]
     for row in conflict_report:
         if not isinstance(row, dict):
             continue
-        label = str(row.get("label") or "").strip()
+        label = str(row.get("final_label") or "").strip()
         if label and label != "Conflict":
             continue
         status = str(row.get("status") or "").strip().lower()
@@ -433,7 +433,7 @@ def renumber_issue_proposals(
             round_num = int(new_row.get("round") or 1)
         except (TypeError, ValueError):
             round_num = 1
-        old_id = clean_text(new_row.get("issue_id") or new_row.get("id"))
+        old_id = clean_text(new_row.get("issue_id"))
         counters[round_num] = counters.get(round_num, 0) + 1
         new_id = f"R{round_num}-I{counters[round_num]}"
         if old_id:
@@ -809,12 +809,12 @@ def final_verification_proposals(
     ]
     detector_rows = deterministic_issue_proposals(artifact, round_num=round_num)
     source_ids = [
-        clean_text(row.get("issue_id") or row.get("id"))
+        clean_text(row.get("issue_id"))
         for row in backlog
-        if clean_text(row.get("issue_id") or row.get("id"))
+        if clean_text(row.get("issue_id"))
     ]
     for row in detector_rows:
-        source_ids.append(clean_text(row.get("issue_id") or row.get("id")))
+        source_ids.append(clean_text(row.get("issue_id")))
     source_ids = list(dict.fromkeys([sid for sid in source_ids if sid]))
     if not source_ids:
         return []
@@ -859,11 +859,11 @@ def pre_round_review(
         proposer = clean_text(row.get("proposed_by")) or "unknown"
         proposer_counts[proposer] = proposer_counts.get(proposer, 0) + 1
         if clean_text(row.get("issue_level")).lower() == "blocking":
-            issue_id = clean_text(row.get("issue_id") or row.get("id"))
+            issue_id = clean_text(row.get("issue_id"))
             if issue_id:
                 blocking_ids.append(issue_id)
         if clean_text(row.get("importance")).lower() == "high":
-            issue_id = clean_text(row.get("issue_id") or row.get("id"))
+            issue_id = clean_text(row.get("issue_id"))
             if issue_id:
                 high_ids.append(issue_id)
         for source in row.get("sources") or []:

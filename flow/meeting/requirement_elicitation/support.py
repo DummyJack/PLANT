@@ -16,6 +16,16 @@ ELICITATION_PHASES = [
 ]
 QUESTION_AGENT_ACTIONS = {"ask_user", "supplement_question"}
 FINISH_AGENT_ACTION = "propose_finish"
+COV_KEYS = [
+    "user_goal",
+    "main_workflow",
+    "inputs_outputs",
+    "constraints_risks",
+    "exceptions",
+    "acceptance_criteria",
+]
+REQ_COV_KEYS = ["user_goal", "main_workflow", "inputs_outputs"]
+COV_VALUES = {"covered", "missing"}
 
 
 # ========
@@ -94,12 +104,37 @@ def run_closure_vote_loop(
             vote = str(data.get("vote") or "").strip().lower()
             if vote not in {"close", "continue"}:
                 raise ValueError("closure vote must be close or continue")
+            coverage = data.get("coverage")
+            if not isinstance(coverage, dict):
+                raise ValueError("closure vote must include coverage object")
+            normalized_coverage: Dict[str, str] = {}
+            for key in COV_KEYS:
+                value = str(coverage.get(key) or "").strip().lower()
+                if value not in COV_VALUES:
+                    raise ValueError(f"coverage.{key} must be covered or missing")
+                normalized_coverage[key] = value
+            blocking_gap = str(data.get("blocking_gap") or "").strip()
+            missing_question = str(data.get("missing_question") or "").strip()
+            if vote == "continue" and (not blocking_gap or not missing_question):
+                raise ValueError("continue vote must include blocking_gap and missing_question")
+            open_questions = data.get("open_questions")
+            if isinstance(open_questions, str):
+                open_questions = [open_questions]
+            if not isinstance(open_questions, list):
+                open_questions = []
             return {
                 "action": decision.get("action", ""),
                 "status": "success",
                 "vote": vote,
                 "reason": str(data.get("reason") or "").strip(),
-                "missing_question": str(data.get("missing_question") or "").strip(),
+                "coverage": normalized_coverage,
+                "blocking_gap": blocking_gap,
+                "missing_question": missing_question,
+                "open_questions": [
+                    str(item or "").strip()
+                    for item in open_questions
+                    if str(item or "").strip()
+                ],
                 "summary": f"{role} closure vote: {vote}",
             }
         except Exception as e:
@@ -517,6 +552,7 @@ def collect_closure_votes(
     round_num: int,
     turn: int,
     proposer_role: str,
+    proposer_roles: Optional[List[str]] = None,
     recent_ask_history: List[Dict[str, Any]],
     candidate_texts: List[str],
 ) -> Dict[str, Any]:
@@ -539,6 +575,7 @@ def collect_closure_votes(
         prompt = coordinator.flow.mediator_agent.closure_vote_prompt(
             role=role,
             proposer_role=proposer_role,
+            proposer_roles=proposer_roles,
             role_focus=role_focus.get(role, "需求理解是否足夠清楚"),
             scenario=artifact.get("scenario", ""),
             requirements=requirements,
@@ -551,29 +588,85 @@ def collect_closure_votes(
             data = {
                 "vote": "continue",
                 "reason": f"closure vote 格式修復失敗，保守起見繼續需求擷取: {e}",
-                "missing_question": "",
+                "coverage": {key: "missing" for key in COV_KEYS},
+                "blocking_gap": "closure vote 格式修復失敗，無法確認需求擷取已足夠收束",
+                "missing_question": "請補充目前最影響需求正確性的核心流程、輸入輸出或目標缺口。",
+                "open_questions": [],
             }
         vote = str(data.get("vote") or "").strip().lower()
+        coverage = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
         votes.append(
             {
                 "role": role,
                 "vote": vote,
                 "reason": str((data or {}).get("reason") or "").strip(),
+                "coverage": {
+                    key: str(coverage.get(key) or "missing").strip().lower()
+                    if str(coverage.get(key) or "").strip().lower() in COV_VALUES
+                    else "missing"
+                    for key in COV_KEYS
+                },
+                "blocking_gap": str((data or {}).get("blocking_gap") or "").strip(),
                 "missing_question": str((data or {}).get("missing_question") or "").strip(),
+                "open_questions": [
+                    str(item or "").strip()
+                    for item in ((data or {}).get("open_questions") or [])
+                    if str(item or "").strip()
+                ],
             }
         )
 
     close_count = sum(1 for row in votes if row.get("vote") == "close")
     continue_count = sum(1 for row in votes if row.get("vote") == "continue")
-    approved = close_count >= 2
+    cov_summary = {}
+    for key in COV_KEYS:
+        covered_count = sum(
+            1 for row in votes if (row.get("coverage") or {}).get(key) == "covered"
+        )
+        cov_summary[key] = {
+            "status": "covered" if covered_count >= 2 else "missing",
+            "covered_count": covered_count,
+        }
+    gaps = [
+        str(row.get("blocking_gap") or "").strip()
+        for row in votes
+        if str(row.get("blocking_gap") or "").strip()
+    ]
+    questions = [
+        str(row.get("missing_question") or "").strip()
+        for row in votes
+        if str(row.get("missing_question") or "").strip()
+    ]
+    open_items: List[str] = []
+    for row in votes:
+        for question in row.get("open_questions") or []:
+            append_unique(open_items, str(question))
+    cov_ready = all(
+        cov_summary[key]["status"] == "covered"
+        for key in REQ_COV_KEYS
+    )
+    approved = close_count >= 2 and not gaps and cov_ready
+    proposers = [
+        str(role or "").strip()
+        for role in (proposer_roles or [proposer_role])
+        if str(role or "").strip()
+    ]
+    proposers = list(dict.fromkeys(proposers))
     summary = {
         "round": round_num,
         "turn": turn,
         "proposer_role": proposer_role,
+        "finish_agents": proposers,
+        "finish_count": len(proposers),
         "approved": approved,
-        "rule": "majority_2_of_3",
+        "rule": "2_of_3_coverage_gate",
         "close_count": close_count,
         "continue_count": continue_count,
+        "coverage_ready": cov_ready,
+        "coverage": cov_summary,
+        "gaps": gaps,
+        "questions": questions,
+        "open_questions": open_items,
         "votes": votes,
     }
     artifact.setdefault("elicitation_closure_votes", []).append(summary)

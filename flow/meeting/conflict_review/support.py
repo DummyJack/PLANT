@@ -3,8 +3,13 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from agents.meeting.pair_review import normalize_pair_review_record
 from agents.profile.analyst.conflicts import all_conflict_rows, normalize_conflict_state
-from storage.requirements import next_requirement_id, requirement_discussion_pool
+
+
+def conflict_current_label(conflict: Dict[str, Any]) -> str:
+    return str(conflict.get("final_label") or "").strip()
+
 
 # ========
 # Defines mark conflicts resolved by ids function for this module workflow.
@@ -22,39 +27,82 @@ def mark_conflicts_resolved_by_ids(
         cid = str(c.get("id") or "").strip()
         if cid not in target:
             continue
-        c["label"] = "Neutral"
+        c["final_label"] = "Neutral"
     normalize_conflict_state(artifact)
 
-# ========
-# Defines pair review record function for this module workflow.
-# ========
-def pair_review_record(
+def normalize_expert_non_intervention_review(
     review: Dict[str, Any],
     *,
-    pair_id_set: set[str],
-    current_labels_by_id: Optional[Dict[str, str]] = None,
-) -> Optional[Dict[str, Any]]:
-    if not isinstance(review, dict):
-        return None
-    pair_id = str(review.get("id") or "").strip()
-    if not pair_id or pair_id not in pair_id_set:
-        return None
+    current_label: str,
+) -> Dict[str, Any]:
+    if current_label not in {"Conflict", "Neutral"}:
+        return review
     proposed_label = str(review.get("proposed_label") or "").strip()
-    reason = str(review.get("reason") or "").strip()
-    if proposed_label not in {"Conflict", "Neutral"}:
-        proposed_label = ""
-    current_label = ""
-    if current_labels_by_id:
-        current_label = str(current_labels_by_id.get(pair_id) or "").strip()
-    decision = ""
-    if proposed_label and current_label in {"Conflict", "Neutral"}:
-        decision = "keep" if proposed_label == current_label else "modify"
-    return {
-        "id": pair_id,
-        "decision": decision,
-        "proposed_label": proposed_label,
-        "reason": reason,
-    }
+    if proposed_label == current_label:
+        return review
+    reason = str(review.get("reason") or "").strip().lower()
+    non_intervention_markers = (
+        "no external",
+        "no evidence of external",
+        "no known external",
+        "no regulatory",
+        "not a regulatory conflict",
+        "not a compliance conflict",
+        "absence of such external",
+        "in the absence of such evidence",
+        "unless a specific",
+        "無外部",
+        "沒有外部",
+        "沒有法規",
+        "無法規",
+        "不屬於合規衝突",
+    )
+    if not any(marker in reason for marker in non_intervention_markers):
+        return review
+    normalized = dict(review)
+    normalized["proposed_label"] = current_label
+    normalized["decision"] = "keep"
+    return normalized
+
+
+def normalize_requirement_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def description_contradicts_label(description: str, final_label: str) -> bool:
+    text = normalize_requirement_text(description)
+    if not text:
+        return False
+    if final_label == "Conflict":
+        neutral_markers = (
+            "no conflict",
+            "not conflict",
+            "not in conflict",
+            "there is no conflict",
+            "can coexist",
+            "can co-exist",
+            "do not conflict",
+            "does not conflict",
+            "不構成衝突",
+            "可以共存",
+            "可共存",
+        )
+        return any(marker in text for marker in neutral_markers)
+    if final_label == "Neutral":
+        conflict_markers = (
+            "mutually exclusive",
+            "cannot coexist",
+            "cannot co-exist",
+            "direct conflict",
+            "in conflict",
+            "互斥",
+            "不可共存",
+            "無法共存",
+            "構成衝突",
+        )
+        return any(marker in text for marker in conflict_markers)
+    return False
+
 
 # ========
 # Defines extract reviews from json function for this module workflow.
@@ -81,7 +129,7 @@ def extract_reviews_from_json(
         raw_reviews = parsed.get("pair_reviews")
         if isinstance(raw_reviews, list):
             for raw_review in raw_reviews:
-                normalized = pair_review_record(
+                normalized = normalize_pair_review_record(
                     raw_review,
                     pair_id_set=pair_id_set,
                     current_labels_by_id=current_labels_by_id,
@@ -167,6 +215,7 @@ def collect_reviews(
 ) -> tuple[list[dict], list[dict]]:
     discussion_rows = collect_discussion_rows(conversation)
     extracted_pair_reviews: List[Dict[str, Any]] = []
+    seen_reviews: set[tuple[str, str, str, str]] = set()
     for c in conversation or []:
         if not isinstance(c, dict):
             continue
@@ -187,12 +236,31 @@ def collect_reviews(
         if isinstance(raw_reviews, list) and raw_reviews:
             pair_id_set = {str(x).strip() for x in known_pair_ids if str(x).strip()}
             for raw_review in raw_reviews:
-                normalized = pair_review_record(
+                normalized = normalize_pair_review_record(
                     raw_review,
                     pair_id_set=pair_id_set,
                     current_labels_by_id=current_labels_by_id,
                 )
                 if normalized:
+                    if agent_name == "expert":
+                        current_label = ""
+                        if current_labels_by_id:
+                            current_label = str(
+                                current_labels_by_id.get(str(normalized.get("id") or "").strip()) or ""
+                            ).strip()
+                        normalized = normalize_expert_non_intervention_review(
+                            normalized,
+                            current_label=current_label,
+                        )
+                    key = (
+                        agent_name,
+                        str(normalized.get("id") or "").strip(),
+                        str(normalized.get("proposed_label") or "").strip(),
+                        str(normalized.get("reason") or "").strip(),
+                    )
+                    if key in seen_reviews:
+                        continue
+                    seen_reviews.add(key)
                     extracted_pair_reviews.append({"agent": agent_name, **normalized})
             continue
     return discussion_rows, extracted_pair_reviews
@@ -236,7 +304,7 @@ def merge_review_decisions(
     }
 
     for cid, conflict in conflicts_by_id.items():
-        current_label = str(conflict.get("label") or "").strip()
+        current_label = conflict_current_label(conflict)
         reviews = reviews_by_id.get(cid, [])
         review_agents = {
             str(r.get("agent") or "").strip()
@@ -291,7 +359,7 @@ def merge_review_decisions(
         auto_decisions.append(
             {
                 "id": cid,
-                "new_label": decided_label,
+                "final_label": decided_label,
                 "reason": reasons[0] if reasons else "consensus_keep_current_label",
                 "decided_by": "consensus",
             }
@@ -321,7 +389,7 @@ def analyst_changed_label_ids(
             continue
         cid = str(review.get("id") or "").strip()
         proposed_label = str(review.get("proposed_label") or "").strip()
-        current_label = str((conflicts_by_id.get(cid) or {}).get("label") or "").strip()
+        current_label = conflict_current_label(conflicts_by_id.get(cid) or {})
         if cid and proposed_label in {"Conflict", "Neutral"} and current_label in {"Conflict", "Neutral"}:
             if proposed_label != current_label and cid not in changed:
                 changed.append(cid)
@@ -355,6 +423,7 @@ def consensus_decisions(
         "unresolved_ids_preview": [],
     }
     for cid, conflict in conflicts_by_id.items():
+        current_label = conflict_current_label(conflict)
         reviews = reviews_by_id.get(cid, [])
         review_agents = {
             str(r.get("agent") or "").strip()
@@ -368,7 +437,11 @@ def consensus_decisions(
             if str(r.get("proposed_label") or "").strip() in {"Conflict", "Neutral"}
         ]
         unique_labels = sorted(set(labels))
-        if has_expected_reviews and len(labels) >= min_valid_labels and len(unique_labels) == 1:
+        if (
+            has_expected_reviews
+            and len(labels) >= min_valid_labels
+            and len(unique_labels) == 1
+        ):
             reasons = [
                 str(r.get("reason") or "").strip()
                 for r in reviews
@@ -377,7 +450,7 @@ def consensus_decisions(
             decisions.append(
                 {
                     "id": cid,
-                    "new_label": unique_labels[0],
+                    "final_label": unique_labels[0],
                     "reason": reasons[0] if reasons else "consensus_keep_current_label",
                     "decided_by": "consensus",
                 }
@@ -405,7 +478,7 @@ def finalize_review_reasons(
         conversation,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
-            cid: str(conflict.get("label") or "").strip()
+            cid: conflict_current_label(conflict)
             for cid, conflict in conflicts_by_id.items()
             if isinstance(conflict, dict)
         },
@@ -436,7 +509,7 @@ def finalize_review_reasons(
         decision_items.append(
             {
                 "id": cid,
-                "final_label": str(decision.get("new_label") or "").strip(),
+                "final_label": str(decision.get("final_label") or "").strip(),
                 "requirements": req_rows,
             }
         )
@@ -510,17 +583,19 @@ def finalize_review_reasons(
         if not isinstance(decision, dict):
             continue
         cid = str(decision.get("id") or "").strip()
+        final_label = str(decision.get("final_label") or "").strip()
+        if cid in reason_by_id and description_contradicts_label(reason_by_id[cid], final_label):
+            fallback_reason = str(decision.get("reason") or "").strip()
+            reason_by_id[cid] = fallback_reason or f"依最終裁定結果整理為 {final_label}。"
         if cid in reason_by_id:
             decision["reason"] = reason_by_id[cid]
             decision["reason_by"] = "analyst"
         if cid in final_type_by_id:
             decision["final_type"] = final_type_by_id[cid]
-        elif str(decision.get("new_label") or decision.get("final_label") or "").strip() == "Conflict":
+        elif final_label == "Conflict":
             conflict = conflicts_by_id.get(cid) if isinstance(conflicts_by_id, dict) else {}
             fallback_type = str(
                 (conflict or {}).get("final_type")
-                or (conflict or {}).get("initial_type")
-                or (conflict or {}).get("type")
                 or "other"
             ).strip().lower()
             decision["final_type"] = fallback_type or "other"
@@ -560,7 +635,7 @@ def complete_missing_review_decisions(
         conversation,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
-            cid: str(conflict.get("label") or "").strip()
+            cid: conflict_current_label(conflict)
             for cid, conflict in conflicts_by_id.items()
             if isinstance(conflict, dict)
         },
@@ -577,7 +652,7 @@ def complete_missing_review_decisions(
         proposal_list.append(
             {
                 "id": cid,
-                "current_label": str(conflict.get("label") or "").strip(),
+                "current_label": conflict_current_label(conflict),
                 "requirements": list(conflict.get("requirements") or []),
                 "requirement_a": dict((conflict.get("requirement_a") or {})),
                 "requirement_b": dict((conflict.get("requirement_b") or {})),
@@ -632,17 +707,23 @@ def collect_missing_reviews(
     conversation: List[Dict[str, Any]],
     participants: List[str],
 ) -> List[Dict[str, Any]]:
-    existing_with_text = {
+    def has_review_response(row: Dict[str, Any]) -> bool:
+        resp = row.get("response") if isinstance(row.get("response"), dict) else {}
+        if get_conversation_text(row):
+            return True
+        return isinstance(resp.get("pair_reviews"), list) and bool(resp.get("pair_reviews"))
+
+    existing_with_response = {
         str(c.get("agent") or "").strip()
         for c in conversation or []
         if isinstance(c, dict)
         and str(c.get("agent") or "").strip()
-        and get_conversation_text(c)
+        and has_review_response(c)
     }
     missing = [
         str(p).strip()
         for p in participants or []
-        if str(p).strip() and str(p).strip() not in existing_with_text
+        if str(p).strip() and str(p).strip() not in existing_with_response
     ]
     if not missing:
         return conversation
@@ -689,7 +770,7 @@ def analyst_signoff(
         conversation,
         known_pair_ids=list(conflicts_by_id.keys()),
         current_labels_by_id={
-            cid: str(conflict.get("label") or "").strip()
+            cid: conflict_current_label(conflict)
             for cid, conflict in conflicts_by_id.items()
             if isinstance(conflict, dict)
         },

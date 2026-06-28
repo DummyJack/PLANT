@@ -516,7 +516,12 @@ def run_export_html_stage(flow, *, force: bool = False) -> None:
 
             html_path = results_dir / rel
             html_path = html_path.with_suffix(".html")
-            markdown_storage.save_markdown_as_html(md_path, html_path, results_dir)
+            markdown_storage.save_markdown_as_html(
+                md_path,
+                html_path,
+                results_dir,
+                project_id=flow.store.project_id,
+            )
             html_count += 1
 
     flow.logger.info("已轉成 html: results/*")
@@ -558,6 +563,103 @@ def copy_model_assets(source_root: Path, results_dir: Path, counter_ref: Optiona
 # ========
 # Defines save cost summary function for this module workflow.
 # ========
+def cost_summary_has_usage(cost_summary: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(cost_summary, dict):
+        return False
+    totals = cost_summary.get("totals")
+    if not isinstance(totals, dict):
+        return False
+    return bool(
+        int(totals.get("total_tokens", 0) or 0) > 0
+        or float(totals.get("estimated_cost(USD)", 0.0) or 0.0) > 0
+    )
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int_sum(a: Any, b: Any) -> int:
+    return int(round(_num(a) + _num(b)))
+
+
+def _float_sum(a: Any, b: Any, *, digits: int = 8) -> float:
+    return round(_num(a) + _num(b), digits)
+
+
+def _merge_cost_row(existing: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing or {})
+    current = dict(current or {})
+    if current.get("model"):
+        previous_model = str(merged.get("model") or "").strip()
+        current_model = str(current.get("model") or "").strip()
+        if previous_model and previous_model != current_model:
+            models = [
+                item.strip()
+                for item in previous_model.split(" + ")
+                if item.strip()
+            ]
+            if current_model not in models:
+                models.append(current_model)
+            merged["model"] = " + ".join(models)
+        else:
+            merged["model"] = current_model
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        merged[key] = _int_sum(merged.get(key), current.get(key))
+    merged["run_time(s)"] = _float_sum(merged.get("run_time(s)"), current.get("run_time(s)"), digits=3)
+    merged["estimated_cost(USD)"] = _float_sum(
+        merged.get("estimated_cost(USD)", merged.get("estimated_cost")),
+        current.get("estimated_cost(USD)", current.get("estimated_cost")),
+        digits=8,
+    )
+    return merged
+
+
+def merge_cost_summaries(existing: Dict[str, Any], current: Dict[str, Any], *, run_id: str) -> Dict[str, Any]:
+    existing = dict(existing or {})
+    current = dict(current or {})
+    existing_run_ids = [
+        str(item).strip()
+        for item in (existing.get("_run_ids") or [])
+        if str(item).strip()
+    ]
+    if run_id and run_id in existing_run_ids:
+        return existing
+
+    existing_agents = existing.get("agents") if isinstance(existing.get("agents"), dict) else {}
+    current_agents = current.get("agents") if isinstance(current.get("agents"), dict) else {}
+    merged_agents: Dict[str, Any] = {
+        str(agent): dict(row)
+        for agent, row in existing_agents.items()
+        if isinstance(row, dict)
+    }
+    for agent, row in current_agents.items():
+        if not isinstance(row, dict):
+            continue
+        key = str(agent)
+        merged_agents[key] = _merge_cost_row(
+            merged_agents.get(key, {}),
+            row,
+        )
+
+    merged_totals = _merge_cost_row(
+        existing.get("totals") if isinstance(existing.get("totals"), dict) else {},
+        current.get("totals") if isinstance(current.get("totals"), dict) else {},
+    )
+    merged = {
+        **existing,
+        "project_id": current.get("project_id") or existing.get("project_id"),
+        "agents": merged_agents,
+        "totals": merged_totals,
+    }
+    if run_id:
+        merged["_run_ids"] = [*existing_run_ids, run_id]
+    return merged
+
+
 def save_cost_summary(flow) -> None:
     if not export_enabled(flow.config, "cost", True):
         flow.logger.info("跳過成本統計")
@@ -565,7 +667,26 @@ def save_cost_summary(flow) -> None:
 
     cost_summary = flow.build_cost_summary()
     if cost_summary:
-        flow.store.save_json(cost_summary, flow.store.project_dir / "cost_summary.json")
+        cost_path = flow.store.project_dir / "cost_summary.json"
+        existing = None
+        if cost_path.exists():
+            try:
+                existing = json.loads(cost_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = None
+        if not cost_summary_has_usage(cost_summary) and cost_path.exists():
+            if cost_summary_has_usage(existing):
+                flow.logger.info("成本統計無新 usage，保留既有 cost_summary.json")
+                return
+        run_mode = str(getattr(flow, "run_mode", "") or "").strip()
+        run_id = str(getattr(flow, "run_id", "") or "").strip()
+        if run_mode == "continue" and cost_summary_has_usage(existing):
+            cost_summary = merge_cost_summaries(
+                existing,
+                cost_summary,
+                run_id=run_id,
+            )
+        flow.store.save_json(cost_summary, cost_path)
         flow.logger.info("已輸出成本統計：cost_summary.json")
 
 

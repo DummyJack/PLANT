@@ -781,7 +781,7 @@ class MeetingCoordinator:
         def first_ids(rows: List[Dict[str, Any]]) -> List[str]:
             ids: List[str] = []
             for row in rows:
-                rid = clean_id(row.get("id") or row.get("issue_id"))
+                rid = clean_id(row.get("id"))
                 if rid:
                     ids.append(rid)
             return list(dict.fromkeys(ids))

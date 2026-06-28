@@ -16,6 +16,7 @@ from .conversation import attach_review_conversation_to_conflicts, build_pair_re
 from .support import (
     analyst_signoff,
     analyst_changed_label_ids,
+    conflict_current_label,
     finalize_review_reasons,
     collect_reviews,
     consensus_decisions,
@@ -25,6 +26,31 @@ from .support import (
 )
 
 CONFLICT_REVIEW_BATCH_SIZE = 20
+
+
+def conflict_review_pair_cards_block(pair_cards: List[Dict[str, Any]]) -> str:
+    return (
+        "\n\nPair Cards JSON（逐筆審查必須以 requirements 原文為準，不可只依初判標籤或摘要）：\n"
+        + json.dumps(pair_cards, ensure_ascii=False, indent=2)
+        + "\n\n再審查校準：\n"
+        "- current_label 只是初步辨識結果，不是答案；每筆都必須重新判斷。\n"
+        "- 若 current_label=Neutral，仍須主動檢查是否為同一需求槽位的範圍、門檻、輸出、規範強度、允許集合或驗收邊界差異。\n"
+        "- 不要只因兩項需求可同時實作、可做成選項、可合併、可澄清，或其中一項較具體，就判 Neutral。\n"
+        "- 明確 display/output 形式、standard/non-standard、named subset/all、shall/must、量化/未量化，若落在同一槽位，通常是 Conflict。\n"
+        "- 同一既有流程的 mimic/preserve 與 make practical/improve/change 是流程保留程度差異，判 Conflict。\n"
+        "- 同一 capability 的 personalized 與 semi-personalized 是支援程度差異，判 Conflict；但具體模板能力 vs 廣義最小客製政策仍判 Neutral。\n"
+        "- 同一品質或效率目標的 general improvement 與 quantified threshold 是驗收門檻差異，判 Conflict。\n"
+        "- 若原文清楚是不同情境、不同階段、互補條件分支、限定試辦範圍、或方法與必要配件/前置條件，才判 Neutral。\n"
+        "- including / such as / for example 通常只是舉例，不等於限定集合；不要與 named subset/all 規則混用。\n"
+        "- 不要推定 pilot/trial/exception/special case 與一般規則必然重疊；沒有明確同條件時判 Neutral，即使方法不同或一般規則使用 only。\n"
+        "- only if/enough/unique/success 條件與 if not/not enough/not unique/failure 條件是互補 guard condition，判 Neutral。\n"
+        "- hierarchy/subclass/tree depth 與 membership/credential/device/PIN/reader 通常不是同一槽位，判 Neutral。\n"
+        "- 具體客製化能力與廣義最小化客製政策可並存；除非原文明確禁止該能力，判 Neutral。\n"
+        "- user class 是否可替代 security keys，與 user class 可定義在 hospital-wide/service scope，是用途限制與組織範圍，判 Neutral。\n"
+        "- 一般 allow/support 能力與該能力的強化版本可並存；除非兩者明確定義互斥門檻，判 Neutral。\n"
+        "- 同一敏感資料顯示事件中 authorized users 與 only if not authorized users 是相反 guard，判 Conflict。"
+    )
+
 
 # ========
 # Defines save conflict report function for this module workflow.
@@ -41,7 +67,7 @@ def save_conflict_report(
     payload = conflict_payload(artifact, include_report=True)
     conflict_rows = [
         row for row in (payload.get("report", []) or [])
-        if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+        if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
     ]
     conflict_rows = unresolved_conflict_report_rows(conflict_rows)
     if not conflict_rows:
@@ -57,7 +83,7 @@ def save_conflict_report(
     report_artifact = coordinator.flow.analyst_agent.resolve_conflicts(report_artifact)
     report_payload = [
         row for row in ((report_artifact.get("conflict", {}) or {}).get("report", []) or [])
-        if isinstance(row, dict) and str(row.get("label") or "").strip() == "Conflict"
+        if isinstance(row, dict) and str(row.get("final_label") or "").strip() == "Conflict"
     ]
     report_payload = unresolved_conflict_report_rows(report_payload)
     report_payload = reindex_conflict_report_rows(report_payload)
@@ -136,7 +162,7 @@ def run_conflict_review_round(
     conversation_rows: List[str] = []
     known_pair_ids = list(conflicts_by_id.keys())
     current_labels_by_id = {
-        cid: str(conflict.get("label") or "").strip()
+        cid: conflict_current_label(conflict)
         for cid, conflict in conflicts_by_id.items()
         if isinstance(conflict, dict)
     }
@@ -187,7 +213,7 @@ def conflict_review(
     candidates = [
         c
         for c in all_conflict_rows(artifact)
-        if isinstance(c, dict) and str(c.get("label") or "").strip() in {"Conflict", "Neutral"}
+        if isinstance(c, dict) and conflict_current_label(c) in {"Conflict", "Neutral"}
     ]
     if not candidates:
         coordinator.flow.logger.info("需求衝突再審查：無需處理項目")
@@ -209,12 +235,12 @@ def conflict_review(
     pair_cards = []
     pair_card_by_id: Dict[str, Dict[str, Any]] = {}
     for cid, conflict in conflicts_by_id.items():
-        label = str(conflict.get("label") or "").strip()
+        label = conflict_current_label(conflict)
         req_ids = [str(r) for r in (conflict.get("requirement_ids") or []) if str(r).strip()]
         initial_reason = str(conflict.get("initial_reason") or "").strip()
         is_multiple = cid.startswith("MULTIPLE-")
         review_focus = (
-            "判斷這組 requirements 是否圍繞同一決策、規則、流程、資料或 scope 問題形成集合型衝突；不要只做孤立的兩兩文字比對。"
+            "判斷這組 requirements 是否圍繞同一決策、規則、流程、資料或 scope 問題形成集合型衝突。"
             if is_multiple
             else ""
         )
@@ -253,6 +279,13 @@ def conflict_review(
         for p in (plan.get("participants") or [])
         if str(p).strip() and str(p).strip() != "user"
     ]
+    registered = set(coordinator.flow.registry.get_names())
+    preferred_participants = [
+        agent for agent in ("analyst", "expert", "modeler")
+        if agent in registered
+    ]
+    if len(preferred_participants) >= 2:
+        participants = preferred_participants
     if len(participants) < 2:
         raise RuntimeError(
             f"需求衝突再審查 participants 至少需要兩位有效 agent，目前為 {participants}"
@@ -299,7 +332,8 @@ def conflict_review(
             "title": f"需求衝突再審查（R1 批次 {batch_label}）",
             "description": (
                 coordinator.flow.mediator_agent.conflict_review_description(batch_summaries)
-                + f"\n\n本批次只審查 {len(batch_ids)} 筆；請勿輸出本批次以外的 pair。"
+                + f"\n\n本批次審查 {len(batch_ids)} 筆 pair。"
+                + conflict_review_pair_cards_block(batch_pair_cards)
             ),
             "category": "resolve_conflict",
             "participants": participants,
@@ -310,7 +344,7 @@ def conflict_review(
                 "type": "pair_reviews",
                 "known_pair_ids": batch_ids,
                 "current_labels_by_id": {
-                    cid: str(conflict.get("label") or "").strip()
+                    cid: conflict_current_label(conflict)
                     for cid, conflict in batch_conflicts_by_id.items()
                     if isinstance(conflict, dict)
                 },
@@ -328,7 +362,7 @@ def conflict_review(
             conversation,
             known_pair_ids=batch_ids,
             current_labels_by_id={
-                cid: str(conflict.get("label") or "").strip()
+                cid: conflict_current_label(conflict)
                 for cid, conflict in batch_conflicts_by_id.items()
                 if isinstance(conflict, dict)
             },
@@ -354,7 +388,7 @@ def conflict_review(
                 for cid in second_conflicts_by_id.keys()
             ]
             second_summaries = [
-                f"- [{cid}] 原標籤={batch_conflicts_by_id[cid].get('label')}  Analyst 第一輪改判，需要第二輪 proposed_label 共識"
+                    f"- [{cid}] 原標籤={batch_conflicts_by_id[cid].get('final_label')}  Analyst 第一輪改判，需要第二輪 proposed_label 共識"
                 for cid in second_conflicts_by_id.keys()
             ]
             second_issue = {
@@ -362,9 +396,10 @@ def conflict_review(
                 "title": f"需求衝突再審查（R2 批次 {batch_label}）",
                 "description": (
                     coordinator.flow.mediator_agent.conflict_review_description(second_summaries)
-                    + "\n\n第二輪目標：只針對 Analyst 第一輪 proposed_label 與原標籤不同的 pair 再審查。"
+                    + "\n\n第二輪目標：針對 Analyst 第一輪 proposed_label 與原標籤不同的 pair 再審查。"
                     + "請各 agent 根據 requirement 原文與第一輪 pair_reviews 重新輸出 proposed_label；"
-                    + "本輪結束後只看 proposed_label 是否一致。"
+                    + "本輪以 proposed_label 是否一致作為收斂依據。"
+                    + conflict_review_pair_cards_block(second_pair_cards)
                 ),
                 "category": "resolve_conflict",
                 "participants": participants,
@@ -376,7 +411,7 @@ def conflict_review(
                     "type": "pair_reviews",
                     "known_pair_ids": list(second_conflicts_by_id.keys()),
                     "current_labels_by_id": {
-                        cid: str(conflict.get("label") or "").strip()
+                        cid: conflict_current_label(conflict)
                         for cid, conflict in second_conflicts_by_id.items()
                         if isinstance(conflict, dict)
                     },
@@ -394,7 +429,7 @@ def conflict_review(
                 second_conversation,
                 known_pair_ids=list(second_conflicts_by_id.keys()),
                 current_labels_by_id={
-                    cid: str(conflict.get("label") or "").strip()
+                    cid: conflict_current_label(conflict)
                     for cid, conflict in second_conflicts_by_id.items()
                     if isinstance(conflict, dict)
                 },
@@ -468,31 +503,28 @@ def conflict_review(
         conflict = conflicts_by_id.get(cid)
         if not conflict:
             continue
-        new_label = str(dec.get("new_label") or "").strip()
-        old_label = str(conflict.get("label") or "").strip()
-        modify = new_label in {"Conflict", "Neutral"} and new_label != old_label
+        final_label = str(dec.get("final_label") or "").strip()
+        old_label = conflict_current_label(conflict)
+        modify = final_label in {"Conflict", "Neutral"} and final_label != old_label
         if modify:
-            conflict["label"] = new_label
             changed += 1
         decided_by = str(dec.get("decided_by") or "").strip()
         review_status = "consensus" if "consensus" in decided_by else "analyst"
         conflict["initial_label"] = old_label
-        conflict["final_label"] = new_label if modify else old_label
+        conflict["final_label"] = final_label if final_label in {"Conflict", "Neutral"} else old_label
         conflict["status"] = review_status
         conflict["description"] = str(dec.get("reason") or "")
         conflict.pop("conflict_review", None)
         final_type = str(
             dec.get("final_type")
             or conflict.get("final_type")
-            or conflict.get("initial_type")
-            or conflict.get("type")
             or ""
         ).strip()
-        if new_label == "Conflict" and not final_type:
+        if final_label == "Conflict" and not final_type:
             final_type = "other"
-        if new_label == "Conflict" and final_type:
+        if final_label == "Conflict" and final_type:
             conflict["final_type"] = final_type
-        elif new_label == "Neutral":
+        elif final_label == "Neutral":
             conflict.pop("final_type", None)
 
     pair_review_conversation = build_pair_review_conversation(
@@ -506,7 +538,7 @@ def conflict_review(
     coordinator.flow.logger.step_completed(
         "conflict_review",
         "conflict_review.resolve_conflicts",
-        "初步辨識",
+        "衝突審查裁定",
         agent="analyst",
         message=f"檢查 {len(conflicts_by_id)} 筆，改判 {changed} 筆",
         output_path="artifact/result.json",

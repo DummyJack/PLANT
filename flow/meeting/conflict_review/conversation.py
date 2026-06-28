@@ -32,10 +32,10 @@ def build_pair_review_conversation(
         decision = decision_by_id.get(pair_id)
         if not isinstance(decision, dict):
             raise RuntimeError(f"缺少衝突再審查 decision: {pair_id}")
-        final_label = str(decision.get("new_label") or conflict.get("label") or "").strip()
+        final_label = str(decision.get("final_label") or "").strip()
         if final_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"衝突再審查 final_label 不合法: {pair_id}")
-        initial_label = str(conflict.get("initial_label") or conflict.get("label") or "").strip()
+        initial_label = str(conflict.get("initial_label") or conflict.get("final_label") or "").strip()
         if initial_label not in {"Conflict", "Neutral"}:
             raise RuntimeError(f"衝突再審查 initial_label 不合法: {pair_id}")
         description = str(decision.get("reason") or "").strip()
@@ -73,9 +73,6 @@ def build_pair_review_conversation(
             "status": status,
             "meeting": meeting,
         }
-        initial_type = str(conflict.get("initial_type") or "").strip()
-        if initial_label == "Conflict" and initial_type:
-            conversation["initial_type"] = initial_type
         final_type = str(decision.get("final_type") or conflict.get("final_type") or "").strip()
         if final_label == "Conflict" and final_type:
             conversation["final_type"] = final_type
@@ -107,8 +104,6 @@ def attach_review_conversation_to_conflicts(
         status = str(conversation.get("status") or "").strip()
         if status:
             conflict["status"] = status
-        if conversation.get("initial_type"):
-            conflict["initial_type"] = conversation["initial_type"]
         if conversation.get("final_type"):
             conflict["final_type"] = conversation["final_type"]
 

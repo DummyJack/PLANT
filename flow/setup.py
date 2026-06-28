@@ -257,18 +257,31 @@ class Flow:
         kwargs = {"temperature": temperature}
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
-        passthrough_keys = (
-            "base_url",
-            "api_key",
-            "json_response_format",
-            "thinking_level",
-            "thinking_budget",
-        )
+
+        def supports_gemini_3_thinking(provider_name: str, model: str) -> bool:
+            if str(provider_name or "").strip().lower() != "gemini":
+                return False
+            name = str(model or "").strip().lower()
+            if not name.startswith("gemini-"):
+                return False
+            version = name.removeprefix("gemini-").split("-", 1)[0]
+            try:
+                return float(version) >= 3.0
+            except ValueError:
+                return False
+
+        passthrough_keys = ("base_url", "api_key", "json_response_format")
         for key in passthrough_keys:
             if per_agent.get(key) is not None:
                 kwargs[key] = per_agent[key]
             elif default_cfg.get(key) is not None:
                 kwargs[key] = default_cfg[key]
+        if supports_gemini_3_thinking(provider, model_name):
+            for key in ("thinking_level", "thinking_budget"):
+                if per_agent.get(key) is not None:
+                    kwargs[key] = per_agent[key]
+                elif default_cfg.get(key) is not None:
+                    kwargs[key] = default_cfg[key]
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
     # ========

@@ -203,8 +203,8 @@ def validated_elicitation_answer(
         for name in speaking_as
         if str(name).strip() and str(name).strip() in set(question_targets)
     ]
-    if not valid_speakers and len(question_targets) == 1:
-        valid_speakers = [question_targets[0]]
+    if not valid_speakers and question_targets:
+        valid_speakers = list(question_targets)
     if not valid_speakers:
         raise RuntimeError(
             "Requirement elicitation user answer 缺少有效 speaking_as，"
@@ -499,11 +499,12 @@ def run_elicitation(
             "conversation": final_conversation,
             "discussion_mode": "sequential",
             "participants": final_agents,
-                        "judged_action_agent": final_agents[0],
+            "judged_action_agent": final_agents[0],
             "judged_action": final_text,
             "recent_ask_history": final_recent_ask_history,
             "new_candidates_count": 0,
             "new_candidate_texts": [],
+            "judge_finish": not forced_finish,
             "forced_finish": forced_finish,
         }
         elicitation_trace.append(final_turn_log)
@@ -528,6 +529,9 @@ def run_elicitation(
         elicitation["meeting"] = rows_by_round
         elicitation["elicited_reqts"] = list(elicitation.get("elicited_reqts", []) or []) + list(cleaned_candidates)
         elicitation["elicitation_stop_reason"] = reason
+        closure_votes = artifact.get("elicitation_closure_votes")
+        if isinstance(closure_votes, list) and closure_votes:
+            elicitation["closure_summary"] = closure_votes[-1]
         artifact.setdefault("elicitation_trace", []).extend(elicitation_trace)
 
         coordinator.flow.store.save_artifact(artifact)
@@ -667,10 +671,26 @@ def run_elicitation(
         if finish_text:
             if not finish_proposer:
                 raise RuntimeError("需求擷取收束缺少提出收束的 agent")
-            if len(finish_agents) >= 2:
+            closure_vote = collect_closure_votes(
+                coordinator,
+                artifact,
+                round_num=round_num,
+                turn=turn,
+                proposer_role=finish_proposer,
+                proposer_roles=finish_agents,
+                recent_ask_history=recent_ask_history,
+                candidate_texts=[
+                    str(c.get("text") or "").strip()
+                    for c in all_candidates
+                    if isinstance(c, dict) and str(c.get("text") or "").strip()
+                ],
+            )
+            if closure_vote.get("approved"):
                 coordinator.flow.logger.info(
-                    "  停止：本輪有 %s 位 agent 實際提出 propose_finish，視為需求擷取結束",
+                    "  收束投票通過：propose_finish=%s close=%s continue=%s",
                     len(finish_agents),
+                    closure_vote.get("close_count"),
+                    closure_vote.get("continue_count"),
                 )
                 interviewer_finish = True
                 effective_conversation = [
@@ -685,46 +705,16 @@ def run_elicitation(
                     for agent in finish_agents
                 ]
             else:
-                closure_vote = collect_closure_votes(
-                    coordinator,
-                    artifact,
-                    round_num=round_num,
-                    turn=turn,
-                    proposer_role=finish_proposer,
-                    recent_ask_history=recent_ask_history,
-                    candidate_texts=[
-                        str(c.get("text") or "").strip()
-                        for c in all_candidates
-                        if isinstance(c, dict) and str(c.get("text") or "").strip()
-                    ],
+                coordinator.flow.logger.info(
+                    "  收束投票未通過：propose_finish=%s close=%s continue=%s，本輪後繼續追問",
+                    len(finish_agents),
+                    closure_vote.get("close_count"),
+                    closure_vote.get("continue_count"),
                 )
-                if closure_vote.get("approved"):
-                    coordinator.flow.logger.info(
-                        "  收束投票通過：close=%s continue=%s",
-                        closure_vote.get("close_count"),
-                        closure_vote.get("continue_count"),
-                    )
-                    interviewer_finish = True
-                    effective_conversation = [
-                        {
-                            "agent": finish_proposer,
-                            "response": {
-                                "text": stop_phrase,
-                                "content": stop_phrase,
-                                "action": FINISH_AGENT_ACTION,
-                            },
-                        }
-                    ]
-                else:
-                    coordinator.flow.logger.info(
-                        "  收束投票未通過：close=%s continue=%s，本輪後繼續追問",
-                        closure_vote.get("close_count"),
-                        closure_vote.get("continue_count"),
-                    )
-                    effective_conversation = without_finish_proposals(
-                        interviewer_conversation,
-                        stop_phrase,
-                    )
+                effective_conversation = without_finish_proposals(
+                    interviewer_conversation,
+                    stop_phrase,
+                )
 
         question_conversations = user_questions(effective_conversation)
         normalized_question_conversations: List[Dict[str, Any]] = []
@@ -767,6 +757,17 @@ def run_elicitation(
                 coordinator.flow.logger.info(
                     "  收束投票未通過且本輪無可追問問題，進入下一輪"
                 )
+                previous_turn_summary = {
+                    **(previous_turn_summary or {}),
+                    "turn": turn,
+                    "meeting_phase": meeting_phase,
+                    "goal": turn_goal,
+                    "finish_rejected": True,
+                    "closure_vote": closure_vote,
+                    "gaps": closure_vote.get("gaps") or [],
+                    "questions": closure_vote.get("questions") or [],
+                    "open_questions": closure_vote.get("open_questions") or [],
+                }
                 continue
             planned_finish_agents = [
                 agent
@@ -776,19 +777,6 @@ def run_elicitation(
                 == FINISH_AGENT_ACTION
             ]
             if planned_finish_agents:
-                if len(planned_finish_agents) >= 2:
-                    append_finish_turn(
-                        turn,
-                        planned_finish_agents,
-                        stop_phrase,
-                        forced_finish=False,
-                    )
-                    coordinator.flow.logger.info(
-                        "  停止：本輪有 %s 位 agent action=propose_finish，視為需求擷取結束",
-                        len(planned_finish_agents),
-                    )
-                    return finalize_elicitation("propose_finish")
-
                 finish_agent = str(planned_finish_agents[0] or "mediator").strip() or "mediator"
                 closure_vote = collect_closure_votes(
                     coordinator,
@@ -796,6 +784,7 @@ def run_elicitation(
                     round_num=round_num,
                     turn=turn,
                     proposer_role=finish_agent,
+                    proposer_roles=planned_finish_agents,
                     recent_ask_history=recent_ask_history,
                     candidate_texts=[
                         str(c.get("text") or "").strip()
@@ -806,21 +795,34 @@ def run_elicitation(
                 if closure_vote.get("approved"):
                     append_finish_turn(
                         turn,
-                        finish_agent,
+                        planned_finish_agents,
                         stop_phrase,
                         forced_finish=False,
                     )
                     coordinator.flow.logger.info(
-                        "  收束投票通過：close=%s continue=%s",
+                        "  收束投票通過：propose_finish=%s close=%s continue=%s",
+                        len(planned_finish_agents),
                         closure_vote.get("close_count"),
                         closure_vote.get("continue_count"),
                     )
                     return finalize_elicitation("propose_finish")
                 coordinator.flow.logger.info(
-                    "  單一 propose_finish 收束投票未通過：close=%s continue=%s，進入下一輪",
+                    "  propose_finish 收束投票未通過：propose_finish=%s close=%s continue=%s，進入下一輪",
+                    len(planned_finish_agents),
                     closure_vote.get("close_count"),
                     closure_vote.get("continue_count"),
                 )
+                previous_turn_summary = {
+                    **(previous_turn_summary or {}),
+                    "turn": turn,
+                    "meeting_phase": meeting_phase,
+                    "goal": turn_goal,
+                    "finish_rejected": True,
+                    "closure_vote": closure_vote,
+                    "gaps": closure_vote.get("gaps") or [],
+                    "questions": closure_vote.get("questions") or [],
+                    "open_questions": closure_vote.get("open_questions") or [],
+                }
                 continue
             conversation_preview = []
             for row in effective_conversation:
@@ -853,12 +855,19 @@ def run_elicitation(
                 raise RuntimeError("Requirement elicitation action type 判定失敗") from e
         if interviewer_finish and stop_phrase in judged_text:
             judge_action_type = "finish"
+        oracle_judge_finish = judge_action_type == "finish"
 
         conversation = list(effective_conversation)
-        if interviewer_finish:
+        if interviewer_finish or oracle_judge_finish:
             for row in conversation:
                 emit_elicitation_speech(coordinator.flow.logger, row)
-        if user_agent and not interviewer_finish and judged_text and question_conversations:
+        if (
+            user_agent
+            and not interviewer_finish
+            and not oracle_judge_finish
+            and judged_text
+            and question_conversations
+        ):
             if user_answer_all_questions:
                 paired_conversation: List[Dict[str, Any]] = []
                 question_ids = {id(c) for c in question_conversations}
@@ -875,13 +884,18 @@ def run_elicitation(
                         question_response.get("target_stakeholders"),
                         allowed_names=allowed_stakeholders,
                     )
-                    if question_targets:
-                        question_response = dict(question_response)
-                        question_response["target_stakeholders"] = question_targets
-                        question_conversation = {
-                            **question_conversation,
-                            "response": question_response,
-                        }
+                    if not question_targets:
+                        question_targets = planned_targets_for_agent(
+                            turn_strategy,
+                            str(question_conversation.get("agent") or "").strip(),
+                            allowed_names=allowed_stakeholders,
+                        )
+                    question_response = dict(question_response)
+                    question_response["target_stakeholders"] = question_targets
+                    question_conversation = {
+                        **question_conversation,
+                        "response": question_response,
+                    }
                     paired_conversation.append(question_conversation)
                     emit_elicitation_speech(coordinator.flow.logger, question_conversation)
                     user_issue = {
@@ -1008,11 +1022,11 @@ def run_elicitation(
                 pending_targets_for_row = []
             conversation_rows.append(row)
 
-        should_stop_after_this_turn = bool(interviewer_finish)
+        should_stop_after_this_turn = bool(interviewer_finish or oracle_judge_finish)
         stop_reason_after_this_turn = (
             "judge_finish"
             if interviewer_finish
-            else "judge_continue"
+            else ("oracle_judge_finish" if oracle_judge_finish else "judge_continue")
         )
 
         turn_log = {
@@ -1030,7 +1044,9 @@ def run_elicitation(
             "judged_action_agent": judged_action_agent,
             "judged_action": judged_text,
             "judge_action_type": judge_action_type,
-            "judge_finish": interviewer_finish,
+            "judge_finish": should_stop_after_this_turn,
+            "closure_finish": interviewer_finish,
+            "oracle_judge_finish": oracle_judge_finish,
             "closure_vote": closure_vote,
             "recent_ask_history": recent_ask_history,
             "new_candidates_count": len(new_candidates),
@@ -1083,7 +1099,7 @@ def run_elicitation(
             break
 
     if termination_reason == "max_turns_reached":
-        final_turn = max_turns
+        final_turn = len(elicitation_trace) + 1
         final_agent = "mediator"
         append_finish_turn(final_turn, final_agent, forced_finish_phrase)
         coordinator.flow.logger.info("[輪次 %s]", final_turn)
