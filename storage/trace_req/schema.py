@@ -9,11 +9,11 @@ def trace_req_event_defaults(event_type: str, relation: str = "") -> Dict[str, s
     event = str(event_type or "").strip()
     rel = str(relation or "").strip()
     defaults = {
-        "derive_requirement": {"role": "main_chain", "edge_label": "整理"},
+        "derive_requirement": {"role": "main_chain", "edge_label": "分析"},
         "formalize_requirement": {"role": "main_chain", "edge_label": ""},
         "generate_feedback": {"role": "supporting", "edge_label": "依據", "style": "dashed"},
         "generate_model": {"role": "supporting", "edge_label": "建模", "style": "dashed"},
-        "detect_conflict": {"role": "main_chain", "edge_label": ""},
+        "detect_conflict": {"role": "main_chain", "edge_label": "衝突"},
         "resolve_issue": {"role": "main_chain", "edge_label": "解決"},
     }.get(event, {"role": "supporting", "edge_label": rel})
     return {
