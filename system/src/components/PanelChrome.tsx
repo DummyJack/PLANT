@@ -29,7 +29,7 @@ export function PanelChrome({
   titleClassName,
 }: PanelChromeProps) {
   return (
-    <div className={cn("card relative flex h-full flex-col overflow-hidden", className)}>
+    <div className={cn("card relative flex h-full min-w-0 flex-col overflow-hidden", className)}>
       <div className={cn("relative flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2.5", headerClassName)}>
         {centerTitle ? (
           <>

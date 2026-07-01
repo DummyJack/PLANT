@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Edit3, Loader2, Minus, MoreHorizontal, Plus } from "lucide-react";
+import { Check, Download, Edit3, Loader2, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
@@ -259,6 +259,214 @@ function triggerDownload(url: string, filename: string) {
   link.remove();
 }
 
+function downloadSourcePathForPreview(path: string, availablePaths: Set<string>) {
+  const srs = /^results\/srs\.html$/i.exec(path);
+  if (srs && availablePaths.has("output/srs.md")) return "output/srs.md";
+
+  const dr = /^results\/design_rationale\.html$/i.exec(path);
+  if (dr && availablePaths.has("output/design_rationale.md")) {
+    return "output/design_rationale.md";
+  }
+
+  const draft = /^results\/drafts\/(draft_v\d+)\.html$/i.exec(path);
+  if (draft) {
+    const source = `artifact/drafts/${draft[1]}.md`;
+    if (availablePaths.has(source)) return source;
+  }
+
+  const mom = /^results\/MoM\/(R\d+-M\d+)\.html$/i.exec(path);
+  if (mom) {
+    const source = `artifact/MoM/${mom[1]}.md`;
+    if (availablePaths.has(source)) return source;
+  }
+
+  const report = /^results\/report\/(conflict_report_v\d+)\.html$/i.exec(path);
+  if (report) {
+    const markdown = `artifact/report/${report[1]}.md`;
+    if (availablePaths.has(markdown)) return markdown;
+    const json = `artifact/report/${report[1]}.json`;
+    if (availablePaths.has(json)) return json;
+  }
+
+  return path;
+}
+
+function downloadHtmlPathForPreview(path: string, availablePaths: Set<string>) {
+  if (/\.html$/i.test(path)) return path;
+
+  if (/^output\/srs\.md$/i.test(path) && availablePaths.has("results/srs.html")) {
+    return "results/srs.html";
+  }
+
+  if (
+    /^output\/design_rationale\.md$/i.test(path) &&
+    availablePaths.has("results/design_rationale.html")
+  ) {
+    return "results/design_rationale.html";
+  }
+
+  const draft = /^artifact\/drafts\/(draft_v\d+)\.md$/i.exec(path);
+  if (draft) {
+    const html = `results/drafts/${draft[1]}.html`;
+    if (availablePaths.has(html)) return html;
+  }
+
+  const mom = /^artifact\/MoM\/(R\d+-M\d+)\.md$/i.exec(path);
+  if (mom) {
+    const html = `results/MoM/${mom[1]}.html`;
+    if (availablePaths.has(html)) return html;
+  }
+
+  const report = /^artifact\/report\/(conflict_report_v\d+)\.(?:md|json)$/i.exec(path);
+  if (report) {
+    const html = `results/report/${report[1]}.html`;
+    if (availablePaths.has(html)) return html;
+  }
+
+  return path;
+}
+
+type DownloadFormat = "markdown" | "html";
+
+function downloadPathForFormat(path: string, availablePaths: Set<string>, format: DownloadFormat) {
+  return format === "html"
+    ? downloadHtmlPathForPreview(path, availablePaths)
+    : downloadSourcePathForPreview(path, availablePaths);
+}
+
+function modelImageDownloadPath(rawPath: string) {
+  const trimmed = rawPath.trim().replace(/^<(.+)>$/, "$1");
+  if (!trimmed || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(trimmed)) return null;
+
+  const hashIndex = trimmed.indexOf("#");
+  const beforeHash = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+  const hash = hashIndex >= 0 ? trimmed.slice(hashIndex) : "";
+  const queryIndex = beforeHash.indexOf("?");
+  const pathOnly = queryIndex >= 0 ? beforeHash.slice(0, queryIndex) : beforeHash;
+  const query = queryIndex >= 0 ? beforeHash.slice(queryIndex) : "";
+  const fileName = pathOnly.split("/").filter(Boolean).at(-1);
+  if (!fileName || !/\.(?:png|jpe?g|gif|webp|svg)$/i.test(fileName)) return null;
+
+  const pointsToModels = /(?:^|\/)models\//i.test(pathOnly) || !pathOnly.includes("/");
+  if (!pointsToModels) return null;
+
+  return `./models/${fileName}${query}${hash}`;
+}
+
+function rewriteMarkdownModelImagePaths(content: string) {
+  const withMarkdownImages = content.replace(
+    /(!\[[^\]]*]\()([^)\n]+)(\))/g,
+    (match, prefix: string, target: string, suffix: string) => {
+      const parts = /^(\S+)(\s+["'][^"']*["'])$/.exec(target.trim());
+      const rawPath = parts?.[1] ?? target.trim();
+      const title = parts?.[2] ?? "";
+      const rewritten = modelImageDownloadPath(rawPath);
+      return rewritten ? `${prefix}${rewritten}${title}${suffix}` : match;
+    },
+  );
+
+  const withReferenceImages = withMarkdownImages.replace(
+    /^(\[[^\]]+]:\s*)(\S+)(.*)$/gm,
+    (match, prefix: string, rawPath: string, suffix: string) => {
+      const rewritten = modelImageDownloadPath(rawPath);
+      return rewritten ? `${prefix}${rewritten}${suffix}` : match;
+    },
+  );
+
+  return withReferenceImages.replace(
+    /(<img\b[^>]*\bsrc=["'])([^"']+)(["'][^>]*>)/gi,
+    (match, prefix: string, rawPath: string, suffix: string) => {
+      const rewritten = modelImageDownloadPath(rawPath);
+      return rewritten ? `${prefix}${rewritten}${suffix}` : match;
+    },
+  );
+}
+
+function rewriteSrsDesignRationaleLinks(content: string) {
+  const rewriteTarget = (rawPath: string) => {
+    const trimmed = rawPath.trim().replace(/^<(.+)>$/, "$1");
+    if (!trimmed || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(trimmed)) return null;
+
+    const hashIndex = trimmed.indexOf("#");
+    const pathOnly = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+    const hash = hashIndex >= 0 ? trimmed.slice(hashIndex) : "";
+    if (!hash) return null;
+
+    if (
+      /^(?:\.\/)?dr$/i.test(pathOnly) ||
+      /^(?:\.\/)?design_rationale\.html$/i.test(pathOnly) ||
+      /^(?:\.\/)?design_rationale\.md$/i.test(pathOnly) ||
+      /^results\/design_rationale\.html$/i.test(pathOnly) ||
+      /^output\/design_rationale\.md$/i.test(pathOnly)
+    ) {
+      return `./design_rationale.md${hash}`;
+    }
+
+    return null;
+  };
+
+  const withMarkdownLinks = content.replace(
+    /(\[[^\]]+]\()([^)\n]+)(\))/g,
+    (match, prefix: string, target: string, suffix: string) => {
+      const parts = /^(\S+)(\s+["'][^"']*["'])$/.exec(target.trim());
+      const rawPath = parts?.[1] ?? target.trim();
+      const title = parts?.[2] ?? "";
+      const rewritten = rewriteTarget(rawPath);
+      return rewritten ? `${prefix}${rewritten}${title}${suffix}` : match;
+    },
+  );
+
+  const withReferenceLinks = withMarkdownLinks.replace(
+    /^(\[[^\]]+]:\s*)(\S+)(.*)$/gm,
+    (match, prefix: string, rawPath: string, suffix: string) => {
+      const rewritten = rewriteTarget(rawPath);
+      return rewritten ? `${prefix}${rewritten}${suffix}` : match;
+    },
+  );
+
+  return withReferenceLinks.replace(
+    /(<a\b[^>]*\bhref=["'])([^"']+)(["'][^>]*>)/gi,
+    (match, prefix: string, rawPath: string, suffix: string) => {
+      const rewritten = rewriteTarget(rawPath);
+      return rewritten ? `${prefix}${rewritten}${suffix}` : match;
+    },
+  );
+}
+
+function addDesignRationaleMarkdownAnchors(content: string) {
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
+  const output: string[] = [];
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+((?:CON|FR|NFR)-\d+)\b/i.exec(line.trim());
+    if (heading) {
+      const id = heading[2].toLowerCase();
+      const previous = output.at(-1)?.trim() ?? "";
+      if (!new RegExp(`<a\\s+(?:id|name)=["']${id}["']\\s*><\\/a>`, "i").test(previous)) {
+        output.push(`<a id="${id}"></a>`);
+      }
+    }
+    output.push(line);
+  }
+  return output.join(newline);
+}
+
+function fileContentForDownload(content: FileContent, path: string): FileContent {
+  if (content.encoding !== "base64" && /\.md$/i.test(path)) {
+    const normalized = /^output\/srs\.md$/i.test(path)
+      ? rewriteSrsDesignRationaleLinks(rewriteMarkdownModelImagePaths(content.content))
+      : /^output\/design_rationale\.md$/i.test(path)
+        ? addDesignRationaleMarkdownAnchors(rewriteMarkdownModelImagePaths(content.content))
+        : rewriteMarkdownModelImagePaths(content.content);
+    return {
+      ...content,
+      content: normalized,
+      mime: content.mime || "text/markdown;charset=utf-8",
+    };
+  }
+  return content;
+}
+
 function crc32(bytes: Uint8Array) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -344,6 +552,10 @@ function bytesFromFileContent(content: FileContent) {
   return new TextEncoder().encode(content.content);
 }
 
+function bytesFromFileContentForDownload(content: FileContent, path: string) {
+  return bytesFromFileContent(fileContentForDownload(content, path));
+}
+
 function StakeholderStatementEditor({
   drafts,
   saving,
@@ -372,7 +584,7 @@ function StakeholderStatementEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noEditableStatements}
@@ -407,7 +619,7 @@ function StakeholderStatementEditor({
                       </span>
                       <textarea
                         className={cn(
-                          "min-h-20 w-full resize-y rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
+                          "min-h-20 w-full resize-none thin-scrollbar rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
                           showValidation && empty
                             ? "border-red-300 focus:border-red-400 focus:ring-red-100"
                             : "border-gray-200 focus:border-slate-400 focus:ring-slate-200",
@@ -442,7 +654,7 @@ function StakeholderStatementPreview({
 }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noStakeholderStatements}
@@ -501,6 +713,11 @@ function ScopeReviewEditor({
 }) {
   const { t } = useI18n();
   const [editingItems, setEditingItems] = useState<Record<string, boolean>>({});
+  const [invalidItems, setInvalidItems] = useState<Record<string, boolean>>({});
+  const [removeTarget, setRemoveTarget] = useState<{
+    key: keyof ScopeReviewDraft;
+    index: number;
+  } | null>(null);
   const itemKey = (key: keyof ScopeReviewDraft, index: number) => `${key}-${index}`;
   const updateItem = (key: keyof ScopeReviewDraft, index: number, value: string) => {
     onChange({
@@ -509,22 +726,56 @@ function ScopeReviewEditor({
         currentIndex === index ? value : item,
       ),
     });
+    if (value.trim()) {
+      const currentKey = itemKey(key, index);
+      setInvalidItems((current) => {
+        if (!current[currentKey]) return current;
+        const next = { ...current };
+        delete next[currentKey];
+        return next;
+      });
+    }
   };
   const addItem = (key: keyof ScopeReviewDraft) => {
     if (draft[key].some((item) => !item.trim())) return;
     const nextIndex = draft[key].length;
+    setRemoveTarget(null);
     onChange({
       ...draft,
       [key]: [...draft[key], ""],
     });
     setEditingItems((current) => ({ ...current, [itemKey(key, nextIndex)]: true }));
   };
+  const finishItemEditing = (key: keyof ScopeReviewDraft, index: number) => {
+    const currentKey = itemKey(key, index);
+    if (!draft[key][index]?.trim()) {
+      setInvalidItems((current) => ({ ...current, [currentKey]: true }));
+      setEditingItems((current) => ({ ...current, [currentKey]: true }));
+      return;
+    }
+    setInvalidItems((current) => {
+      if (!current[currentKey]) return current;
+      const next = { ...current };
+      delete next[currentKey];
+      return next;
+    });
+    setEditingItems((current) => ({
+      ...current,
+      [currentKey]: false,
+    }));
+  };
   const removeItem = (key: keyof ScopeReviewDraft, index: number) => {
     onChange({
       ...draft,
       [key]: draft[key].filter((_, currentIndex) => currentIndex !== index),
     });
+    setRemoveTarget(null);
     setEditingItems((current) => {
+      const next = { ...current };
+      delete next[itemKey(key, index)];
+      return next;
+    });
+    setInvalidItems((current) => {
       const next = { ...current };
       delete next[itemKey(key, index)];
       return next;
@@ -568,61 +819,112 @@ function ScopeReviewEditor({
             {emptyText}
           </div>
         ) : (
-          draft[key].map((item, index) => (
-            <div
-              key={`${key}-${index}`}
-              className="rounded-control border border-gray-200 bg-white p-2"
-            >
-              <div className="flex min-h-14 items-center gap-2 rounded-control bg-slate-50 px-3 py-2">
-                {editingItems[itemKey(key, index)] ? (
-                  <textarea
-                    className="min-h-10 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0"
-                    value={item}
-                    placeholder={placeholder}
-                    autoFocus
-                    onBlur={() =>
+          draft[key].map((item, index) => {
+            const currentKey = itemKey(key, index);
+            const editing = editingItems[currentKey];
+            const confirmRemove = removeTarget?.key === key && removeTarget.index === index;
+            return (
+              <div
+                key={`${key}-${index}`}
+                className="rounded-control border border-gray-200 bg-white p-2"
+              >
+                <div className="flex min-h-14 items-center gap-2 rounded-control bg-slate-50 px-3 py-2">
+                  {editing ? (
+                    <div className="min-w-0 flex-1">
+                      <textarea
+                        className={cn(
+                          "min-h-10 w-full resize-none thin-scrollbar border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0",
+                          invalidItems[currentKey] && "text-red-700 placeholder:text-red-300",
+                        )}
+                        value={item}
+                        placeholder={placeholder}
+                        autoFocus
+                        onBlur={() => finishItemEditing(key, index)}
+                        onChange={(event) => updateItem(key, index, event.target.value)}
+                      />
+                      {invalidItems[currentKey] && (
+                        <span className="mt-1 block text-xs font-medium text-red-600">
+                          {t.requiredField}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="min-w-0 flex-1 text-left text-sm leading-relaxed text-slate-700">
+                      {item.trim() || (
+                        <span className="text-slate-400">{placeholder}</span>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-slate-500 hover:bg-white hover:text-slate-700"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setRemoveTarget(null);
+                      if (editing) {
+                        finishItemEditing(key, index);
+                        return;
+                      }
                       setEditingItems((current) => ({
                         ...current,
-                        [itemKey(key, index)]: false,
-                      }))
-                    }
-                    onChange={(event) => updateItem(key, index, event.target.value)}
-                  />
-                ) : (
-                  <div className="min-w-0 flex-1 text-left text-sm leading-relaxed text-slate-700">
-                    {item.trim() || (
-                      <span className="text-slate-400">{placeholder}</span>
+                        [currentKey]: true,
+                      }));
+                    }}
+                    aria-label={editing ? t.confirm : t.editItem}
+                    title={editing ? t.confirm : t.edit}
+                  >
+                    {editing ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Edit3 className="h-3.5 w-3.5" />
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-red-100 bg-white text-red-500 hover:bg-red-50 hover:text-red-600",
+                      confirmRemove && "border-red-200 bg-red-50 text-red-600",
+                    )}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setRemoveTarget({ key, index })}
+                    aria-label={t.removeItem}
+                    title={t.remove}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {confirmRemove && (
+                  <div className="mt-2 rounded-control border border-red-100 bg-red-50 px-3 py-2">
+                    <div className="text-xs font-semibold text-red-700">
+                      {t.removeItem}
+                    </div>
+                    <p className="mt-1 break-words text-xs leading-5 text-red-600">
+                      {item.trim() || placeholder}
+                    </p>
+                    <p className="text-xs leading-5 text-red-500">
+                      {t.irreversibleAction}
+                    </p>
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-control border border-red-100 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-red-50"
+                        onClick={() => setRemoveTarget(null)}
+                      >
+                        {t.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-control bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700"
+                        onClick={() => removeItem(key, index)}
+                      >
+                        {t.remove}
+                      </button>
+                    </div>
                   </div>
                 )}
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-slate-500 hover:bg-white hover:text-slate-700"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() =>
-                    setEditingItems((current) => ({
-                      ...current,
-                      [itemKey(key, index)]: true,
-                    }))
-                  }
-                  aria-label={t.editItem}
-                  title={t.edit}
-                >
-                  <Edit3 className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-red-100 bg-white text-red-500 hover:bg-red-50 hover:text-red-600"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => removeItem(key, index)}
-                  aria-label={t.removeItem}
-                  title={t.remove}
-                >
-                  <Minus className="h-3.5 w-3.5" />
-                </button>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
@@ -630,7 +932,7 @@ function ScopeReviewEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       <div className="space-y-3">
         {renderSection("in_scope", t.inScope, t.noInScopeItems)}
         {renderSection("out_of_scope", t.outOfScope, t.noOutOfScopeItems)}
@@ -642,7 +944,7 @@ function ScopeReviewEditor({
 function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noUserRequirements}
@@ -701,7 +1003,7 @@ function RequirementReviewEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noEditableRequirements}
@@ -727,7 +1029,7 @@ function RequirementReviewEditor({
                 </div>
                 <textarea
                   className={cn(
-                    "min-h-24 w-full resize-y rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
+                    "min-h-24 w-full resize-none thin-scrollbar rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
                     showValidation && empty
                       ? "border-red-300 focus:border-red-400 focus:ring-red-100"
                       : "border-gray-200 focus:border-slate-400 focus:ring-slate-200",
@@ -753,7 +1055,7 @@ function RequirementReviewEditor({
 function AgentIssueProposalPreview({ rows }: { rows: AgentIssueProposalRow[] }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noAgentIssues}
@@ -1001,7 +1303,7 @@ function MarkdownPreview({
   };
 
   return (
-    <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-5">
+    <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto thin-scrollbar bg-slate-50/50 p-5">
       <div className="markdown-body max-w-none text-slate-800">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -1153,6 +1455,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const { activeRun } = useActiveRun(projectId);
   const headerActionsRef = useRef<HTMLDivElement>(null);
   const headerPickerRef = useRef<HTMLDivElement>(null);
+  const downloadMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const panelMeasureRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -1161,6 +1464,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const [controlsStacked, setControlsStacked] = useState(false);
   const [controlsNarrow, setControlsNarrow] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
@@ -1212,6 +1516,10 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   );
 
   const files = useMemo(() => buildOutputFiles(items), [items]);
+  const availablePaths = useMemo(
+    () => new Set(items.filter((item) => item.kind === "file").map((item) => item.path)),
+    [items],
+  );
   const fileMeta = files.find((f) => f.path === selectedOutputPath);
   const title = fileMeta?.label ?? "";
   const modelPair = fileMeta ? findModelPair(files, fileMeta) : {};
@@ -1317,27 +1625,20 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     projectId && selectedOutputPath?.startsWith("results/")
       ? manualFileUrl(projectId, selectedOutputPath)
       : null;
-  const fileDownloadUrl = (path: string) =>
-    projectId && path.startsWith("results/")
-      ? manualFileUrl(projectId, path)
-      : null;
-  const downloadArtifactPath = async (path: string) => {
+  const downloadArtifactPath = async (path: string, format: DownloadFormat) => {
     if (!projectId) return;
-    const htmlUrl = fileDownloadUrl(path);
-    if (htmlUrl) {
-      triggerDownload(htmlUrl, filenameFromPath(path));
-      return;
-    }
-    const data = await fetchFile(projectId, path);
-    downloadBlob(data, filenameFromPath(path));
+    const sourcePath = downloadPathForFormat(path, availablePaths, format);
+    const data = await fetchFile(projectId, sourcePath);
+    downloadBlob(fileContentForDownload(data, sourcePath), filenameFromPath(sourcePath));
   };
-  const zipEntryForPath = async (path: string) => {
+  const zipEntryForPath = async (path: string, format: DownloadFormat) => {
     if (!projectId) return null;
-    const data = await fetchFile(projectId, path);
-    const modelMatch = /^artifact\/models\/(.+\.png)$/i.exec(path);
+    const sourcePath = downloadPathForFormat(path, availablePaths, format);
+    const data = await fetchFile(projectId, sourcePath);
+    const modelMatch = /^artifact\/models\/(.+\.png)$/i.exec(sourcePath);
     return {
-      path: modelMatch ? `models/${modelMatch[1]}` : filenameFromPath(path),
-      bytes: bytesFromFileContent(data),
+      path: modelMatch ? `models/${modelMatch[1]}` : filenameFromPath(sourcePath),
+      bytes: bytesFromFileContentForDownload(data, sourcePath),
     };
   };
   const downloadTargets = useMemo(() => {
@@ -1363,6 +1664,27 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     }
     return targets;
   }, [files, isModelArtifact, modelPair.image?.path, selectedOutputPath]);
+  const markdownDownloadPath = selectedOutputPath
+    ? downloadSourcePathForPreview(selectedOutputPath, availablePaths)
+    : "";
+  const htmlDownloadPath = selectedOutputPath
+    ? downloadHtmlPathForPreview(selectedOutputPath, availablePaths)
+    : "";
+  const hasMarkdownDownload = !!markdownDownloadPath && /\.md$/i.test(markdownDownloadPath);
+  const hasHtmlDownload = !!htmlDownloadPath && /\.html$/i.test(htmlDownloadPath);
+  const canChooseDownloadFormat =
+    !isModelArtifact &&
+    hasMarkdownDownload &&
+    hasHtmlDownload &&
+    markdownDownloadPath !== htmlDownloadPath;
+  const defaultDownloadFormat: DownloadFormat = "markdown";
+  const downloadTargetsForFormat = (format: DownloadFormat) => {
+    if (format === "html" && selectedOutputPath) {
+      const htmlPath = downloadHtmlPathForPreview(selectedOutputPath, availablePaths);
+      if (/\.html$/i.test(htmlPath)) return [htmlPath];
+    }
+    return downloadTargets;
+  };
   const runInProgress =
     !!activeRun &&
     ["queued", "running", "cancelling"].includes(activeRun.status);
@@ -1371,16 +1693,17 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     !runInProgress &&
     !meetingIssueProposalDecision &&
     downloadTargets.length > 0;
-  const downloadSelectedOutput = async () => {
+  const downloadSelectedOutput = async (format: DownloadFormat = defaultDownloadFormat) => {
     if (!canDownloadOutput) return;
     setDownloadError("");
     try {
+      const targets = downloadTargetsForFormat(format);
       const selectedIsSrs =
         !!selectedOutputPath && /(?:^results\/srs\.html$|^output\/srs\.md$)/i.test(selectedOutputPath);
       const selectedIsDraft =
         !!selectedOutputPath && /(?:^results\/drafts\/draft_v\d+\.html$|^artifact\/drafts\/draft_v\d+\.md$)/i.test(selectedOutputPath);
-      if (selectedIsSrs || selectedIsDraft) {
-        const entries = (await Promise.all(downloadTargets.map(zipEntryForPath))).filter(
+      if (format === "markdown" && (selectedIsSrs || selectedIsDraft)) {
+        const entries = (await Promise.all(targets.map((path) => zipEntryForPath(path, format)))).filter(
           (entry): entry is { path: string; bytes: Uint8Array } => entry !== null,
         );
         const blob = makeZip(entries);
@@ -1392,8 +1715,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
-      for (const path of downloadTargets) {
-        await downloadArtifactPath(path);
+      for (const path of targets) {
+        await downloadArtifactPath(path, format);
       }
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : t.downloadFailed);
@@ -1403,10 +1726,22 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
 
   useEffect(() => {
     setTocOpen(false);
+    setDownloadMenuOpen(false);
     setActionMenuOpen(false);
     setDownloadError("");
     setTocItems([]);
   }, [selectedOutputPath]);
+
+  useEffect(() => {
+    if (!downloadMenuOpen) return;
+    const handler = (event: MouseEvent) => {
+      if (!downloadMenuRef.current?.contains(event.target as Node)) {
+        setDownloadMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [downloadMenuOpen]);
 
   useEffect(() => {
     if (!actionMenuOpen) return;
@@ -1653,6 +1988,48 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     setTocOpen(false);
   };
 
+  const tocControl = showToc ? (
+    <div className="relative">
+      <button
+        type="button"
+        className="rounded-control border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-gray-50"
+        onClick={() => {
+          setActionMenuOpen(false);
+          setDownloadMenuOpen(false);
+          setTocOpen((open) => !open);
+        }}
+      >
+        {t.tableOfContents}
+      </button>
+      {tocOpen && (
+        <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-64 overflow-y-auto thin-scrollbar rounded-card border border-gray-200 bg-white p-2 shadow-lg">
+          {isMarkdownArtifact && file.isLoading ? (
+            <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
+          ) : tocItems.length === 0 ? (
+            <p className="px-2 py-3 text-xs text-slate-500">{t.noToc}</p>
+          ) : (
+            <div className="space-y-0.5">
+              {tocItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={cn(
+                    "block w-full rounded-control px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50",
+                    item.level === 2 && "pl-4",
+                    item.level === 3 && "pl-6 text-slate-500",
+                  )}
+                  onClick={() => scrollToTocItem(item.id)}
+                >
+                  {item.text}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   const actionControls = (
     <div
       ref={headerActionsRef}
@@ -1661,6 +2038,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         controlsNarrow && "w-full",
       )}
     >
+      {tocControl}
       {manualOutputLock && currentAutoOutputPath && (
         <button
           type="button"
@@ -1685,43 +2063,6 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           {t.backToChat}
         </button>
       )}
-      {showToc && (
-        <div className="relative">
-          <button
-            type="button"
-            className="rounded-control border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-gray-50"
-            onClick={() => setTocOpen((open) => !open)}
-          >
-            {t.tableOfContents}
-          </button>
-          {tocOpen && (
-            <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-64 overflow-y-auto rounded-card border border-gray-200 bg-white p-2 shadow-lg">
-              {isMarkdownArtifact && file.isLoading ? (
-                <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
-              ) : tocItems.length === 0 ? (
-                <p className="px-2 py-3 text-xs text-slate-500">{t.noToc}</p>
-              ) : (
-                <div className="space-y-0.5">
-                  {tocItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={cn(
-                        "block w-full rounded-control px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50",
-                        item.level === 2 && "pl-4",
-                        item.level === 3 && "pl-6 text-slate-500",
-                      )}
-                      onClick={() => scrollToTocItem(item.id)}
-                    >
-                      {item.text}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 
@@ -1740,17 +2081,74 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       />
     </div>
   );
+  const renderDownloadActions = (closeMenu: () => void) => (
+    <>
+      {canChooseDownloadFormat ? (
+        <>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
+            onClick={() => {
+              closeMenu();
+              void downloadSelectedOutput("markdown");
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t.downloadMarkdown}
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
+            onClick={() => {
+              closeMenu();
+              void downloadSelectedOutput("html");
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t.downloadHtml}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
+          onClick={() => {
+            closeMenu();
+            void downloadSelectedOutput();
+          }}
+        >
+          <Download className="h-3.5 w-3.5" />
+          {t.download}
+        </button>
+      )}
+    </>
+  );
   const downloadButton = (
-    <button
-      type="button"
-      disabled={!canDownloadOutput}
-      className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-      aria-label={t.downloadResult}
-      title={t.downloadResult}
-      onClick={() => void downloadSelectedOutput()}
-    >
-      <Download className="h-3.5 w-3.5" />
-    </button>
+    <div ref={downloadMenuRef} className="relative shrink-0">
+      <button
+        type="button"
+        disabled={!canDownloadOutput}
+        className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+        aria-label={t.downloadResult}
+        title={t.downloadResult}
+        onClick={() => {
+          if (canChooseDownloadFormat) {
+            setTocOpen(false);
+            setActionMenuOpen(false);
+            setDownloadMenuOpen((open) => !open);
+            return;
+          }
+          void downloadSelectedOutput();
+        }}
+      >
+        <Download className="h-3.5 w-3.5" />
+      </button>
+      {downloadMenuOpen && canDownloadOutput && canChooseDownloadFormat && (
+        <div className="absolute left-0 top-full z-40 mt-2 w-44 rounded-card border border-gray-200 bg-white p-1 shadow-lg">
+          {renderDownloadActions(() => setDownloadMenuOpen(false))}
+        </div>
+      )}
+    </div>
   );
   const filePickerControls = (
     <div
@@ -1762,7 +2160,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     </div>
   );
   const hasActionMenu =
-    canDownloadOutput || !!relatedMessageId || (manualOutputLock && currentAutoOutputPath) || showToc;
+    canDownloadOutput || !!relatedMessageId || (manualOutputLock && currentAutoOutputPath);
   const actionMenu = hasActionMenu ? (
     <div ref={actionMenuRef} className="relative">
       <button
@@ -1770,7 +2168,11 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700"
         aria-label={t.moreOutputActions}
         title={t.more}
-        onClick={() => setActionMenuOpen((open) => !open)}
+        onClick={() => {
+          setTocOpen(false);
+          setDownloadMenuOpen(false);
+          setActionMenuOpen((open) => !open);
+        }}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
@@ -1788,19 +2190,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
               {t.followProgress}
             </button>
           )}
-          {canDownloadOutput && (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
-              onClick={() => {
-                setActionMenuOpen(false);
-                void downloadSelectedOutput();
-              }}
-            >
-              <Download className="h-3.5 w-3.5" />
-              {t.download}
-            </button>
-          )}
+          {canDownloadOutput && renderDownloadActions(() => setActionMenuOpen(false))}
           {relatedMessageId && (
             <button
               type="button"
@@ -1812,40 +2202,6 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
             >
               {t.backToChat}
             </button>
-          )}
-          {showToc && (
-            <div className="border-t border-gray-100 first:border-t-0">
-              <div className="px-2 py-2 text-xs font-medium text-slate-700">
-                {t.tableOfContents}
-              </div>
-              <div className="max-h-64 overflow-y-auto">
-                {isMarkdownArtifact && file.isLoading ? (
-                  <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
-                ) : tocItems.length === 0 ? (
-                  <p className="px-2 py-3 text-xs text-slate-500">{t.noToc}</p>
-                ) : (
-                  <div className="space-y-0.5">
-                    {tocItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={cn(
-                          "block w-full rounded-control px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50",
-                          item.level === 2 && "pl-4",
-                          item.level === 3 && "pl-6 text-slate-500",
-                        )}
-                        onClick={() => {
-                          scrollToTocItem(item.id);
-                          setActionMenuOpen(false);
-                        }}
-                      >
-                        {item.text}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
           )}
         </div>
       )}
@@ -2025,7 +2381,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       centerTitle
       headerClassName={cn("min-h-10 py-2", controlsStacked && "border-b-0")}
       titleClassName="text-base"
-      actions={!controlsStacked && actionControls}
+      actions={controlsStacked ? tocControl : actionControls}
       trailing={controlsStacked ? actionMenu : filePickerControls}
       subheader={
         <>
@@ -2110,7 +2466,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           contentRef={markdownContentRef}
         />
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar bg-slate-50/50 p-4">
           <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-700">
             {content}
           </pre>

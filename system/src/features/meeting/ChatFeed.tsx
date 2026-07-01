@@ -1607,7 +1607,7 @@ function MomFileTile({ projectId, file }: { projectId: string | null; file: Outp
     : { title: "", summary: "", decision: "" };
 
   return (
-    <div className="w-fit min-w-72 max-w-xl space-y-3 text-left" title={file.label}>
+    <div className="w-full min-w-0 max-w-xl space-y-3 text-left" title={file.label}>
       <div className="text-lg font-bold leading-tight text-slate-900">
         {file.label}
       </div>
@@ -1830,8 +1830,8 @@ function DraftUpdateBubbles({
   return (
     <>
       {links.map((item) => (
-        <div key={item.label} className="mb-4 flex w-full gap-2.5 justify-start">
-          <div className="flex w-20 shrink-0 flex-col items-center gap-1">
+        <div key={item.label} className="mb-4 flex w-full min-w-0 gap-2.5 justify-start">
+          <div className="flex w-14 shrink-0 flex-col items-center gap-1 sm:w-20">
             <div className="w-full whitespace-nowrap text-center text-xs font-semibold leading-tight text-slate-600">
               {agentLabel(item.speaker)}
             </div>
@@ -1839,7 +1839,7 @@ function DraftUpdateBubbles({
               <Bot className="h-4.5 w-4.5" />
             </div>
           </div>
-          <div className="min-w-0 max-w-[85%] pt-6">
+          <div className="min-w-0 max-w-[calc(100%-4.125rem)] pt-6 sm:max-w-[85%]">
             <button
               type="button"
               className={cn(
@@ -2951,11 +2951,11 @@ function Bubble({
   return (
     <div
       className={cn(
-        "mb-4 flex w-full gap-2.5",
+        "mb-4 flex w-full min-w-0 gap-2.5",
         isHumanUser ? "flex-row-reverse justify-start" : "justify-start",
       )}
     >
-      <div className="flex w-20 shrink-0 flex-col items-center gap-1">
+      <div className="flex w-14 shrink-0 flex-col items-center gap-1 sm:w-20">
         <div className="w-full whitespace-nowrap text-center text-xs font-semibold leading-tight text-slate-600">
           {label}
         </div>
@@ -2972,7 +2972,7 @@ function Bubble({
           )}
         </div>
       </div>
-      <div className={cn("min-w-0 max-w-[85%] pt-6", momPreviewGrid && "w-fit", isHumanUser && "items-end")}>
+      <div className={cn("min-w-0 max-w-[calc(100%-4.125rem)] pt-6 sm:max-w-[85%]", momPreviewGrid && "w-full sm:w-fit", isHumanUser && "items-end")}>
         {!isHumanUser && !isAction && !msg.outputPath && !elicitPlan && !conflictPlan && (action || isDecision) && (
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
             {action && (
@@ -3277,10 +3277,10 @@ export function ChatFeed({
     <div
       ref={scrollRef}
       onScroll={updateScrollPosition}
-      className={cn("chat-scroll h-full overflow-y-auto px-4 py-3", runActive && "pb-5")}
+      className={cn("chat-scroll h-full overflow-y-auto overflow-x-hidden px-2 py-3 sm:px-4", runActive && "pb-5")}
     >
       <div className={cn(
-        "mx-auto w-full max-w-[720px]",
+        "mx-auto w-full min-w-0 max-w-[720px]",
         (showEmpty || (historyLoading && messages.length === 0)) &&
           "flex h-full items-center justify-center",
       )}>

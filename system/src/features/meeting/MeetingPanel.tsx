@@ -826,22 +826,22 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           }}
         />
       }
-      bodyClassName="flex flex-col"
+      bodyClassName="flex min-w-0 flex-col overflow-hidden"
     >
       <div ref={panelMeasureRef} className="pointer-events-none absolute inset-x-0 top-0 h-0 overflow-hidden opacity-0" />
       <div
-        className="relative flex min-h-0 flex-1 flex-col"
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         onDragOver={handleReviewDockDragOver}
         onDragLeave={handleReviewDockDragLeave}
         onDrop={handleReviewDockDrop}
       >
-        <div className="relative min-h-0 flex-1 flex flex-col bg-slate-50/50">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-50/50">
           <WorkspaceFlowIndex
             inline
             runCheckpoint={runCheckpoint}
             artifactItems={artifactItems ?? []}
           />
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             <ChatFeed
               key={projectId || "new-project"}
               projectId={projectId}

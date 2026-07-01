@@ -253,19 +253,19 @@ export default function App() {
   };
 
   const renderMobileLayout = () => (
-    <div className="mobile-layout-scroll flex h-full flex-col gap-2 overflow-y-auto pb-2">
+    <div className="mobile-layout-scroll flex h-full min-w-0 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-2">
       {visiblePanels.workspace && (
-        <section className="h-[78vh] min-h-[560px] shrink-0">
+        <section className="h-[78vh] min-h-[560px] min-w-0 shrink-0 overflow-hidden">
           <MeetingPanel projectId={projectId} />
         </section>
       )}
       {visiblePanels.output && (
-        <section className="h-[72vh] min-h-[480px] shrink-0">
+        <section className="h-[72vh] min-h-[480px] min-w-0 shrink-0 overflow-hidden">
           <ResultPreview projectId={projectId} items={items} />
         </section>
       )}
       {visiblePanels.references && (
-        <section className="h-[56vh] min-h-[360px] shrink-0">
+        <section className="h-[56vh] min-h-[360px] min-w-0 shrink-0 overflow-hidden">
           <ReferencePanel projectId={projectId} />
         </section>
       )}
@@ -273,10 +273,10 @@ export default function App() {
   );
 
   return (
-    <div className={cn("flex h-full flex-col overflow-hidden bg-slate-50", darkMode && "theme-dark")}>
+    <div className={cn("flex h-full min-w-0 flex-col overflow-hidden bg-slate-50", darkMode && "theme-dark")}>
       <HeaderBar />
       <NoticeStack />
-      <div className="min-h-0 flex-1 p-1">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-1">
         {panelCount === 0 ? (
           <div className="flex h-full items-center justify-center rounded-surface border border-gray-200 bg-white text-sm font-medium text-slate-400">
             {t.noPanelOpen}

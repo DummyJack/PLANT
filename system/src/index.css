@@ -11,6 +11,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow-x: hidden;
 }
 
 body {
@@ -545,4 +546,35 @@ textarea:disabled {
 .chat-scroll {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
+}
+
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.theme-dark .thin-scrollbar {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.theme-dark .thin-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
 }

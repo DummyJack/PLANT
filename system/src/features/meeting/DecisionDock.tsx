@@ -228,8 +228,13 @@ export function DecisionDock({
     const isScopeReview = decision.kind === "scope_review";
     const isMeetingIssueReview = decision.kind === "meeting_issue_proposal_review";
     const originalScopeDraft = scopeDraftFromDecision(decision);
+    const rawScopeDraft = scopeReviewDrafts[decision.id] ?? originalScopeDraft;
     const editedScopeDraft = normalizeScopeDraft(
-      scopeReviewDrafts[decision.id] ?? originalScopeDraft,
+      rawScopeDraft,
+    );
+    const scopeHasEmptyItem = isScopeReview && (
+      rawScopeDraft.in_scope.some((item) => !String(item || "").trim()) ||
+      rawScopeDraft.out_of_scope.some((item) => !String(item || "").trim())
     );
     const scopeChanged = isScopeReview && !sameScopeDraft(originalScopeDraft, editedScopeDraft);
     const reviewHelpText = isDomainReview
@@ -330,7 +335,7 @@ export function DecisionDock({
     };
     return (
       <div
-        className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-3 py-2.5"
+        className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-3 py-2.5"
         onDragOver={onReviewDragOver}
         onDragLeave={onReviewDragLeave}
         onDrop={onReviewDrop}
@@ -361,7 +366,7 @@ export function DecisionDock({
             <button
               type="button"
               className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              disabled={actionDisabled}
+              disabled={actionDisabled || scopeHasEmptyItem}
               onClick={submitReview}
             >
               {waitingForResume && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -459,7 +464,7 @@ export function DecisionDock({
     };
 
     return (
-      <div className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-2.5 py-2">
+      <div className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-2.5 py-2">
         <div className="bg-white">
           <div className="mb-2 flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -481,7 +486,7 @@ export function DecisionDock({
             </button>
           </div>
 
-        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto min-[640px]:grid-cols-2">
+        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto thin-scrollbar min-[640px]:grid-cols-2">
           {proposedDisplayRows.map(({ row: p, originalIndex }, displayIndex) => (
             <button
               key={p.name}
@@ -657,7 +662,7 @@ export function DecisionDock({
   }, [onRegisterHumanDecisionConfirm, submitHumanDecision]);
 
   return (
-    <div className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-2.5 py-2">
+    <div className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-2.5 py-2">
       <div className="bg-white">
         <div className="mb-2 flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -689,7 +694,7 @@ export function DecisionDock({
           </div>
         </div>
 
-        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto min-[640px]:grid-cols-2">
+        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto thin-scrollbar min-[640px]:grid-cols-2">
           {best.map((opt, i) => {
             const optionValue = String(opt.option_id ?? opt.id ?? OPTION_LETTERS[i] ?? String(i + 1)).trim();
             const active = selected.has(optionValue);

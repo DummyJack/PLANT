@@ -533,7 +533,7 @@ export function MeetingComposer({
   return (
     <div
       ref={composerRef}
-      className="shrink-0 px-3 pb-4 pt-3"
+      className="min-w-0 shrink-0 overflow-x-hidden px-2 pb-4 pt-3 sm:px-3"
       onDragOver={handleComposerDragOver}
       onDragLeave={handleReferenceDragLeave}
       onDrop={handleComposerDrop}
@@ -543,7 +543,7 @@ export function MeetingComposer({
         compact={compactButtons}
         onDismiss={onDismissRunCheckpoint}
       />
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <div className="relative" ref={agentRef}>
           <button
             type="button"
@@ -670,7 +670,7 @@ export function MeetingComposer({
 
         <div
           className={cn(
-            "relative flex min-h-[54px] min-w-0 flex-1 items-start gap-2 rounded-bubble border border-gray-100 bg-transparent p-2 transition-colors",
+            "relative flex min-h-[54px] min-w-[240px] flex-1 items-start gap-2 rounded-bubble border border-gray-100 bg-transparent p-2 transition-colors max-[360px]:min-w-0",
             (referenceDragOver || reviewDragOver) && "border-slate-300 bg-slate-50",
           )}
         >
