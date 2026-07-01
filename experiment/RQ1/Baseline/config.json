@@ -1,8 +1,6 @@
 {
-  "interviewer_model": "gemini-3-flash-preview",
+  "interviewer_model": "gpt-4.1",
   "gym_model": "gpt-5.2",
-  "thinking_level": "minimal",
-  "use_thinking": true,
   "verbose": true,
   "judge_temperature": 0.0,
   "judge_max_tokens": 1024,
@@ -14,6 +12,5 @@
   "max_turns": 20,
   "interviewer_temperature": 0.0,
   "interviewer_timeout": 60.0,
-  "interviewer_max_tokens": 1024,
-  "interviewer_max_tokens_thinking": 8192
+  "interviewer_max_tokens": 1024
 }

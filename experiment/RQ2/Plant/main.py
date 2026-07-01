@@ -56,6 +56,52 @@ def plant_model_file_prefix(config: Dict[str, Any]) -> str:
                 break
     return model_file_prefix(provider)
 
+
+def cost_summary_diff(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "model": str(after.get("model") or before.get("model") or ""),
+        "input_tokens": max(0, int(after.get("input_tokens", 0) or 0) - int(before.get("input_tokens", 0) or 0)),
+        "output_tokens": max(0, int(after.get("output_tokens", 0) or 0) - int(before.get("output_tokens", 0) or 0)),
+        "total_tokens": max(0, int(after.get("total_tokens", 0) or 0) - int(before.get("total_tokens", 0) or 0)),
+        "run_time(s)": round(
+            max(
+                0.0,
+                float(after.get("run_time(s)", 0.0) or 0.0)
+                - float(before.get("run_time(s)", 0.0) or 0.0),
+            ),
+            3,
+        ),
+        "estimated_cost(USD)": round(
+            max(
+                0.0,
+                float(after.get("estimated_cost(USD)", 0.0) or 0.0)
+                - float(before.get("estimated_cost(USD)", 0.0) or 0.0),
+            ),
+            8,
+        ),
+    }
+
+
+def cost_totals(rows: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in rows.values()),
+        "output_tokens": sum(int(v.get("output_tokens", 0) or 0) for v in rows.values()),
+        "total_tokens": sum(int(v.get("total_tokens", 0) or 0) for v in rows.values()),
+        "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in rows.values()), 3),
+        "estimated_cost(USD)": round(
+            sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in rows.values()),
+            8,
+        ),
+    }
+
+
+def current_cost_snapshot(flow: Flow) -> Dict[str, Dict[str, Any]]:
+    rows: Dict[str, Dict[str, Any]] = {}
+    for agent_name, model in flow.agent_models.items():
+        if hasattr(model, "costTracker"):
+            rows[agent_name] = model.costTracker.export_summary_dict()
+    return rows
+
 # ========
 # Defines run type group batch function for this experiment module.
 # ========
@@ -269,12 +315,14 @@ def run_conflict(
     requirements_artifact: Dict[str, Any] = {"URL": []}
     conflict_artifact.setdefault("pairs", [])
     requirements_artifact.setdefault("URL", [])
+    task_cost_rows: List[Dict[str, Any]] = []
 
-    for g, items in grouped.items():
+    for type_idx, (g, items) in enumerate(grouped.items()):
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
             flush=True,
         )
+        cost_before = current_cost_snapshot(flow)
         try:
             run_type_group_batch(
                 flow,
@@ -284,6 +332,17 @@ def run_conflict(
                 meetings_by_type=meetings_by_type,
                 conflict_artifact=conflict_artifact,
                 requirements_artifact=requirements_artifact,
+            )
+            cost_after = current_cost_snapshot(flow)
+            agent_costs = {
+                name: cost_summary_diff(cost_before.get(name, {}), summary)
+                for name, summary in cost_after.items()
+            }
+            task_cost_rows.append(
+                {
+                    "task_name": str(g),
+                    "totals": cost_totals(agent_costs),
+                }
             )
         except Exception as e:
             print(f"\n✗ 類型「{g}」整批失敗: {e}", flush=True)
@@ -373,7 +432,7 @@ def run_conflict(
         except (TypeError, ValueError):
             return 0.0
 
-    cost_payload = build_plant_cost_payload(flow)
+    cost_payload = build_plant_cost_payload(flow, task_cost_rows)
     paths = write_rq2_outputs(
         prefix=OUTPUT_PREFIX,
         results_dir=RESULTS_DIR,
@@ -454,8 +513,11 @@ def run_experiments(
 
     run_scalar_metrics: List[Dict[str, float]] = []
     run_costs_usd: List[float] = []
+    run_input_tokens: List[int] = []
+    run_output_tokens: List[int] = []
     run_total_tokens: List[int] = []
     run_total_runtime_s: List[float] = []
+    run_costs_by_type: List[Dict[str, Dict[str, Any]]] = []
 
     for run_idx in range(runs):
         run_id = str(
@@ -477,8 +539,21 @@ def run_experiments(
         result = run_output.get("result", {}) if isinstance(run_output, dict) else {}
         cost_payload = run_output.get("cost", {}) if isinstance(run_output, dict) else {}
         run_scalar_metrics.append(scalar_metrics_for_summary(result))
+        run_costs_by_type.append(
+            {
+                str(row.get("task_name") or "Unknown"): row.get("totals", {})
+                for row in (cost_payload.get("tasks", []) if isinstance(cost_payload, dict) else [])
+                if isinstance(row, dict)
+            }
+        )
         run_costs_usd.append(
             float(cost_payload.get("totals", {}).get("estimated_cost(USD)", 0.0) or 0.0)
+        )
+        run_input_tokens.append(
+            int(cost_payload.get("totals", {}).get("input_tokens", 0) or 0)
+        )
+        run_output_tokens.append(
+            int(cost_payload.get("totals", {}).get("output_tokens", 0) or 0)
         )
         run_total_tokens.append(
             int(cost_payload.get("totals", {}).get("total_tokens", 0) or 0)
@@ -491,7 +566,10 @@ def run_experiments(
         runs=runs,
         run_scalar_metrics=run_scalar_metrics,
         run_costs_usd=run_costs_usd,
+        run_input_tokens=run_input_tokens,
+        run_output_tokens=run_output_tokens,
         run_total_tokens=run_total_tokens,
         run_total_runtime_s=run_total_runtime_s,
+        run_costs_by_type=run_costs_by_type,
         model_prefix=file_prefix,
     )

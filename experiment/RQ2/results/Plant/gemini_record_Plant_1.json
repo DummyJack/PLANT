@@ -1,0 +1,3906 @@
+{
+  "Health Management System": [
+    {
+      "id": "PAIR-1",
+      "text1": "The system shall wait until the user explicitly selects an item using the mouse or the keyboard if the user does not enter enough characters to uniquely identify an item.",
+      "text2": "The system shall select the item at the top of the list if the user does not enter enough characters to uniquely identify an item.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify mutually exclusive system behaviors for the same trigger condition (insufficient character input). One mandates a 'Wait' state for user interaction, while the other mandates an 'Auto-Select' state, creating a logical contradiction in the state machine.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements address the same system state (non-unique identification) but mandate mutually exclusive behaviors: one requires waiting for user input while the other requires an automatic selection."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "No external regulatory mandate or domain risk intervention; maintaining current_label based on logical behavioral conflict."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The state machine for the 'Item Selection' process cannot resolve to both a 'Wait' state and an 'Auto-Select' state under the same trigger condition of insufficient character input."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-2",
+      "text1": "The system shall allow medication orders to be placed and filled from local stocks of medications while providing full auditing of all medication orders within the medication profile.",
+      "text2": "The system shall allow medication orders to be placed and filled from local stocks of medications while providing auditing of most medication orders within the medication profile.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a direct contradiction regarding the auditing scope and data integrity constraints. The requirements define incompatible boundaries for the 'Audit Log' object, where the multiplicity of audited records cannot simultaneously be 'All' and 'Most'.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements define different acceptance boundaries for the same auditing capability, where 'full auditing of all' and 'auditing of most' create a conflict in scope and verification standards."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The discrepancy between 'full auditing' and 'auditing of most' creates a compliance risk regarding audit trail integrity and forensic accountability standards."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements impose conflicting constraints on the 'Audit Log' data object's completeness attribute, where the multiplicity of audited records cannot be both 'All' and 'Most' simultaneously."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-3",
+      "text1": "The system shall support the requirements for codified data specified by the DOQ-IT quality improvement measures.",
+      "text2": "The system shall support requirements for codified data, including diagnosis data using ICD-9 codes.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are complementary; URL-6 acts as a specialization of URL-5 by adding specific ICD-9 code support without violating the general mandate for codified data improvement measures.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-6 is a specialization of URL-5 that adds specific data types (ICD-9) without contradicting the general requirement to support codified data improvement measures."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The inclusion of ICD-9 codes is a standard domain practice for codified data and does not violate the general quality improvement measures specified."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-6 acts as a specialization of the 'Codified Data' entity in the domain model, adding a specific 'ICD-9' attribute without violating the general compliance association in URL-5."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-4",
+      "text1": "The system shall display a box listing possible matches if CPRS finds more than one patient with the same last name and same last four digits of the social security numbers.",
+      "text2": "The system shall display a message of possible matches if more than one match is found when a user partially enters a patient's name and last four digits of a social security number.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define two different UI representation types (Box listing vs. Message) for the same output event (multiple patient matches), resulting in a structural conflict within the user interface model.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements specify different UI output formats (box listing vs. message) for the same event of finding multiple patient matches, requiring a single UI design decision."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "No external regulatory mandate regarding UI components; maintaining current_label as the output format for patient matching requires a single design standard."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Display Matches' interface component is assigned two different UI representation types (Box vs. Message) for the same output event, creating a structural conflict in the UI model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-5",
+      "text1": "The system shall require most orders or documents, such as progress notes, reports, or health summaries, to have an electronic signature.",
+      "text2": "The system shall require a user to review and sign changed if a user has just entered orders or documents that are unsigned.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements occupy different functional layers: URL-9 defines a static business rule for document states, while URL-10 defines a dynamic workflow trigger for the signing process, allowing them to coexist.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-9 defines the scope of documents requiring signatures, while URL-10 defines the workflow trigger for the signing process; they occupy different functional slots."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Electronic signature requirements (URL-9) and workflow triggers (URL-10) are complementary under standard healthcare IT auditing and non-repudiation frameworks."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-9 defines a static business rule for the 'Document' entity state, while URL-10 defines a dynamic transition trigger in the 'Order Entry' sequence; they reside in different model layers."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-6",
+      "text1": "The system shall allow users to enter time in several different formats.",
+      "text2": "The system shall require times to be entered as a 24-hour time, not with a 12-hour clock and an a.m. and p.m.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements impose conflicting data entry constraints on the 'Time' data type. URL-11 allows for flexible formats, whereas URL-12 strictly limits input to a 24-hour format to meet clinical safety standards.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-11 allows for multiple time formats while URL-12 strictly limits the system to a single 24-hour format, creating a direct contradiction in data entry constraints."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The restriction to a 24-hour clock (URL-12) is a safety-critical standard in clinical environments to prevent AM/PM medication errors, conflicting with the flexibility of URL-11."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Time' data type definition in the domain model is subject to conflicting constraints: a flexible format set versus a restricted 24-hour format singleton."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-7",
+      "text1": "The system shall require the user to have access to the Clinical Coorindator menu in the List Manager Interface to assign CPRS tab access.",
+      "text2": "The system shall require the user to have access to the List Manager Interface to assign CPRS tab access.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify inconsistent authorization thresholds and actor-to-interface associations for the same administrative task, requiring different menu-level permissions to perform the same function.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the access threshold for the same administrative task but specify different mandatory menu/interface requirements, necessitating a reconciliation of the permission model."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "No external regulatory mandate for specific menu naming; maintaining current_label due to the inconsistency in the defined authorization threshold."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Assign Access' use case has inconsistent actor-to-interface associations, requiring different menu-level permissions for the same functional boundary."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-8",
+      "text1": "The system shall include Standard Laboratory and Medication orderable files.",
+      "text2": "The system shall include non-Standard Laboratory and Medication orderable files.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are additive and non-exclusive. The system model can support a union of both standard and non-standard laboratory and medication files for interoperability and legacy data handling.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements are additive, specifying that the system must include both standard and non-standard files; they do not restrict each other's presence."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Supporting both standard and non-standard files is a common domain requirement for interoperability and legacy data handling; no conflict in domain scope."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The 'Orderable File' class can support multiple instances or subclasses representing both standard and non-standard types; the model allows for a union of these sets."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-9",
+      "text1": "The system shall require the user to have access to the Clinical Coorindator menu in the List Manager Interface to assign CPRS tab access.",
+      "text2": "The system shall require the entry of an access code to gain access to the system.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements address distinct security layers: URL-18 defines general system authentication (access codes), while URL-17 defines specific functional authorization (menu access) for the Clinical Coordinator. They are complementary components of a least-privilege security model.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-17 concerns functional authorization for a specific task, whereas URL-18 concerns general system authentication; they address different security layers."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Authentication (access code) and authorization (menu access) represent distinct layers of the HIPAA-aligned security principle of least privilege."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These requirements address different security model elements: URL-18 defines the 'System Login' authentication process, while URL-17 defines a specific 'Functional Authorization' rule."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-10",
+      "text1": "The system shall provide real-time order checking, as well as extended expert system/decision support capabilities that enhance the order entry process.",
+      "text2": "The system shall provide order checking, as well as extended expert system/decision support capabilities that enhance the order entry process.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-19 introduces a specific 'real-time' temporal and performance constraint for order checking that is absent in the general description of URL-20. This creates a discrepancy in the required quality-of-service baseline and system response expectations.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-19 introduces a 'real-time' performance constraint that is absent in URL-20, representing a difference in the quality of service and acceptance criteria for the same feature."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "'Real-time' checking is a specific clinical safety performance requirement; the absence of this constraint in URL-20 creates a gap in the quality-of-service baseline."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-19 adds a 'Real-time' temporal constraint to the 'Order Checking' service execution, which alters the sequence diagram's performance requirements compared to the general service in URL-20."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-11",
+      "text1": "The system's design shall follow hospital work flow patterns and allow local site and individual customization to make it fit specific needs.",
+      "text2": "The system's design shall follow hospital work flow patterns while minimizing individual customization in order to make the system similar across practises.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements present opposing design philosophies for system configuration: URL-21 prioritizes local site and individual customization, whereas URL-22 mandates minimizing customization to ensure standardization across practices.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements present opposing design philosophies for the same workflow: one prioritizes individual customization while the other mandates minimizing it to ensure cross-practice similarity."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The tension between local customization and cross-practice standardization impacts the clinical safety risk profile and system maintenance auditability."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Customization' attribute of the 'System Configuration' entity is subject to opposing policy constraints: one maximizing local site flexibility and the other minimizing it for standardization."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-12",
+      "text1": "The system shall check ICD and CPT code validity as of a specified date when codes are entered, when a new code set is implemented, and whenever CACs or IRM personnel choose to run the option.",
+      "text2": "The system shall only check ICD code validity as of a specified date when codes are entered, when a new code set is implemented, and whenever CACs or IRM personnel choose to run the option.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-24 uses the restrictive keyword 'only' to limit validation to ICD codes, which logically excludes the CPT code validation explicitly required by URL-23, creating a conflict in the validation service logic.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The use of the keyword 'only' in URL-24 creates a logical exclusion that prevents the broader check of CPT codes mentioned in URL-23, requiring a scope resolution."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'only' constraint in URL-24 creates a compliance gap by potentially excluding CPT code validation required for accurate billing and clinical reporting."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Validation Service' logic in the model is restricted by an 'Only' guard in URL-24 that explicitly excludes the 'CPT Code' validation path required by URL-23."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-13",
+      "text1": "The system shall have the capability to capture and store risk, social and medical factors; including, but not limited to the following: Tobacco use and history including number of years and packs per day (PPD), Alcohol use history, Drug use history, Occupational environment, Marital status, Occupation, Religious preference, Ethnicity, Healthcare surrogate with alert, Guardian/legal representative with alert.",
+      "text2": "The system shall only delete history of recieved immunizations unless user specifies",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements handle different data entities and lifecycle stages: URL-25 concerns the capture and storage of social/medical factors, while URL-26 defines deletion logic for immunization history. There is no functional or data overlap.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-25 defines data capture capabilities for social factors, while URL-26 defines deletion logic for immunization records; they handle different data lifecycles and entities."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Data capture for social factors and deletion logic for immunizations address separate data lifecycle risks and privacy domains."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements map to different lifecycle events of distinct entities: 'Capture' for Social Factors and 'Delete' for Immunization History; no overlap in state transitions."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-14",
+      "text1": "The system shall allow clinicians to create patient lists for who can sign or cosign for each other.",
+      "text2": "The system shall only allow clinicians to create patient lists for who can sign or cosign for each other.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-28 imposes a strict Role-Based Access Control (RBAC) restriction using 'only' to limit list creation to clinicians, which conflicts with the broader, non-exclusive permission structure implied in URL-27.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-28 uses 'only' to restrict a capability to clinicians, which conflicts with the open-ended permission implied in URL-27, requiring a definitive rule on role-based access."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Restricting list creation to clinicians via 'only' (URL-28) is a strict role-based access control (RBAC) constraint that conflicts with the broader permission in URL-27."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Create List' operation in the class diagram has conflicting actor associations: URL-27 allows clinicians, while URL-28 restricts it exclusively to clinicians, impacting the RBAC model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-15",
+      "text1": "The system shall allow document types to inherit authorizations from a higher level when using classes to assign roles.",
+      "text2": "The system shall allow setting of business rules, document types, user classes, etc. to control access to documents, reports, verification, signing, and so on.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are complementary: URL-29 describes a mechanism for authorization inheritance, while URL-30 defines the objects and rules (business rules, document types) that the authorization system must control.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-29 describes a mechanism (inheritance), while URL-30 describes the objects of control (business rules and document types); they are complementary components of the authorization system."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Authorization inheritance and business rule configuration are standard complementary mechanisms for managing complex healthcare document access control."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-29 describes a 'Hierarchy Inheritance' mechanism for authorizations, while URL-30 defines the 'Control Objects' in the authorization matrix; they are complementary model elements."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-16",
+      "text1": "The system shall mimic traditional order entry processes where necessary to accommodate established clinical practices.",
+      "text2": "The system shall make the traditional order entry processes more practical.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define incompatible goals for the order entry process: URL-31 seeks to 'mimic' (preserve) traditional workflows, while URL-32 seeks to 'make practical' (optimize or change) those same processes.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements set different goals for the same process: 'mimicking' implies preservation of existing steps, while 'making more practical' implies an intent to modify or improve them."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Mimicking traditional processes versus improving them represents a conflict in the clinical risk management strategy during system transition."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Order Entry' process model cannot simultaneously 'Mimic' (preserve existing nodes) and 'Make Practical' (optimize/change nodes) the same legacy workflow."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-17",
+      "text1": "The system shall indicate problems with inactive codes have the “#” symbol in the status column.",
+      "text2": "The system shall indicate that a record is sensitive and may only be viewed by authorized users only if the user is not authorized.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements address distinct UI notification scenarios and event triggers: URL-33 specifies a status column symbol for inactive codes, while URL-34 defines a sensitivity warning for unauthorized access. They occupy different slots in the UI model and do not overlap.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-33 specifies a status column symbol for inactive codes, while URL-34 specifies a sensitivity warning for unauthorized access; they address distinct UI notification scenarios."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Inactive code indicators and sensitive record warnings address different safety and privacy notification requirements respectively."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These requirements define UI indicators for different event triggers: 'Inactive Code' status and 'Sensitive Record' access warning; they occupy different slots in the UI notification model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-18",
+      "text1": "The system shall allow medication orders to be placed and filled from local stocks of medications while providing full auditing of all medication orders within the medication profile.",
+      "text2": "The system's pilot program shall require a handwritten signature for medication orders.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a fundamental contradiction between the digital auditing process required for medication orders in URL-35 and the mandate for handwritten signatures in the pilot program described in URL-36, creating a technical and legal evidence gap.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-35 implies a digital auditing process for medication orders, which is technically contradicted by the requirement for handwritten signatures in the pilot program described in URL-36."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirement for handwritten signatures in a pilot (URL-36) creates a technical and legal evidence gap when compared to the digital auditing goal of URL-35."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'Signature' attribute of the 'Medication Order' entity has conflicting data type requirements: a digital audit-compliant format versus a physical 'Handwritten' format."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-19",
+      "text1": "The system shall only auto-select(highlights in blue and places that entry in the field) a patient name if the user types enough characters to uniquely identify a name in the list.",
+      "text2": "The system shall wait until the user explicitly selects an item using the mouse or the keyboard if the user does not enter enough characters to uniquely identify an item.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define mutually exclusive automation behaviors for patient selection: URL-37 mandates an auto-select action upon unique identification, whereas URL-38 mandates waiting for manual selection, creating a logical conflict in system behavior.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define conflicting automation behaviors for patient selection: URL-37 mandates an auto-select action upon unique identification, while URL-38 mandates waiting for manual selection."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "No external regulatory mandate for auto-selection logic; maintaining current_label due to the conflict in automated vs. manual selection behavior."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "In the 'Patient Selection' state machine, URL-37 and URL-38 represent mutually exclusive guard conditions (Unique Match vs. Non-Unique Match) leading to different valid states; they are logically complementary."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-20",
+      "text1": "The system shall allow order checking.",
+      "text2": "The system shall provide real-time order checking, as well as extended expert system/decision support capabilities that enhance the order entry process.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-39 provides a high-level functional requirement for order checking, while URL-40 serves as a detailed refinement that adds real-time performance attributes and decision support capabilities. They represent a base capability and its functional extension.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-39 is a high-level functional requirement, and URL-40 is a detailed refinement that adds specific performance (real-time) and capability (decision support) attributes."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-40 serves as a higher-tier clinical decision support (CDS) refinement of the basic capability in URL-39, which is acceptable in domain scaling."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-40 is a functional extension of the base 'Order Checking' use case in URL-39, adding specialized decision support nodes to the activity diagram without contradiction."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-21",
+      "text1": "The system shall allow several orders to be placed with the ability for a user to sign for them all at once.",
+      "text2": "The system must allow several orders to be placed with the ability for a user to sign for them all at once.",
+      "is_changed": true,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Neutral",
+          "final_label": "Conflict",
+          "description": "The requirements occupy the same functional slot but use different normative language ('shall' vs. 'must'), creating ambiguity in the formal specification and requiring a decision on the standard terminology for the SRS.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "Although the semantic meaning is identical, the normative strength differs between 'shall' and 'must', requiring a decision on the standard requirement language for the SRS."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "No external regulatory or compliance obligations are triggered by the choice between 'shall' and 'must' in this context; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "From a modeling perspective, 'shall' and 'must' map to the same functional capability in a use case diagram; there is no structural or behavioral divergence in the system model."
+              }
+            ],
+            "r2": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "The requirements occupy the same functional slot but use different normative language, 'shall' versus 'must', which creates ambiguity in the formal specification and requires a decision on the standard terminology for the SRS."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "From a regulatory and compliance perspective, both 'shall' and 'must' denote mandatory requirements in technical standards (e.g., ISO/IEC or IEEE), and since the functional content is identical, there is no conflict regarding external obligations or safety risks; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "From a modeling perspective, both requirements describe an identical state transition and interaction flow where a single 'Sign' event is applied to a collection of 'Order' entities; the variation in normative strength (shall vs must) does not alter the system's behavioral model, data structure, or actor responsibilities."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-22",
+      "text1": "The system shall allow users who hold any of the ORES/ORELSE/PROVIDER keys to be viewed as a clinical user and has full access privileges to all problem list options.",
+      "text2": "The system shall only allow clinical users to have full access privileges to all problem list options.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements impose conflicting constraints on the access boundary for the 'Problem List'. URL-43 defines access via specific keys, while URL-44 uses an exclusive 'only' constraint that restricts access to clinical users, creating a boundary conflict.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements target the same access control slot for problem lists, but URL-44 uses an exclusive 'only' constraint that creates a logical boundary conflict with the specific key-based definition in URL-43."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The conflict involves access control boundaries for clinical data, which impacts auditability and data privacy standards; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements impose conflicting constraints on the 'Clinical User' actor's access boundary to the 'Problem List' data object, where one defines it by specific keys and the other by an exclusive 'only' condition."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-23",
+      "text1": "The system shall retain notifications for a predetermined amount of time (up to 30 days), after which they may be sent to another destination, such as your MailMan surrogate or your supervisor.",
+      "text2": "The system shall only display notifications for a user's patients or notifications that have been forwarded.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements target different model elements: URL-45 defines the data retention and archival lifecycle, while URL-46 defines UI display filtering criteria. They belong to distinct functional domains and can coexist.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements address distinct functional slots: one defines data retention and archival logic, while the other defines UI display filtering criteria."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Data retention (archival) and UI filtering (privacy/usability) are distinct compliance domains with no direct conflict; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These requirements target different model elements: one defines a state transition for data retention (Notification Lifecycle), while the other defines a guard condition for a UI display event."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-24",
+      "text1": "The system shall allow infinite hierarchies of subclasses to be created in the User Hierarchy Class structure.",
+      "text2": "The system shall allow 100 hierarchies of subclasses to be created in the User Hierarchy Class structure.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "Both requirements define the upper bound for the same 'User Hierarchy Class' structure, where the 'infinite' depth specified in URL-47 and the '100' limit in URL-48 are mutually exclusive structural invariants.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements define contradictory upper bounds for the same structural attribute (hierarchy depth), where 'infinite' and '100' represent mutually exclusive acceptance criteria."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Defining system capacity limits for user hierarchies affects security management and administrative audit trails; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the multiplicity or depth constraint of the same 'User Hierarchy Class' tree structure, where 'infinite' and '100' are mutually exclusive structural invariants."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-25",
+      "text1": "The system shall retain notifications for a predetermined amount of time (up to 30 days), after which they may be sent to another destination, such as your MailMan surrogate or your supervisor.",
+      "text2": "The system shall retain notifications for a predetermined amount of time (more than 30 days), after which they may be sent to another destination, such as your MailMan surrogate or your supervisor.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify mutually exclusive guard conditions for the same state transition (archiving notifications). The thresholds 'up to 30 days' (URL-49) and 'more than 30 days' (URL-50) are logically disjoint, making deterministic trigger logic impossible.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The retention thresholds 'up to 30 days' and 'more than 30 days' are logically disjoint for the same data retention slot, making it impossible to verify both simultaneously."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Contradictory retention periods for notifications create a compliance risk regarding data lifecycle management and legal discovery; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define mutually exclusive guard conditions for the same state transition (archiving notifications), making it impossible to model a single deterministic trigger logic."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-26",
+      "text1": "The system shall require times to be entered as a 24-hour time, not with a 12-hour clock and an a.m. and p.m.",
+      "text2": "The system shall allow users to disable unwanted notifications as desired.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements address distinct functional areas: URL-51 specifies a data entry format for time (24-hour clock), while URL-52 defines a user configuration capability for disabling notifications. They occupy different requirement slots with no overlapping constraints.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-51 specifies a data entry format for time, while URL-52 defines a user configuration capability for notifications; they occupy different requirement slots."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Time format standards and notification toggles involve different quality attributes with no overlapping regulatory constraints; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These address unrelated model components: one specifies the data format for a 'Time' attribute, while the other defines a user-triggered event to modify 'Notification' settings."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-27",
+      "text1": "The system shall allow clinicians to create patient lists for who can sign or cosign for each other.",
+      "text2": "The system shall ensure that some team members receive all information about a patient by using patient lists to tie notifications to teams.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These are complementary functional modules. URL-53 concerns the creation of authorization lists for signing, whereas URL-54 focuses on the routing of information to teams. They represent separate security and workflow domains.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-53 concerns the creation of authorization lists for signing, whereas URL-54 concerns the routing of information to teams; these are complementary functional modules."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Authorization lists for signing and notification routing for teams represent separate security and workflow domains; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-53 models an association between clinicians and patient lists for authorization, while URL-54 models a message routing flow; they represent different interaction patterns."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-28",
+      "text1": "The system shall check ICD and CPT code validity as of a specified date when codes are entered, when a new code set is implemented, and whenever CACs or IRM personnel choose to run the option.",
+      "text2": "The system shall require the entry of an access code and a verify code to gain access to the system.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements target unrelated domains and do not share common entities. URL-55 focuses on clinical code validation logic (ICD/CPT), while URL-56 defines system-wide authentication security through access and verify codes.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements target unrelated domains: one focuses on clinical code validation logic and the other on system-wide authentication security."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Clinical code validity and system authentication are governed by different security and billing standards; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements belong to different functional domains (Billing Validation vs. System Authentication) and do not share any common entities or state machines."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-29",
+      "text1": "The system shall improve efficiency of entering orders by atleast 20 percent.",
+      "text2": "The system shall improve accessibility of online clinical information and results.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These define high-level quality goals for different system behaviors. URL-57 targets order entry efficiency, while URL-58 targets information accessibility; they utilize non-overlapping metrics and do not conflict at the functional level.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These define different quality attributes (efficiency vs. accessibility) with non-overlapping metrics and targets."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Efficiency and accessibility are distinct quality goals with no conflicting external mandates in the provided text; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "These define high-level quality goals for different system behaviors (Order Entry vs. Information Retrieval) and do not conflict at the functional model level."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-30",
+      "text1": "The system shall require a user to review and sign changed if a user has just entered orders or documents that are unsigned.",
+      "text2": "The system shall only require a user to review and sign changed if a user has just entered orders or documents that are unsigned.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The inclusion of the 'only' constraint in URL-60 restricts the set of trigger events for the 'Review and Sign' process. This creates a conflict regarding when the state transition is mandatory, potentially excluding other necessary scenarios required by the broader statement in URL-59.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The inclusion of 'only' in URL-60 restricts the trigger conditions for signing, potentially excluding other necessary scenarios implied or required by the broader statement in URL-59."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'only' constraint in URL-60 may conflict with clinical safety standards that require signing triggers in broader scenarios; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The 'only' constraint in URL-60 restricts the set of trigger events for the 'Review and Sign' process, creating a conflict in the behavioral model regarding when this state transition is mandatory."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-31",
+      "text1": "The system shall enforce these access levels when problems are entered via the encounter form.",
+      "text2": "Problems entered on the encounter form by clerical personnel shall be left as UNVERIFIED.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements are complementary within the system's state machine. URL-61 establishes general access level enforcement, while URL-62 defines a specific initial state ('UNVERIFIED') for data objects created by clerical personnel.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-61 establishes the enforcement of access levels, while URL-62 defines the specific initial state for data entered by a particular role; they are complementary."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Access enforcement and initial data states for specific roles are complementary from an audit and security perspective; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-61 defines a general enforcement mechanism, while URL-62 defines a specific initial state ('UNVERIFIED') for a data object created by a specific actor; they are complementary in a state machine."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-32",
+      "text1": "The system shall allow physician offices to only use social security numbers to identify patients.",
+      "text2": "The system shall display a message of possible matches if more than one match is found when a user partially enters a patient's name and last four digits of a social security number.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements address different aspects of the patient search process. URL-63 constrains the allowed attributes for identification in physician offices, while URL-64 defines the UI response flow and matching logic for partial entries.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-63 limits the identifier types allowed for a specific office type, while URL-64 defines the system's behavior during a search match failure; the contexts are distinct."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Patient identification constraints and UI match logic address different privacy and usability risks; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-63 constrains the allowed attributes for patient identification, while URL-64 defines the system response flow for a non-unique search result; they model different aspects of the search process."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-33",
+      "text1": "The system shall use HL-7 communications protocol for transferring messages among packages.",
+      "text2": "The system shall use any protocol for transferring messages among packages.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is an inconsistency in technical constraints for the message transfer interface. URL-65 mandates a specific standard (HL-7), while URL-66 allows 'any' protocol, creating a conflict in the technical specification and interface model.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The technical specification for communication protocols is inconsistent, as 'HL-7' is a specific standard while 'any' implies a lack of protocol restriction for the same interface slot."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "HL-7 is a specific healthcare interoperability standard; allowing 'any' protocol creates a compliance and integration risk; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements specify conflicting technical constraints for the 'Message Transfer' interface, where one mandates a specific protocol (HL-7) and the other allows any, affecting the interface model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-34",
+      "text1": "The system's pilot program shall require a handwritten signature for medication orders.",
+      "text2": "The system shall require only a smart card to digitally sign an order.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify mutually exclusive physical methods for order verification (handwritten vs. digital smart card) within the same pilot program context, involving incompatible legal evidence and non-repudiation standards.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements specify mutually exclusive physical methods for order verification (handwritten vs. digital smart card) within the same pilot program context."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Handwritten vs. digital signatures involve mutually exclusive legal evidence and non-repudiation standards for medication orders; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements specify mutually exclusive interaction methods (Handwritten vs. Smart Card) for the same 'Sign Order' use case within the pilot program context."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-35",
+      "text1": "The system shall allow creation of personalized templates to fit the specific needs of individual practices.",
+      "text2": "The system shall allow creation of semi-personalized templates to fit the specific needs of individual practices.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define conflicting degrees of freedom for template customization ('personalized' vs. 'semi-personalized'), which affects clinical safety standardization and the underlying data model attributes.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The degree of allowed customization ('personalized' vs. 'semi-personalized') for the same template feature represents a conflict in the functional scope and acceptance boundary."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The degree of personalization affects the standardization required for clinical safety and audit consistency; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define conflicting degrees of freedom for the 'Template' entity's customization capability, affecting the allowed attributes and associations in the class model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-36",
+      "text1": "The system shall require the user to have access to the List Manager Interface to assign CPRS tab access.",
+      "text2": "The system shall require the entry of an access code and a verify code to gain access to the system.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-71 defines a specific prerequisite for administrative interface access, while URL-72 defines general system login requirements; these represent hierarchical security layers that do not interfere with each other.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-71 defines a specific prerequisite for administrative access, while URL-72 defines general system login requirements; they operate at different layers of the security model."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Interface-specific access and general system authentication are hierarchical security layers with no conflict; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-71 models a prerequisite for a specific administrative task, while URL-72 models the general system access sequence; they represent different layers of the security model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-37",
+      "text1": "The system's pilot program shall use a smart card to digitally sign medication orders.",
+      "text2": "The system's pilot program shall require a handwritten signature for medication orders.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "Both requirements define the mandatory interaction step for signing medication orders in the pilot program but specify physically and technically incompatible methods (digital vs. handwritten).",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements specify the mandatory signature method for the same pilot program and order type, but one requires digital and the other requires handwritten signatures."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Digital vs. handwritten signatures for medication orders represent conflicting technical and legal compliance paths; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the mandatory interaction step for signing medication orders in the pilot program, but specify physically incompatible methods."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-38",
+      "text1": "The system shall require a smart card reader, smart card, and a PIN to digitally sign an order.",
+      "text2": "The system shall require only a smart card to digitally sign an order.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define different sets of mandatory hardware and authentication factors (MFA with Reader/Card/PIN vs. single-factor Card only) for the same digital signature capability, creating a conflict in security compliance and interaction modeling.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different sets of mandatory hardware/factors for the same digital signature capability, creating a conflict in the technical verification requirements."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The number of authentication factors (MFA vs. single factor) directly impacts security compliance and risk levels; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different sets of required entities (Reader + Card + PIN vs. Card only) for the 'Digital Signature' sequence, creating a conflict in the interaction model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-39",
+      "text1": "The system shall update diagnostic and procedure codes used for billing purposes so codes are applicable at the time the service was provided.",
+      "text2": "The system shall only update diagnostic used for billing purposes so codes are applicable at the time the service was provided.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-78 uses an exclusive 'only' constraint to restrict billing updates to diagnostic codes, which directly contradicts URL-77's requirement to include procedure codes, creating a conflict in data scope and billing compliance.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-78 uses 'only' to restrict updates to diagnostic codes, which directly contradicts URL-77's requirement to also update procedure codes within the same billing update slot."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Restricting updates to diagnostic codes only creates a billing compliance risk by excluding procedure codes; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-78 uses an exclusive 'only' to restrict the data objects updated by the billing process, which directly contradicts the inclusion of 'procedure codes' required by URL-77."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-40",
+      "text1": "The system shall have a option to release unsigned orders to services",
+      "text2": "The system shall not require a signature for an order if the order is designated as \"signed on chart\" or a generic order that does not require a signature.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-79 provides a functional option for releasing orders, while URL-80 defines logical exceptions for signature requirements; these are complementary rules that can coexist as distinct paths in an activity diagram.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-79 provides a functional option for releasing orders, while URL-80 defines specific logical exceptions where signatures are not required; these can coexist as complementary rules."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Functional options for order release and logical exceptions for signatures are complementary under clinical safety rules; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-79 models a functional option (Release Unsigned), while URL-80 models a conditional bypass of the signature requirement; these can be modeled as distinct paths in an activity diagram."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-41",
+      "text1": "The system shall ensure that all team members receive necessary information about a patient by using patient lists to tie notifications to teams.",
+      "text2": "The system shall ensure that some team members receive all information about a patient by using patient lists to tie notifications to teams.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define mutually exclusive logic for notification distribution. URL-81 mandates that all team members receive a filtered subset of 'necessary' information, while URL-82 mandates that only some members receive 'all' information. This creates a conflict in the multiplicity and filtering logic for the same notification event.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements address the same notification distribution slot but define mutually exclusive sets for recipients and information scope, requiring a decision on whether all or some members receive necessary or all information."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "No external regulatory or domain-specific safety obligations intervene here; maintaining current_label based on the original scope conflict."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define conflicting multiplicity and filtering logic for the same notification event, where one mandates a 'necessary' subset for all members while the other mandates 'all' data for a specific subset of members."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-42",
+      "text1": "The system shall allow physician offices to use social security numbers or medical record numbers to identify patients.",
+      "text2": "The system shall display a box listing possible matches if CPRS finds more than one patient with the same last name and same last four digits of the social security numbers.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are complementary and address different functional layers. URL-83 defines the valid data attributes for patient identification (SSN/MRN), while URL-84 specifies a conditional UI safety check and guard condition to handle non-unique search results.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-83 defines the valid data types for patient identification, while URL-84 specifies the UI behavior for handling duplicate search results, representing different functional slots."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The use of SSN and MRN for identification is a standard healthcare practice; URL-84 provides a specific UI safety check for duplicate records which complements the general identification capability in URL-83."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-83 defines the data attributes for the Patient entity, while URL-84 defines a conditional UI flow (guard condition) triggered when a search returns non-unique results; these represent different model states."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-43",
+      "text1": "The system shall allow concurrent membership in more than one User Class.",
+      "text2": "The system shall automatically include membership in a given User Class to all member of subclasses of that class.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements define distinct but compatible structural rules for user management. URL-85 establishes the capability for a user to hold multiple class memberships, while URL-86 defines the recursive logic for automatic membership inheritance through subclasses.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-85 establishes the capability for multiple memberships, while URL-86 defines the logic for automatic inheritance through subclasses; these are complementary structural rules."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "No external audit or security constraints are violated by these complementary membership and inheritance rules; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-85 defines the multiplicity of the User-to-Class association, while URL-86 defines a recursive inheritance logic within the Class hierarchy; these are distinct structural constraints."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-44",
+      "text1": "The system shall integrate orders with progress notes, results, procedures, diagnosis, and Problem List.",
+      "text2": "The system shall allow users who hold any of the ORES/ORELSE/PROVIDER keys to be viewed as a clinical user and has full access privileges to all problem list options.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements operate on different architectural layers without contradiction. URL-87 defines the high-level scope of data integration across clinical modules, whereas URL-88 specifies the low-level security implementation details regarding specific authorization keys for the Problem List.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-87 defines the scope of data integration across modules, whereas URL-88 defines specific authorization keys for accessing the problem list, targeting different requirement layers."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-88 specifies access control keys which is a security implementation detail that does not conflict with the high-level data integration scope of URL-87."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-87 defines data integration links between different domain objects, whereas URL-88 defines specific access control keys for a single object (Problem List); they operate on different architectural layers."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-45",
+      "text1": "The system shall include capabilities for ordering laboratory tests and reviewing results.",
+      "text2": "The system shall include non-Standard Laboratory and Medication orderable files.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements are functionally consistent. URL-89 describes the high-level capability for laboratory ordering and results, while URL-90 provides the necessary data schema support for non-standard files required for specialized laboratory operations.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-89 describes high-level functional capabilities for lab orders, while URL-90 specifies the support for specific non-standard file types within those orders."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The inclusion of non-standard files is a common domain requirement for specialized labs and does not contradict the general capability to order tests; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-89 defines a high-level functional capability (Use Case), while URL-90 specifies the data schema support for non-standard files within that capability; they are complementary in the data model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-46",
+      "text1": "The system shall require the entry of an access code and a verify code to gain access to the system.",
+      "text2": "The system shall require the entry of an access code to gain access to the system.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify conflicting mandatory input parameters for the system authentication sequence. URL-91 requires both an access and verify code, whereas URL-92 only requires an access code, representing a fundamental difference in security thresholds and authentication strength.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the mandatory credentials for system access, but they set different security thresholds regarding the necessity of a verify code."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "From a security and audit perspective, requiring two codes versus one represents a fundamental difference in authentication strength and compliance with multi-factor access principles."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the mandatory input parameters for the 'System Access' sequence, but they specify different required attributes (one vs. two codes) for the same authentication event."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-47",
+      "text1": "The system shall allow document types to inherit authorizations from a higher level when using classes to assign roles.",
+      "text2": "The system shall allow document types to inherit authorizations from other levels when using classes to assign roles.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define conflicting source nodes for authorization inheritance within the class hierarchy. URL-93 restricts inheritance to 'higher levels,' while URL-94 allows inheritance from 'other levels,' creating ambiguity in the state transitions for permission resolution and security auditing.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define the source of authorization inheritance differently, with one restricting it to higher levels and the other allowing it from any other level, creating an ambiguity in the inheritance logic."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The ambiguity in authorization inheritance sources creates a risk for security auditing and permission leakage; the two definitions provide different logical boundaries for access control."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements specify conflicting source nodes for authorization inheritance within the class hierarchy, creating an ambiguous state transition for permission resolution."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-48",
+      "text1": "The system shall allow clinicians to create patient lists for who can sign or cosign for each other.",
+      "text2": "The system shall ensure that all team members receive necessary information about a patient by using patient lists to tie notifications to teams.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements concern distinct functional areas and clinical processes. URL-95 addresses the responsibility boundaries for document signing among clinicians, while URL-96 addresses the event flow for team-based patient notifications; they involve different actors and triggers.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-95 concerns clinician signing lists for document authorization, while URL-96 concerns team-based patient notifications; these are distinct functional areas."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Clinician signing lists and team notifications are distinct functional areas with separate clinical safety implications; no external conflict identified."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-95 concerns the 'Signing' responsibility boundary between clinicians, while URL-96 concerns the 'Notification' event flow for teams; these involve different actors and processes."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-49",
+      "text1": "The system shall allow user classes to be used across VistA to replace and/or complement security keys.",
+      "text2": "The system shall not allow user classes to be used across VistaA to replace and/or complement security keys.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements present a direct logical contradiction regarding the system's fundamental authorization model. URL-97 permits user classes to replace or complement security keys, while URL-98 explicitly prohibits this substitution, creating mutually exclusive logic for the 'Authorization' component.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements present a direct logical contradiction regarding whether user classes are permitted to replace or complement security keys across the system."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This is a direct logical contradiction regarding the security architecture (User Classes vs. Security Keys), which impacts the system's fundamental authorization model and audit trail."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements impose mutually exclusive logic on the 'Authorization' component regarding whether User Classes can functionally substitute for Security Keys."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-50",
+      "text1": "The system shall allow creation of semi-personalized templates to fit the specific needs of individual practices.",
+      "text2": "The system's design shall follow hospital work flow patterns and allow local site and individual customization to make it fit specific needs.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are compatible as they address different levels of system configuration. URL-99 specifies a specific functional capability for template creation, while URL-100 establishes a general design philosophy for workflow alignment; the policy acts as a guiding constraint rather than a contradiction.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-99 specifies a specific template creation capability, while URL-100 provides a general design philosophy regarding workflow alignment; the two can coexist without modification."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "General design philosophy and specific template capabilities can coexist within standard healthcare software quality frameworks; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-99 defines a specific template creation capability, while URL-100 defines a general design policy; from a modeling perspective, the policy acts as a constraint that does not negate the capability."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-51",
+      "text1": "The system shall not allow mandatory notifications to be disabled.",
+      "text2": "The system shall allow users to disable unwanted notifications as desired.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "A conflict exists in the guard conditions for notification management. URL-101 prohibits disabling mandatory notifications for clinical safety, whereas URL-102 allows users to disable any 'unwanted' notifications without excluding the mandatory set, creating a state transition conflict.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-101 sets an absolute prohibition on disabling mandatory notifications, while URL-102 provides a general permission to disable unwanted ones, creating a conflict if a mandatory notification is deemed unwanted."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "From a clinical safety and risk management perspective, the inability to disable mandatory notifications is a critical safeguard that is directly challenged by a general permission to disable unwanted ones."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define conflicting guard conditions for the 'Disable Notification' action, where one prohibits the action for 'mandatory' types and the other allows it for 'unwanted' types without excluding the mandatory set."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-52",
+      "text1": "The system shall allow users to enter time in several different formats.",
+      "text2": "The system shall not allow mandatory notifications to be disabled.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements are neutral as they address entirely unrelated domains and model elements. URL-103 defines data formats for time entry, while URL-104 defines constraints on notification states; there is no functional or regulatory overlap between them.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements address entirely different domains: time entry formats versus notification management constraints."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "No external domain risk or regulatory overlap between time formats and notification constraints; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements address unrelated model elements: one defines the data format for a 'Time' attribute, and the other defines a state transition constraint for 'Notifications'."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-53",
+      "text1": "The system shall allow infinite hierarchies of subclasses to be created in the User Hierarchy Class structure.",
+      "text2": "The system shall allow membership in only one User Class.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "A structural conflict exists between the functional utility of an infinite hierarchy (URL-105) and the restriction of a user to a single class membership (URL-106), which creates a logical bottleneck for role-based access control implementation.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "There is a structural conflict between allowing infinite subclass hierarchies and restricting a user to only one class membership, as it limits the practical utility of the hierarchy for user assignment."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The structural limitation of single membership conflicts with the functional utility of an infinite hierarchy, creating a logical bottleneck for role-based access control (RBAC) implementation."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "URL-105 defines the depth of the Class hierarchy tree, while URL-106 defines the multiplicity of the User-to-Class association; these are independent structural constraints in a class diagram."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-54",
+      "text1": "The system shall improve efficiency of entering orders.",
+      "text2": "The system shall improve efficiency of entering orders by atleast 20 percent.",
+      "is_changed": true,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Neutral",
+          "final_label": "Conflict",
+          "description": "Both requirements target the same order entry efficiency goal but impose mutually exclusive verification thresholds. URL-107 provides a qualitative goal, while URL-108 establishes a specific 20 percent quantitative acceptance criterion, creating a conflict in the formal validation model.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements target the same efficiency goal for order entry, but they establish different acceptance criteria by introducing a specific 20 percent quantitative threshold in one version."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Quantifying an efficiency goal does not create a regulatory or safety conflict with the general goal; maintaining current_label as they are complementary performance targets."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements target the same 'Order Entry' process efficiency, but they establish different quantitative acceptance criteria (guard conditions) for the same performance goal."
+              }
+            ],
+            "r2": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements occupy the same slot regarding order entry efficiency, but they establish different acceptance boundaries by introducing a specific 20 percent quantitative threshold in one version versus a general qualitative goal in the other, requiring a decision on the formal verification criteria for the SRS."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "There are no specific external regulations, safety standards, or domain-specific audit requirements that mandate a 20 percent efficiency threshold for order entry; since no external compliance obligation or quality floor is violated by having both a general and a specific goal, I maintain the current_label as Neutral from an expert perspective."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "From a modeling perspective, both requirements define the 'Acceptance Criteria' or 'Guard Conditions' for the same 'Order Entry' process efficiency goal; however, they impose mutually exclusive verification thresholds (qualitative vs. quantitative) on the same performance state, creating a conflict in the system's validation model."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-55",
+      "text1": "The system shall delete history of received immunizations.",
+      "text2": "The system shall only delete history of recieved immunizations unless user specifies",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify incompatible data handling rules for immunization history. URL-109 mandates unconditional deletion, while URL-110 requires a user-specified parameter for deletion, representing a conflict in data integrity and audit trail logic.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different logical boundaries for the deletion of immunization history, specifically regarding whether the deletion is unconditional or subject to user specification."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Immunization records are subject to strict data retention and integrity regulations; the difference between unconditional deletion and user-specified deletion represents a significant audit and compliance risk."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different logical boundaries and triggers for the 'Delete' operation on the Immunization History entity, specifically regarding the necessity of a user-defined parameter."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-56",
+      "text1": "The system shall allow creation of personalized templates to fit the specific needs of individual practices.",
+      "text2": "The system's design shall follow hospital work flow patterns while minimizing individual customization in order to make the system similar across practises.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a fundamental policy conflict regarding system customization. URL-111 encourages personalized templates for individual practices, while URL-112 mandates the minimization of customization to ensure cross-practice consistency and system similarity.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements represent a conflict in design policy, where one promotes personalized templates and the other explicitly seeks to minimize individual customization to ensure cross-practice consistency."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The tension between individual practice needs and cross-practice consistency is a known quality management conflict in large-scale health systems; these represent opposing policy directions."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements represent a conflict in the 'Customization' policy applied to the Template entity, where one encourages individual variance and the other mandates minimization for consistency."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-57",
+      "text1": "The system shall not allow user classes to be used across VistaA to replace and/or complement security keys.",
+      "text2": "The system shall allow user classes to be defined hospital-wide or more narrowly for a specific service.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements are neutral because they define independent dimensions of the 'User Class' entity. URL-113 restricts the functional application of classes relative to security keys, while URL-114 defines the organizational scope (namespace) where those classes are defined.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-113 restricts the functional use of user classes relative to security keys, while URL-114 defines the organizational scope for defining those classes; these are different dimensions of the user class entity."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The organizational scope of a class and its functional ability to replace security keys are independent dimensions of security configuration; no external conflict."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-113 defines a functional restriction on the use of User Classes, while URL-114 defines the organizational scope (namespace) of the Class entity; these are different model dimensions."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-58",
+      "text1": "The system shall require digital signatures for outpatient medication orders of schedule 2 and schedule 2n controlled substances due to DEA policy.",
+      "text2": "The system's pilot program shall require a handwritten signature for medication orders.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements specify incompatible data formats and methods for the same transaction. URL-115 requires digital signatures for controlled substances to meet DEA policy, while URL-116 requires handwritten signatures for the pilot program, creating a direct regulatory and technical conflict.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements specify the signing medium for medication orders but demand different methods—digital versus handwritten—for the same transaction type."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "DEA policy for Schedule II substances typically requires specific high-assurance signing methods; the conflict between digital and handwritten signatures represents a direct regulatory compliance gap."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements specify the 'Signature' attribute type for the same 'Medication Order' process but demand different data formats (digital vs. handwritten) for the same transaction."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-59",
+      "text1": "The system shall allow concurrent membership in more than one User Class.",
+      "text2": "The system shall allow membership in only one User Class.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a direct cardinality conflict regarding user class membership. URL-117 allows concurrent membership in multiple classes, while URL-118 strictly limits membership to only one, creating a contradiction in the identity management system's multiplicity rules.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This is a direct cardinality conflict regarding user class membership, with one requirement allowing multiple concurrent classes and the other strictly limiting it to one."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This is a direct cardinality conflict in the identity management system, impacting how user permissions are audited and enforced; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This is a direct multiplicity conflict on the association between the User actor and the User Class entity (one-to-one vs. one-to-many)."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-60",
+      "text1": "The system shall only update diagnostic used for billing purposes so codes are applicable at the time the service was provided.",
+      "text2": "The system shall indicate problems with inactive codes have the “#” symbol in the status column.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These requirements are complementary aspects of code management; URL-119 defines the backend logic for updating billing codes based on service time, while URL-120 specifies the UI visual indicator for inactive codes.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-119 defines the logic for updating billing codes, while URL-120 specifies the UI indicator for inactive codes; these are complementary aspects of code management."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Billing code update logic and UI indicators for inactive codes are complementary requirements for financial audit and data integrity; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-119 defines the update logic for the Billing Code entity, while URL-120 defines the visual representation (UI state) for inactive codes; these are complementary aspects of the same object."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-61",
+      "text1": "The system shall provide order checking, as well as extended expert system/decision support capabilities that enhance the order entry process.",
+      "text2": "The system shall mimic traditional order entry processes where necessary to accommodate established clinical practices.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements define different but compatible aspects of the system: URL-121 adds functional decision support capabilities, while URL-122 constrains the UI workflow to mimic traditional practices. These can coexist as a workflow with embedded logic gates.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-121 defines functional capabilities for decision support while URL-122 defines a design philosophy for the user interface workflow; these occupy different requirement slots and can coexist."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "No external regulatory or compliance obligations are identified that would force a conflict between decision support capabilities and clinical practice mimicry; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-121 adds decision support logic to the order entry process while URL-122 constrains the UI workflow sequence to mimic traditional practices; these model different aspects of the system and can coexist as a workflow with embedded logic gates."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-62",
+      "text1": "The system shall allow physician offices to use social security numbers or medical record numbers to identify patients.",
+      "text2": "The system shall allow physician offices to only use social security numbers to identify patients.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a data model contradiction regarding patient identifiers. URL-123 allows a choice between SSN and MRN, whereas URL-124 imposes a restrictive 'only' clause that limits the identifier set to SSN, creating a conflict in identity management standards.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the valid set of patient identifiers for physician offices but specify different allowed sets, where one is a subset and the other is a restricted 'only' set, requiring a scope reconciliation."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The conflict involves patient identification standards (SSN vs MRN) which directly impacts data privacy and identity management audit trails; the restrictive 'only' clause in URL-124 creates a compliance boundary conflict with the broader allowance in URL-123."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements define the data attributes for the Patient entity identifier; URL-123 allows a choice between SSN and MRN while URL-124 imposes a cardinality constraint that restricts the identifier set to SSN only, creating a data model contradiction."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-63",
+      "text1": "The system's pilot program shall use a smart card to digitally sign medication orders.",
+      "text2": "The system shall require a smart card reader, smart card, and a PIN to digitally sign an order.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "A conflict exists regarding the minimum security baseline for digital signatures. URL-125 specifies a single-factor (smart card) for a pilot scope, while URL-126 mandates multi-factor authentication (smart card + PIN) for the system, creating a discrepancy in non-repudiation and regulatory compliance standards.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "URL-125 specifies the high-level tool for a specific pilot program while URL-126 defines the detailed hardware and authentication factors for the general system; they represent different levels of detail and scope."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "From a security and audit perspective, URL-125 specifies a single factor (smart card) while URL-126 mandates multi-factor authentication (card + PIN), creating a conflict in the minimum security baseline for digital signatures."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "URL-125 defines the actor-to-system interaction for a specific pilot scope while URL-126 details the multi-factor authentication sequence for the general system; these can be modeled as a general process with a specialized pilot branch."
+              }
+            ],
+            "r2": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "URL-125 is explicitly scoped to a 'pilot program' while URL-126 defines the general system requirements; since they apply to different operational phases or scopes, they can coexist in the SRS as a specialized exception versus a general rule without semantic contradiction."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "From a regulatory and security audit perspective, URL-126 mandates multi-factor authentication (MFA) including a PIN, which establishes a higher security baseline than the single-factor smart card mentioned in URL-125; since digital signatures for medication orders often require strict non-repudiation standards (e.g., HIPAA or eIDAS compliance), the discrepancy in authentication factors represents a conflict in the minimum security and compliance threshold."
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Neutral",
+                "reason": "From a modeling perspective, URL-125 defines a specialized actor-to-system interaction sequence for a 'pilot program' scope, while URL-126 specifies the multi-factor authentication (MFA) data requirements and hardware components for the general system; these can be modeled as distinct process branches or a general-specialization relationship where the pilot scope acts as a specific instance of the broader signature capability."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-64",
+      "text1": "Problems entered on the encounter form by clerical personnel shall be left as UNVERIFIED.",
+      "text2": "Problems entered on the encounter form by clerical personnel shall be left as UNSIGNED.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "These requirements assign different initial state values ('UNVERIFIED' vs 'UNSIGNED') to the same Problem object created by clerical personnel, resulting in a direct conflict in the state machine definition for the Problem lifecycle.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Both requirements specify the mandatory initial state for problems entered by clerical personnel but define different state names, creating a direct conflict in the state machine definition."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "Maintaining current_label as the discrepancy in status naming (UNVERIFIED vs UNSIGNED) creates an audit trail ambiguity, though no specific external regulation mandates one term over the other."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements assign different initial state values to the same Problem object upon creation by a specific actor role, resulting in a state machine definition conflict for the Problem lifecycle."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-65",
+      "text1": "The system shall require handwritten signatures for outpatient medication orders of schedule 2 and schedule 2n controlled substances due to DEA policy.",
+      "text2": "The system shall require digital signatures for outpatient medication orders of schedule 2 and schedule 2n controlled substances due to DEA policy.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "This is a regulatory and execution conflict where URL-129 and URL-130 mandate mutually exclusive methods (handwritten vs. digital signatures) for the same task under DEA policy, preventing a consistent process sequence.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "These requirements mandate mutually exclusive execution methods for the same regulatory task, requiring a decision between physical handwritten signatures and electronic digital signatures."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This is a critical regulatory conflict; DEA policy for controlled substances (21 CFR Part 1311) has specific, non-interchangeable requirements for electronic vs. manual workflows, and these requirements mandate mutually exclusive execution methods."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements specify mutually exclusive interaction methods for the same signing event on the same medication order object, preventing the definition of a single consistent sequence diagram for this process."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-66",
+      "text1": "The system shall indicate that the record is sensitive and may only be viewed by authorized users.",
+      "text2": "The system shall indicate that a record is sensitive and may only be viewed by authorized users only if the user is not authorized.",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define contradictory display logic for sensitivity indicators. URL-131 implies visibility for authorized users, whereas URL-132 explicitly restricts the indication to unauthorized users only, creating a logical contradiction in the guard conditions for privacy markers.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define contradictory display logic for sensitivity indicators where one implies visibility for authorized users and the other restricts it only to unauthorized users."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define contradictory logic for privacy indicators; from a HIPAA/Privacy Rule standpoint, the conditions for displaying sensitivity markers must be consistent to ensure authorized access control."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define contradictory guard conditions for the 'display sensitivity indicator' event; one implies visibility for authorized users while the other explicitly restricts it to unauthorized users only."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-67",
+      "text1": "The system shall not release orders to services or activated until they are signed if they require a signature.",
+      "text2": "The system shall have a option to release unsigned orders to services",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "There is a conflict in process control and clinical safety policy. URL-133 enforces a mandatory state transition guard requiring a signature before release, while URL-134 introduces a bypass option that invalidates this safety gate and affects the integrity of the audit chain.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-133 establishes a hard constraint preventing the release of unsigned orders while URL-134 mandates a feature to bypass this constraint, representing a conflict in process control policy."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "This represents a conflict in clinical safety and accountability controls; URL-133 enforces a hard safety gate while URL-134 introduces a bypass option, affecting the integrity of the medical record audit chain."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-133 defines a mandatory state transition guard requiring a signature, whereas URL-134 introduces a bypass option that invalidates that guard, creating a conflict in the process control logic."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-68",
+      "text1": "The system's pilot program shall use a smart card to digitally sign medication orders.",
+      "text2": "The system shall use HL-7 communications protocol for transferring messages among packages.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "The requirements address distinct technical domains without overlap. URL-135 focuses on digital signature hardware for a pilot program, while URL-136 specifies system-wide communication protocols (HL-7); they do not impose conflicting constraints on each other.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "The requirements address entirely different technical domains, with one focusing on digital signature hardware for a pilot and the other on system-wide communication protocols."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "No external obligation links smart card hardware requirements to HL-7 communication protocols in a way that creates a conflict; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-135 models a hardware-based authentication interaction while URL-136 models a system-to-system communication interface; they involve different model elements and do not overlap in responsibility."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-69",
+      "text1": "The system shall support the requirements for codified data specified by the DOQ-IT quality improvement measures.",
+      "text2": "The system shall support the requirements for all codified data ",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "The requirements define incompatible boundaries for data compliance and object class definitions. URL-137 limits support to specific DOQ-IT quality measures, while URL-138 expands the scope to all codified data, creating a conflict in verification scope and audit requirements.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different boundaries for data compliance, where one limits support to a specific standard and the other expands it to all codified data, affecting the verification scope."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The conflict involves the scope of compliance with DOQ-IT quality measures versus a universal data standard; differing scopes for 'codified data' create an evidence gap for audit and certification."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "The requirements define different boundaries for the 'Codified Data' object class; one limits the scope to a specific standard's attributes while the other expands it to all data, creating a class definition conflict."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-70",
+      "text1": "The system shall allow medication orders to be placed and filled from local stocks of medications while providing full auditing of all medication orders within the medication profile.",
+      "text2": "The system must allow several orders to be placed with the ability for a user to sign for them all at once.",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "These are complementary functional features that exist in different operational slots. URL-139 concerns inventory sourcing and auditing, while URL-140 concerns batch processing capabilities for user signatures; they do not represent conflicting constraints.",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-139 concerns auditing and inventory sourcing while URL-140 concerns the user's ability to perform batch signing; these are complementary functional features in different slots."
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "Inventory auditing requirements and batch signing functionality are distinct domains within healthcare IT standards and do not impose conflicting external constraints; maintaining current_label."
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-139 models the data relationship between orders and inventory auditing while URL-140 models a batch processing capability for the signing actor; these are distinct functional responsibilities that can coexist in the system model."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "訂餐外送系統": [
+    {
+      "id": "PAIR-1",
+      "text1": "系統應提升餐廳結算對帳效率，使財務人員能更快完成每週結算。",
+      "text2": "系統應將每週餐廳結算對帳的平均處理時間降低至少百分之十五，並以此數值作為財務模組驗收條件。",
+      "is_changed": true,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Neutral",
+          "final_label": "Conflict",
+          "description": "URL-1 定義了抽象的效率提升目標，而 URL-2 則對同一流程施加了具體的量化驗收門檻，兩者在測試模型與驗收準則（Pass/Fail Criteria）的定義上存在重疊與不一致，需統一驗收口徑。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "URL-1 為抽象目標，URL-2 為具體量化指標，兩者在驗收門檻上存在定義差異，需在 SRS 中統一驗收口徑。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "從模型驗收標準來看，URL-1 定義了抽象的效率提升目標，而 URL-2 強制了具體的量化門檻，兩者在測試模型（Test Model）的通過準則上存在定義重疊與不一致。"
+              }
+            ],
+            "r2": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "URL-1 與 URL-2 屬於同一需求槽位，但 URL-2 引入了具體的量化百分比作為驗收門檻，這與 URL-1 的抽象描述在驗收口徑上不一致，需在 SRS 中統一定義以避免驗收爭議。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "本案涉及財務結算效率提升，雖 URL-2 引入量化指標，但目前無外部金融法規或審計準則強制要求特定百分比之處理時效，且兩者皆朝向提升效率之同一合規方向，無外部義務衝突，故維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "從測試模型與驗收準則的角度來看，URL-1 定義了抽象的效率提升目標，而 URL-2 則對同一結算流程的狀態轉移時間施加了具體的量化約束，兩者在測試案例的通過準則（Pass/Fail Criteria）上存在定義重疊且門檻不一，構成模型驗收邊界的衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-2",
+      "text1": "系統應在付款完成後鎖定配送地址，避免配送費、服務範圍與派單距離被重複計算。",
+      "text2": "系統應允許使用者在外送員取餐前新增交付備註，例如門禁說明或放置位置，且該備註不得改變配送地址。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-3 規範地址鎖定以確保費用計算準確，URL-4 則規範在不變更地址的前提下新增交付備註。兩者針對不同資料屬性且具備明確的邊界約束，邏輯互補且可並存。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者針對不同需求槽位，URL-3 規範地址鎖定，URL-4 規範備註新增且明確排除地址變更，邏輯互補。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在訂單資料模型中，地址與備註屬於不同屬性，且 URL-4 的狀態轉移 guard 明確限制了備註更新不得觸發地址變更，兩者在責任邊界上互補。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-3",
+      "text1": "系統應在餐廳接單後凍結餐廳備餐清單中所有由使用者填寫的餐點相關欄位。",
+      "text2": "系統應允許使用者在餐廳接單後修改餐點備註，並將更新後的備註同步至餐廳備餐清單。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對「餐廳接單後」的狀態，URL-5 要求凍結所有使用者填寫欄位，而 URL-6 卻要求允許修改備註欄位。兩者對同一資料項在相同生命週期階段的編輯權限定義完全相反，存在狀態行為約束衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "兩者對同一資料欄位『備註』在同一觸發條件『餐廳接單後』的編輯權限定義完全相反。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及資料完整性與稽核追蹤風險，兩者對同一資料項在同一狀態下的編輯權限定義互斥，維持 Conflict。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『餐廳接單』狀態後的資料物件存取控制，URL-5 要求凍結所有欄位，而 URL-6 卻定義了備註欄位的寫入權限，兩者在狀態機的行為約束上直接衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-4",
+      "text1": "系統應對外送員隱藏使用者的真實電話號碼。",
+      "text2": "系統應提供平台中繼通話功能，讓外送員可在不取得真實電話號碼的情況下聯絡使用者。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-7 定義了隱私保護的目標（隱藏真實號碼），URL-8 則提供了達成該目標的技術手段（中繼通話）。兩者為目標與實作的關係，符合 Privacy by Design 原則，無語意衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-7 定義隱私保護目標，URL-8 提供達成該目標的具體功能手段，兩者為目標與實作關係，無語意衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-7 與 URL-8 共同符合隱私保護（Privacy by Design）原則，技術手段支持隱私目標，無合規衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-7 定義了資料可見性約束，URL-8 則是在通訊循序圖中引入中繼參與者以達成該約束，兩者在系統架構模型中是目標與實現關係。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-5",
+      "text1": "系統應保留訂單通知最多三十天，超過三十天後才能轉送至使用者指定的備援通知管道。",
+      "text2": "系統應保留訂單通知超過三十天後，才允許將通知轉送至使用者指定的備援通知管道。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-9 要求通知保留「最多三十天」即轉送，而 URL-10 要求「超過三十天」才允許轉送。兩者在通知轉送流程的觸發時間點與邏輯邊界上互斥，將導致系統判定基準不明。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-9 的『最多三十天』與 URL-10 的『超過三十天』在轉送時間點的邏輯邊界上互斥，需裁定確切天數規範。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及資料保留政策（Data Retention Policy）的法規遵從性，上限與下限邏輯互斥將導致稽核基準不明，維持 Conflict。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "在通知轉送流程的 guard condition 中，URL-9 要求時間 <= 30 天，URL-10 要求時間 > 30 天，兩者在同一流程節點的觸發邏輯互斥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-6",
+      "text1": "系統應在餐廳暫停接單期間不接受即時配送訂單。",
+      "text2": "系統應允許使用者在餐廳暫停接單期間建立隔日預約訂單，且該預約訂單不要求餐廳立即確認。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-11 與 URL-12 分別定義「即時配送」與「隔日預約」兩種不同訂單類型的業務規則。系統可根據訂單類型屬性執行不同的處理邏輯，情境區分明確，無功能衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別定義即時與預約兩種不同訂單類型的業務規則，情境區分明確，可並存於系統。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在類別圖中，即時訂單與預約訂單為不同子類，系統可根據訂單類型屬性分流至不同的狀態機處理邏輯，模型上完全可共存。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-7",
+      "text1": "系統應在客服檢視使用者完整電話號碼前要求帳號密碼、簡訊驗證碼與主管 PIN 三項驗證皆通過。",
+      "text2": "系統應在客服輸入帳號密碼後即顯示使用者完整電話號碼，不需再進行簡訊驗證或主管 PIN 驗證。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對「檢視電話」的使用案例，URL-13 要求三項嚴格驗證，而 URL-14 僅要求帳密驗證。兩者在身份驗證強度的 Pre-condition 定義上完全矛盾，涉及嚴重的安全合規風險。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對同一敏感資料存取事件，兩者定義的驗證強度與必要條件完全矛盾，需統一安全控管標準。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及敏感個人資料（PII）存取控制，URL-14 顯著降低了 URL-13 設定的安全防護底線，存在嚴重安全合規風險。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『檢視電話』這一使用案例的 Pre-condition，兩者定義的身份驗證強度（三項驗證 vs 單項驗證）在安全模型中無法同時滿足。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-8",
+      "text1": "系統應限制每筆訂單在結帳時最多只能套用一張優惠券。",
+      "text2": "系統應允許客服在訂單完成後發放一張補償優惠券至使用者帳號，供未來訂單使用。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-15 限制結帳時的優惠套用，URL-16 規範售後補償發放，屬於不同流程階段且不影響彼此規則。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-15 限制結帳時的優惠套用，URL-16 規範售後補償發放，屬於不同流程階段且不影響彼此規則。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-15 作用於結帳流程的優惠計算物件，URL-16 作用於售後流程的優惠發放事件，兩者在生命週期與責任邊界上無交集。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-9",
+      "text1": "系統應只允許財務角色修改餐廳結算調整單的核定狀態。",
+      "text2": "系統應允許客服角色在爭議成立時直接修改同一筆餐廳結算調整單的核定狀態。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "URL-17 規定僅限財務角色可修改核定狀態，而 URL-18 則賦予客服角色相同權限。兩者在權限模型（RBAC）中的排他性約束與權限賦予產生直接衝突，破壞了職能分立原則。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "URL-17 的絕對排他性限制與 URL-18 的權限賦予在角色存取控制清單上產生直接衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及財務稽核與職能分立（SoD）原則，URL-18 破壞了 URL-17 建立的財務審核邊界，存在內部控制風險。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "在權限模型（RBAC）中，URL-17 的『只允許』排他性約束與 URL-18 賦予客服角色的寫入權限在同一資料物件的核定狀態上產生衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-10",
+      "text1": "系統應將使用者選擇的取消原因轉換為平台定義的標準分類，用於營運統計報表。",
+      "text2": "系統應在客服案件中保留使用者輸入的原始取消原因文字，以便客服追蹤爭議。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "兩者分別定義資料的統計轉換與原始保留，可透過不同資料欄位同時達成，不具互斥性。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別定義資料的統計轉換與原始保留，可透過不同資料欄位同時達成，不具互斥性。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合資料處理的原始性與統計性並存原則，不違反資料治理標準，維持 Neutral。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在資料模型設計上，標準分類與原始文字可分別存儲於不同欄位，兩者在資料物件結構中不具互斥性。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-11",
+      "text1": "系統應將外送任務提供給第一位候選外送員後保留九十秒專屬回覆期間，期間不將同一任務提供給其他外送員。",
+      "text2": "系統應在第一位候選外送員四十五秒未回覆且餐廳標記備餐完成時，同步將同一外送任務提供給下一位候選外送員。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對同一外送任務的派單邏輯，URL-21 的 90 秒專屬期與 URL-22 的 45 秒觸發轉移在時間軸上產生邏輯重疊，兩者在專屬回覆時長與派發下一位的觸發條件上定義互斥。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對同一外送任務的派單邏輯，兩者在專屬回覆時間長度與派給下一位的觸發條件上邏輯互斥。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "無外部法規介入，但時間邏輯互斥影響服務品質底線，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對派單事件的計時器模型，URL-21 的 90 秒專屬期與 URL-22 的 45 秒觸發轉移在時間軸上產生邏輯重疊與衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-12",
+      "text1": "系統應要求使用者以一次性驗證碼確認更換帳號聯絡電話的操作。",
+      "text2": "系統應要求使用者以帳號密碼登入後才能進入個人資料頁面。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "兩項需求分別定義帳號管理與個人資料頁面等不同功能模組的驗證要求，屬於不同層次的安全規範與進入條件，在系統導覽模型上互不干擾。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別定義帳號安全的不同操作驗證要求，屬於不同功能槽位的安全規範。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別符合身份驗證與授權的不同安全層次要求，無合規衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別定義了不同功能模組（帳號管理 vs 個人資料頁）的進入條件，在系統導覽模型與安全邊界上互不干擾。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-13",
+      "text1": "系統應改善尖峰時段從餐廳接單到外送員接受任務的派單效率。",
+      "text2": "系統應將尖峰時段從餐廳接單到外送員接受任務的平均時間降低至少百分之二十，並將此數值作為上線驗收條件。",
+      "is_changed": true,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "analyst",
+          "initial_label": "Neutral",
+          "final_label": "Conflict",
+          "description": "兩項需求針對相同的派單流程定義了不同的效能約束，URL-25 為定性描述，URL-26 則強制要求量化指標，導致在流程模型的效能標籤與上線驗收邊界上出現定義衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "URL-25 為一般性效率提升目標，URL-26 為具體量化驗收標準，兩者在驗收邊界定義上不一致，需合併改寫。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "URL-25 與 URL-26 對於派單流程的效能模型定義了不同的驗收邊界，前者為定性描述，後者為定量約束，需統一模型指標。"
+              }
+            ],
+            "r2": [
+              {
+                "agent": "analyst",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "兩項需求皆針對尖峰時段派單效率，但 URL-26 強制要求降低至少百分之二十的量化指標，改變了 URL-25 的一般性改善義務，屬於驗收邊界定義衝突，必須合併改寫。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "派單效率之量化指標屬於內部營運品質底線，目前查無外部交通運輸或勞動法規對派單秒數有強制性限制，且 URL-26 之量化門檻未違反任何已知之第三方平台限制，無外部風險介入，故維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "modify",
+                "proposed_label": "Conflict",
+                "reason": "URL-25 與 URL-26 針對相同的派單流程事件（從接單到接受任務）定義了不同的效能約束模型，前者為定性描述，後者為具體定量門檻，這會導致在循序圖的時序約束或活動圖的效能標籤上出現多重且不一致的驗收標準。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-14",
+      "text1": "系統應在即時配送追蹤頁面移除超過七天的外送員 GPS 座標點。",
+      "text2": "系統應保留由 GPS 座標計算出的彙總配送里程，用於外送員薪資與補貼結算。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-27 規範原始座標點的銷毀，URL-28 規範彙總統計資料的持久化，兩者屬於資料生命週期中不同階段的處理流程，符合資料最小化與隱私合規的互補關係。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-27 規範原始資料刪除，URL-28 規範衍生統計資料保留，兩者在資料生命週期管理上為互補關係。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合資料最小化與去識別化原則，URL-27 刪除細節與 URL-28 保留彙總資料在隱私合規上是互補的。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在資料生命週期模型中，URL-27 負責原始座標點的銷毀流程，URL-28 負責彙總資料的持久化，兩者為資料處理的不同階段。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-15",
+      "text1": "系統應允許使用者在結帳時只使用已驗證且已儲存的配送地址。",
+      "text2": "系統應允許使用者在同日配送結帳流程中輸入一次性未驗證地址並直接送出訂單。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對結帳流程的地址合法性檢查，URL-29 限制必須使用已驗證地址，而 URL-30 允許未驗證地址直接送出，兩者在驗證邏輯與配送安全品質底線上直接衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對結帳流程的地址合法性檢查，兩者對於是否允許『未驗證地址』的規則定義直接衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及配送安全與地址驗證的品質底線，URL-30 繞過了 URL-29 的安全驗證強制性，規則互斥。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對結帳流程的輸入驗證 guard，URL-29 限制地址必須已驗證，URL-30 卻允許未驗證地址通過，兩者在驗證邏輯上互斥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-16",
+      "text1": "系統應在使用者付款完成後鎖定原始訂單金額，避免餐廳或使用者端再次改寫已成立訂單的應收金額。",
+      "text2": "系統應允許客服在補償成立後建立獨立的錢包調整紀錄，並將補償金額顯示於使用者錢包明細。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-31 鎖定原始訂單金額以確保不可篡改性，URL-32 透過獨立的錢包調整紀錄進行補償，兩者在財務領域模型中為獨立實體，符合會計稽核標準且可共存。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-31 鎖定訂單實體金額，URL-32 透過外部錢包機制補償，兩者在資料模型與業務邏輯上可共存。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合財務交易不可篡改性原則，透過補償分錄而非修改原始訂單，符合會計稽核標準。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在財務領域模型中，原始訂單金額與錢包調整紀錄是獨立的實體，URL-32 的補償流程不需修改 URL-31 鎖定的訂單物件。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-17",
+      "text1": "系統應要求餐廳營業時間以標準二十四小時制區間輸入，例如 09:00-21:30。",
+      "text2": "系統應允許餐廳以任意本地文字格式輸入營業時間，包括上午九點、晚上九點半或 9 PM 等格式。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對營業時間資料項，URL-33 要求標準化結構資料（24h制），URL-34 則允許非結構化任意文字，兩者在資料型別定義與格式規範上完全互斥，將導致自動化處理失效。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對同一資料項『營業時間』，兩者要求的輸入格式規範（標準化 vs 任意文字）完全互斥。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及資料標準化與後續自動化處理的可靠性風險，格式規範完全互斥將導致資料品質失效。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對營業時間資料項的格式規範，URL-33 要求結構化資料（24h制），URL-34 允許非結構化文字，兩者在資料型別定義上衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-18",
+      "text1": "系統應在使用者端退款頁面只顯示簡化退款狀態，例如處理中、已退款或未通過。",
+      "text2": "系統應允許財務人員在後台查看同一筆退款的完整帳務分錄、扣回紀錄與支付通道回傳碼。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "兩項需求定義同一業務實體在使用者端（簡化狀態）與後台（完整帳務分錄）的不同顯示視圖，符合最小權限原則與模型視圖分離原則，不具衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者定義同一業務實體在不同使用者介面（前端 vs 後台）的顯示視圖差異，不具衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合最小權限原則（PoLP），針對不同角色提供不同層級的資料視圖是資訊安全最佳實務。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者定義了同一資料實體在不同參與者視圖（View）中的顯示層次，符合模型視圖分離原則，不具衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-19",
+      "text1": "系統應在使用者送出取消原因後保留原始文字內容，以便客服追蹤爭議與還原使用者當時描述。",
+      "text2": "系統應在取消原因送出後立即以平台標準分類覆寫原始文字，且不保留使用者輸入的原始內容。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對取消原因的資料保存策略，URL-37 要求保留原始文字以供追蹤，而 URL-38 要求以標準分類覆寫且不保留原始內容，兩者在資料持久化策略與稽核軌跡（Audit Trail）的保全要求上直接互斥。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對取消原因的資料保存策略，一項要求保留原始文字，另一項要求覆寫且不保留，邏輯互斥。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及證據保全與稽核軌跡（Audit Trail），URL-38 的覆寫行為將導致 URL-37 要求保留的原始證據滅失，存在合規風險。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對取消原因的資料更新行為，URL-37 要求保留原始狀態，URL-38 要求覆寫且不保留，兩者在資料持久化策略上互斥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-20",
+      "text1": "系統應在企業帳戶訂單中依企業合約設定可用付款方式。",
+      "text2": "系統應允許一般個人帳戶訂單使用平台預設付款方式清單。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "兩項需求分別針對企業帳戶與個人帳戶定義不同的付款規則，在系統設計上屬於互補的條件分支，可透過策略模式（Strategy Pattern）根據帳戶類型動態切換，功能上完全並存。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別針對企業與個人兩種不同帳戶類別定義付款規則，屬於互補的條件分支。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部法規或安全標準介入，維持 current_label。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在付款策略模式（Strategy Pattern）中，系統可根據帳戶類型（企業/個人）動態切換不同的付款方式清單，模型上可並存。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-21",
+      "text1": "系統應只允許已通過平台審核的標準菜單分類出現在使用者端搜尋篩選器。",
+      "text2": "系統應允許餐廳自行建立未經平台審核的菜單分類，並讓該分類出現在使用者端搜尋篩選器。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對搜尋篩選器的顯示範圍，兩者定義了互斥的准入規則：一者要求僅限審核通過，另一者允許未經審核直接顯示，這將導致狀態機邏輯衝突並使平台內容審核機制失效。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "兩者針對同一需求槽位『搜尋篩選器顯示範圍』定義了互斥的准入規則，一為僅限審核通過，一為允許未經審核，SRS 必須裁定最終顯示邏輯。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "無外部法規介入，維持 current_label。從領域風險看，若允許未經審核分類出現在搜尋器，將導致平台內容治理與合規審核機制失效。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "在類別圖中，菜單分類物件的『可見性』屬性受到互斥的 Guard Condition 約束，一者要求必須通過審核狀態，另一者則允許未審核狀態直接關聯至搜尋器，導致狀態機邏輯衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-22",
+      "text1": "系統應在使用者刪除常用配送地址後，停止在使用者端地址清單中顯示該地址。",
+      "text2": "系統應在使用者刪除常用配送地址後，於後台稽核紀錄中保留該地址的雜湊值、刪除時間與操作來源。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-43 規範前端介面的顯示集合，URL-44 規範後台稽核資料的雜湊化存儲，兩者作用於不同的資料物件與生命週期階段，符合資料最小化與稽核留存規範，無語意衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-43 規範前端介面顯示狀態，URL-44 規範後台稽核資料留存，兩者屬於不同功能槽位且符合資料生命週期管理規範。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合 GDPR 與相關資安稽核標準中『資料最小化』與『稽核留存』的並行要求，前端刪除與後台雜湊留存不構成合規衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩項需求作用於不同的資料物件與生命週期階段，URL-43 影響前端地址清單的顯示集合，URL-44 則定義後台稽核物件的資料結構與雜湊化存儲，模型上可完全共存。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-23",
+      "text1": "系統應允許餐廳設定最低接單金額，且任何平台活動不得覆蓋餐廳設定的最低接單限制。",
+      "text2": "系統應允許平台管理員為指定促銷活動設定免最低消費門檻，並直接覆蓋所有餐廳的最低接單金額。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對最低接單金額的覆蓋權限，兩項需求對於平台活動是否具備強制覆蓋義務存在直接矛盾，涉及商業合約中關於定價權與促銷權限的優先級定義衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『最低接單金額覆蓋權限』，兩項需求對平台活動是否具備覆蓋義務存在直接衝突，屬於業務規則優先級的定義矛盾。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "無外部強制標準介入，維持 current_label。此為商業合約中關於定價權與促銷權限的優先級定義衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『訂單校驗流程』中的最低金額檢查節點，兩者定義了互斥的覆蓋規則與責任邊界，導致活動物件與餐廳設定物件在優先級權限上無法達成一致的模型轉移。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-24",
+      "text1": "系統應要求每一筆結帳只能包含同一家餐廳的餐點。",
+      "text2": "系統應允許使用者在同一次登入工作階段中連續建立多筆來自不同餐廳的結帳訂單。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-47 約束單筆訂單與餐廳的關聯多重度（1:1），URL-48 描述使用者在同一工作階段內建立多筆訂單的行為，兩者在業務流程與物件模型上可完全並存。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-47 限制單筆訂單的組成結構，URL-48 描述使用者在工作階段內的連續操作能力，兩者在業務流程上可並存且無語意重疊。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "無外部義務介入，維持 current_label。單筆訂單限制與多筆訂單建立在支付安全與交易流程上可並存。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-47 約束單一訂單物件與餐廳物件的關聯多重度（1:1），URL-48 描述使用者參與者在同一 Session 內發起多個訂單實例的行為，兩者在物件模型與互動圖中無衝突。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-25",
+      "text1": "系統應要求平台結算檔使用平台標準訂單狀態代碼後才可匯出給餐廳。",
+      "text2": "系統應允許餐廳結算檔直接使用餐廳 POS 回傳的原始狀態文字，不需轉換為平台標準訂單狀態代碼。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對結算檔匯出格式，URL-49 要求強制轉換為平台標準代碼以利稽核，而 URL-50 則要求保留餐廳 POS 原始文字。兩者在資料轉換邏輯與輸出介面的格式定義上存在直接衝突，導致資料一致性規範不一。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『結算檔匯出格式』，URL-49 要求強制轉換標準代碼，URL-50 則允許保留原始文字，兩者在輸出標準化程度上存在驗收邊界衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及資料交換標準化風險，URL-49 強制標準化以利後續財務稽核，URL-50 則允許原始文字，兩者在資料一致性與稽核證據鏈上存在衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "在資料流模型中，結算檔匯出組件的資料轉換邏輯存在衝突，一者強制要求狀態代碼映射，另一者要求保留原始文字，導致輸出介面的資料格式定義不一致。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-26",
+      "text1": "系統應只在使用者端顯示已發布且可供下單的菜單項目。",
+      "text2": "系統應允許餐廳員工在後台查看尚未發布的草稿菜單項目。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "兩者分別定義了使用者端與後台端不同的資料可見性範圍，屬於基於角色的權限區隔，不構成語意衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "兩者分別定義了使用者端與後台端不同的資料可見性範圍，屬於基於角色的權限區隔，不構成語意衝突。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合資訊安全管理系統 (ISMS) 的存取控制原則，區分公開發布與內部草稿的可見性屬於標準權限設計。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "此為典型的基於角色的存取控制（RBAC）模型，使用者端與後台端分別對應不同的使用案例與資料過濾視圖，菜單項目的『發布狀態』屬性可同時支援這兩種過濾邏輯。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-27",
+      "text1": "系統應保留所有退款申請的建立、審核、駁回、核准、撤回與重送紀錄，且任何角色不得刪除這些稽核紀錄。",
+      "text2": "系統應只保留已核准退款申請的稽核紀錄，並在退款被駁回或使用者撤回後移除該申請的處理紀錄。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對退款稽核紀錄的留存政策，URL-53 要求全量保留所有狀態紀錄且禁止刪除，以符合不可篡改性；URL-54 則要求移除特定狀態下的紀錄。兩者在資料持久化策略與合規性要求上完全互斥。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『退款稽核紀錄留存政策』，一者要求全量保留且禁止刪除，另一者要求特定狀態下移除紀錄，資料完整性規範直接互斥。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及金融稽核與稅務法規要求的『不可篡改性』，URL-53 符合稽核軌跡完整性，URL-54 則要求移除紀錄，兩者在合規底線上直接互斥。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "退款紀錄物件的生命週期管理存在衝突，URL-53 要求所有狀態轉移皆須持久化，URL-54 則要求在特定狀態轉移後執行刪除操作，導致資料保留策略在狀態機上互斥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-28",
+      "text1": "系統應在從餐廳 POS 匯入訂單時保留 POS 訂單編號作為外部參照。",
+      "text2": "系統應為所有匯入訂單產生平台內部訂單編號，用於平台客服、付款與派單流程。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Neutral",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Neutral",
+          "final_label": "Neutral",
+          "description": "URL-55 與 URL-56 分別定義了保留外部 POS 編號與產生平台內部編號的需求。兩者在資料結構中可作為獨立屬性並存，是確保跨系統對帳與追蹤的必要設計，無語意衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "URL-55 與 URL-56 分別定義了外部參照 ID 與內部系統 ID 的產生與保留義務，屬於系統整合中互補的資料欄位需求。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "符合系統整合最佳實務，保留外部參照 ID (POS ID) 與產生內部 ID 是確保跨系統資料對帳與追蹤的必要證據設計。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Neutral",
+                "reason": "在訂單類別定義中，POS 訂單編號與平台訂單編號可建模為兩個獨立的屬性欄位，分別承擔外部參照與內部識別的責任，屬於互補的資料結構設計。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-29",
+      "text1": "系統應在付款完成後先建立付款預授權，並且只在餐廳接單後才正式請款。",
+      "text2": "系統應在使用者付款完成時立即完成請款，不得等待餐廳接單狀態。",
+      "is_changed": false,
+      "true": "Conflict",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "支付流程的狀態流轉邏輯存在衝突。URL-57 採行「預授權後接單請款」序列，而 URL-58 要求「付款即刻請款」。兩者的事件觸發順序與資金流轉模式互斥，無法在同一狀態機中執行。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "針對『支付流程狀態流轉』，兩者對於請款觸發時機（接單後 vs 付款即刻）定義了互斥的狀態機邏輯，SRS 無法同時採納。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "涉及支付卡產業資料安全標準 (PCI DSS) 與收單機構的交易流程規範，預授權與立即請款為互斥的資金流轉模式，無法同時執行。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "支付流程的狀態圖存在邏輯衝突，URL-57 定義了『預授權 -> 接單 -> 請款』的序列，而 URL-58 要求『付款 -> 立即請款』的原子操作，兩者的事件觸發順序與狀態轉移路徑互斥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "PAIR-30",
+      "text1": "系統應允許餐廳設定最低接單金額，低於該金額的即時配送訂單不得送出。",
+      "text2": "系統應允許平台管理員為指定活動設定免最低消費門檻，且活動規則優先於餐廳最低接單金額。",
+      "is_changed": false,
+      "true": "Neutral",
+      "pred": "Conflict",
+      "conflict_meeting": [
+        {
+          "status": "consensus",
+          "initial_label": "Conflict",
+          "final_label": "Conflict",
+          "description": "針對訂單送出的檢核邏輯，URL-59 賦予餐廳最低接單金額強制性，而 URL-60 則主張平台活動規則具備優先覆蓋權。兩者對於業務規則引擎中的優先級定義相反，存在邏輯覆蓋衝突。",
+          "details": {
+            "r1": [
+              {
+                "agent": "analyst",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "與 PAIR-23 類似，兩者對『最低消費限制』與『活動規則』的優先級定義相反，一為強制不得送出，一為活動優先覆蓋，需人工裁定業務邏輯。"
+              },
+              {
+                "agent": "expert",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "無外部法規介入，維持 current_label。此為業務規則中關於最低消費門檻的強制性與活動覆蓋權限的邏輯衝突。"
+              },
+              {
+                "agent": "modeler",
+                "decision": "keep",
+                "proposed_label": "Conflict",
+                "reason": "在業務規則引擎模型中，針對『訂單送出』行為的檢核邏輯存在優先級衝突，兩者對於活動規則是否能覆蓋餐廳實體約束的 Guard Condition 定義相反。"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

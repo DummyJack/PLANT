@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 import os
 
 @dataclass
@@ -15,7 +15,6 @@ class ReqElicitGymConfig:
     judge_temperature: float = 0
     judge_max_tokens: int = 1024
     judge_timeout: float = 30.0
-    judge_thinking_level: Optional[str] = None
 
 
     user_api_key: Optional[str] = None
@@ -24,7 +23,6 @@ class ReqElicitGymConfig:
     user_temperature: float = 0.7
     user_max_tokens: int = 1024
     user_timeout: float = 30.0
-    user_thinking_level: Optional[str] = None
 
 
     user_answer_quality: str = "high"
@@ -43,6 +41,7 @@ class ReqElicitGymConfig:
 
     evaluation_result_path: Optional[str] = None
     conversation_result_path: Optional[str] = None
+    task_cost_callback: Optional[Any] = None
 
     def __post_init__(self):
         if self.judge_api_key is None:

@@ -1,13 +1,12 @@
 {
-  "enable_human_judgment": false,
   "enable_agents": {
     "user": false,
     "documentor": false
   },
   "agent_models": {
     "default": {
-      "provider": "gemini",
-      "model": "gemini-3-flash-preview",
+      "provider": "openai",
+      "model": "gpt-4.1",
       "thinking_level": "minimal",
       "temperature": 0
     }

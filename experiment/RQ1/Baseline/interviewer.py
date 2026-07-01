@@ -1,5 +1,5 @@
 from typing import Dict, Any, List, Optional
-from .env.prompts import model_call, model_call_with_thinking
+from .env.prompts import model_call
 from .env.utils import build_history_into_prompt
 
 
@@ -13,8 +13,6 @@ class Interviewer:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         timeout: float = 30.0,
-        use_thinking: bool = False,
-        thinking_level: Optional[str] = None,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -22,9 +20,6 @@ class Interviewer:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
-        self.thinking_level = thinking_level
-
-        self.use_thinking = use_thinking
 
 
         self.model_config = {
@@ -34,7 +29,6 @@ class Interviewer:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "timeout": self.timeout,
-            "thinking_level": self.thinking_level,
         }
 
     def ask_question(self, conversation_history: List[Dict[str, str]], return_usage: bool = False) -> Any:
@@ -64,11 +58,8 @@ Important: When you finish, you must generate a complete set of user stories tha
 Ask your next question to better understand the user's requirements, or finish the dialogue and generate a comprehensive set of user stories based on all the requirements you have elicited."""
 
 
-        call_fn = model_call_with_thinking if self.use_thinking else model_call
-
-
         if return_usage:
-            response_text, usage_info = call_fn(
+            response_text, usage_info = model_call(
                 system_prompt,
                 user_prompt,
                 self.model_config,
@@ -77,7 +68,7 @@ Ask your next question to better understand the user's requirements, or finish t
             )
             return (response_text if response_text else "", usage_info)
         else:
-            response_text = call_fn(
+            response_text = model_call(
                 system_prompt,
                 user_prompt,
                 self.model_config,

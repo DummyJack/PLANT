@@ -1,0 +1,43 @@
+{
+  "agents": {
+    "analyst": {
+      "model": "gpt-4.1",
+      "input_tokens": 281024,
+      "output_tokens": 26325,
+      "total_tokens": 307349,
+      "run_time(s)": 186.131,
+      "estimated_cost(USD)": 0.772648
+    },
+    "expert": {
+      "model": "gpt-4.1",
+      "input_tokens": 154815,
+      "output_tokens": 7141,
+      "total_tokens": 161956,
+      "run_time(s)": 52.061,
+      "estimated_cost(USD)": 0.366758
+    },
+    "mediator": {
+      "model": "gpt-4.1",
+      "input_tokens": 1627,
+      "output_tokens": 46,
+      "total_tokens": 1673,
+      "run_time(s)": 1.41,
+      "estimated_cost(USD)": 0.003622
+    },
+    "modeler": {
+      "model": "gpt-4.1",
+      "input_tokens": 163904,
+      "output_tokens": 8276,
+      "total_tokens": 172180,
+      "run_time(s)": 59.96,
+      "estimated_cost(USD)": 0.394016
+    }
+  },
+  "totals": {
+    "input_tokens": 601370,
+    "output_tokens": 41788,
+    "total_tokens": 643158,
+    "run_time(s)": 299.562,
+    "estimated_cost(USD)": 1.537044
+  }
+}

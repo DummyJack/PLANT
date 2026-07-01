@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from flow.setup import Flow
 from storage.artifact import save_artifact as save_split_artifact
@@ -216,7 +216,10 @@ class ExperimentStore:
 # ========
 # Defines build plant cost payload function for this experiment module.
 # ========
-def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
+def build_plant_cost_payload(
+    flow: Flow,
+    task_costs: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     cost_by_agent: Dict[str, Any] = {}
     for agent_name, m in flow.agent_models.items():
         if not hasattr(m, "costTracker"):
@@ -236,6 +239,7 @@ def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
                 "run_time(s)": 0.0,
                 "estimated_cost(USD)": 0.0,
             },
+            "tasks": task_costs or [],
         }
     totals = {
         "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in cost_by_agent.values()),
@@ -253,6 +257,7 @@ def build_plant_cost_payload(flow: Flow) -> Dict[str, Any]:
     return {
         "agents": cost_by_agent,
         "totals": totals,
+        "tasks": task_costs or [],
     }
 
 RQ2_DIR = Path(__file__).resolve().parent.parent
@@ -291,7 +296,11 @@ def load_rq2_config() -> Dict[str, Any]:
 # ========
 def apply_rq2_benchmark_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     updated = dict(config)
+    updated["enable_human_judgment"] = False
     updated["enable_conflict_report"] = False
+    enable_tools = dict(updated.get("enable_tools") or {})
+    enable_tools["read_file"] = False
+    updated["enable_tools"] = enable_tools
     conflict_detection = dict(updated.get("conflict_detection") or {})
     conflict_detection["enable_batch_pair_discovery"] = False
     updated["conflict_detection"] = conflict_detection

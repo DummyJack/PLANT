@@ -1,0 +1,299 @@
+{
+  "runs": 3,
+  "metrics": {
+    "overall_precision": {
+      "mean": 0.7857,
+      "std": 0.0028,
+      "per_round_values": [
+        0.7896,
+        0.7837,
+        0.7837
+      ]
+    },
+    "overall_recall": {
+      "mean": 0.77,
+      "std": 0.0,
+      "per_round_values": [
+        0.77,
+        0.77,
+        0.77
+      ]
+    },
+    "overall_f1": {
+      "mean": 0.7668,
+      "std": 0.0006,
+      "per_round_values": [
+        0.766,
+        0.7672,
+        0.7672
+      ]
+    },
+    "conflict_precision": {
+      "mean": 0.8524,
+      "std": 0.0088,
+      "per_round_values": [
+        0.8649,
+        0.8462,
+        0.8462
+      ]
+    },
+    "conflict_recall": {
+      "mean": 0.6533,
+      "std": 0.0094,
+      "per_round_values": [
+        0.64,
+        0.66,
+        0.66
+      ]
+    },
+    "conflict_f1": {
+      "mean": 0.7396,
+      "std": 0.0028,
+      "per_round_values": [
+        0.7356,
+        0.7416,
+        0.7416
+      ]
+    }
+  },
+  "metrics_by_type": {
+    "Health Management System": {
+      "overall_precision": {
+        "mean": 0.7403,
+        "std": 0.0032,
+        "per_round_values": [
+          0.7448,
+          0.7381,
+          0.7381
+        ]
+      },
+      "overall_recall": {
+        "mean": 0.7286,
+        "std": 0.0,
+        "per_round_values": [
+          0.7286,
+          0.7286,
+          0.7286
+        ]
+      },
+      "overall_f1": {
+        "mean": 0.7252,
+        "std": 0.0008,
+        "per_round_values": [
+          0.724,
+          0.7258,
+          0.7258
+        ]
+      },
+      "conflict_precision": {
+        "mean": 0.793,
+        "std": 0.0104,
+        "per_round_values": [
+          0.8077,
+          0.7857,
+          0.7857
+        ]
+      },
+      "conflict_recall": {
+        "mean": 0.6191,
+        "std": 0.0135,
+        "per_round_values": [
+          0.6,
+          0.6286,
+          0.6286
+        ]
+      },
+      "conflict_f1": {
+        "mean": 0.6951,
+        "std": 0.0047,
+        "per_round_values": [
+          0.6885,
+          0.6984,
+          0.6984
+        ]
+      },
+      "cost": {
+        "input_token": {
+          "mean": 6398.0,
+          "per_round_values": [
+            6398.0,
+            6398.0,
+            6398.0
+          ]
+        },
+        "output_token": {
+          "mean": 70.0,
+          "per_round_values": [
+            70.0,
+            70.0,
+            70.0
+          ]
+        },
+        "total_token": {
+          "mean": 6468.0,
+          "per_round_values": [
+            6468.0,
+            6468.0,
+            6468.0
+          ]
+        },
+        "cost(USD)": {
+          "mean": 0.003409,
+          "per_round_values": [
+            0.003409,
+            0.003409,
+            0.003409
+          ]
+        },
+        "run_time(s)": {
+          "mean": 94.04866666666668,
+          "per_round_values": [
+            97.396,
+            92.901,
+            91.849
+          ]
+        }
+      }
+    },
+    "訂餐外送系統": {
+      "overall_precision": {
+        "mean": 0.8947,
+        "std": 0.0,
+        "per_round_values": [
+          0.8947,
+          0.8947,
+          0.8947
+        ]
+      },
+      "overall_recall": {
+        "mean": 0.8667,
+        "std": 0.0,
+        "per_round_values": [
+          0.8667,
+          0.8667,
+          0.8667
+        ]
+      },
+      "overall_f1": {
+        "mean": 0.8643,
+        "std": 0.0,
+        "per_round_values": [
+          0.8643,
+          0.8643,
+          0.8643
+        ]
+      },
+      "conflict_precision": {
+        "mean": 1.0,
+        "std": 0.0,
+        "per_round_values": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "conflict_recall": {
+        "mean": 0.7333,
+        "std": 0.0,
+        "per_round_values": [
+          0.7333,
+          0.7333,
+          0.7333
+        ]
+      },
+      "conflict_f1": {
+        "mean": 0.8462,
+        "std": 0.0,
+        "per_round_values": [
+          0.8462,
+          0.8462,
+          0.8462
+        ]
+      },
+      "cost": {
+        "input_token": {
+          "mean": 3147.0,
+          "per_round_values": [
+            3147.0,
+            3147.0,
+            3147.0
+          ]
+        },
+        "output_token": {
+          "mean": 30.0,
+          "per_round_values": [
+            30.0,
+            30.0,
+            30.0
+          ]
+        },
+        "total_token": {
+          "mean": 3177.0,
+          "per_round_values": [
+            3177.0,
+            3177.0,
+            3177.0
+          ]
+        },
+        "cost(USD)": {
+          "mean": 0.0016635,
+          "per_round_values": [
+            0.0016635,
+            0.0016635,
+            0.0016635
+          ]
+        },
+        "run_time(s)": {
+          "mean": 25.471666666666664,
+          "per_round_values": [
+            24.982,
+            26.029,
+            25.404
+          ]
+        }
+      }
+    }
+  },
+  "cost": {
+    "input_token": {
+      "mean": 9545.0,
+      "per_round_values": [
+        9545.0,
+        9545.0,
+        9545.0
+      ]
+    },
+    "output_token": {
+      "mean": 100.0,
+      "per_round_values": [
+        100.0,
+        100.0,
+        100.0
+      ]
+    },
+    "total_token": {
+      "mean": 9645.0,
+      "per_round_values": [
+        9645.0,
+        9645.0,
+        9645.0
+      ]
+    },
+    "cost(USD)": {
+      "mean": 0.0050725,
+      "per_round_values": [
+        0.0050725,
+        0.0050725,
+        0.0050725
+      ]
+    },
+    "run_time(s)": {
+      "mean": 119.52133333333332,
+      "per_round_values": [
+        122.378,
+        118.931,
+        117.255
+      ]
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "agents": {
+    "analyst": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 282593,
+      "output_tokens": 23714,
+      "total_tokens": 306307,
+      "run_time(s)": 169.1,
+      "estimated_cost(USD)": 0.2124385
+    },
+    "expert": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 156652,
+      "output_tokens": 5216,
+      "total_tokens": 161868,
+      "run_time(s)": 49.803,
+      "estimated_cost(USD)": 0.093974
+    },
+    "mediator": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 1420,
+      "output_tokens": 73,
+      "total_tokens": 1493,
+      "run_time(s)": 2.777,
+      "estimated_cost(USD)": 0.000929
+    },
+    "modeler": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 163239,
+      "output_tokens": 6382,
+      "total_tokens": 169621,
+      "run_time(s)": 56.741,
+      "estimated_cost(USD)": 0.1007655
+    }
+  },
+  "totals": {
+    "input_tokens": 603904,
+    "output_tokens": 35385,
+    "total_tokens": 639289,
+    "run_time(s)": 278.421,
+    "estimated_cost(USD)": 0.408107
+  }
+}

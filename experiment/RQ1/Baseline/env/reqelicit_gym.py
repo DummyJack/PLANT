@@ -276,7 +276,6 @@ class ReqElicitGym(gym.Env):
             "temperature": self.config.judge_temperature,
             "max_tokens": self.config.judge_max_tokens,
             "timeout": self.config.judge_timeout,
-            "thinking_level": self.config.judge_thinking_level,
         }
 
 
@@ -287,7 +286,6 @@ class ReqElicitGym(gym.Env):
             "temperature": self.config.user_temperature,
             "max_tokens": self.config.user_max_tokens,
             "timeout": self.config.user_timeout,
-            "thinking_level": self.config.user_thinking_level,
         }
 
         user_quality_level = self.config.user_answer_quality
@@ -578,6 +576,9 @@ class ReqElicitGym(gym.Env):
 
             task_id = info.get("task_id", f"task_{task_num}")
             task_data = self.current_task
+            task_cost_callback = getattr(self.config, "task_cost_callback", None)
+            if callable(task_cost_callback):
+                task_cost_callback("start", task_id, task_data)
 
             if self.config.verbose:
                 print(f"\n{'='*60}")
@@ -652,6 +653,9 @@ class ReqElicitGym(gym.Env):
             if self.config.verbose:
                 print(f"\n任務 {task_num} 完成：總輪數={len(self.current_task_conversation_turns)}，"
                       f"已取得需求數={len(self.elicited_requirements)}")
+
+            if callable(task_cost_callback):
+                task_cost_callback("end", task_id, task_data)
 
             task_num += 1
 

@@ -1,7 +1,7 @@
 # Provides RQ1 Plant experiment records helpers.
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flow.setup import Flow
 from metric import (
@@ -115,7 +115,11 @@ def resolve_plant_model_label(flow_cfg: Dict[str, Any], per_task: Dict[str, Any]
 # ========
 # Defines build cost payload function for this experiment module.
 # ========
-def build_cost_payload(flow: Flow, oracle_user: OracleUserAgent) -> Dict[str, Any]:
+def build_cost_payload(
+    flow: Flow,
+    oracle_user: OracleUserAgent,
+    task_costs: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     cost_by_agent: Dict[str, Any] = {}
     enabled = flow.config.get("enable_agents") or {}
     for agent_name, m in flow.agent_models.items():
@@ -140,7 +144,7 @@ def build_cost_payload(flow: Flow, oracle_user: OracleUserAgent) -> Dict[str, An
             8,
         ),
     }
-    return {"agents": cost_by_agent, "totals": totals}
+    return {"agents": cost_by_agent, "totals": totals, "tasks": task_costs or []}
 
 # ========
 # Defines extract action type effectiveness function for this experiment module.
@@ -609,7 +613,7 @@ def build_result_payload(
             "judge_model": str(exp_cfg.get("gym_model") or ""),
             "user_model": str(exp_cfg.get("gym_model") or ""),
             "user_answer_quality": str(exp_cfg.get("user_answer_quality", "high")),
-            "max_turns": int(flow_cfg.get("elicitation_max_turns", 0) or 0),
+            "max_turns": int(flow_cfg.get("max_turns", flow_cfg.get("elicitation_max_turns", 0)) or 0),
         },
         "overall_evaluation": overall,
         "task_results": [

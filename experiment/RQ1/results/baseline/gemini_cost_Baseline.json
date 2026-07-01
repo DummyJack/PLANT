@@ -1,0 +1,25 @@
+{
+  "interviewer": {
+    "model": "gemini-3-flash-preview",
+    "input_tokens": 20238,
+    "output_tokens": 3609,
+    "total_tokens": 23847,
+    "run_time(s)": 60.548,
+    "estimated_cost(USD)": 0.020946
+  },
+  "user": {
+    "model": "gpt-5.2",
+    "input_tokens": 13903,
+    "output_tokens": 1679,
+    "total_tokens": 15582,
+    "run_time(s)": 53.634,
+    "estimated_cost(USD)": 0.04783625
+  },
+  "totals": {
+    "input_tokens": 34141,
+    "output_tokens": 5288,
+    "total_tokens": 39429,
+    "run_time(s)": 114.182,
+    "estimated_cost(USD)": 0.06878225
+  }
+}

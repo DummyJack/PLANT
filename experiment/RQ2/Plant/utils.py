@@ -15,6 +15,48 @@ from utils import json_dump_no_scientific
 RQ2_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = RQ2_DIR
 RESULTS_DIR = RQ2_DIR / "results"
+SUMMARY_METRIC_ORDER = [
+    "overall_precision",
+    "overall_recall",
+    "overall_f1",
+    "conflict_precision",
+    "conflict_recall",
+    "conflict_f1",
+]
+
+
+def order_summary_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    ordered = {key: metrics[key] for key in SUMMARY_METRIC_ORDER if key in metrics}
+    ordered.update({key: metrics[key] for key in metrics if key not in ordered})
+    return ordered
+
+
+def summarize_cost_rows(cost_rows: Dict[str, List[float]]) -> Dict[str, Any]:
+    summary_cost: Dict[str, Any] = {}
+    for key, values in cost_rows.items():
+        vals = [float(v) for v in values]
+        summary_cost[key] = {
+            "mean": float(np.mean(vals)) if vals else 0.0,
+            "per_round_values": vals,
+        }
+    return summary_cost
+
+
+def cost_rows_from_totals(
+    *,
+    input_tokens: List[int],
+    output_tokens: List[int],
+    total_tokens: List[int],
+    costs_usd: List[float],
+    runtime_s: List[float],
+) -> Dict[str, List[float]]:
+    return {
+        "input_token": [float(v) for v in input_tokens],
+        "output_token": [float(v) for v in output_tokens],
+        "total_token": [float(v) for v in total_tokens],
+        "cost(USD)": [float(v) for v in costs_usd],
+        "run_time(s)": [float(v) for v in runtime_s],
+    }
 
 # ========
 # Defines final pair label function for this experiment module.
@@ -30,8 +72,11 @@ def print_multi_run_summary(
     runs: int,
     run_scalar_metrics: List[Dict[str, float]],
     run_costs_usd: List[float],
+    run_input_tokens: List[int],
+    run_output_tokens: List[int],
     run_total_tokens: List[int],
     run_total_runtime_s: List[float],
+    run_costs_by_type: List[Dict[str, Dict[str, Any]]],
     model_prefix: str,
     method_prefix: str = "Plant",
 ) -> None:
@@ -41,14 +86,7 @@ def print_multi_run_summary(
     all_keys: set[str] = set()
     for metric_row in run_scalar_metrics:
         all_keys.update(metric_row.keys())
-    preferred_order = [
-        "overall_precision",
-        "overall_recall",
-        "overall_f1",
-        "conflict_precision",
-        "conflict_recall",
-        "conflict_f1",
-    ]
+    preferred_order = SUMMARY_METRIC_ORDER
     ordered_keys = [key for key in preferred_order if key in all_keys]
     ordered_keys.extend(sorted(key for key in all_keys if key not in set(ordered_keys)))
 
@@ -80,20 +118,58 @@ def print_multi_run_summary(
 
     summary_payload: Dict[str, Any] = {"runs": runs}
     if summary_metrics:
-        summary_payload["metrics"] = summary_metrics
+        summary_payload["metrics"] = order_summary_metrics(summary_metrics)
     if summary_metrics_by_type:
-        summary_payload["metrics_by_type"] = summary_metrics_by_type
+        ordered_by_type = {
+            scenario: order_summary_metrics(metrics)
+            for scenario, metrics in summary_metrics_by_type.items()
+        }
+        for scenario, metrics in ordered_by_type.items():
+            cost_rows = cost_rows_from_totals(
+                input_tokens=[
+                    int((row.get(scenario, {}) or {}).get("input_tokens", 0) or 0)
+                    for row in run_costs_by_type
+                ],
+                output_tokens=[
+                    int((row.get(scenario, {}) or {}).get("output_tokens", 0) or 0)
+                    for row in run_costs_by_type
+                ],
+                total_tokens=[
+                    int((row.get(scenario, {}) or {}).get("total_tokens", 0) or 0)
+                    for row in run_costs_by_type
+                ],
+                costs_usd=[
+                    float((row.get(scenario, {}) or {}).get("estimated_cost(USD)", 0.0) or 0.0)
+                    for row in run_costs_by_type
+                ],
+                runtime_s=[
+                    float((row.get(scenario, {}) or {}).get("run_time(s)", 0.0) or 0.0)
+                    for row in run_costs_by_type
+                ],
+            )
+            metrics["cost"] = summarize_cost_rows(cost_rows)
+        summary_payload["metrics_by_type"] = ordered_by_type
     if run_costs_usd:
-        cost_mu = float(np.mean(run_costs_usd))
-        token_mu = float(np.mean(run_total_tokens))
-        rt_mu = float(np.mean(run_total_runtime_s))
-        print(f"  平均 token：{token_mu:.1f}")
-        print(f"  平均成本(USD)：{cost_mu:.8f}")
-        print(f"  平均執行時間(s)：{rt_mu:.3f}")
+        summary_cost = summarize_cost_rows(
+            cost_rows_from_totals(
+                input_tokens=run_input_tokens,
+                output_tokens=run_output_tokens,
+                total_tokens=run_total_tokens,
+                costs_usd=run_costs_usd,
+                runtime_s=run_total_runtime_s,
+            )
+        )
+        print(f"  平均 input token：{summary_cost['input_token']['mean']:.1f}")
+        print(f"  平均 output token：{summary_cost['output_token']['mean']:.1f}")
+        print(f"  平均 total token：{summary_cost['total_token']['mean']:.1f}")
+        print(f"  平均成本(USD)：{summary_cost['cost(USD)']['mean']:.8f}")
+        print(f"  平均執行時間(s)：{summary_cost['run_time(s)']['mean']:.3f}")
         summary_payload["cost"] = {
-            "average_token": token_mu,
-            "average_cost(USD)": cost_mu,
-            "average_run_time(s)": rt_mu,
+            "input_token": summary_cost["input_token"],
+            "output_token": summary_cost["output_token"],
+            "total_token": summary_cost["total_token"],
+            "cost(USD)": summary_cost["cost(USD)"],
+            "run_time(s)": summary_cost["run_time(s)"],
         }
     else:
         print("  平均成本(USD)：N/A")

@@ -1,0 +1,407 @@
+{
+  "config": {
+    "Plant": {
+      "analyst": "gpt-4.1",
+      "expert": "gpt-4.1",
+      "modeler": "gpt-4.1"
+    },
+    "judge_model": "gpt-5.2",
+    "user_model": "gpt-5.2",
+    "user_answer_quality": "high",
+    "max_turns": 20
+  },
+  "overall_evaluation": {
+    "total_test_samples": 5,
+    "total_hidden_requirements": 103,
+    "average_elicitation_ratio": 0.5428,
+    "average_tkqr": 0.5495,
+    "average_turn": 17.0,
+    "std_elicitation_ratio": 0.1678,
+    "std_tkqr": 0.0773,
+    "std_turn": 3.52,
+    "average_token_cost": 543609.0,
+    "action_type_effectiveness": {
+      "probe": {
+        "total": 64,
+        "effective": 29,
+        "effectiveness_ratio": 0.453125
+      },
+      "clarify": {
+        "total": 16,
+        "effective": 7,
+        "effectiveness_ratio": 0.4375
+      },
+      "finish": {
+        "total": 5,
+        "effective": 0,
+        "effectiveness_ratio": 0.0
+      }
+    },
+    "aspect_type_elicitation": {
+      "Interaction": {
+        "total": 25,
+        "elicited": 11,
+        "elicitation_ratio": 0.44
+      },
+      "Content": {
+        "total": 26,
+        "elicited": 12,
+        "elicitation_ratio": 0.46153846153846156
+      },
+      "Style": {
+        "total": 10,
+        "elicited": 0,
+        "elicitation_ratio": 0.0
+      },
+      "Reliability": {
+        "total": 7,
+        "elicited": 5,
+        "elicitation_ratio": 0.7142857142857143
+      },
+      "Compatibility": {
+        "total": 10,
+        "elicited": 7,
+        "elicitation_ratio": 0.7
+      },
+      "Flexibility": {
+        "total": 4,
+        "elicited": 2,
+        "elicitation_ratio": 0.5
+      },
+      "Performance Efficiency": {
+        "total": 6,
+        "elicited": 4,
+        "elicitation_ratio": 0.6666666666666666
+      },
+      "Security": {
+        "total": 12,
+        "elicited": 10,
+        "elicitation_ratio": 0.8333333333333334
+      },
+      "Safety": {
+        "total": 3,
+        "elicited": 3,
+        "elicitation_ratio": 1.0
+      }
+    },
+    "application_type_statistics": {
+      "Dashboards": {
+        "num_tasks": 1,
+        "average_elicitation_ratio": 0.8235294117647058,
+        "average_tkqr": 0.6872482459084599
+      },
+      "Enterprise Management": {
+        "num_tasks": 1,
+        "average_elicitation_ratio": 0.47619047619047616,
+        "average_tkqr": 0.4508026329950172
+      },
+      "E-commerce Web": {
+        "num_tasks": 2,
+        "average_elicitation_ratio": 0.5331807780320366,
+        "average_tkqr": 0.5400052364951451
+      },
+      "Learning Platforms": {
+        "num_tasks": 1,
+        "average_elicitation_ratio": 0.34782608695652173,
+        "average_tkqr": 0.5294343201230731
+      }
+    }
+  },
+  "task_results": [
+    {
+      "task_id": "task_0",
+      "total_requirements": 17,
+      "total_elicited": 14,
+      "elicitation_ratio": 0.8235,
+      "tkqr": 0.6872,
+      "turns": 20,
+      "optimal_rounds": 18,
+      "token_cost": 602319,
+      "action_type_effectiveness": {
+        "probe": {
+          "total": 17,
+          "effective": 8,
+          "effectiveness_ratio": 0.47058823529411764
+        },
+        "clarify": {
+          "total": 2,
+          "effective": 2,
+          "effectiveness_ratio": 1.0
+        },
+        "finish": {
+          "total": 1,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        }
+      },
+      "aspect_type_elicitation": {
+        "Interaction": {
+          "total": 4,
+          "elicited": 4,
+          "elicitation_ratio": 1.0
+        },
+        "Content": {
+          "total": 4,
+          "elicited": 4,
+          "elicitation_ratio": 1.0
+        },
+        "Style": {
+          "total": 2,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Reliability": {
+          "total": 1,
+          "elicited": 1,
+          "elicitation_ratio": 1.0
+        },
+        "Compatibility": {
+          "total": 2,
+          "elicited": 2,
+          "elicitation_ratio": 1.0
+        },
+        "Flexibility": {
+          "total": 1,
+          "elicited": 1,
+          "elicitation_ratio": 1.0
+        },
+        "Performance Efficiency": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        }
+      }
+    },
+    {
+      "task_id": "task_1",
+      "total_requirements": 21,
+      "total_elicited": 10,
+      "elicitation_ratio": 0.4762,
+      "tkqr": 0.4508,
+      "turns": 20,
+      "optimal_rounds": 22,
+      "token_cost": 660113,
+      "action_type_effectiveness": {
+        "probe": {
+          "total": 14,
+          "effective": 6,
+          "effectiveness_ratio": 0.42857142857142855
+        },
+        "clarify": {
+          "total": 5,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        },
+        "finish": {
+          "total": 1,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        }
+      },
+      "aspect_type_elicitation": {
+        "Interaction": {
+          "total": 4,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Content": {
+          "total": 6,
+          "elicited": 2,
+          "elicitation_ratio": 0.3333333333333333
+        },
+        "Style": {
+          "total": 2,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Security": {
+          "total": 6,
+          "elicited": 6,
+          "elicitation_ratio": 1.0
+        },
+        "Compatibility": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        }
+      }
+    },
+    {
+      "task_id": "task_2",
+      "total_requirements": 23,
+      "total_elicited": 10,
+      "elicitation_ratio": 0.4348,
+      "tkqr": 0.523,
+      "turns": 11,
+      "optimal_rounds": 24,
+      "token_cost": 373723,
+      "action_type_effectiveness": {
+        "probe": {
+          "total": 8,
+          "effective": 4,
+          "effectiveness_ratio": 0.5
+        },
+        "clarify": {
+          "total": 2,
+          "effective": 2,
+          "effectiveness_ratio": 1.0
+        },
+        "finish": {
+          "total": 1,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        }
+      },
+      "aspect_type_elicitation": {
+        "Interaction": {
+          "total": 8,
+          "elicited": 4,
+          "elicitation_ratio": 0.5
+        },
+        "Content": {
+          "total": 4,
+          "elicited": 2,
+          "elicitation_ratio": 0.5
+        },
+        "Style": {
+          "total": 2,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Security": {
+          "total": 3,
+          "elicited": 1,
+          "elicitation_ratio": 0.3333333333333333
+        },
+        "Reliability": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        },
+        "Compatibility": {
+          "total": 3,
+          "elicited": 1,
+          "elicitation_ratio": 0.3333333333333333
+        }
+      }
+    },
+    {
+      "task_id": "task_3",
+      "total_requirements": 23,
+      "total_elicited": 8,
+      "elicitation_ratio": 0.3478,
+      "tkqr": 0.5294,
+      "turns": 15,
+      "optimal_rounds": 24,
+      "token_cost": 439798,
+      "action_type_effectiveness": {
+        "probe": {
+          "total": 11,
+          "effective": 6,
+          "effectiveness_ratio": 0.5454545454545454
+        },
+        "clarify": {
+          "total": 3,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        },
+        "finish": {
+          "total": 1,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        }
+      },
+      "aspect_type_elicitation": {
+        "Interaction": {
+          "total": 6,
+          "elicited": 1,
+          "elicitation_ratio": 0.16666666666666666
+        },
+        "Content": {
+          "total": 9,
+          "elicited": 3,
+          "elicitation_ratio": 0.3333333333333333
+        },
+        "Style": {
+          "total": 2,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Flexibility": {
+          "total": 3,
+          "elicited": 1,
+          "elicitation_ratio": 0.3333333333333333
+        },
+        "Safety": {
+          "total": 3,
+          "elicited": 3,
+          "elicitation_ratio": 1.0
+        }
+      }
+    },
+    {
+      "task_id": "task_4",
+      "total_requirements": 19,
+      "total_elicited": 12,
+      "elicitation_ratio": 0.6316,
+      "tkqr": 0.557,
+      "turns": 19,
+      "optimal_rounds": 20,
+      "token_cost": 642092,
+      "action_type_effectiveness": {
+        "probe": {
+          "total": 14,
+          "effective": 5,
+          "effectiveness_ratio": 0.35714285714285715
+        },
+        "clarify": {
+          "total": 4,
+          "effective": 3,
+          "effectiveness_ratio": 0.75
+        },
+        "finish": {
+          "total": 1,
+          "effective": 0,
+          "effectiveness_ratio": 0.0
+        }
+      },
+      "aspect_type_elicitation": {
+        "Interaction": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        },
+        "Content": {
+          "total": 3,
+          "elicited": 1,
+          "elicitation_ratio": 0.3333333333333333
+        },
+        "Style": {
+          "total": 2,
+          "elicited": 0,
+          "elicitation_ratio": 0.0
+        },
+        "Performance Efficiency": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        },
+        "Reliability": {
+          "total": 3,
+          "elicited": 2,
+          "elicitation_ratio": 0.6666666666666666
+        },
+        "Security": {
+          "total": 3,
+          "elicited": 3,
+          "elicitation_ratio": 1.0
+        },
+        "Compatibility": {
+          "total": 2,
+          "elicited": 2,
+          "elicitation_ratio": 1.0
+        }
+      }
+    }
+  ]
+}

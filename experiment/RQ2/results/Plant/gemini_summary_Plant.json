@@ -1,0 +1,215 @@
+{
+  "runs": 3,
+  "metrics": {
+    "overall_precision": {
+      "mean": 0.9236,
+      "std": 0.0076,
+      "per_round_values": [
+        0.9182,
+        0.9182,
+        0.9343
+      ]
+    },
+    "overall_recall": {
+      "mean": 0.9167,
+      "std": 0.0094,
+      "per_round_values": [
+        0.91,
+        0.91,
+        0.93
+      ]
+    },
+    "overall_f1": {
+      "mean": 0.9163,
+      "std": 0.0095,
+      "per_round_values": [
+        0.9096,
+        0.9096,
+        0.9298
+      ]
+    },
+    "conflict_precision": {
+      "mean": 0.87,
+      "std": 0.0148,
+      "per_round_values": [
+        0.8596,
+        0.8596,
+        0.8909
+      ]
+    },
+    "conflict_recall": {
+      "mean": 0.98,
+      "std": 0.0,
+      "per_round_values": [
+        0.98,
+        0.98,
+        0.98
+      ]
+    },
+    "conflict_f1": {
+      "mean": 0.9217,
+      "std": 0.0082,
+      "per_round_values": [
+        0.9159,
+        0.9159,
+        0.9333
+      ]
+    }
+  },
+  "metrics_by_type": {
+    "Health Management System": {
+      "overall_precision": {
+        "mean": 0.9049,
+        "std": 0.0106,
+        "per_round_values": [
+          0.8974,
+          0.8974,
+          0.9198
+        ]
+      },
+      "overall_recall": {
+        "mean": 0.8952,
+        "std": 0.0135,
+        "per_round_values": [
+          0.8857,
+          0.8857,
+          0.9143
+        ]
+      },
+      "overall_f1": {
+        "mean": 0.8946,
+        "std": 0.0137,
+        "per_round_values": [
+          0.8849,
+          0.8849,
+          0.914
+        ]
+      },
+      "conflict_precision": {
+        "mean": 0.8435,
+        "std": 0.02,
+        "per_round_values": [
+          0.8293,
+          0.8293,
+          0.8718
+        ]
+      },
+      "conflict_recall": {
+        "mean": 0.9714,
+        "std": 0.0,
+        "per_round_values": [
+          0.9714,
+          0.9714,
+          0.9714
+        ]
+      },
+      "conflict_f1": {
+        "mean": 0.9028,
+        "std": 0.0114,
+        "per_round_values": [
+          0.8947,
+          0.8947,
+          0.9189
+        ]
+      }
+    },
+    "訂餐外送系統": {
+      "overall_precision": {
+        "mean": 0.9688,
+        "std": 0.0,
+        "per_round_values": [
+          0.9688,
+          0.9688,
+          0.9688
+        ]
+      },
+      "overall_recall": {
+        "mean": 0.9667,
+        "std": 0.0,
+        "per_round_values": [
+          0.9667,
+          0.9667,
+          0.9667
+        ]
+      },
+      "overall_f1": {
+        "mean": 0.9666,
+        "std": 0.0,
+        "per_round_values": [
+          0.9666,
+          0.9666,
+          0.9666
+        ]
+      },
+      "conflict_precision": {
+        "mean": 0.9375,
+        "std": 0.0,
+        "per_round_values": [
+          0.9375,
+          0.9375,
+          0.9375
+        ]
+      },
+      "conflict_recall": {
+        "mean": 1.0,
+        "std": 0.0,
+        "per_round_values": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "conflict_f1": {
+        "mean": 0.9677,
+        "std": 0.0,
+        "per_round_values": [
+          0.9677,
+          0.9677,
+          0.9677
+        ]
+      }
+    }
+  },
+  "cost": {
+    "input_token": {
+      "mean": 612680.3333333334,
+      "per_round_values": [
+        609279.0,
+        624858.0,
+        603904.0
+      ]
+    },
+    "output_token": {
+      "mean": 35510.333333333336,
+      "per_round_values": [
+        35075.0,
+        36071.0,
+        35385.0
+      ]
+    },
+    "total_token": {
+      "mean": 648190.6666666666,
+      "per_round_values": [
+        644354.0,
+        660929.0,
+        639289.0
+      ]
+    },
+    "cost(USD)": {
+      "mean": 0.4128711666666667,
+      "per_round_values": [
+        0.4098645,
+        0.420642,
+        0.408107
+      ]
+    },
+    "run_time(s)": {
+      "mean": 278.237,
+      "per_round_values": [
+        272.92,
+        283.37,
+        278.421
+      ]
+    }
+  }
+}

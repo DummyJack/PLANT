@@ -99,7 +99,52 @@ def merge_cost_payloads(previous: Dict[str, Any], current: Dict[str, Any]) -> Di
         "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in merged_agents.values()), 3),
         "estimated_cost(USD)": round(sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in merged_agents.values()), 8),
     }
-    return {"agents": merged_agents, "totals": totals}
+    task_rows: Dict[str, Dict[str, Any]] = {}
+    for row in (previous.get("tasks") or []) + (current.get("tasks") or []):
+        if not isinstance(row, dict):
+            continue
+        task_id = str(row.get("task_id") or "")
+        if task_id:
+            task_rows[task_id] = row
+    return {"agents": merged_agents, "totals": totals, "tasks": list(task_rows.values())}
+
+
+def cost_summary_diff(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "model": str(after.get("model") or before.get("model") or ""),
+        "input_tokens": max(0, int(after.get("input_tokens", 0) or 0) - int(before.get("input_tokens", 0) or 0)),
+        "output_tokens": max(0, int(after.get("output_tokens", 0) or 0) - int(before.get("output_tokens", 0) or 0)),
+        "total_tokens": max(0, int(after.get("total_tokens", 0) or 0) - int(before.get("total_tokens", 0) or 0)),
+        "run_time(s)": round(
+            max(
+                0.0,
+                float(after.get("run_time(s)", 0.0) or 0.0)
+                - float(before.get("run_time(s)", 0.0) or 0.0),
+            ),
+            3,
+        ),
+        "estimated_cost(USD)": round(
+            max(
+                0.0,
+                float(after.get("estimated_cost(USD)", 0.0) or 0.0)
+                - float(before.get("estimated_cost(USD)", 0.0) or 0.0),
+            ),
+            8,
+        ),
+    }
+
+
+def cost_totals(rows: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in rows.values()),
+        "output_tokens": sum(int(v.get("output_tokens", 0) or 0) for v in rows.values()),
+        "total_tokens": sum(int(v.get("total_tokens", 0) or 0) for v in rows.values()),
+        "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in rows.values()), 3),
+        "estimated_cost(USD)": round(
+            sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in rows.values()),
+            8,
+        ),
+    }
 
 
 def choose_application_types(tasks: List[Dict[str, Any]]) -> List[str] | None:
@@ -196,8 +241,6 @@ def main() -> None:
             print("錯誤：選擇的情境沒有可執行任務")
             sys.exit(1)
 
-    print(f"資料檔案共 {total_tasks_in_file} 個任務，本輪執行 {len(tasks)} 個任務")
-
     file_prefix = plant_model_file_prefix(flow_cfg)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -269,6 +312,26 @@ def main() -> None:
             if isinstance(checkpoint_payload, dict)
             else {}
         )
+        task_cost_rows: List[Dict[str, Any]] = [
+            row
+            for row in (previous_cost_payload.get("tasks", []) if isinstance(previous_cost_payload, dict) else [])
+            if isinstance(row, dict)
+        ]
+
+        def current_cost_snapshot() -> Dict[str, Dict[str, Any]]:
+            enabled = flow.config.get("enable_agents") or {}
+            rows: Dict[str, Dict[str, Any]] = {}
+            for agent_name, model in flow.agent_models.items():
+                if isinstance(enabled, dict) and not bool(enabled.get(agent_name, True)):
+                    continue
+                if agent_name == "user":
+                    continue
+                if hasattr(model, "costTracker"):
+                    rows[agent_name] = model.costTracker.export_summary_dict()
+            if not isinstance(enabled, dict) or bool(enabled.get("user", True)):
+                rows["user"] = oracle_user.export_cost_summary()
+            return rows
+
         def persist_progress() -> Dict[str, Any]:
             result_payload = build_result_payload(
                 flow_cfg=flow_cfg,
@@ -296,7 +359,7 @@ def main() -> None:
                 )
             cost_payload = merge_cost_payloads(
                 previous_cost_payload,
-                build_cost_payload(flow, oracle_user),
+                build_cost_payload(flow, oracle_user, task_cost_rows),
             )
             with cost_path.open("w", encoding="utf-8") as f:
                 json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)
@@ -326,10 +389,23 @@ def main() -> None:
             print(f"總需求數：{len(task_implicit_requirements(task))}")
             print("\n開始需求擷取會議...\n")
             token_before = 0
+            cost_before = current_cost_snapshot()
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):
                     token_before += int(m.costTracker.export_summary_dict().get("total_tokens", 0) or 0)
             one = run_one_task(flow, oracle_user, task)
+            cost_after = current_cost_snapshot()
+            agent_costs = {
+                name: cost_summary_diff(cost_before.get(name, {}), summary)
+                for name, summary in cost_after.items()
+            }
+            task_cost_rows.append(
+                {
+                    "task_id": task_id,
+                    "task_name": task.get("name", ""),
+                    "totals": cost_totals(agent_costs),
+                }
+            )
             token_after = 0
             for m in flow.agent_models.values():
                 if hasattr(m, "costTracker"):

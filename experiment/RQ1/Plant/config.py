@@ -233,8 +233,9 @@ def apply_rq1_flow_overrides(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]) 
     if isinstance(exp_cfg.get("agent_models"), dict):
         updated["agent_models"] = exp_cfg["agent_models"]
     updated["rounds"] = 0
-    if exp_cfg.get("elicitation_max_turns") is not None:
-        updated["elicitation_max_turns"] = int(exp_cfg["elicitation_max_turns"])
+    max_turns = exp_cfg.get("max_turns", exp_cfg.get("elicitation_max_turns"))
+    if max_turns is not None:
+        updated["elicitation_max_turns"] = int(max_turns)
     return updated
 
 # ========

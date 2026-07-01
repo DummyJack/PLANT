@@ -1,0 +1,360 @@
+[
+  {
+    "task_id": "task_0",
+    "task_name": "Stock Report Generation System",
+    "initial_requirements": "I need a website that helps me search for stocks and automatically generate stock analysis reports.",
+    "user_answer_quality": "high",
+    "interviewer_model": "gemini-3-flash-preview",
+    "conversation": [
+      {
+        "turn": 1,
+        "interviewer": "To help me understand the scope of the analysis, what specific types of data or metrics should be included in these automatically generated reports (e.g., technical indicators, financial ratios, recent news sentiment, or price predictions)?",
+        "user": "I’d like the reports to include basic stock info and price performance (1D/1W/1M/1Y), a few key technical indicators like moving averages and RSI, and core financials/ratios like revenue/earnings growth, P/E, and debt-to-equity. It’d also be helpful to summarize recent major news and overall sentiment, but I don’t need price predictions to start.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR5"
+        ],
+        "elicitation_ratio": 0.058823529411764705
+      },
+      {
+        "turn": 2,
+        "interviewer": "Once the stock analysis report is generated, how would you like to interact with it—should it be viewable only on the website, or do you need options to download it (e.g., as a PDF) or share it with others?",
+        "user": "I’d like to view it on the website, but also have an option to download/export it—PDF is ideal. Sharing via a link or email would be nice too, but export is the main thing.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR4"
+        ],
+        "elicitation_ratio": 0.11764705882352941
+      },
+      {
+        "turn": 3,
+        "interviewer": "Regarding the search functionality, should users be able to search only by the specific stock ticker symbol (e.g., AAPL), or do you also need the ability to search by company name or filter stocks by specific criteria like industry or market cap?",
+        "user": "I want to be able to search by both ticker symbol and company name. Basic filters like industry/sector and market cap would be useful, but not required for the first version.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR1"
+        ],
+        "elicitation_ratio": 0.17647058823529413
+      },
+      {
+        "turn": 4,
+        "interviewer": "Will this website be open to the public, or should users be required to create an account to save their searches, manage their downloaded reports, and access the sharing features?",
+        "user": "I don’t really care about public vs. accounts right now. For the first version, I’m fine with it being public and not requiring sign-up.",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.17647058823529413
+      },
+      {
+        "turn": 5,
+        "interviewer": "Since you mentioned that the reports should include a summary of recent major news and overall sentiment, how frequently should this data be updated (e.g., real-time as news breaks, or once a day), and are there specific news sources you want the system to prioritize?",
+        "user": "Daily updates are fine to start—like refresh the news/sentiment once every 24 hours, maybe more often during market hours later. No specific sources, just prioritize reputable outlets (e.g., major financial news) and avoid spammy sites.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR9"
+        ],
+        "elicitation_ratio": 0.23529411764705882
+      },
+      {
+        "turn": 6,
+        "interviewer": "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\nUser Story 1: As a user, I want to search for stocks by ticker symbol or company name so that I can quickly find the specific company I am interested in.\nUser Story 2: As a user, I want to view a stock's basic information and price performance over various timeframes (1D, 1W, 1M, 1Y) so that I can understand its recent market trends.\nUser Story 3: As a user, I want the system to generate a report including technical indicators like moving averages and RSI so that I can perform basic technical analysis.\nUser Story 4: As a user, I want to see core financial ratios such as P/E, debt-to-equity, and revenue/earnings growth in the report so that I can evaluate the company's fundamental health.\nUser Story 5: As a user, I want to read a summary of recent major news and an overall sentiment analysis so that I can understand the current market mood surrounding a stock.\nUser Story 6: As a user, I want the news and sentiment data to be updated at least once every 24 hours from reputable financial sources so that I am making decisions based on relatively current information.\nUser Story 7: As a user, I want to view the generated stock analysis report directly on the website so that I can access information quickly without downloading files.\nUser Story 8: As a user, I want to export the stock analysis report as a PDF so that I can save it for offline viewing or personal record-keeping.\nUser Story 9: As a user, I want the ability to share a report via a link or email so that I can easily communicate findings with others.\nUser Story 10: As a user, I want to access all search and reporting features without creating an account so that I can use the tool immediately and frictionlessly.",
+        "user": "",
+        "action_type": "finish",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.23529411764705882
+      }
+    ],
+    "turns": 6
+  },
+  {
+    "task_id": "task_1",
+    "task_name": "Hospital Management and Information System",
+    "initial_requirements": "I want a website that helps manage hospital operations, including clinical, administrative, and operational activities, and provides a clear overview of the hospital’s overall performance.",
+    "user_answer_quality": "high",
+    "interviewer_model": "gemini-3-flash-preview",
+    "conversation": [
+      {
+        "turn": 1,
+        "interviewer": "To help me understand the scope of the clinical and administrative features, could you specify which primary user roles (e.g., doctors, receptionists, hospital administrators) will be interacting with the system and what their most critical daily tasks are?",
+        "user": "Main roles: doctors/nurses, reception/front desk, billing/insurance staff, pharmacy/lab, and hospital admins/department heads. Daily tasks: clinicians manage patient charts/orders/notes and discharge; front desk handles registration, appointments, admissions; billing submits claims, posts payments, tracks denials; pharmacy/lab manages inventory and fulfills orders/results; admins monitor dashboards, approvals, staffing, and overall performance with role-based permissions.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR14"
+        ],
+        "elicitation_ratio": 0.047619047619047616
+      },
+      {
+        "turn": 2,
+        "interviewer": "Regarding the clinical workflow and the \"clear overview of performance\" you mentioned, how should the system handle notifications or alerts—for example, should clinicians be alerted to critical lab results, or should administrators receive automated notifications when specific performance KPIs (like bed occupancy or claim denial rates) hit a certain threshold?",
+        "user": "I don’t really care about a sophisticated alerts/thresholds system right now. Basic notifications for critical lab results and maybe a simple admin alert for major KPI issues is enough to start.",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.047619047619047616
+      },
+      {
+        "turn": 3,
+        "interviewer": "Since you mentioned that administrators need to monitor performance and department heads need to manage staffing, how do you envision the system handling staff scheduling and the tracking of bed availability across different departments?",
+        "user": "For staffing, we need a basic scheduling module where department heads can set shifts, request/approve swaps or time-off, and see coverage gaps by role. For beds, a real-time bed board by department/ward showing available/occupied/cleaning/reserved, tied to admissions/discharges and patient transfers, with a simple occupancy summary for admins.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR5"
+        ],
+        "elicitation_ratio": 0.09523809523809523
+      },
+      {
+        "turn": 4,
+        "interviewer": "To ensure the billing and insurance workflow is fully integrated, how should the system handle the transition from a patient's clinical discharge or pharmacy order to the final billing statement—should the system automatically generate a draft invoice based on those activities for the billing staff to review?",
+        "user": "Yes—when a patient is discharged (and as pharmacy/lab charges come in), the system should automatically generate a draft invoice with all chargeable items captured. Billing staff should review/edit, apply insurance rules, then finalize the patient statement and claim submission from that draft.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR3"
+        ],
+        "elicitation_ratio": 0.14285714285714285
+      },
+      {
+        "turn": 5,
+        "interviewer": "Regarding the pharmacy and laboratory modules, how should the system handle inventory management—specifically, do you need automated alerts when stock levels for medications or lab supplies fall below a certain point, or should it simply track usage against orders?",
+        "user": "We should track inventory usage against medication/lab orders, and also have simple low-stock alerts with a reorder threshold per item. Nothing too fancy—just a dashboard/list and optional email/in-app notification when something drops below the minimum.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR7"
+        ],
+        "elicitation_ratio": 0.19047619047619047
+      },
+      {
+        "turn": 6,
+        "interviewer": "Regarding the \"clear overview of the hospital’s overall performance\" for administrators and department heads, what specific metrics or data points should be included in the primary dashboard beyond bed occupancy and claim denial rates?",
+        "user": "Beyond bed occupancy and claim denials, the main dashboard should show ED/OPD wait times and patient throughput (admit-to-discharge LOS), readmission rate, surgery/clinic schedule utilization, staffing coverage vs plan/overtime, pharmacy/lab turnaround times and stockouts, and high-level financials like daily charges, collections, AR aging, and payer mix. Department heads should be able to filter these by department/ward and date range and export a simple report.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR1"
+        ],
+        "elicitation_ratio": 0.23809523809523808
+      },
+      {
+        "turn": 7,
+        "interviewer": "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\nUser Story 1: As a Front Desk Staff, I want to register patients and manage appointments so that the hospital can efficiently schedule and admit patients.\nUser Story 2: As a Clinician, I want to manage patient charts, clinical notes, and orders so that I can provide accurate and timely care to patients.\nUser Story 3: As a Clinician, I want to receive basic notifications for critical lab results so that I can take immediate action for patient safety.\nUser Story 4: As a Department Head, I want to set shifts and manage staff time-off or swap requests so that I can ensure adequate coverage for my department.\nUser Story 5: As a Staff Member, I want to view a real-time bed board showing status (available, occupied, cleaning, reserved) so that I can manage admissions and transfers effectively.\nUser Story 6: As a Billing Staff member, I want the system to automatically generate a draft invoice from clinical and pharmacy charges so that I can review and finalize claims more efficiently.\nUser Story 7: As a Billing Staff member, I want to apply insurance rules and track claim denials so that the hospital can maximize revenue collection.\nUser Story 8: As a Pharmacy/Lab Staff member, I want to track inventory usage against orders so that stock levels are accurately maintained.\nUser Story 9: As a Pharmacy/Lab Staff member, I want to receive low-stock alerts based on reorder thresholds so that I can prevent stockouts of essential supplies.\nUser Story 10: As a Hospital Administrator, I want a dashboard showing KPIs like bed occupancy, wait times, and financial metrics so that I can monitor the hospital's overall performance.\nUser Story 11: As a Department Head, I want to filter performance metrics by department and date range and export reports so that I can analyze specific operational trends.\nUser Story 12: As a Hospital Administrator, I want to receive simple alerts for major KPI issues so that I can address critical operational bottlenecks quickly.\nUser Story 13: As a System Administrator, I want to manage role-based permissions so that users only have access to the data and functions relevant to their jobs.",
+        "user": "",
+        "action_type": "finish",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.23809523809523808
+      }
+    ],
+    "turns": 7
+  },
+  {
+    "task_id": "task_2",
+    "task_name": "Bus and Railway Ticket Booking System",
+    "initial_requirements": "I want a platform that helps me look up and book bus and train tickets, complete payments, and manage my trips and past bookings in one place.",
+    "user_answer_quality": "high",
+    "interviewer_model": "gemini-3-flash-preview",
+    "conversation": [
+      {
+        "turn": 1,
+        "interviewer": "To help me understand how the platform should handle trip management, could you clarify if you need the ability to modify or cancel existing bookings directly through the app, and if so, should the system handle the refund process automatically?",
+        "user": "Yes—I’d like to be able to modify or cancel bookings in the app whenever the operator allows it. And if it’s refundable, the app should handle the refund automatically and show the status/timeline.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR8"
+        ],
+        "elicitation_ratio": 0.043478260869565216
+      },
+      {
+        "turn": 2,
+        "interviewer": "When searching for bus and train tickets, do you need the ability to filter or sort results by specific criteria, such as price, departure time, or travel duration?",
+        "user": "I don’t really care about advanced filtering/sorting. Basic stuff like sorting by price or departure time is fine, but it’s not a big requirement for me.",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.043478260869565216
+      },
+      {
+        "turn": 3,
+        "interviewer": "Regarding the payment process, do you have a preference for specific payment methods (such as credit cards, digital wallets, or bank transfers), and would you like the platform to securely save your payment information for faster future bookings?",
+        "user": "Credit/debit cards and common digital wallets are the main ones I’d want—bank transfer is optional. I’m okay with saving payment info for faster checkout as long as it’s secure (tokenized) and I can opt in/out and remove saved methods anytime.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR21"
+        ],
+        "elicitation_ratio": 0.08695652173913043
+      },
+      {
+        "turn": 4,
+        "interviewer": "For the trip management and booking history aspect, would you like the platform to provide real-time notifications or alerts, such as reminders for upcoming departures or updates on delays and platform changes?",
+        "user": "I don’t really care about real-time alerts. A simple reminder before departure is nice, but delays/platform change notifications aren’t a must-have for me.",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.08695652173913043
+      },
+      {
+        "turn": 5,
+        "interviewer": "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\nUser Story 1: As a traveler, I want to search for bus and train tickets in one place so that I can compare travel options easily.\nUser Story 2: As a traveler, I want to sort search results by price or departure time so that I can quickly find the most convenient or affordable trip.\nUser Story 3: As a traveler, I want to book tickets and pay using credit/debit cards or digital wallets so that I can complete my purchase using my preferred payment method.\nUser Story 4: As a traveler, I want to securely save my payment information with the ability to opt-in, opt-out, or delete it so that I can enjoy a faster checkout process in the future.\nUser Story 5: As a traveler, I want to view a list of my past and upcoming bookings so that I can manage my travel history and itinerary in one place.\nUser Story 6: As a traveler, I want to modify or cancel my bookings directly within the app (where operator policies allow) so that I can manage changes to my plans without contacting support.\nUser Story 7: As a traveler, I want the system to automatically process refunds for eligible cancellations and show me the refund status and timeline so that I am informed about my money.\nUser Story 8: As a traveler, I want to receive a simple reminder notification before my scheduled departure so that I don't forget my trip.",
+        "user": "",
+        "action_type": "finish",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.08695652173913043
+      }
+    ],
+    "turns": 5
+  },
+  {
+    "task_id": "task_3",
+    "task_name": "Adult Vocabulary Learning and Quiz System",
+    "initial_requirements": "I want a website that helps me steadily learn and practice new vocabulary, stay motivated, and track my learning progress over time.",
+    "user_answer_quality": "high",
+    "interviewer_model": "gemini-3-flash-preview",
+    "conversation": [
+      {
+        "turn": 1,
+        "interviewer": "To help me understand how the system should support your learning process, how would you like to acquire the new vocabulary—would you prefer to provide your own lists of words, or should the system suggest words for you based on your interests or proficiency level?",
+        "user": "Ideally both: I want to be able to add my own word lists, but I’d also like the system to suggest words based on my interests and current level. The suggestions should adapt as I improve so the difficulty steadily increases.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR15"
+        ],
+        "elicitation_ratio": 0.043478260869565216
+      },
+      {
+        "turn": 2,
+        "interviewer": "To help you stay motivated and track your progress, what specific types of practice activities or progress visualizations (such as quizzes, flashcards, streaks, or charts) do you envision using within the system?",
+        "user": "I’d like spaced-repetition flashcards and short quizzes (multiple choice + type-the-word), plus a daily streak and reminders. For progress, a dashboard with charts showing words learned over time, accuracy/recall rate, and which words I’m struggling with most.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR10"
+        ],
+        "elicitation_ratio": 0.08695652173913043
+      },
+      {
+        "turn": 3,
+        "interviewer": "Regarding the word suggestions based on your interests, how would you like to provide those interests to the system (e.g., by selecting from a list of categories like \"Business\" or \"Travel,\" or by providing a sample text/article), and should the system perform an initial assessment to determine your starting proficiency level?",
+        "user": "I don’t really care about the exact method—as long as it’s quick. Picking a few categories is fine, and optionally pasting a short sample text could be nice. An initial proficiency assessment would be helpful, but I’d want it to be short and skippable.",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.08695652173913043
+      },
+      {
+        "turn": 4,
+        "interviewer": "When you are practicing with flashcards or quizzes and you get a word wrong, how would you like the system to handle those \"struggling\" words—should it simply increase their frequency in your sessions, or would you like specific features like a dedicated \"review list\" or additional hints for those terms?",
+        "user": "I’d want both: automatically show those words more often via spaced repetition, and also keep a dedicated “struggling words” review list I can jump into anytime. For wrong answers, quick hints like example sentences, mnemonic tips, and showing the correct answer after a second try would help.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR16"
+        ],
+        "elicitation_ratio": 0.13043478260869565
+      },
+      {
+        "turn": 5,
+        "interviewer": "Since you mentioned that the system should adapt as you improve, how would you like the system to handle \"mastered\" words—should they be archived automatically after a certain success threshold, or would you prefer to manually mark them as learned to remove them from your active practice rotation?",
+        "user": "I’d prefer it to auto-mark words as mastered once I hit a clear success threshold (like several correct recalls over time), and then push them way less often or archive them. But I still want a manual override so I can unmaster/remaster a word if it was a fluke or I want to keep practicing it.",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR19"
+        ],
+        "elicitation_ratio": 0.17391304347826086
+      },
+      {
+        "turn": 6,
+        "interviewer": "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\nUser Story 1: As a learner, I want to manually add my own word lists so that I can focus on specific vocabulary relevant to my personal needs.\nUser Story 2: As a learner, I want the system to suggest words based on my interests (categories or sample text) and proficiency level so that I can discover relevant new vocabulary.\nUser Story 3: As a learner, I want to take a short, skippable proficiency assessment so that the system can determine my starting level without a long onboarding process.\nUser Story 4: As a learner, I want the system to automatically increase the difficulty of suggested words as I improve so that I am consistently challenged.\nUser Story 5: As a learner, I want to practice using spaced-repetition flashcards so that I can memorize words efficiently over the long term.\nUser Story 6: As a learner, I want to take multiple-choice and \"type-the-word\" quizzes so that I can test my recall and spelling accuracy.\nUser Story 7: As a learner, I want to see hints like example sentences and mnemonics when I get a word wrong so that I have context to help me remember.\nUser Story 8: As a learner, I want the system to show the correct answer after a second failed attempt so that I can learn from my mistakes immediately.\nUser Story 9: As a learner, I want a dedicated \"struggling words\" list so that I can manually review the terms I find most difficult at any time.\nUser Story 10: As a learner, I want the system to automatically archive words after a success threshold is met so that my active practice stays focused on new or difficult material.\nUser Story 11: As a learner, I want a manual override to mark words as mastered or unmastered so that I have final control over my learning rotation.\nUser Story 12: As a learner, I want to see a daily streak and receive reminders so that I stay motivated to practice every day.\nUser Story 13: As a learner, I want a dashboard with charts showing words learned over time and recall rates so that I can visualize my progress.\nUser Story 14: As a learner, I want to see a report of which specific words I am struggling with most so that I know where to focus my extra effort.",
+        "user": "",
+        "action_type": "finish",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.17391304347826086
+      }
+    ],
+    "turns": 6
+  },
+  {
+    "task_id": "task_4",
+    "task_name": "訂餐外送系統",
+    "initial_requirements": "我想要一個線上訂餐外送平台，讓顧客可以搜尋餐廳、瀏覽菜單、加入購物車、下單付款並追蹤外送，同時讓餐廳管理菜單與訂單、外送員接收派單並完成配送、平台管理者查看營運狀態。",
+    "user_answer_quality": "high",
+    "interviewer_model": "gemini-3-flash-preview",
+    "conversation": [
+      {
+        "turn": 1,
+        "interviewer": "為了更精確地定義系統功能，我想先了解關於「訂單分配」的細節：請問您希望系統如何將訂單指派給外送員？是採取「系統自動根據距離指派」，還是「由外送員在平台上自行搶單」？",
+        "user": "我希望以系統自動派單為主，依距離、外送員目前負載/評分來分配。外送員收到派單後要能用按鈕「接單/拒單」，若連續拒單或超時就自動改派；也可以保留一個搶單模式當備援。",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR3"
+        ],
+        "elicitation_ratio": 0.05263157894736842
+      },
+      {
+        "turn": 2,
+        "interviewer": "關於「付款與訂單追蹤」的部分，請問您希望平台支援哪些支付方式（例如：信用卡、行動支付、或貨到付款）？另外，在「追蹤外送」功能中，顧客是否需要即時在地圖上看到外送員的 GPS 位置，還是只需看到訂單狀態的變更（如：準備中、配送中、已送達）即可？",
+        "user": "付款希望先支援信用卡跟主流行動支付（像 Apple Pay/Google Pay、Line Pay），也希望有貨到付款當備選。追蹤外送我希望顧客可以在地圖上即時看到外送員 GPS 位置，並同時有狀態更新（準備中/取餐中/配送中/已送達）。",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR19"
+        ],
+        "elicitation_ratio": 0.10526315789473684
+      },
+      {
+        "turn": 3,
+        "interviewer": "關於「餐廳管理」與「平台營運」的部分，請問您希望系統如何處理訂單的抽成與結算？例如：平台是否需要自動計算並扣除佣金後再撥款給餐廳，以及管理者是否需要具備審核新餐廳入駐、管理外送員帳號權限的功能？",
+        "user": "抽成與結算希望系統自動計算，每筆訂單先扣平台佣金與必要費用後，定期（例如每週/每月）撥款給餐廳，並提供對帳明細與發票/收據紀錄。管理者需要能審核餐廳入駐、管理餐廳/外送員帳號與權限；像退款、帳號修改、權限變更這種高風險操作要有分級權限與審核/操作紀錄。",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR17"
+        ],
+        "elicitation_ratio": 0.15789473684210525
+      },
+      {
+        "turn": 4,
+        "interviewer": "關於「搜尋餐廳與瀏覽菜單」的部分，為了提升使用者體驗，請問您希望顧客在搜尋時，除了基本的關鍵字搜尋外，是否需要支援「分類篩選」（如：台式、美式、素食）、「評價排序」或「距離排序」等功能？另外，菜單是否需要支援「客製化選項」（如：去冰、微辣、加蛋）的功能？",
+        "user": "需要，搜尋希望支援分類篩選（料理類型/素食等）、評價排序、距離排序，最好也能加上外送時間與價格區間的篩選。菜單也要支援客製化選項（辣度、加料、去冰等），並能影響價格、可選/不可選與備註。",
+        "action_type": "probe",
+        "is_relevant_to_url": true,
+        "elicited_requirements": [
+          "IR1"
+        ],
+        "elicitation_ratio": 0.21052631578947367
+      },
+      {
+        "turn": 5,
+        "interviewer": "最後一個關於「評價與回饋」的部分：請問您是否希望建立一套雙向或三向的評價系統？例如：顧客可以對餐廳和外送員評分與留言，而餐廳或外送員是否也需要對顧客進行評分（以防惡意訂單）？此外，這些評價是否會直接影響到您前面提到的「自動派單」權重？",
+        "user": "這部分我其實沒有特別在意先做得很完整。先做顧客對餐廳/外送員的評分與留言就好，餐廳或外送員要不要評顧客可以先不做；評價影響派單權重也先不用納入第一版。",
+        "action_type": "probe",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.21052631578947367
+      },
+      {
+        "turn": 6,
+        "interviewer": "I have gathered enough information. Based on our conversation, here is the set of user stories:\n\nUser Story 1: As a customer, I want to search for restaurants using keywords and filters (cuisine type, vegetarian, price range) so that I can quickly find the food I want.\nUser Story 2: As a customer, I want to sort restaurant results by rating, distance, and delivery time so that I can choose the best or fastest option.\nUser Story 3: As a customer, I want to customize my meal options (e.g., spiciness, extra toppings, ice levels) with real-time price adjustments so that the food meets my personal preferences.\nUser Story 4: As a customer, I want to pay for my order using credit cards, mobile payments (Apple/Google/Line Pay), or cash on delivery so that I have flexible payment options.\nUser Story 5: As a customer, I want to track the real-time GPS location of the delivery person and see status updates (Preparing/Picking up/Delivering/Delivered) so that I know exactly when my food will arrive.\nUser Story 6: As a customer, I want to rate and leave comments for the restaurant and the delivery person so that I can share my feedback with the community.\nUser Story 7: As a restaurant manager, I want to manage my menu and incoming orders so that I can efficiently run my business operations.\nUser Story 8: As a restaurant manager, I want to receive periodic payouts and access detailed reconciliation reports and invoices so that I can manage my finances accurately.\nUser Story 9: As a delivery person, I want to receive automated delivery assignments based on my location and workload so that I can efficiently pick up and deliver orders.\nUser Story 10: As a delivery person, I want to accept or reject assigned orders via a button and access a backup \"grab\" mode so that I have flexibility in managing my tasks.\nUser Story 11: As a platform administrator, I want to review and approve new restaurant applications so that I can ensure the quality of partners on the platform.\nUser Story 12: As a platform administrator, I want to manage account permissions and view audit logs for high-risk operations (e.g., refunds, permission changes) so that I can maintain system security and accountability.\nUser Story 13: As a platform administrator, I want the system to automatically calculate commissions and fees for each order so that the platform's revenue is correctly processed.\nUser Story 14: As a platform administrator, I want to view the overall operational status of the platform so that I can make data-driven business decisions.",
+        "user": "",
+        "action_type": "finish",
+        "is_relevant_to_url": false,
+        "elicited_requirements": [],
+        "elicitation_ratio": 0.21052631578947367
+      }
+    ],
+    "turns": 6
+  }
+]

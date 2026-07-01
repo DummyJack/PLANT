@@ -4,7 +4,7 @@ import sys
 from time import perf_counter
 from pathlib import Path
 
-from typing import List
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
@@ -71,22 +71,49 @@ def model_file_prefix(provider: str) -> str:
     return normalized or "model"
 
 
+def cost_summary_diff(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "model": str(after.get("model") or before.get("model") or ""),
+        "input_tokens": max(0, int(after.get("input_tokens", 0) or 0) - int(before.get("input_tokens", 0) or 0)),
+        "output_tokens": max(0, int(after.get("output_tokens", 0) or 0) - int(before.get("output_tokens", 0) or 0)),
+        "total_tokens": max(0, int(after.get("total_tokens", 0) or 0) - int(before.get("total_tokens", 0) or 0)),
+        "run_time(s)": round(
+            max(
+                0.0,
+                float(after.get("run_time(s)", 0.0) or 0.0)
+                - float(before.get("run_time(s)", 0.0) or 0.0),
+            ),
+            3,
+        ),
+        "estimated_cost(USD)": round(
+            max(
+                0.0,
+                float(after.get("estimated_cost(USD)", 0.0) or 0.0)
+                - float(before.get("estimated_cost(USD)", 0.0) or 0.0),
+            ),
+            8,
+        ),
+    }
+
+
+def cost_totals(rows: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "input_tokens": sum(int(v.get("input_tokens", 0) or 0) for v in rows.values()),
+        "output_tokens": sum(int(v.get("output_tokens", 0) or 0) for v in rows.values()),
+        "total_tokens": sum(int(v.get("total_tokens", 0) or 0) for v in rows.values()),
+        "run_time(s)": round(sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in rows.values()), 3),
+        "estimated_cost(USD)": round(
+            sum(float(v.get("estimated_cost(USD)", 0.0) or 0.0) for v in rows.values()),
+            8,
+        ),
+    }
+
+
 def model_provider(model_name: str) -> str:
     normalized = str(model_name or "").strip().lower()
     if normalized.startswith("gemini-"):
         return "gemini"
     return "openai"
-
-
-def model_supports_thinking_level(model_name: str) -> bool:
-    normalized = str(model_name or "").strip().lower()
-    if not normalized.startswith("gemini-"):
-        return False
-    version = normalized.removeprefix("gemini-").split("-", 1)[0]
-    try:
-        return float(version) >= 3.0
-    except ValueError:
-        return False
 
 
 def endpoint_for_model(model_name: str) -> tuple[str, str]:
@@ -100,16 +127,6 @@ def endpoint_for_model(model_name: str) -> tuple[str, str]:
         os.environ.get("OPENAI_API_KEY", ""),
         os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL,
     )
-
-
-def thinking_level_for_model(
-    model_name: str, configured_level: str | None, *, enabled: bool
-) -> str | None:
-    if not enabled:
-        return None
-    if not model_supports_thinking_level(model_name):
-        return None
-    return configured_level
 
 
 def choose_application_types(tasks: List[dict]) -> List[str] | None:
@@ -158,8 +175,6 @@ def main():
 
     interviewer_model = pick("interviewer_model", "gpt-4o-mini")
     gym_model = pick("gym_model", "gpt-5.2")
-    thinking_level = str(pick("thinking_level", "") or "").strip() or None
-    use_thinking = bool(pick("use_thinking", False))
     api_key, base_url = endpoint_for_model(interviewer_model)
     gym_api_key, gym_base_url = endpoint_for_model(gym_model)
     data_path = resolve_data_path(DEFAULT_DATA_FILE)
@@ -214,16 +229,12 @@ def main():
     interviewer_temperature = float(pick("interviewer_temperature", 0.0))
     interviewer_timeout = float(pick("interviewer_timeout", 60.0))
     interviewer_max_tokens = int(pick("interviewer_max_tokens", 1024))
-    interviewer_max_tokens_thinking = int(pick("interviewer_max_tokens_thinking", 8192))
 
 
     judge_api_key = os.getenv("JUDGE_API_KEY", gym_api_key)
     user_api_key = os.getenv("USER_API_KEY", gym_api_key)
     judge_base_url = os.getenv("JUDGE_BASE_URL", gym_base_url)
     user_base_url = os.getenv("USER_BASE_URL", gym_base_url)
-    interviewer_thinking_level = thinking_level_for_model(
-        interviewer_model, thinking_level, enabled=use_thinking
-    )
 
     if not api_key:
         provider = model_provider(interviewer_model)
@@ -275,14 +286,12 @@ def main():
             judge_temperature=judge_temperature,
             judge_max_tokens=judge_max_tokens,
             judge_timeout=judge_timeout,
-            judge_thinking_level=None,
             user_api_key=user_api_key,
             user_base_url=user_base_url,
             user_model_name=gym_model,
             user_temperature=user_temperature,
             user_max_tokens=user_max_tokens,
             user_timeout=user_timeout,
-            user_thinking_level=None,
             user_answer_quality=user_answer_quality,
             max_turns=max_turns,
             verbose=verbose,
@@ -302,10 +311,6 @@ def main():
 
         env.current_task_index = 0
 
-        interviewer_max_tokens = (
-            interviewer_max_tokens_thinking
-            if interviewer_thinking_level and use_thinking else interviewer_max_tokens
-        )
         interviewer = Interviewer(
             api_key=api_key,
             base_url=base_url,
@@ -313,16 +318,14 @@ def main():
             temperature=interviewer_temperature,
             max_tokens=interviewer_max_tokens,
             timeout=interviewer_timeout,
-            use_thinking=bool(interviewer_thinking_level and use_thinking),
-            thinking_level=interviewer_thinking_level,
         )
         interviewer_cost_tracker = CostTracker(model_name=interviewer.model_name)
         user_cost_tracker = CostTracker(model_name=gym_model)
+        task_cost_rows: List[Dict[str, Any]] = []
+        task_cost_start: Dict[str, Dict[str, Any]] = {}
         orig_ask_question = interviewer.ask_question
         orig_prompt_model_call = baseline_prompts.model_call
-        orig_prompt_model_call_with_thinking = baseline_prompts.model_call_with_thinking
         orig_interviewer_model_call = baseline_interviewer_module.model_call
-        orig_interviewer_model_call_with_thinking = baseline_interviewer_module.model_call_with_thinking
 
         def tracked_ask_question(conversation_history, return_usage=False):
             start = perf_counter()
@@ -364,11 +367,36 @@ def main():
                 return response, usage_info
             return response
 
+        def current_cost_snapshot() -> Dict[str, Dict[str, Any]]:
+            return {
+                "interviewer": interviewer_cost_tracker.export_summary_dict(),
+                "user": user_cost_tracker.export_summary_dict(),
+            }
+
+        def task_cost_callback(event: str, task_id: str, task_data: Dict[str, Any]) -> None:
+            nonlocal task_cost_start
+            if event == "start":
+                task_cost_start = current_cost_snapshot()
+                return
+            if event != "end":
+                return
+            after = current_cost_snapshot()
+            agent_costs = {
+                name: cost_summary_diff(task_cost_start.get(name, {}), summary)
+                for name, summary in after.items()
+            }
+            task_cost_rows.append(
+                {
+                    "task_id": task_id,
+                    "task_name": task_data.get("name", ""),
+                    "totals": cost_totals(agent_costs),
+                }
+            )
+
         interviewer.ask_question = tracked_ask_question
         baseline_prompts.model_call = tracked_model_call
         baseline_interviewer_module.model_call = tracked_model_call
-        baseline_prompts.model_call_with_thinking = orig_prompt_model_call_with_thinking
-        baseline_interviewer_module.model_call_with_thinking = orig_interviewer_model_call_with_thinking
+        config.task_cost_callback = task_cost_callback
         print(f"Interviewer 已建立：{interviewer}")
 
         print("\n" + "=" * 60)
@@ -377,9 +405,7 @@ def main():
         results = env.run_all_tasks(interviewer)
         interviewer.ask_question = orig_ask_question
         baseline_prompts.model_call = orig_prompt_model_call
-        baseline_prompts.model_call_with_thinking = orig_prompt_model_call_with_thinking
         baseline_interviewer_module.model_call = orig_interviewer_model_call
-        baseline_interviewer_module.model_call_with_thinking = orig_interviewer_model_call_with_thinking
 
         try:
             env.save_evaluation_results(file_path=None, interviewer_model_name=interviewer.model_name)
@@ -400,25 +426,36 @@ def main():
         try:
             interviewer_summary = interviewer_cost_tracker.export_summary_dict()
             user_summary = user_cost_tracker.export_summary_dict()
+            agents = {
+                "interviewer": interviewer_summary,
+                "user": user_summary,
+            }
             cost_payload = {
                 "interviewer": interviewer_summary,
                 "user": user_summary,
-                "input_tokens": int(interviewer_summary.get("input_tokens", 0) or 0)
-                + int(user_summary.get("input_tokens", 0) or 0),
-                "output_tokens": int(interviewer_summary.get("output_tokens", 0) or 0)
-                + int(user_summary.get("output_tokens", 0) or 0),
-                "total_tokens": int(interviewer_summary.get("total_tokens", 0) or 0)
-                + int(user_summary.get("total_tokens", 0) or 0),
-                "run_time(s)": round(
-                    float(interviewer_summary.get("run_time(s)", 0.0) or 0.0)
-                    + float(user_summary.get("run_time(s)", 0.0) or 0.0),
-                    3,
-                ),
-                "estimated_cost(USD)": round(
-                    float(interviewer_summary.get("estimated_cost(USD)", 0.0) or 0.0)
-                    + float(user_summary.get("estimated_cost(USD)", 0.0) or 0.0),
-                    8,
-                ),
+                "totals": {
+                    "input_tokens": sum(
+                        int(v.get("input_tokens", 0) or 0) for v in agents.values()
+                    ),
+                    "output_tokens": sum(
+                        int(v.get("output_tokens", 0) or 0) for v in agents.values()
+                    ),
+                    "total_tokens": sum(
+                        int(v.get("total_tokens", 0) or 0) for v in agents.values()
+                    ),
+                    "run_time(s)": round(
+                        sum(float(v.get("run_time(s)", 0.0) or 0.0) for v in agents.values()),
+                        3,
+                    ),
+                    "estimated_cost(USD)": round(
+                        sum(
+                            float(v.get("estimated_cost(USD)", 0.0) or 0.0)
+                            for v in agents.values()
+                        ),
+                        8,
+                    ),
+                },
+                "tasks": task_cost_rows,
             }
             with open(cost_result_path, "w", encoding="utf-8") as f:
                 json_dump_no_scientific(cost_payload, f, indent=2, ensure_ascii=False)

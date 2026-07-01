@@ -41,6 +41,48 @@ BASELINE_THINKING_LEVEL = "minimal"
 BASELINE_TEMPERATURE = 0.0
 ask_runs = True
 MAX_WORKERS = 10
+SUMMARY_METRIC_ORDER = [
+    "overall_precision",
+    "overall_recall",
+    "overall_f1",
+    "conflict_precision",
+    "conflict_recall",
+    "conflict_f1",
+]
+
+
+def order_summary_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    ordered = {key: metrics[key] for key in SUMMARY_METRIC_ORDER if key in metrics}
+    ordered.update({key: metrics[key] for key in metrics if key not in ordered})
+    return ordered
+
+
+def summarize_cost_rows(cost_rows: dict[str, list[float]]) -> dict[str, Any]:
+    summary_cost: dict[str, Any] = {}
+    for key, values in cost_rows.items():
+        vals = [float(v) for v in values]
+        summary_cost[key] = {
+            "mean": float(np.mean(vals)) if vals else 0.0,
+            "per_round_values": vals,
+        }
+    return summary_cost
+
+
+def cost_rows_from_totals(
+    *,
+    input_tokens: list[int],
+    output_tokens: list[int],
+    total_tokens: list[int],
+    costs_usd: list[float],
+    runtime_s: list[float],
+) -> dict[str, list[float]]:
+    return {
+        "input_token": [float(v) for v in input_tokens],
+        "output_token": [float(v) for v in output_tokens],
+        "total_token": [float(v) for v in total_tokens],
+        "cost(USD)": [float(v) for v in costs_usd],
+        "run_time(s)": [float(v) for v in runtime_s],
+    }
 
 
 def model_is_gemini_3_or_newer(model_name: str) -> bool:
@@ -175,15 +217,21 @@ class BaselineModel:
     ) -> str:
 
         user_prompt = conflict_prompt(text1, text2, req_type=req_type)
+        metadata = {"req_type": str(req_type or "Unknown").strip() or "Unknown"}
 
         if self.provider == "openai":
-            return self.detect_openai(user_prompt)
-        return self.detect_gemini(user_prompt)
+            return self.detect_openai(user_prompt, metadata=metadata)
+        return self.detect_gemini(user_prompt, metadata=metadata)
 
     # ========
     # Defines detect openai function for this experiment module.
     # ========
-    def detect_openai(self, user_prompt: str) -> str:
+    def detect_openai(
+        self,
+        user_prompt: str,
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
         assert self.client is not None
         self.cost_tracker.start()
         resp = None
@@ -204,6 +252,7 @@ class BaselineModel:
                     "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
                     "total_tokens": getattr(usage, "total_tokens", 0) or 0,
                 },
+                metadata=metadata,
                 run_time_s=run_s,
             )
         if resp is None or not getattr(resp, "choices", None):
@@ -213,7 +262,12 @@ class BaselineModel:
     # ========
     # Defines detect gemini function for this experiment module.
     # ========
-    def detect_gemini(self, user_prompt: str) -> str:
+    def detect_gemini(
+        self,
+        user_prompt: str,
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
         assert self.genai_client is not None and self.genai_types is not None
         assert self.gemini_lock is not None
 
@@ -254,6 +308,7 @@ class BaselineModel:
                     "completion_tokens": cand,
                     "total_tokens": int(total),
                 },
+                metadata=metadata,
                 run_time_s=run_s,
             )
 
@@ -265,9 +320,40 @@ class BaselineModel:
 # ========
 # Defines build baseline cost payload function for this experiment module.
 # ========
-def build_baseline_cost_payload(model: BaselineModel) -> dict:
+def build_baseline_cost_payload(
+    model: BaselineModel,
+    task_costs: Optional[list[dict[str, Any]]] = None,
+) -> dict:
+    payload = dict(model.cost_tracker.export_summary_dict())
+    payload["tasks"] = task_costs or []
+    return payload
 
-    return dict(model.cost_tracker.export_summary_dict())
+
+def cost_totals_from_records(model: BaselineModel, records: list[dict[str, Any]]) -> dict[str, Any]:
+    input_tokens = sum(int(row.get("input_tokens", 0) or 0) for row in records)
+    output_tokens = sum(int(row.get("output_tokens", 0) or 0) for row in records)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": sum(int(row.get("total_tokens", 0) or 0) for row in records),
+        "run_time(s)": round(sum(float(row.get("run_time(s)", 0.0) or 0.0) for row in records), 3),
+        "estimated_cost(USD)": round(model.cost_tracker.estimate_cost(input_tokens, output_tokens), 8),
+    }
+
+
+def build_baseline_task_costs(model: BaselineModel, scenario_order: list[str]) -> list[dict[str, Any]]:
+    grouped_records: dict[str, list[dict[str, Any]]] = {}
+    for row in model.cost_tracker.get_call_records():
+        req_type = str(row.get("req_type") or "Unknown").strip() or "Unknown"
+        grouped_records.setdefault(req_type, []).append(row)
+    ordered_scenarios = list(dict.fromkeys(scenario_order + sorted(grouped_records)))
+    return [
+        {
+            "task_name": scenario,
+            "totals": cost_totals_from_records(model, grouped_records.get(scenario, [])),
+        }
+        for idx, scenario in enumerate(ordered_scenarios)
+    ]
 
 # ========
 # Defines load cn pairs function for this experiment module.
@@ -453,6 +539,9 @@ def run_conflict(
         sys.exit(1)
 
     y_true = [row["Class"] for row in data]
+    scenario_order = list(
+        dict.fromkeys(str(row.get("types") or "Unknown").strip() or "Unknown" for row in data)
+    )
     results_by_idx: dict[int, tuple[Optional[str], dict]] = {}
     max_workers = min(MAX_WORKERS, total)
 
@@ -502,9 +591,10 @@ def run_conflict(
         json_dump_no_scientific(result, f, indent=2, ensure_ascii=False)
     with paths["record"].open("w", encoding="utf-8") as f:
         json_dump_no_scientific(records, f, indent=2, ensure_ascii=False)
+    task_costs = build_baseline_task_costs(model, scenario_order)
     with paths["cost"].open("w", encoding="utf-8") as f:
         json_dump_no_scientific(
-            build_baseline_cost_payload(model), f, indent=2, ensure_ascii=False
+            build_baseline_cost_payload(model, task_costs), f, indent=2, ensure_ascii=False
         )
     for key in ("result", "record", "cost"):
         print(f"  已儲存: {paths[key]}")
@@ -539,8 +629,11 @@ if __name__ == "__main__":
     file_prefix = model_file_prefix(BASELINE_PROVIDER)
     run_scalar_metrics: list[dict[str, float]] = []
     run_costs_usd: list[float] = []
+    run_input_tokens: list[int] = []
+    run_output_tokens: list[int] = []
     run_total_tokens: list[int] = []
     run_total_runtime_s: list[float] = []
+    run_costs_by_type: list[dict[str, dict[str, Any]]] = []
 
     for run_idx in range(runs):
         run_id = str(next_result_index(file_prefix, RESULTS_FILE_PREFIX, RESULTS_DIR))
@@ -560,8 +653,21 @@ if __name__ == "__main__":
         }
         result = run_conflict(model, count=count, paths=paths, scenarios=scenarios)
         run_scalar_metrics.append(scalar_metrics_for_summary(result))
-        cost_payload = build_baseline_cost_payload(model)
+        task_costs = build_baseline_task_costs(
+            model,
+            list((result.get("metrics_by_type", {}) or {}).keys()),
+        )
+        cost_payload = build_baseline_cost_payload(model, task_costs)
+        run_costs_by_type.append(
+            {
+                str(row.get("task_name") or "Unknown"): row.get("totals", {})
+                for row in task_costs
+                if isinstance(row, dict)
+            }
+        )
         run_costs_usd.append(float(cost_payload.get("estimated_cost(USD)", 0.0) or 0.0))
+        run_input_tokens.append(int(cost_payload.get("input_tokens", 0) or 0))
+        run_output_tokens.append(int(cost_payload.get("output_tokens", 0) or 0))
         run_total_tokens.append(int(cost_payload.get("total_tokens", 0) or 0))
         run_total_runtime_s.append(float(cost_payload.get("run_time(s)", 0.0) or 0.0))
 
@@ -571,14 +677,7 @@ if __name__ == "__main__":
             all_keys.update(m.keys())
         print("\n多次執行結果統計（平均值）：")
 
-        preferred_order = [
-            "overall_precision",
-            "overall_recall",
-            "overall_f1",
-            "conflict_precision",
-            "conflict_recall",
-            "conflict_f1",
-        ]
+        preferred_order = SUMMARY_METRIC_ORDER
         ordered_keys = [k for k in preferred_order if k in all_keys]
         ordered_keys.extend(sorted(k for k in all_keys if k not in set(ordered_keys)))
         summary_metrics: dict[str, Any] = {}
@@ -608,20 +707,58 @@ if __name__ == "__main__":
 
         summary_payload: dict[str, Any] = {"runs": runs}
         if summary_metrics:
-            summary_payload["metrics"] = summary_metrics
+            summary_payload["metrics"] = order_summary_metrics(summary_metrics)
         if summary_metrics_by_type:
-            summary_payload["metrics_by_type"] = summary_metrics_by_type
+            ordered_by_type = {
+                scenario: order_summary_metrics(metrics)
+                for scenario, metrics in summary_metrics_by_type.items()
+            }
+            for scenario, metrics in ordered_by_type.items():
+                cost_rows = cost_rows_from_totals(
+                    input_tokens=[
+                        int((row.get(scenario, {}) or {}).get("input_tokens", 0) or 0)
+                        for row in run_costs_by_type
+                    ],
+                    output_tokens=[
+                        int((row.get(scenario, {}) or {}).get("output_tokens", 0) or 0)
+                        for row in run_costs_by_type
+                    ],
+                    total_tokens=[
+                        int((row.get(scenario, {}) or {}).get("total_tokens", 0) or 0)
+                        for row in run_costs_by_type
+                    ],
+                    costs_usd=[
+                        float((row.get(scenario, {}) or {}).get("estimated_cost(USD)", 0.0) or 0.0)
+                        for row in run_costs_by_type
+                    ],
+                    runtime_s=[
+                        float((row.get(scenario, {}) or {}).get("run_time(s)", 0.0) or 0.0)
+                        for row in run_costs_by_type
+                    ],
+                )
+                metrics["cost"] = summarize_cost_rows(cost_rows)
+            summary_payload["metrics_by_type"] = ordered_by_type
         if run_costs_usd:
-            cost_mu = float(np.mean(run_costs_usd))
-            token_mu = float(np.mean(run_total_tokens))
-            rt_mu = float(np.mean(run_total_runtime_s))
-            print(f"  平均 token：{token_mu:.1f}")
-            print(f"  平均成本(USD)：{cost_mu:.8f}")
-            print(f"  平均執行時間(s)：{rt_mu:.3f}")
+            summary_cost = summarize_cost_rows(
+                cost_rows_from_totals(
+                    input_tokens=run_input_tokens,
+                    output_tokens=run_output_tokens,
+                    total_tokens=run_total_tokens,
+                    costs_usd=run_costs_usd,
+                    runtime_s=run_total_runtime_s,
+                )
+            )
+            print(f"  平均 input token：{summary_cost['input_token']['mean']:.1f}")
+            print(f"  平均 output token：{summary_cost['output_token']['mean']:.1f}")
+            print(f"  平均 total token：{summary_cost['total_token']['mean']:.1f}")
+            print(f"  平均成本(USD)：{summary_cost['cost(USD)']['mean']:.8f}")
+            print(f"  平均執行時間(s)：{summary_cost['run_time(s)']['mean']:.3f}")
             summary_payload["cost"] = {
-                "average_token": token_mu,
-                "average_cost(USD)": cost_mu,
-                "average_run_time(s)": rt_mu,
+                "input_token": summary_cost["input_token"],
+                "output_token": summary_cost["output_token"],
+                "total_token": summary_cost["total_token"],
+                "cost(USD)": summary_cost["cost(USD)"],
+                "run_time(s)": summary_cost["run_time(s)"],
             }
         else:
             print("  平均成本(USD)：N/A")

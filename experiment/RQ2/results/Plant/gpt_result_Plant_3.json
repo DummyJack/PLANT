@@ -1,0 +1,56 @@
+{
+  "model": "gpt-4.1",
+  "total": 100,
+  "count": {
+    "conflict": 50,
+    "neutral": 50
+  },
+  "metrics": {
+    "overall": {
+      "precision": 0.9141,
+      "recall": 0.91,
+      "f1": 0.9098
+    },
+    "conflict": {
+      "precision": 0.8727,
+      "recall": 0.96,
+      "f1": 0.9143
+    }
+  },
+  "metrics_by_type": {
+    "Health Management System": {
+      "total": 70,
+      "count": {
+        "conflict": 35,
+        "neutral": 35
+      },
+      "overall": {
+        "precision": 0.8974,
+        "recall": 0.8857,
+        "f1": 0.8849
+      },
+      "conflict": {
+        "precision": 0.8293,
+        "recall": 0.9714,
+        "f1": 0.8947
+      }
+    },
+    "訂餐外送系統": {
+      "total": 30,
+      "count": {
+        "conflict": 15,
+        "neutral": 15
+      },
+      "overall": {
+        "precision": 0.9688,
+        "recall": 0.9667,
+        "f1": 0.9666
+      },
+      "conflict": {
+        "precision": 1.0,
+        "recall": 0.9333,
+        "f1": 0.9655
+      }
+    }
+  }
+}

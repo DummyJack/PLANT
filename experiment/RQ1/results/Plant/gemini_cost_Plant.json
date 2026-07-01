@@ -1,0 +1,51 @@
+{
+  "agents": {
+    "analyst": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 455074,
+      "output_tokens": 24313,
+      "total_tokens": 479387,
+      "run_time(s)": 312.931,
+      "estimated_cost(USD)": 0.300476
+    },
+    "expert": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 6037519,
+      "output_tokens": 241922,
+      "total_tokens": 6279441,
+      "run_time(s)": 2256.414,
+      "estimated_cost(USD)": 3.7445255
+    },
+    "mediator": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 224926,
+      "output_tokens": 11397,
+      "total_tokens": 236323,
+      "run_time(s)": 126.059,
+      "estimated_cost(USD)": 0.146654
+    },
+    "modeler": {
+      "model": "gemini-3-flash-preview",
+      "input_tokens": 2152973,
+      "output_tokens": 120470,
+      "total_tokens": 2273443,
+      "run_time(s)": 1101.265,
+      "estimated_cost(USD)": 1.4378965
+    },
+    "user": {
+      "model": "gpt-5.2",
+      "input_tokens": 531242,
+      "output_tokens": 11092,
+      "total_tokens": 542334,
+      "run_time(s)": 376.602,
+      "estimated_cost(USD)": 1.0849615
+    }
+  },
+  "totals": {
+    "input_tokens": 9401734,
+    "output_tokens": 409194,
+    "total_tokens": 9810928,
+    "run_time(s)": 4173.271,
+    "estimated_cost(USD)": 6.7145135
+  }
+}

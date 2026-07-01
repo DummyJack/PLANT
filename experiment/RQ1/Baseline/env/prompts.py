@@ -14,17 +14,6 @@ from .utils import PASSIVE_RESPONSE_SYSTEM, PASSIVE_RESPONSE_USER
 GEMINI_OPENAI_HOST = "generativelanguage.googleapis.com"
 
 
-def model_is_gemini_3_or_newer(model_name: str) -> bool:
-    name = str(model_name or "").strip().lower()
-    if not name.startswith("gemini-"):
-        return False
-    version = name.removeprefix("gemini-").split("-", 1)[0]
-    try:
-        return float(version) >= 3.0
-    except ValueError:
-        return False
-
-
 def openai_endpoint_is_gemini_compat(model_config: Dict[str, Any]) -> bool:
     u = (model_config.get("base_url") or "").lower()
     return GEMINI_OPENAI_HOST in u
@@ -49,17 +38,6 @@ def apply_token_limit_to_create_kw(
         create_kw["max_completion_tokens"] = max_val
     else:
         create_kw["max_tokens"] = max_val
-
-
-def apply_gemini_thinking_config(
-    create_kw: Dict[str, Any], model_config: Dict[str, Any]
-) -> None:
-    if not model_is_gemini_3_or_newer(model_config.get("model_name", "")):
-        return
-    level = str(model_config.get("thinking_level") or "").strip().lower()
-    if not level:
-        return
-    create_kw["reasoning_effort"] = level
 
 
 def chat_message_text(message: Any) -> str:
@@ -95,7 +73,6 @@ def model_call(
                 timeout=model_config["timeout"],
             )
             apply_token_limit_to_create_kw(create_kw, model_config, max_val)
-            apply_gemini_thinking_config(create_kw, model_config)
             response = client.chat.completions.create(**create_kw)
             response_text = chat_message_text(response.choices[0].message)
 
@@ -137,81 +114,6 @@ def model_call(
     if return_usage:
         return ({}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}) if return_json else ("", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
     return {} if return_json else ""
-
-
-def model_call_with_thinking(
-    system_prompt: str,
-    user_prompt: str,
-    model_config: Dict[str, Any],
-    return_json: bool = True,
-    return_usage: bool = False
-) -> Any:
-
-    if "base_url" in model_config and model_config["base_url"]:
-        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
-    else:
-        client = OpenAI(api_key=model_config["api_key"])
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
-
-    try_time = 0
-    while try_time < 3:
-        try:
-            max_val = model_config.get("max_completion_tokens", model_config.get("max_tokens", 1024))
-            create_kw = dict(
-                model=model_config["model_name"],
-                messages=messages,
-                temperature=model_config["temperature"],
-                timeout=model_config["timeout"],
-            )
-            if not model_is_gemini_3_or_newer(model_config.get("model_name", "")):
-                create_kw["extra_body"] = {"enable_thinking": True}
-            apply_token_limit_to_create_kw(create_kw, model_config, max_val)
-            apply_gemini_thinking_config(create_kw, model_config)
-            response = client.chat.completions.create(**create_kw)
-            response_text = chat_message_text(response.choices[0].message)
-
-
-            usage_info = None
-            if hasattr(response, 'usage') and response.usage:
-                usage_info = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens
-                }
-            else:
-                usage_info = {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
-
-            if return_json:
-                response_json = parse_output_as_json(response_text)
-                if return_usage:
-                    return response_json, usage_info
-                else:
-                    return response_json
-            else:
-                if return_usage:
-                    return response_text, usage_info
-                else:
-                    return response_text
-        except Exception as e:
-            print(f"[ReqElicitGym - Model Call] Error calling model: {e}")
-            try_time += 1
-            if try_time >= 3:
-                if return_usage:
-                    return ({}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}) if return_json else ("", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
-                else:
-                    return {} if return_json else ""
-            time.sleep(2)
-    if return_usage:
-        return ({}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}) if return_json else ("", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
-    return {} if return_json else ""
-
 
 def judge_interviewer_action(
     action: str,
