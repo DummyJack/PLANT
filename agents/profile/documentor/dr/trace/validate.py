@@ -262,6 +262,13 @@ class DocumentorDrTraceValidationMixin:
             and cls.is_conflict_resolution_meeting(row)
             and str(row.get("id") or "").strip()
         ]
+        refine_meeting_ids = [
+            str(row.get("id") or "").strip()
+            for row in (requirement.get("meetings") or [])
+            if isinstance(row, dict)
+            and cls.is_requirement_clarification_meeting(row)
+            and str(row.get("id") or "").strip()
+        ]
         last_formalize_id = formalize_meeting_ids[-1] if formalize_meeting_ids else ""
         last_resolve_id = resolve_meeting_ids[-1] if resolve_meeting_ids else ""
 
@@ -305,6 +312,27 @@ class DocumentorDrTraceValidationMixin:
                 edge_label="正式化",
                 confidence="high",
             )
+
+        if last_formalize_id and refine_meeting_ids:
+            chain = sorted(
+                list(dict.fromkeys([last_formalize_id, *refine_meeting_ids])),
+                key=lambda meeting_id: cls.meeting_order_key({"id": meeting_id}),
+            )
+            previous_meeting_id = ""
+            for meeting_id in chain:
+                if meeting_id == last_formalize_id:
+                    previous_meeting_id = meeting_id
+                    continue
+                if previous_meeting_id and (previous_meeting_id, meeting_id) not in edge_pairs:
+                    add_task(
+                        "connect_formalize_to_refine_meeting",
+                        f"{meeting_id} refines the formalized requirement, but it is not connected to the prior formalization/refinement meeting.",
+                        candidate_from=previous_meeting_id,
+                        candidate_to=meeting_id,
+                        edge_label="精煉",
+                        confidence="high",
+                    )
+                previous_meeting_id = meeting_id
 
         if requirement.get("meetings") and not last_formalize_id:
             add_task(
@@ -406,11 +434,12 @@ class DocumentorDrTraceValidationMixin:
         repair_type = str(proposal.get("repair_type") or "").strip()
         edge_label = str(proposal.get("edge_label") or "").strip()
         allowed_labels_by_type = {
-            "connect_statement_to_url": {"分析", "整理"},
+            "connect_statement_to_url": {"分析"},
             "connect_feedback_to_formalize_meeting": {""},
             "connect_model_to_formalize_meeting": {""},
             "connect_resolve_to_formalize_meeting": {"正式化"},
-            "identify_url_source": {"分析", "整理"},
+            "connect_formalize_to_refine_meeting": {"精煉"},
+            "identify_url_source": {"分析"},
             "identify_conflict_resolution_meeting": {"解決"},
             "identify_formalization_meeting": {""},
         }

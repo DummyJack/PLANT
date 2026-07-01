@@ -34,13 +34,13 @@ Requirement Context:
 - 若 topology 中有 CR、Feedback、System Model 或 Meeting，需說明它們如何由 URL 觸發、如何在會議中提供依據、建模或被解決。
 - Trace Explanation 必須優先依 trace_graph.edges 的可達路徑順序敘述：Source → User Requirement → Analysis → Meeting → Requirement。
 - 若有 Feedback 或 System Model 支線，請在它接回 meeting 的位置說明它補充了哪個決策、限制、模型依據或需求欄位，不要獨立寫成同等主線。
-- topology edge label 只能使用固定短語，不要自創長句或同義詞：ST→URL 為「分析」；URL→FB 為「依據」；URL→SM 為「建模」；URL→CR 不顯示文字；CR→resolve meeting 為「解決」；沒有衝突時 URL→formalize meeting 為「正式化」；有衝突時 resolve meeting→formalize meeting 為「正式化」；formalize meeting→clarify meeting 為「精練」；FB/SM→meeting 不顯示文字；最後 meeting→FR/NFR/CON 不顯示文字。
+- topology edge label 只能使用固定短語，不要自創長句或同義詞：ST→URL 為「分析」；URL→FB 為「依據」；URL→SM 為「建模」；URL→CR 不顯示文字；CR→resolve meeting 為「解決」；沒有衝突時 URL→formalize meeting 為「正式化」；有衝突時 resolve meeting→formalize meeting 為「正式化」；formalize meeting→clarify meeting 為「精煉」；FB/SM→meeting 不顯示文字；最後 meeting→FR/NFR/CON 不顯示文字。
 - 若 trace_graph.edges 的 relation 為空字串，Trace Explanation 可以說明節點承接關係，但不得替該邊命名或寫成新的 edge label。
 - 若需要描述「依據」或「建模」支線，請在文字中說明它補充哪個 meeting decision、限制或模型依據；不要把支線寫成與主鏈同等的正式化步驟。
-- 只有 formalize_requirement meeting 才代表正式化；若有後續 clarify_requirement meeting，則由最後一個 clarify_requirement meeting 連到正式需求但不顯示文字，表示精練後收斂。clarify_requirement meeting 不要寫成正式化本身。
+- 只有 formalize_requirement meeting 才代表正式化；若有後續 clarify_requirement meeting，則由最後一個 clarify_requirement meeting 連到正式需求但不顯示文字，表示精煉後收斂。clarify_requirement meeting 不要寫成正式化本身。
 - 不要把 topology 中所有相關 evidence 寫成同等重要；請依 edge path 說明主要形成鏈，旁支 evidence 只說明它補充了哪個決策、限制、模型依據或需求欄位。
 - Meeting Discussion 必須依 meeting 時序書寫；若同時有 resolve_conflict、formalize_requirement、clarify_requirement，順序必須是先解決衝突，再正式化，再說明後續釐清。
-- Meeting Discussion 的每個 bullet 都必須說清楚四件事：該 meeting 的用途（解決衝突、需求正式化或精練/深入討論）、承接來源、會議中「目前這個 FR/NFR/CON」如何被決定或確認、以及它對下一個 meeting 或最後 FR/NFR/CON 的影響。只有衝突解決會議可以寫「討論輸入」；需求正式化會議要寫「正式化依據」；後續 clarify/refine meeting 要寫「承接前一版需求做更深入討論/精練」，不要再寫成衝突解決的討論輸入。不要寫整場會議的總摘要；要聚焦目前 block 的需求如何在該 meeting 產生、保留、調整、補齊或收斂。
+- Meeting Discussion 的每個 bullet 都必須說清楚四件事：該 meeting 的用途（解決衝突、需求正式化或精煉/深入討論）、承接來源、會議中「目前這個 FR/NFR/CON」如何被決定或確認、以及它對下一個 meeting 或最後 FR/NFR/CON 的影響。只有衝突解決會議可以寫「討論輸入」；需求正式化會議要寫「正式化依據」；後續 clarify/refine meeting 要寫「承接前一版需求做更深入討論/精煉」，不要再寫成衝突解決的討論輸入。不要寫整場會議的總摘要；要聚焦目前 block 的需求如何在該 meeting 產生、保留、調整、補齊或收斂。
 - 不要只寫「成為依據」這種泛稱；必須說清楚依據哪個會議決定、哪個正式需求或哪個限制。
 - 若 Requirement Context 含 trace_warnings，代表該 evidence 關聯不足或被排除；不要把 warning 中被排除的 evidence 寫成已形成正式 trace。
 - 若 trace_warnings 顯示 evidence 被排除或未連上，不得在 Trace Explanation 中宣稱它已支撐該需求；只能說該 evidence 未形成可確認追蹤路徑。
@@ -83,7 +83,7 @@ System Model
 - 只有有相關 SM-* 時輸出。SM-* 將 URL-* 對應到具體流程、狀態、資料結構或互動，建模此需求的系統設計。
 
 Meeting Discussion
-- 只有有相關 meeting 時輸出。若是解決衝突會議，寫明「R*-M* 是衝突解決會議，討論輸入為 CR-*」並說明該衝突如何被處理；若是需求正式化會議，寫明「R*-M* 是需求正式化會議，正式化依據為 URL-*／前一場會議」並說明保留或調整了什麼；若是後續 clarify/refine meeting，寫明「R*-M* 承接前一版需求做更深入討論或精練」並說明補齊了哪個需求細節。會議決定或確認具體需求內容，因此該內容被保留、調整、補齊或推進到下一個 meeting/正式需求。
+- 只有有相關 meeting 時輸出。若是解決衝突會議，寫明「R*-M* 是衝突解決會議，討論輸入為 CR-*」並說明該衝突如何被處理；若是需求正式化會議，寫明「R*-M* 是需求正式化會議，正式化依據為 URL-*／前一場會議」並說明保留或調整了什麼；若是後續 clarify/refine meeting，寫明「R*-M* 承接前一版需求做更深入討論或精煉」並說明補齊了哪個需求細節。會議決定或確認具體需求內容，因此該內容被保留、調整、補齊或推進到下一個 meeting/正式需求。
 
 Requirement Formation
 - URL-* 經由 R*-M* 或前述 trace 節點收斂為 FR/NFR/CON-*，正式要求系統履行該 block 的具體功能、品質或限制。

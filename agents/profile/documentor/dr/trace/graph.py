@@ -212,11 +212,7 @@ class DocumentorDrTraceGraphMixin:
                 })
                 return
             relation = str(event.get("edge_label") or event.get("relation") or "").strip()
-            if (
-                relation == "整理"
-                and target_node_id.startswith("URL-")
-                and node_type_by_id.get(source_id) == "Stakeholder Statement"
-            ):
+            if relation == "整理":
                 relation = "分析"
             edge = {
                 "from": source_id,
@@ -969,13 +965,13 @@ class DocumentorDrTraceGraphMixin:
             if not feedback_id:
                 continue
             for url_id in related_url_ids(feedback):
-                add_edge(url_id, feedback_id, "", style="dashed")
+                add_edge(url_id, feedback_id, "依據", style="dashed")
         for model in model_rows:
             model_id = str(model.get("id") or "").strip()
             if not model_id:
                 continue
             for url_id in related_url_ids(model):
-                add_edge(url_id, model_id, "", style="dashed")
+                add_edge(url_id, model_id, "建模", style="dashed")
 
         meeting_by_id = {
             str(row.get("id") or "").strip(): row
@@ -1053,17 +1049,18 @@ class DocumentorDrTraceGraphMixin:
             for index, meeting_id in enumerate(meeting_ids):
                 meeting = meeting_by_id.get(meeting_id, {})
                 is_formalization_meeting = cls.is_requirement_formalization_meeting(meeting)
+                has_prior_formalization = any(
+                    cls.is_requirement_formalization_meeting(meeting_by_id.get(prior_id, {}))
+                    for prior_id in meeting_ids[:index]
+                )
                 if cls.is_conflict_resolution_meeting(meeting):
                     for conflict_id in conflict_ids:
                         add_edge(conflict_id, meeting_id, "解決")
                 if index > 0:
                     previous_meeting = meeting_by_id.get(meeting_ids[index - 1], {})
-                    has_prior_formalization = any(
-                        cls.is_requirement_formalization_meeting(meeting_by_id.get(prior_id, {}))
-                        for prior_id in meeting_ids[:index]
-                    )
                     if (
                         is_formalization_meeting
+                        and not has_prior_formalization
                         and (
                             cls.is_conflict_resolution_meeting(previous_meeting)
                             or str(meeting_ids[index - 1]).strip() == "R1-M1"
@@ -1071,7 +1068,7 @@ class DocumentorDrTraceGraphMixin:
                     ):
                         relation = "正式化"
                     elif cls.is_requirement_clarification_meeting(meeting) or has_prior_formalization:
-                        relation = "精練"
+                        relation = "精煉"
                     else:
                         relation = ""
                     add_edge(meeting_ids[index - 1], meeting_id, relation)
@@ -1080,7 +1077,7 @@ class DocumentorDrTraceGraphMixin:
                     if not conflict_ids:
                         formalization_sources = primary_url_ids
                     for source_id in formalization_sources:
-                        add_edge(source_id, meeting_id, "正式化")
+                        add_edge(source_id, meeting_id, "精煉" if has_prior_formalization else "正式化")
             if not formalization_meeting_ids and not conflict_ids and meeting_ids:
                 for source_id in primary_url_ids:
                     add_edge(source_id, meeting_ids[0], "正式化")

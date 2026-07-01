@@ -499,9 +499,9 @@ class DocumentorDrNormalize:
                 return "衝突解決"
             if "正式化" in incoming_relations:
                 return "需求正式化"
-            if "精練" in incoming_relations:
-                return "需求精練"
-            if any(relation(edge) == "精練" for edge in outgoing):
+            if "精煉" in incoming_relations:
+                return "需求精煉"
+            if any(relation(edge) == "精煉" for edge in outgoing):
                 return "模型對齊確認"
             if any(edge_to(edge) == str(requirement.get("srs_id") or "").strip() for edge in outgoing):
                 return "最終確認"
@@ -697,7 +697,7 @@ class DocumentorDrNormalize:
                 if ac_text:
                     formalized += f"；{ac_text}"
                 return formalized
-            if purpose in {"需求精練", "最終確認", "模型對齊確認"}:
+            if purpose in {"需求精煉", "最終確認", "模型對齊確認"}:
                 model_text = f"，並確認與 {format_ids(model_ids, limit=5)} 的模型支撐一致" if model_ids else ""
                 return (
                     f"{purpose}階段沒有重新改寫 {target_name} 的需求語意，而是確認 {req_name} 的條文、驗收條件與追蹤關係已可支撐正式 SRS{model_text}"
@@ -717,8 +717,8 @@ class DocumentorDrNormalize:
                 return f"{meeting_id} 是衝突解決會議，討論輸入為 {source_text}。"
             if purpose == "需求正式化":
                 return f"{meeting_id} 是需求正式化會議，正式化依據為 {source_text}。"
-            if purpose == "需求精練":
-                return f"{meeting_id} 是需求精練會議，承接 {source_text} 的需求版本做更深入討論。"
+            if purpose == "需求精煉":
+                return f"{meeting_id} 是需求精煉會議，承接 {source_text} 的需求版本做更深入討論。"
             if purpose == "模型對齊確認":
                 return f"{meeting_id} 是模型對齊確認會議，承接 {source_text} 檢查需求條文、模型與追蹤關係是否一致。"
             if purpose == "最終確認":
@@ -1030,9 +1030,9 @@ class DocumentorDrNormalize:
             elif relation == "正式化":
                 section = "Meeting Discussion" if to_type == "Meeting Discussion" else "Requirement Formation"
                 bullet = f"{source} 透過「正式化」推進到 {target}。"
-            elif relation == "精練":
+            elif relation == "精煉":
                 section = "Meeting Discussion"
-                bullet = f"{source} 透過「精練」推進到 {target}。"
+                bullet = f"{source} 透過「精煉」推進到 {target}。"
             elif relation == "建模":
                 section = "System Model"
                 bullet = f"{source} 透過「建模」支撐 {target}。"
@@ -1068,7 +1068,7 @@ class DocumentorDrNormalize:
             r"^\s*[-*]\s+.*在拓樸中.*$",
             r"^\s*[-*]\s+.*承接\s+前述節點.*$",
             r"^\s*[-*]\s+.*透過「依據」推進到.*$",
-            r"^\s*[-*]\s+R\d+-M\d+\s+透過「精練」推進到\s+R\d+-M\d+。?\s*$",
+            r"^\s*[-*]\s+R\d+-M\d+\s+透過「精煉」推進到\s+R\d+-M\d+。?\s*$",
         ]
         lines = []
         for line in text.splitlines():
@@ -1471,7 +1471,7 @@ class DocumentorDrNormalize:
             append(
                 sections,
                 "Meeting Discussion",
-                f"{display_id(from_id)} 透過「{rel}」推進到 {display_id(to_id)}，延續前一會議的決議與待精練內容{detail}。",
+                f"{display_id(from_id)} 透過「{rel}」推進到 {display_id(to_id)}，延續前一會議的決議與待精煉內容{detail}。",
             )
 
         target_summary = description or node_summary(target_id)

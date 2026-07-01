@@ -213,7 +213,14 @@ class ExpertResearchPlan:
                     messages,
                     active_skill="domain-research",
                 )
-                response = self.parse_issue_response_json(raw)
+                try:
+                    response = self.parse_issue_response_json(raw)
+                except Exception as parse_error:
+                    repair_task = repair_plan_output(
+                        raw=raw,
+                        error=f"上一輪輸出不是合法 JSON object: {parse_error}",
+                    )
+                    response = self.chat_json(self.build_direct_messages(repair_task))
             else:
                 response = self.chat_json(messages)
         except Exception as e:

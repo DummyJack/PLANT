@@ -60,7 +60,15 @@ class MediatorRecords:
         original = cls.clean_repeated_text(issue.get("title", ""))
         category = str(issue.get("category") or "").strip()
         trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
-        artifact_ids = cls.clean_id_list(trace.get("artifact_ids"), ("REQ", "URL", "SM", "OQ"))
+        artifact_id_values: List[Any] = list(trace.get("artifact_ids") or [])
+        sources = issue.get("sources") if isinstance(issue.get("sources"), list) else []
+        for source in sources:
+            if isinstance(source, dict):
+                artifact_id_values.extend(source.get("ids") or [])
+        artifact_ids = cls.clean_id_list(
+            artifact_id_values,
+            ("REQ", "URL", "SM", "OQ", "CR", "PAIR", "MULTIPLE"),
+        )
         req_ids = [rid for rid in artifact_ids if rid.startswith("REQ-")]
         model_ids = [rid for rid in artifact_ids if rid.startswith("SM-")]
         oq_ids = [rid for rid in artifact_ids if rid.startswith("OQ-")]
@@ -108,7 +116,9 @@ class MediatorRecords:
         elif oq_ids:
             object_label = "、".join(sorted(oq_ids, key=cls.artifact_id_sort_key)[:3])
 
-        if category == "align_model" or "模型" in original:
+        if category == "resolve_conflict":
+            prefix = "解決需求衝突"
+        elif category == "align_model" or "模型" in original:
             prefix = "對齊需求與系統模型"
         elif category == "define_boundary" or "邊界" in original or "責任" in summary_blob:
             prefix = "釐清系統邊界與責任"
@@ -121,9 +131,7 @@ class MediatorRecords:
         elif "最終檢查" in original:
             prefix = "最終檢查需求與模型缺口"
         elif "需求正式化" in original:
-            prefix = "正式化使用者需求"
-        elif category == "resolve_conflict":
-            prefix = "解決需求衝突"
+            prefix = "需求正式化"
         else:
             prefix = original or "正式會議議題"
 
@@ -483,7 +491,7 @@ class MediatorRecords:
         options = resolution.get("options", []) or []
         recommendation = resolution.get("recommendation", {}) or {}
 
-        def conflict_report_decision_options() -> List[Dict[str, Any]]:
+        def latest_conflict_report_rows() -> List[Dict[str, Any]]:
             if str((issue or {}).get("category") or "").strip() != "resolve_conflict":
                 return []
             store = getattr(self, "store", None)
@@ -496,9 +504,9 @@ class MediatorRecords:
                 rows = latest_conflict_report_payload(Path(artifact_dir))
             except Exception:
                 return []
-            if not rows:
-                return []
+            return [row for row in (rows or []) if isinstance(row, dict)]
 
+        def affected_conflict_ids() -> List[str]:
             affected_ids = [
                 str(value).strip()
                 for value in (resolution.get("affected_conflict_ids") or [])
@@ -508,17 +516,32 @@ class MediatorRecords:
                 affected_ids = [
                     str(value).strip()
                     for value in (issue.get("trace") or {}).get("artifact_ids", [])
-                    if str(value).strip().startswith("CR-")
+                    if str(value).strip().startswith(("CR-", "PAIR-", "MULTIPLE-"))
                 ]
+            sources = issue.get("sources") if isinstance(issue.get("sources"), list) else []
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                affected_ids.extend(
+                    str(value).strip()
+                    for value in (source.get("ids") or [])
+                    if str(value).strip().startswith(("CR-", "PAIR-", "MULTIPLE-"))
+                )
+            return list(dict.fromkeys(affected_ids))
+
+        def conflict_report_decision_options() -> List[Dict[str, Any]]:
+            rows = latest_conflict_report_rows()
+            if not rows:
+                return []
+            affected_ids = affected_conflict_ids()
             affected_set = set(affected_ids)
             scoped_rows = [
                 row
                 for row in rows
-                if isinstance(row, dict)
-                and (not affected_set or str(row.get("id") or "").strip() in affected_set)
+                if not affected_set or str(row.get("id") or "").strip() in affected_set
             ]
             if not scoped_rows:
-                scoped_rows = [row for row in rows if isinstance(row, dict)]
+                scoped_rows = rows
 
             conflict_blocks: List[Dict[str, Any]] = []
             for row in scoped_rows:
@@ -547,7 +570,7 @@ class MediatorRecords:
                         {
                             "kind": "conflict_decision",
                             "conflict_id": conflict_id,
-                            "title": row_title or row_description,
+                            "title": row_title,
                             "options": row_options,
                             "recommended_resolution": recommended,
                         }

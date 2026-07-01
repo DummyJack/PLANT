@@ -11,6 +11,7 @@ from .elicitation import ElicitationPlan
 from ..validation import (
     issue_type_ids,
     issue_types,
+    meeting_actions,
     meeting_action_decision,
     meeting_issue,
 )
@@ -278,6 +279,34 @@ def repair_meeting_plan(
   ],
   "discarded_reason": ""
 }}"""
+
+
+def repair_meeting_action_output(*, raw: Any, error: str) -> str:
+    return f"""# 任務
+上一次 Mediator meeting action 輸出不是合法 JSON object。請只修正格式，不要重新規劃、不要新增輸入沒有支持的內容。
+
+# 錯誤
+{error}
+
+# 可用 action
+{json.dumps(meeting_actions, ensure_ascii=False, indent=2)}
+
+# 修正規則
+- action 必須保留原始輸出中明確表達的 action 意圖；不得因為範例或格式修復自行改成其他 action。
+- params 只能保留原始輸出中已明確給出的參數；沒有參數時用空 object。
+- reasoning 只能整理原始輸出已表達的理由；沒有理由時用空字串。
+- 如果原始輸出沒有任何可辨識 action，請輸出 action="__invalid_unrepairable__"，讓 runtime 明確失敗；不要猜測或補預設 action。
+
+# 輸出 JSON
+{{
+  "action": "必須是原始輸出中可辨識的 action；不可照抄此說明",
+  "params": {{}},
+  "reasoning": ""
+}}
+
+# 原始輸出
+{raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=2)}
+"""
 
 
 # ========
@@ -1493,7 +1522,14 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
         try:
             if "artifact_query" in self.tools:
                 raw = self.chat_with_tools(messages)
-                response = self.parse_issue_response_json(raw)
+                try:
+                    response = self.parse_issue_response_json(raw)
+                except Exception as parse_error:
+                    repair_prompt = repair_meeting_action_output(
+                        raw=raw,
+                        error=f"上一輪輸出不是合法 JSON object: {parse_error}",
+                    )
+                    response = self.chat_json(self.build_direct_messages(repair_prompt))
             else:
                 response = self.chat_json(messages)
         except Exception as e:

@@ -94,8 +94,11 @@ def conflict_report_markdown_from_rows(rows: List[Dict[str, Any]]) -> str:
         if not isinstance(row, dict):
             continue
         conflict_id = text(row.get("id")) or f"CR-{index}"
-        title = text(row.get("title") or row.get("description")) or "需求衝突"
-        blocks.extend(["", f"## {conflict_id}：{title}"])
+        title = text(row.get("title"))
+        heading = conflict_id
+        if title:
+            heading += f"：{title}"
+        blocks.extend(["", f"## {heading}"])
 
         requirements = [
             bullet_requirement(req)

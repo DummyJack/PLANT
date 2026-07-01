@@ -544,30 +544,10 @@ class MediatorDiscussion:
                     f"{response.get('format_error')}"
                 )
             format_error = str(response.get("format_error") or "").strip()
-            self.logger.warning(
-                "%s agent response output contract invalid after fallback; "
-                "fallback to needs_more_discussion: %s",
-                getattr(agent, "name", ""),
-                format_error,
+            raise ValueError(
+                f"{getattr(agent, 'name', '')} agent response output contract invalid after fallback: "
+                f"{format_error}"
             )
-            response = {
-                "text": (
-                    "本輪回覆格式修復後仍不合格。為避免誤判議題已完成，"
-                    "建議先繼續討論，請 Mediator 重新指派或要求本 agent 補充。"
-                ),
-                "open_questions": [],
-                "stance": {
-                    "state": "needs_more_discussion",
-                    "proposal": {
-                        "summary": "繼續討論並重新取得有效回覆",
-                        "rationale": (
-                            "agent response 格式修復後仍無法通過輸出契約，"
-                            "不應以 ready_to_close 或 done 收束。"
-                        ),
-                        "tradeoffs": [format_error] if format_error else [],
-                    },
-                },
-            }
         if not is_pair_review_round:
             response.pop("pair_reviews", None)
         if not is_answer_question and (not actions or actions[-1] != "respond_issue"):

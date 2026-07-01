@@ -569,35 +569,4 @@ class IssueResponseSupport:
                     return parsed_decision
                 raise RuntimeError("action_plan has no valid steps")
             except Exception as retry_error:
-                fallback_action = (
-                    default_action
-                    if default_action in actions
-                    else ("respond_issue" if "respond_issue" in actions else "")
-                )
-                if fallback_action:
-                    self.logger.warning(
-                        "%s issue action plan retry failed; fallback to %s with needs_more_discussion: %s",
-                        role,
-                        fallback_action,
-                        retry_error,
-                    )
-                    return {
-                        "action": "done",
-                        "params": {},
-                        "reasoning": (
-                            "action plan 格式修復後仍無有效 steps；保守改為繼續討論，"
-                            "避免誤判為已完成。"
-                        ),
-                        "action_plan": {
-                            "goal": "補充一則 needs_more_discussion 發言",
-                            "steps": [
-                                {
-                                    "id": fallback_action,
-                                    "action": fallback_action,
-                                    "params": {},
-                                    "reasoning": "格式修復失敗，需由本輪發言說明仍需討論。",
-                                }
-                            ],
-                        },
-                    }
                 raise RuntimeError(f"{role} issue action plan retry failed: {retry_error}") from retry_error

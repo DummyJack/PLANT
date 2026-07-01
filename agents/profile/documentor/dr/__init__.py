@@ -92,17 +92,17 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             "不得新增不存在的 evidence id，不得把低信心推測當成正式 trace。\n"
             "trace_repair_reference_graph 只可作為候選證據參考，不是正式 trace；是否採用哪條邊必須由你依 trace_repair_tasks 判斷。\n"
             "edge_label 只能依 repair_type 使用 runtime 允許值；不要自創長句、同義詞或說明文字。\n"
-            "connect_statement_to_url / identify_url_source 只能用「分析」或「整理」；connect_resolve_to_formalize_meeting 只能用「正式化」；identify_conflict_resolution_meeting 只能用「解決」；connect_feedback_to_formalize_meeting、connect_model_to_formalize_meeting、identify_formalization_meeting 必須用空字串。\n"
+            "connect_statement_to_url / identify_url_source 只能用「分析」；connect_resolve_to_formalize_meeting 只能用「正式化」；connect_formalize_to_refine_meeting 只能用「精煉」；identify_conflict_resolution_meeting 只能用「解決」；connect_feedback_to_formalize_meeting、connect_model_to_formalize_meeting、identify_formalization_meeting 必須用空字串。\n"
             "只輸出 JSON，不要 Markdown。\n\n"
             "# Output JSON\n"
             "{\n"
             '  "proposals": [\n'
             "    {\n"
             '      "target_requirement_id": "FR-* | NFR-* | CON-*",\n'
-            '      "repair_type": "connect_statement_to_url | connect_feedback_to_formalize_meeting | connect_model_to_formalize_meeting | connect_resolve_to_formalize_meeting | identify_url_source | identify_conflict_resolution_meeting | identify_formalization_meeting",\n'
+            '      "repair_type": "connect_statement_to_url | connect_feedback_to_formalize_meeting | connect_model_to_formalize_meeting | connect_resolve_to_formalize_meeting | connect_formalize_to_refine_meeting | identify_url_source | identify_conflict_resolution_meeting | identify_formalization_meeting",\n'
             '      "candidate_from": "existing evidence id or empty",\n'
             '      "candidate_to": "existing evidence id or empty",\n'
-            '      "edge_label": "分析 | 整理 | 解決 | 正式化 | empty string; must match repair_type",\n'
+            '      "edge_label": "分析 | 解決 | 正式化 | 精煉 | empty string; must match repair_type",\n'
             '      "reason": "why this repair follows the task",\n'
             '      "confidence": "high | medium | low"\n'
             "    }\n"
