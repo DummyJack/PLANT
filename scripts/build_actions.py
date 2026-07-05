@@ -19,7 +19,6 @@ from agents.profile.analyst.actions.draft.create import create_draft
 from agents.profile.analyst.actions.draft.update import update_draft
 from agents.profile.analyst.actions.report.create import create_report
 from agents.profile.analyst.actions.report.resolution import report_resolution
-from agents.profile.analyst.actions.report.update import update_report
 from agents.profile.analyst.actions.reqt.analyze import analyze_requirement
 from agents.profile.analyst.actions.reqt.extract import extract_requirement
 from agents.profile.analyst.actions.reqt.refine import refine_requirement
@@ -760,14 +759,6 @@ def export_analyst() -> None:
             mode="report",
             task=create_report(),
             context=SAMPLE_CONFLICT_REPORT_CONTEXT,
-        ),
-    )
-    write(
-        "analyst/report/update_conflict_report.txt",
-        conflict_prompt(
-            mode="report",
-            task=update_report(),
-            context=SAMPLE_CONFLICT_REPORT_UPDATE_CONTEXT,
         ),
     )
     write(
