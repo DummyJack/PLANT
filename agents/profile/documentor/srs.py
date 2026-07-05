@@ -179,41 +179,6 @@ class DocumentorSrs:
         return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
 
     @staticmethod
-    def srs_id_map(req_rows: list[dict]) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for row in req_rows:
-            req_id = str(row.get("id") or "").strip()
-            existing_srs_id = str(row.get("srs_id") or "").strip()
-            existing_match = re.fullmatch(r"(FR|NFR|CON)-(\d+)", existing_srs_id)
-            if req_id and existing_match:
-                out[req_id] = existing_srs_id
-        return out
-
-    @staticmethod
-    def srs_id_sort_key(value: str) -> tuple[int, int, str]:
-        label = str(value or "").strip()
-        match = re.fullmatch(r"(FR|NFR|CON)-(\d+)", label)
-        if not match:
-            return (99, 0, label)
-        group_order = {"FR": 0, "NFR": 1, "CON": 2}
-        return (group_order.get(match.group(1), 99), int(match.group(2)), label)
-
-    @staticmethod
-    def model_anchor(text: str) -> str:
-        slug = re.sub(r"[^\w\u4e00-\u9fff -]", "", str(text or "").strip().lower())
-        slug = re.sub(r"\s+", "-", slug)
-        return slug
-
-    @classmethod
-    def model_anchor_map_from_srs(cls, srs_md: str) -> dict[str, str]:
-        anchors: dict[str, str] = {}
-        for match in re.finditer(r"(?m)^####\s+(SM-\d+)\s*:\s*(.+?)\s*$", srs_md or ""):
-            model_id = match.group(1)
-            heading = f"{model_id}: {match.group(2).strip()}"
-            anchors[model_id] = "#" + cls.model_anchor(heading)
-        return anchors
-
-    @staticmethod
     def normalize_requirement_field_spacing(srs_md: str) -> str:
         text = re.sub(
             r"(?m)^(\*\*Description\*\*[:：])\s*\n+([^\n].*)$",
@@ -402,34 +367,22 @@ class DocumentorSrs:
         return re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n"
 
     @staticmethod
-    # Defines model heading map function for this module workflow.
-    def model_heading_map(draft_md: str) -> dict[str, str]:
-        headings: dict[str, str] = {}
-        for match in re.finditer(r"(?m)^###\s+(SM-\d+)\s*:?\s+(.+?)\s*$", draft_md or ""):
-            model_id = match.group(1).strip()
-            title = match.group(2).strip()
-            if model_id and title:
-                headings[title] = model_id
-        return headings
-
-    @classmethod
-    # Defines restore model heading ids function for this module workflow.
-    def restore_model_heading_ids(cls, srs_md: str, draft_md: str) -> str:
-        title_to_id = cls.model_heading_map(draft_md)
-        if not title_to_id:
-            return srs_md
-
-        def repl(match: re.Match) -> str:
-            level = match.group(1)
-            title = match.group(2).strip()
-            if re.match(r"SM-\d+\b", title):
-                return match.group(0)
-            model_id = title_to_id.get(title)
-            if not model_id:
-                return match.group(0)
-            return f"{level} {model_id}: {title}"
-
-        return re.sub(r"(?m)^(#{3,4})\s+(.+?)\s*$", repl, srs_md or "")
+    def remove_appendix_model_heading_ids(srs_md: str) -> str:
+        lines = (srs_md or "").splitlines()
+        normalized: list[str] = []
+        in_model_appendix = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^###\s+A\.\s+系統模型\s*$", stripped):
+                in_model_appendix = True
+                normalized.append(line)
+                continue
+            if in_model_appendix and re.match(r"^##\s+", stripped):
+                in_model_appendix = False
+            if in_model_appendix:
+                line = re.sub(r"^(#{4,6}\s+)SM-\d+\s*[:：]?\s*(.+?)\s*$", r"\1\2", line)
+            normalized.append(line)
+        return "\n".join(normalized).rstrip() + "\n"
 
     # Defines generate from draft function for this module workflow.
     def generate_from_draft(
@@ -456,7 +409,7 @@ class DocumentorSrs:
                 last_error = exc
                 if attempt == 1:
                     raise
-        srs_md = self.restore_model_heading_ids(srs_md, draft_md)
+        srs_md = self.remove_appendix_model_heading_ids(srs_md)
         srs_md = self.fix_model_links(srs_md)
         srs_md = self.fix_model_image_filenames(srs_md)
         srs_md = normalize_model_image_markdown(srs_md)

@@ -43,10 +43,8 @@ def generate_srs(*, draft_md: str) -> str:
 - 系統情境：只放草稿 System Models 中 type=context_diagram 的模型；不要輸出模型小標題或 `SM-*` 標題；在 `## 系統情境` 後直接先輸出 Markdown 圖片，再輸出一段簡短模型說明文字；說明只回答「這張圖用來釐清什麼」，不要輸出 `**用途**`、`**反映需求**`、`**讀圖重點**`、`**限制**` 等小標題；圖片必須用 Markdown 圖片語法 `![模型名稱](./models/檔名.png)`，不要寫成「圖片：路徑」文字；不輸出「支援需求」。
 - 系統限制：只放草稿 System Requirement 中 type=constraint 的 REQ；使用 1. 2. 3. 編號清單列出完整限制敘述，不顯示 REQ-* 或 CON-*。
 - 需求：只放草稿 System Requirement 中 type=functional 與 type=non-functional 的 REQ，分成「### 功能性需求」與「### 非功能性需求」。
-- 附錄 A：只放草稿 System Models 中 type 不是 context_diagram 的其餘模型，保持草稿順序；每個模型標題必須包含原始 SM-*，格式為 `#### SM-2: 模型名稱`；模型標題後先輸出 Markdown 圖片，圖片必須用 Markdown 圖片語法 `![模型名稱](./models/檔名.png)`，不要寫成「圖片：路徑」文字。
-- 附錄 A 中若模型是 use_case_diagram，圖片下方不要輸出模型說明文字；必須改輸出草稿中該模型的文字用例，依 Actor 分組呈現。Actor 小標題格式為 `#### 1. 外送員`、`#### 2. 平台營運管理者`，不要寫 `Actor:`；每個 Actor 底下使用 Markdown 表格，欄位為 `UC ID | Use Case | Purpose | Interface | Related Requirement`，不得再輸出 Actor 欄。
-- Use Case 表格中的 Interface 若草稿出現 `['A', 'B']` 或其他陣列字面格式，必須整理成 `A、B`；不得輸出方括號、引號或 Python/JSON list 字面格式。
-- 附錄 A 中若模型不是 use_case_diagram，圖片下方輸出兩段模型說明文字：第一段說明這張圖用來釐清什麼，第二段說明它支撐哪些需求面向或 REQ/FR；兩段之間必須空一行；不要輸出 `**用途**`、`**反映需求**`、`**讀圖重點**`、`**支撐需求**` 或 `**限制**` 等小標題。
+- 附錄 A：只放草稿 System Models 中 type 不是 context_diagram 的其餘模型，保持草稿順序；每個模型標題只顯示模型名稱，不得包含 SM-*，格式為 `#### 模型名稱`；模型標題後先輸出 Markdown 圖片，圖片必須用 Markdown 圖片語法 `![模型名稱](./models/檔名.png)`，不要寫成「圖片：路徑」文字。
+- 附錄 A 中每個模型圖片下方都輸出兩段模型說明文字：第一段說明這張圖用來釐清什麼，第二段說明它支撐哪些需求面向或 REQ/FR；兩段之間必須空一行；不要輸出 Actor 分組、Use Case 表格、`**用途**`、`**反映需求**`、`**讀圖重點**`、`**支撐需求**` 或 `**限制**` 等小標題。
 - 不輸出需求追蹤表；SRS 的 FR/NFR 標題與系統限制條目會由 runtime 加上 Design Rationale 連結。
 
 # Requirement Conversion Rules

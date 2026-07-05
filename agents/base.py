@@ -11,7 +11,6 @@ from agents.skills.base import SkillSupport
 from agents.tools.base import (
     build_tool_context_message,
     build_tool_schemas,
-    is_tool_allowed,
     tool_access_error,
 )
 from server.services.run_checkpoint import record_run_checkpoint
@@ -122,31 +121,12 @@ def parse_json_object(raw: str) -> Dict[str, Any]:
 
 
 # ========
-# Defines parse json array function for this module workflow.
-# ========
-def parse_json_array(raw: str) -> List[Any]:
-    data = parse_json_payload(raw)
-    if not isinstance(data, list):
-        raise ValueError("Agent output must be a valid JSON array.")
-    return data
-
-
-
-# ========
 # Defines ToolCallingSupport class for this module workflow.
 # ========
 class ToolCallingSupport:
     # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return ""
-
-    # Defines is tool allowed for context function for this module workflow.
-    def is_tool_allowed_for_context(
-        self,
-        tool_name: str,
-        active_skill: Optional[str] = None,
-    ) -> bool:
-        return is_tool_allowed(self.policy, self.name, tool_name, active_skill)
 
     # Defines tool context message function for this module workflow.
     def tool_context_message(

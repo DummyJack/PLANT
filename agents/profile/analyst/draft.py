@@ -886,24 +886,6 @@ def render_complete_draft(
 
 
 # ========
-# Defines replace or insert section function for this module workflow.
-# ========
-def replace_or_insert_section(md: str, heading: str, section: str, *, before: List[str]) -> str:
-    source = (md or "").strip()
-    pattern = rf"(?ms)^##\s+{re.escape(heading)}\s*\n.*?(?=^##\s+|\Z)"
-    if re.search(pattern, source):
-        return re.sub(pattern, section.rstrip() + "\n\n", source).strip() + "\n"
-    insert_at = len(source)
-    for name in before:
-        match = re.search(rf"(?m)^##\s+{re.escape(name)}\s*$", source)
-        if match:
-            insert_at = min(insert_at, match.start())
-    if insert_at < len(source):
-        return (source[:insert_at].rstrip() + "\n\n" + section.rstrip() + "\n\n" + source[insert_at:].lstrip()).strip() + "\n"
-    return (source.rstrip() + "\n\n" + section.rstrip()).strip() + "\n"
-
-
-# ========
 # Defines draft plan helpers for this module workflow.
 # ========
 def context_has_draft_section(context: Dict[str, Any], section_id: str) -> bool:

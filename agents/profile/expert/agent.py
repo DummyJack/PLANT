@@ -8,7 +8,6 @@ from .feedback import ExpertDomainResearch
 from .issues import ExpertIssues
 from .response import ExpertResponse
 from .rules import (
-    skill_usage_policy as expert_skill_usage_policy,
     tool_usage_policy as expert_tool_usage_policy,
 )
 
@@ -64,10 +63,6 @@ class ExpertAgent(
             skill_names=["domain-research"],
             project_config=project_config,
         )
-
-    # Defines skill usage policy function for this module workflow.
-    def skill_usage_policy(self) -> str:
-        return expert_skill_usage_policy()
 
     # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:

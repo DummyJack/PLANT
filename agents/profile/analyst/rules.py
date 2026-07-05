@@ -4,22 +4,6 @@ from agents.profile.base import elicitation_action_rules, elicitation_action_tas
 
 
 # ========
-# Defines skill usage policy function for this module workflow.
-# ========
-def skill_usage_policy() -> str:
-    return """requirements-analyst：
-- 用於需求品質、需求文字、需求欄位完整性、acceptance criteria、可驗收性、歧義與 scope 邊界判斷。
-- 用於 ELICIT 或會議回答需要轉成 requirement candidate、requirement change candidate 或 open question 時。
-- 輸出限於需求品質與需求資料整理；遇到無法由需求證據支持的內容，改列 open question 或 change candidate。
-
-conflict-analyzer：
-- 用於 requirement pair conflict classification、conflict_discussion、需求間互斥/重疊/語義關係、SRS 條文衝突、驗收衝突、責任不清、scope 不清、重複但不一致，以及 requirement-level resolution options。
-- 輸出限於需求間關係判斷與 resolution options；缺乏判斷依據時保留不確定性。
-
-若議題只需要根據目前專案資料做一般需求分析，不要使用 skill。"""
-
-
-# ========
 # Defines tool usage policy function for this module workflow.
 # ========
 def tool_usage_policy() -> str:

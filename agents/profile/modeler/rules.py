@@ -8,18 +8,6 @@ from agents.profile.base import (
 )
 
 # ========
-# Defines skill usage policy function for this module workflow.
-# ========
-def skill_usage_policy() -> str:
-    return """UML：
-- 用於議題涉及系統邊界、actor/use case、參與者互動、流程、資料輸入/輸出、資料物件、互動順序、狀態轉換或需求到模型元素追蹤。
-- 用於模型能幫助釐清需求一致性、可行性、缺口或影響範圍時。
-- 只在議題有互動、流程、資料、狀態、責任邊界或模型追蹤價值時使用；若用圖能讓討論更清楚，也可以建立或更新模型輔助說明。
-- 沒有流程、資料、狀態、參與者互動、責任邊界或視覺化價值時不要使用。
-- 若使用，只產生需求層級模型參考；不可從模型反推新增需求或把未確認內容畫成正式模型。"""
-
-
-# ========
 # Defines tool usage policy function for this module workflow.
 # ========
 def tool_usage_policy() -> str:

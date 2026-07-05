@@ -990,7 +990,7 @@ class DocumentorDrNormalize:
                 )
             elif section == "System Model":
                 bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中由 {format_ids(incoming)} 觸發建模支撐，補充本需求形成所需的模型依據。"
+                    f"{display_id} 在拓樸中作為模型佐證，補充本需求形成所需的模型依據。"
                 )
             elif section == "Feedback":
                 bullets_by_section.setdefault(section, []).append(
@@ -1035,7 +1035,7 @@ class DocumentorDrNormalize:
                 bullet = f"{source} 透過「精煉」推進到 {target}。"
             elif relation == "建模":
                 section = "System Model"
-                bullet = f"{source} 透過「建模」支撐 {target}。"
+                bullet = f"{target} 作為模型佐證，補充 {source} 所屬需求的形成依據。"
             else:
                 section = section_for_type(to_type or from_type)
                 bullet = f"{source} 透過「{relation}」推進到 {target}。"
@@ -1411,7 +1411,7 @@ class DocumentorDrNormalize:
             append(
                 sections,
                 "System Model",
-                f"{display_id(node_id)} 由 {format_ids(sources)} 透過「建模」支撐本需求{detail}",
+                f"{display_id(node_id)} 作為模型佐證，補充本需求形成所需的模型依據{detail}",
             )
 
         resolved_by_meeting: Dict[str, List[str]] = {}

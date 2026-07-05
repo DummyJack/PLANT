@@ -34,62 +34,6 @@ class AnalystIssues:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
-    # Defines build requirement issue signals function for this module workflow.
-    def build_requirement_issue_signals(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
-        signals: List[Dict[str, Any]] = []
-        for c in all_conflict_rows(artifact):
-            if not isinstance(c, dict):
-                continue
-            cid = str(c.get("id") or "").strip()
-            if cid and str(c.get("final_label") or "").strip() == "Conflict":
-                signals.append(
-                    {
-                        "kind": "unresolved_conflict",
-                        "ids": [cid] + list(c.get("requirement_ids", []) or []),
-                        "summary": str(c.get("description") or "").strip(),
-                    }
-                )
-
-        for oq in artifact.get("open_questions", []) or []:
-            if not isinstance(oq, dict) or oq.get("status") == "answered":
-                continue
-            question = str(oq.get("question") or "").strip()
-            if question:
-                signals.append(
-                    {
-                        "kind": "unanswered_open_question",
-                        "ids": [
-                            str(oq.get("source_conflict_id") or "").strip()
-                        ] if str(oq.get("source_conflict_id") or "").strip() else [],
-                        "summary": question,
-                    }
-                )
-
-        for req in requirement_discussion_pool(artifact):
-            if not isinstance(req, dict):
-                continue
-            rid = str(req.get("id") or "").strip()
-            text = str(req.get("text") or "").strip()
-            if not rid or not text:
-                continue
-            issues: List[str] = []
-            source_text = str(req.get("source") or "").strip()
-            if not source_text:
-                issues.append("missing_source_trace")
-            if len(text) < 12:
-                issues.append("unclear_requirement_text")
-            if issues:
-                signals.append(
-                    {
-                        "kind": "requirement_quality_gap",
-                        "ids": [rid],
-                        "summary": text,
-                        "issues": issues,
-                    }
-                )
-
-        return signals
-
     # Defines obs issue function for this module workflow.
     def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]

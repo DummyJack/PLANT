@@ -8,17 +8,6 @@ from agents.profile.base import (
 )
 
 # ========
-# Defines skill usage policy function for this module workflow.
-# ========
-def skill_usage_policy() -> str:
-    return """domain-research：
-- 用於候選需求涉及外部法規、標準、安全、隱私、稽核、認證、第三方限制、外部資料限制、產業流程或 domain risk。
-- 只有當外部資料會影響候選需求、constraint、risk 或外部限制邊界判斷時才使用。
-- 用於確認某項 obligation 是否真有約束力，或區分強制義務、最佳實務、風險提醒與待查證缺口。
-- 不用於一般功能需求討論、scope/priority/UX preference、純需求語意衝突，或既有領域研究資料已足夠的情況。"""
-
-
-# ========
 # Defines tool usage policy function for this module workflow.
 # ========
 def tool_usage_policy(enabled_tools: set[str]) -> str:

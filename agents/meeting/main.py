@@ -593,10 +593,6 @@ class MeetingRunner:
             return
         self.logger.info("  已保存：%s", issue_id)
 
-    # Defines issue open questions function for this module workflow.
-    def issue_open_questions(self, issue_id: str) -> List[Dict]:
-        return [q for q in self.open_questions if q.get("issue_id") == issue_id]
-
     @staticmethod
     # Defines enrich resolution changes function for this module workflow.
     def enrich_resolution_changes(resolution: Dict[str, Any]) -> Dict[str, Any]:
@@ -1765,28 +1761,6 @@ class MeetingRunner:
             marker = re.sub(r"\s+", "", text).lower()
             by_text.setdefault(marker, []).append(req_id)
         return [ids for ids in by_text.values() if len(ids) > 1]
-
-    @staticmethod
-    # Defines common url stakeholder function for this module workflow.
-    def common_url_stakeholder(rows: List[Dict[str, Any]]) -> Dict[str, str]:
-        stakeholders = []
-        for row in rows or []:
-            stakeholder = row.get("stakeholder")
-            if isinstance(stakeholder, dict):
-                name = str(stakeholder.get("name") or "").strip()
-                if name:
-                    stakeholders.append(
-                        {
-                            "name": name,
-                            "type": str(stakeholder.get("type") or "").strip(),
-                        }
-                    )
-        if not stakeholders:
-            return {}
-        first = stakeholders[0]
-        if all(item == first for item in stakeholders):
-            return first
-        return {}
 
     # Defines save latest conflict report function for this module workflow.
     def save_latest_conflict_report(self, rows: List[Dict[str, Any]]) -> None:
@@ -3149,26 +3123,6 @@ class MeetingRunner:
             summary["sources"] = sources
         return summary
 
-    @staticmethod
-    # Defines system model summary function for this module workflow.
-    def system_model_summary(system_models: Any) -> List[Dict[str, Any]]:
-        if not isinstance(system_models, list):
-            return []
-        summaries: List[Dict[str, Any]] = []
-        for model in system_models:
-            if not isinstance(model, dict):
-                continue
-            item: Dict[str, Any] = {}
-            for key in ("id", "name", "type", "description", "source"):
-                value = model.get(key)
-                if value not in (None, "", [], {}):
-                    item[key] = value
-            if str(model.get("plantuml") or "").strip():
-                item["diagram_available"] = True
-            if item:
-                summaries.append(item)
-        return summaries
-
     # Defines plan action function for this module workflow.
     def plan_action(
         self,
@@ -3746,12 +3700,3 @@ class MeetingRunner:
     # Defines get meeting records function for this module workflow.
     def get_meeting_records(self) -> List[Dict]:
         return self.meeting_records
-
-    # Defines get open questions function for this module workflow.
-    def get_open_questions(self) -> List[Dict]:
-        return self.open_questions
-
-    # Defines get issue snapshot function for this module workflow.
-    def get_issue_snapshot(self) -> List[Dict]:
-        self.load_meeting_issues()
-        return self.current_meeting_issues()

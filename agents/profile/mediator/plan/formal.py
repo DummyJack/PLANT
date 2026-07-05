@@ -854,24 +854,6 @@ class MediatorIssuePlanning(ElicitationPlan, ConflictPlan):
 
         return context if context.get("related_context") else {}
 
-    # Checks whether a proposal has concrete traceable sources.
-    @staticmethod
-    def has_concrete_issue_source(row: Dict[str, Any]) -> bool:
-        for source in row.get("sources") or []:
-            if not isinstance(source, dict):
-                continue
-            artifact_name = str(source.get("artifact") or "").strip()
-            ids = [
-                str(item).strip()
-                for item in (source.get("ids") or [])
-                if str(item).strip()
-            ]
-            evidence = str(source.get("evidence") or "").strip()
-            if artifact_name and (ids or evidence):
-                return True
-        trace = row.get("trace") if isinstance(row.get("trace"), dict) else {}
-        return bool(trace.get("artifact_ids") or trace.get("proposal_ids"))
-
     # Checks whether two proposal rows refer to the same proposal.
     @staticmethod
     def same_issue_proposal(left: Dict[str, Any], right: Dict[str, Any]) -> bool:

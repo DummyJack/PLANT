@@ -445,6 +445,18 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 for path in (meta.get("attached_references") or [])
                 if str(path).strip()
             ]
+            referenced_files = [
+                str(path).strip()
+                for path in (meta.get("domain_research_referenced_files") or [])
+                if str(path).strip()
+            ]
+            if not referenced_files:
+                obs["summary"] = "未指定本輪引用文件，略過文件讀取"
+                obs["result"] = {
+                    "document_evidence": [],
+                    "gaps": ["未指定本輪引用文件"],
+                }
+                return obs
             context = {
                 "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": str(scenario_source or "").strip(),
@@ -455,8 +467,9 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 "open_questions": research_open_questions(artifact),
                 "existing_document_evidence": artifact.get("document_evidence", []) or [],
                 "attached_references": attached_references,
+                "referenced_files": referenced_files,
             }
-            task = read_docs(query=query, attached_references=attached_references)
+            task = read_docs(query=query, attached_references=referenced_files)
             try:
                 skill = domain_skill_subset(get_skill("domain-research"), "read_docs")
                 raw = self.chat_with_tools(
@@ -805,7 +818,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
             if source and source not in seen:
                 rows.append(source)
                 seen.add(source)
-        for source in (meta.get("domain_research_referenced_files") or meta.get("attached_references") or []):
+        for source in (meta.get("domain_research_referenced_files") or []):
             source_text = str(source or "").strip()
             if source_text and source_text not in seen:
                 rows.append(source_text)

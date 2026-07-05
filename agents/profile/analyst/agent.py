@@ -13,7 +13,6 @@ from .draft import AnalystDraft
 from .plan import AnalystPlan
 from .issues import AnalystIssues, AnalystResponse
 from .rules import (
-    skill_usage_policy as analyst_skill_usage_policy,
     tool_usage_policy as analyst_tool_usage_policy,
 )
 
@@ -72,10 +71,6 @@ class AnalystAgent(
             project_config=project_config,
         )
         self.system_prompt = analyst_system
-
-    # Defines skill usage policy function for this module workflow.
-    def skill_usage_policy(self) -> str:
-        return analyst_skill_usage_policy()
 
     # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:

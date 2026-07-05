@@ -34,32 +34,6 @@ class ModelerIssues:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
-    # Defines issue signals function for this module workflow.
-    def issue_signals(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
-        signals: List[Dict[str, Any]] = []
-        models = self.system_model_rows(artifact)
-        baseline_candidate_types = {
-            "context_diagram",
-            "use_case_diagram",
-            "activity_diagram",
-        }
-        existing_types = {m.get("type") for m in models if m.get("type")}
-        missing = sorted(list(baseline_candidate_types - existing_types))
-        if missing:
-            signals.append(
-                {
-                    "kind": "baseline_candidate_gap",
-                    "ids": [f"SM-GAP-{mtype}" for mtype in missing],
-                    "missing_diagram_types": missing,
-                    "summary": (
-                        "目前沒有部分候選基礎模型；只有在缺少模型會阻礙需求討論、"
-                        "流程理解、系統邊界或追蹤性時才需要提案。"
-                    ),
-                }
-            )
-
-        return signals
-
     # Defines obs issue function for this module workflow.
     def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]

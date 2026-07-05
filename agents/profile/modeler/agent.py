@@ -7,7 +7,6 @@ from .model_flow import ModelerModeling
 from .issues import ModelerIssues
 from .response import ModelerResponse
 from .rules import (
-    skill_usage_policy as modeler_skill_usage_policy,
     tool_usage_policy as modeler_tool_usage_policy,
 )
 
@@ -60,10 +59,6 @@ class ModelerAgent(
             skill_names=["UML"],
             project_config=project_config,
         )
-
-    # Defines skill usage policy function for this module workflow.
-    def skill_usage_policy(self) -> str:
-        return modeler_skill_usage_policy()
 
     # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:

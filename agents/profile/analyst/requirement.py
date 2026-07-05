@@ -637,14 +637,6 @@ class AnalystRequirementFlow:
             })
         return rows
 
-    # Defines req source context function for this module workflow.
-    def req_source_context(
-        self,
-        artifact: Dict[str, Any],
-        issue: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        return self.scope_requirement_context(artifact)
-
     @staticmethod
     # Defines feedback context function for this module workflow.
     def feedback_context(feedback: Any) -> Dict[str, List[Dict[str, Any]]]:

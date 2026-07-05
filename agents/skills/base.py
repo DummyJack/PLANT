@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from agents.skills.prompts import skill_reference_task, skill_selection_prompt
-
 SKILLS_ROOT = Path(__file__).resolve().parent
 skill_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -121,10 +119,6 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
 # Defines SkillSupport class for this module workflow.
 # ========
 class SkillSupport:
-    # Defines skill usage policy function for this module workflow.
-    def skill_usage_policy(self) -> str:
-        return ""
-
     # Defines validate skill usage function for this module workflow.
     def validate_skill_usage(self, skill_name: str) -> None:
         if skill_name not in self.skill_names:
@@ -202,84 +196,3 @@ class SkillSupport:
             messages,
             action=self.usage_action(f"skill.{skill_name}"),
         )
-
-    # Defines invoke skill function for this module workflow.
-    def invoke_skill(
-        self,
-        skill_name: str,
-        task: str,
-        context: Optional[Dict] = None,
-    ) -> str:
-        self.validate_skill_usage(skill_name)
-        skill = get_skill(skill_name)
-        messages = self.build_skill_messages(skill, skill_name, task, context=context)
-        return self.run_skill_messages(skill_name, messages)
-
-    # Defines get optional skill context function for this module workflow.
-    def get_optional_skill_context(
-        self, issue: Dict, artifact_context: Optional[Dict]
-    ) -> Optional[str]:
-        if not self.skill_names:
-            return None
-        skill_summaries: Dict[str, Dict[str, str]] = {}
-        try:
-            for skill_name in self.skill_names:
-                skill = get_skill(skill_name)
-                guidance = str(
-                    skill.get("content_system")
-                    or skill.get("content_user")
-                    or skill.get("content")
-                    or ""
-                ).strip()
-                guidance_lines = [
-                    line.strip()
-                    for line in guidance.splitlines()
-                    if line.strip()
-                ]
-                skill_summaries[skill_name] = {
-                    "description": str(skill.get("description") or "").strip(),
-                    "guidance": "\n".join(guidance_lines),
-                }
-        except Exception as e:
-            self.logger.debug("載入 skill 描述失敗: %s", e)
-        issue_summary = {
-            "id": issue.get("id"),
-            "title": issue.get("title"),
-            "description": issue.get("description"),
-            "category": issue.get("category"),
-            "trace": issue.get("trace") or {},
-        }
-        decision_prompt = skill_selection_prompt(
-            agent_name=self.name,
-            skill_names=self.skill_names,
-            skill_summaries=skill_summaries,
-            issue_summary=issue_summary,
-            policy_text=self.skill_usage_policy(),
-        )
-        try:
-            decision = self.chat_json(self.build_direct_messages(decision_prompt))
-        except Exception as e:
-            self.logger.debug("討論 skill 使用判斷失敗: %s", e)
-            return None
-
-        if not isinstance(decision, dict) or not decision.get("use_skill"):
-            return None
-        skill_name = str(decision.get("skill_name") or "").strip()
-        if skill_name not in self.skill_names:
-            return None
-
-        context = {
-            "issue": issue,
-            "artifact_context": artifact_context or {},
-            "usage_reason": decision.get("reason", ""),
-        }
-        task = skill_reference_task()
-        try:
-            raw = self.invoke_skill(skill_name, task, context=context)
-            text = (raw or "").strip()
-            if not text:
-                return None
-            return f"Skill: {skill_name}\nReason: {decision.get('reason', '')}\n{text}"
-        except Exception as e:
-            self.logger.debug("討論階段使用 skill '%s' 失敗: %s", skill_name, e)
-            return None

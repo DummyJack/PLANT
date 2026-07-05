@@ -832,13 +832,6 @@ class MediatorRecords:
                 return [value.strip()]
             return []
 
-        # Defines render list line function for this module workflow.
-        def render_list_line(prefix: str, values: Any) -> str:
-            items = as_text_list(values)
-            if not items:
-                return ""
-            return f"- {prefix}: {'; '.join(items)}"
-
         # Defines reason lines function for this module workflow.
         def reason_lines(value: Any) -> List[str]:
             text = str(value or "").strip()
@@ -960,25 +953,6 @@ class MediatorRecords:
                 out.extend(["", f"**理由**: {reason_text}"])
             return "\n".join(out)
 
-        # Defines render analysis markdown function for this module workflow.
-        def render_analysis_markdown(artifacts: Dict[str, Any]) -> str:
-            parts = []
-            user_requirements = render_user_requirements_markdown(artifacts.get("URL"))
-            if user_requirements:
-                parts.append(user_requirements)
-            conflict_report = render_conflict_report_markdown(artifacts.get("conflict_report"))
-            if conflict_report:
-                parts.append(conflict_report)
-            scope = render_scope_markdown(artifacts.get("scope"), artifacts.get("scope_reason"))
-            if scope:
-                parts.append(scope)
-            reason = str(artifacts.get("requirement_reason") or "").strip()
-            if reason and not artifacts.get("REQ"):
-                parts.append(f"**理由**: {reason}")
-            if not parts:
-                return ""
-            return "\n\n".join(parts)
-
         # Defines render feedback markdown function for this module workflow.
         def render_feedback_markdown(feedback: Any) -> str:
             if not isinstance(feedback, dict) or not feedback:
@@ -1051,69 +1025,6 @@ class MediatorRecords:
                     + " | ".join(
                         table_cell(value)
                         for value in (
-                            row.get("id"),
-                            row.get("type"),
-                            row.get("name"),
-                            related_requirement_ids,
-                        )
-                    )
-                    + " |"
-                )
-            return "\n".join(out)
-
-        # Defines render model changes markdown function for this module workflow.
-        def render_model_changes_markdown(rows: Any) -> str:
-            if not isinstance(rows, list) or not rows:
-                return ""
-            display_rows = []
-            seen = set()
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                operation = str(row.get("operation") or "").strip()
-                if operation not in {"create", "update"}:
-                    continue
-                model_id = str(row.get("id") or "").strip()
-                if not model_id:
-                    continue
-                key = (operation, model_id)
-                if key in seen:
-                    continue
-                seen.add(key)
-                display_rows.append(row)
-
-            display_rows = sorted(
-                display_rows,
-                key=lambda row: (
-                    0 if str(row.get("operation") or "").strip() == "create" else 1,
-                    self.artifact_id_sort_key(row.get("id")),
-                ),
-            )
-            if not display_rows:
-                return ""
-            out = [
-                "### 模型變更",
-                "",
-                "| 變更 | ID | 類型 | 名稱 | 相關需求 |",
-                "|---|---|---|---|---|",
-            ]
-            for row in display_rows:
-                operation = str(row.get("operation") or "").strip()
-                change_label = "新建" if operation == "create" else "更新"
-                related_requirement_ids = sorted(
-                    dict.fromkeys(
-                        str(item).strip()
-                        for item in (row.get("related_requirement_ids") or [])
-                        if str(item).strip()
-                    ),
-                    key=self.artifact_id_sort_key,
-                )
-                out.append(
-                    "| "
-                    + " | ".join(
-                        table_cell(value)
-                        for value in (
-                            change_label,
                             row.get("id"),
                             row.get("type"),
                             row.get("name"),

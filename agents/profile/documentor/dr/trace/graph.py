@@ -357,6 +357,25 @@ class DocumentorDrTraceGraphMixin:
             if node_type_by_id.get(str(edge.get("from") or "").strip()) == "Meeting Discussion"
             and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Meeting Discussion"
         }
+        meeting_reachable: Dict[str, set[str]] = {}
+        meeting_next_ids: Dict[str, set[str]] = {}
+        for source_id, target_node_id in meeting_chain_pairs:
+            meeting_next_ids.setdefault(source_id, set()).add(target_node_id)
+
+        def reachable_meetings(meeting_id: str) -> set[str]:
+            if meeting_id in meeting_reachable:
+                return meeting_reachable[meeting_id]
+            seen: set[str] = set()
+            stack = list(meeting_next_ids.get(meeting_id) or [])
+            while stack:
+                next_id = stack.pop()
+                if next_id in seen:
+                    continue
+                seen.add(next_id)
+                stack.extend(meeting_next_ids.get(next_id) or [])
+            meeting_reachable[meeting_id] = seen
+            return seen
+
         url_to_meeting_edges = [
             edge for edge in edges
             if str(edge.get("from") or "").strip().startswith("URL-")
@@ -368,8 +387,35 @@ class DocumentorDrTraceGraphMixin:
             for previous in url_to_meeting_edges
             if str(edge.get("from") or "").strip() == str(previous.get("from") or "").strip()
             and str(edge.get("to") or "").strip() != str(previous.get("to") or "").strip()
-            and (str(previous.get("to") or "").strip(), str(edge.get("to") or "").strip()) in meeting_chain_pairs
+            and str(edge.get("to") or "").strip() in reachable_meetings(str(previous.get("to") or "").strip())
         }
+        conflict_meeting_sources_by_url: Dict[str, set[str]] = {}
+        conflict_ids_by_url = {
+            str(edge.get("from") or "").strip(): str(edge.get("to") or "").strip()
+            for edge in edges
+            if str(edge.get("from") or "").strip().startswith("URL-")
+            and node_type_by_id.get(str(edge.get("to") or "").strip()) == "Conflict"
+            and str(edge.get("relation") or "").strip() == "衝突"
+        }
+        for edge in edges:
+            conflict_id = str(edge.get("from") or "").strip()
+            meeting_id = str(edge.get("to") or "").strip()
+            if (
+                node_type_by_id.get(conflict_id) == "Conflict"
+                and node_type_by_id.get(meeting_id) == "Meeting Discussion"
+                and str(edge.get("relation") or "").strip() == "解決"
+            ):
+                for url_id, url_conflict_id in conflict_ids_by_url.items():
+                    if url_conflict_id == conflict_id:
+                        conflict_meeting_sources_by_url.setdefault(url_id, set()).add(meeting_id)
+        shortcut_edges.update({
+            (str(edge.get("from") or "").strip(), str(edge.get("to") or "").strip())
+            for edge in url_to_meeting_edges
+            if str(edge.get("relation") or "").strip() == "正式化"
+            for meeting_id in conflict_meeting_sources_by_url.get(str(edge.get("from") or "").strip()) or set()
+            if str(edge.get("to") or "").strip() == meeting_id
+            or str(edge.get("to") or "").strip() in reachable_meetings(meeting_id)
+        })
         if shortcut_edges:
             edges = [
                 edge for edge in edges
@@ -439,6 +485,68 @@ class DocumentorDrTraceGraphMixin:
         }
         if target_id not in visible_ids or len(visible_ids) <= 1:
             return {}
+        visible_url_ids = [
+            str(node.get("id") or "").strip()
+            for node in (graph.get("nodes") or [])
+            if (
+                isinstance(node, dict)
+                and str(node.get("id") or "").strip().startswith("URL-")
+            )
+        ]
+        visible_edges = [edge for edge in (graph.get("edges") or []) if isinstance(edge, dict)]
+        visible_feedback_urls: Dict[str, List[str]] = {}
+        for edge in visible_edges:
+            from_id = str(edge.get("from") or "").strip()
+            to_id = str(edge.get("to") or "").strip()
+            if from_id.startswith("URL-") and node_type_by_id.get(to_id) in {"Feedback", "Feedback Group"}:
+                visible_feedback_urls.setdefault(to_id, [])
+                if from_id not in visible_feedback_urls[to_id]:
+                    visible_feedback_urls[to_id].append(from_id)
+        if visible_feedback_urls:
+            feedback_by_id = {
+                str(row.get("id") or "").strip(): row
+                for row in (requirement.get("feedback") or [])
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            for node in graph.get("all_nodes") or []:
+                if not isinstance(node, dict):
+                    continue
+                node_id = str(node.get("id") or "").strip()
+                if node_id not in visible_feedback_urls:
+                    continue
+                allowed_urls = visible_url_ids or visible_feedback_urls.get(node_id) or []
+                grouped_ids = [
+                    str(item).strip()
+                    for item in (node.get("grouped_ids") or [])
+                    if str(item).strip()
+                ]
+                if not grouped_ids:
+                    node["related_sources"] = allowed_urls
+                    continue
+                table_rows = []
+                for feedback_id in grouped_ids:
+                    row = feedback_by_id.get(feedback_id) or {}
+                    source_chips = "".join(
+                        f'<span class="dr-trace-source-chip">{cls.html_attr(item)}</span>'
+                        for item in dict.fromkeys(allowed_urls)
+                    )
+                    table_rows.append(
+                        "<tr>"
+                        f"<td>{cls.html_attr(feedback_id)}</td>"
+                        f"<td>{cls.html_attr(row.get('type') or '')}</td>"
+                        f"<td>{cls.html_attr(cls.clean_repeated_text(row.get('content')))}</td>"
+                        f"<td>{source_chips}</td>"
+                        "</tr>"
+                    )
+                if table_rows:
+                    node["content"] = (
+                        '<table class="dr-trace-feedback-table dr-trace-feedback-group-table"><thead><tr>'
+                        "<th>ID</th><th>Type</th><th>Feedback</th><th>Source</th>"
+                        "</tr></thead><tbody>"
+                        + "".join(table_rows)
+                        + "</tbody></table>"
+                    )
+                    node["related_sources"] = allowed_urls
         if missing_edges:
             requirement["trace_event_warnings"] = missing_edges
         graph["source"] = "trace_req"
@@ -615,26 +723,50 @@ class DocumentorDrTraceGraphMixin:
             }
 
         def model_image_html(row: Dict[str, Any]) -> str:
-            def model_fallback_html(*, hidden: bool = False) -> str:
-                hidden_attr = " hidden" if hidden else ""
+            def model_details_html() -> str:
                 parts = clean_model_description_parts(row)
-                body = "".join(
+                purpose = parts.get("用途") or parts.get("說明") or cls.clean_repeated_text(row.get("name") or row.get("id") or "System Model")
+                requirement_sources = [
+                    str(item).strip()
+                    for item in (requirement.get("user_requirements") or [])
+                    if isinstance(item, dict)
+                    for item in [item.get("id")]
+                    if str(item).strip().startswith("URL-")
+                ]
+                model_related = {
+                    str(value).strip()
+                    for value in (row.get("related_sources") or [])
+                    if str(value).strip()
+                }
+                source_values = [
+                    value for value in requirement_sources
+                    if value in model_related
+                ]
+                if not source_values and requirement_sources:
+                    source_values = requirement_sources[:1]
+                source_values = source_values[:1]
+                detail_rows = (
                     '<p class="dr-trace-model-description__item">'
-                    f'<strong>{cls.html_attr(label)}</strong>：{cls.html_attr(value)}'
+                    f'{cls.html_attr(purpose)}'
                     "</p>"
-                    for label, value in parts.items()
                 )
-                return f'<div class="dr-trace-model-description"{hidden_attr}>{body}</div>'
+                if source_values:
+                    detail_rows += (
+                        '<p class="dr-trace-model-description__item">'
+                        f'<strong>Source</strong>: {cls.html_attr(", ".join(dict.fromkeys(source_values)))}'
+                        "</p>"
+                    )
+                return f'<div class="dr-trace-model-description">{detail_rows}</div>'
 
             image_path = normalize_dr_model_path(row.get("image_path"))
             if image_path:
                 return (
                     f'<img src="{cls.html_attr(image_path)}" '
                     f'alt="{cls.html_attr(row.get("name") or row.get("id") or "System Model")}" '
-                    'onerror="this.hidden=true;this.nextElementSibling.hidden=false">'
-                    f'{model_fallback_html(hidden=True)}'
+                    'onerror="this.hidden=true">'
+                    f'{model_details_html()}'
                 )
-            return model_fallback_html()
+            return model_details_html()
 
         def feedback_card_html(row: Dict[str, Any]) -> str:
             feedback_type = str(row.get("type") or "Feedback").strip()
@@ -816,6 +948,28 @@ class DocumentorDrTraceGraphMixin:
         feedback_rows = [row for row in requirement.get("feedback") or [] if isinstance(row, dict)]
         model_rows = [row for row in requirement.get("system_models") or [] if isinstance(row, dict)]
         meeting_rows = [row for row in requirement.get("meetings") or [] if isinstance(row, dict)]
+        current_url_ids = [
+            str(row.get("id") or "").strip()
+            for row in url_rows
+            if str(row.get("id") or "").strip()
+        ]
+
+        def feedback_display_sources(row: Dict[str, Any]) -> List[str]:
+            related = [
+                str(item).strip()
+                for item in (row.get("related_sources") or [])
+                if str(item).strip() in current_url_ids
+            ]
+            if not related:
+                related = [
+                    str(item).strip()
+                    for item in (row.get("related_user_requirements") or [])
+                    if str(item).strip() in current_url_ids
+                ]
+            if not related:
+                related = list(current_url_ids)
+            return list(dict.fromkeys(related))
+
         if len(feedback_rows) > 1:
             table_rows = []
             for row in feedback_rows:
@@ -824,7 +978,7 @@ class DocumentorDrTraceGraphMixin:
                     continue
                 source_chips = "".join(
                     f'<span class="dr-trace-source-chip">{cls.html_attr(str(item).strip())}</span>'
-                    for item in (row.get("related_sources") or [])
+                    for item in feedback_display_sources(row)
                     if str(item).strip()
                 )
                 table_rows.append(
@@ -850,7 +1004,7 @@ class DocumentorDrTraceGraphMixin:
                     feedback_grouped_ids.append(row_id)
                 feedback_related_sources.extend(
                     str(item).strip()
-                    for item in (row.get("related_sources") or [])
+                    for item in feedback_display_sources(row)
                     if str(item).strip()
                 )
             feedback_rows = [{
@@ -886,13 +1040,6 @@ class DocumentorDrTraceGraphMixin:
             feedback_id = str(row.get("id") or "").strip()
             if feedback_id in nodes and row.get("grouped_ids"):
                 nodes[feedback_id]["grouped_ids"] = list(row.get("grouped_ids") or [])
-
-        def statement_rank(row: Dict[str, Any]) -> tuple[int, int, int]:
-            numbers = [int(match) for match in re.findall(r"\d+", str(row.get("id") or ""))]
-            if not numbers:
-                return (10**9, 0, 0)
-            padded = numbers[:3] + [0] * max(0, 3 - len(numbers))
-            return (padded[0], padded[1], padded[2])
 
         for url in url_rows:
             url_source_id = str(url.get("source_id") or "").strip()

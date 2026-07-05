@@ -188,18 +188,6 @@ def clean_list(values: Any) -> List[Any]:
 
 
 # ========
-# Defines clean model types function for this module workflow.
-# ========
-def clean_model_types(values: Any) -> List[str]:
-    out: List[str] = []
-    for value in values or []:
-        model_type = clean_text(value)
-        if model_type in model_type_set and model_type not in out:
-            out.append(model_type)
-    return out
-
-
-# ========
 # Defines model targets function for this module workflow.
 # ========
 def model_targets(values: Any) -> List[Dict[str, str]]:
