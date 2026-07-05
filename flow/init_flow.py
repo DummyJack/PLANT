@@ -55,6 +55,19 @@ INIT_RESUME_STAGE_ORDER = [
 ]
 
 
+def merge_reference_paths(*groups: List[str]) -> List[str]:
+    rows: List[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for value in group or []:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                continue
+            rows.append(text)
+            seen.add(text)
+    return rows
+
+
 def init_resume_stage(artifact: Dict[str, Any]) -> str:
     meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
     checkpoint = (
@@ -1119,8 +1132,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 )
             if referenced_files:
-                meta["attached_references"] = referenced_files
-                meta["domain_research_referenced_files"] = referenced_files
+                meta["attached_references"] = merge_reference_paths(
+                    meta.get("attached_references") or [],
+                    referenced_files,
+                )
+                meta["domain_research_referenced_files"] = merge_reference_paths(referenced_files)
             artifact["meta"] = meta
             flow.store.save_artifact(artifact)
         if feedback or referenced_files:

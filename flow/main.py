@@ -186,16 +186,6 @@ def formal_meeting_stage_enabled(config: Dict[str, Any]) -> bool:
 
 
 # ========
-# Defines general only meeting stage function for this module workflow.
-# ========
-def general_only_meeting_stage_enabled(config: Dict[str, Any]) -> bool:
-    return (
-        stage_enabled(config, "general_formal_meeting", True)
-        and not stage_enabled(config, "default_formal_meeting", True)
-    )
-
-
-# ========
 # Defines formal meeting end round function for this module workflow.
 # ========
 def formal_meeting_end_round(config: Dict[str, Any], *, start_round: int = 1) -> int:
@@ -310,14 +300,127 @@ def completed_meeting_rounds_from_issue_state(flow) -> set[int]:
 
 
 # ========
-# Defines artifact file non empty function for this module workflow.
+# Defines completed formal meeting rounds function for this module workflow.
 # ========
-def artifact_file_non_empty(flow, *parts: str) -> bool:
-    artifact_dir = getattr(flow.store, "artifact_dir", None)
-    if artifact_dir is None:
-        return False
-    path = artifact_dir.joinpath(*parts)
-    return path.exists() and path.is_file() and path.stat().st_size > 0
+def completed_formal_meeting_rounds(flow) -> set[int]:
+    return completed_meeting_rounds_from_issue_state(flow) | completed_meeting_rounds_from_mom(flow)
+
+
+# ========
+# Defines formal meeting draft update plan function for this module workflow.
+# ========
+def formal_meeting_draft_update_plan(flow, completed_rounds: set[int]) -> List[Dict[str, Any]]:
+    default_enabled = stage_enabled(flow.config, "default_formal_meeting", True)
+    general_enabled = stage_enabled(flow.config, "general_formal_meeting", True)
+    updates: List[Dict[str, Any]] = []
+    if (
+        default_enabled
+        and stage_enabled(flow.config, "default_update_draft", True)
+        and 1 in completed_rounds
+    ):
+        updates.append({
+            "action": "default_update_draft",
+            "meta_key": "default_draft_v",
+            "round": 1,
+            "label": "Default Update Draft",
+        })
+    if general_enabled and stage_enabled(flow.config, "general_update_draft", True):
+        general_rounds = sorted(
+            round_num for round_num in completed_rounds
+            if round_num >= (2 if default_enabled else 1)
+        )
+        for round_num in general_rounds:
+            updates.append({
+                "action": "general_update_draft",
+                "meta_key": f"general_draft_v_r{round_num}",
+                "round": round_num,
+                "label": f"General Update Draft R{round_num}",
+            })
+    return updates
+
+
+# ========
+# Defines ensure formal meeting draft updates function for this module workflow.
+# ========
+def ensure_formal_meeting_draft_updates(
+    flow,
+    artifact: Dict[str, Any],
+    *,
+    completed_rounds: Optional[set[int]] = None,
+) -> Dict[str, Any]:
+    if not formal_meeting_stage_enabled(flow.config):
+        return artifact
+    rounds = completed_rounds if completed_rounds is not None else completed_formal_meeting_rounds(flow)
+    if not rounds:
+        return artifact
+    update_plan = formal_meeting_draft_update_plan(flow, rounds)
+    if not update_plan:
+        return artifact
+
+    latest_version = flow.store.get_draft_version()
+    if latest_version >= len(update_plan):
+        return artifact
+    if latest_version < 0:
+        require_latest_draft(flow, "formal_meeting_draft_update")
+
+    meta = artifact.setdefault("meta", {})
+    flow.logger.stage_started("draft", "草稿更新")
+    for index, update in enumerate(update_plan, 1):
+        latest_version = flow.store.get_draft_version()
+        if latest_version >= index:
+            continue
+        previous_draft = flow.store.load_draft(latest_version) if latest_version >= 0 else ""
+        next_version = max(0, latest_version + 1)
+        action = str(update["action"])
+        label = str(update["label"])
+        round_num = int(update["round"])
+        flow.logger.step_started(
+            "draft",
+            f"draft.{action}",
+            "更新需求草稿",
+            agent="analyst",
+            message=f"{label}：補齊會議後需求草稿",
+        )
+        draft_md = flow.analyst_agent.run_requirements_analyst(
+            "update_draft",
+            artifact=artifact,
+            draft_version=next_version,
+            previous_draft=previous_draft,
+            round_num=round_num,
+            artifact_dir=getattr(flow.store, "artifact_dir", None),
+        )
+        flow.store.save_draft(draft_md, version=next_version)
+        emit_markdown_section_deltas(
+            flow,
+            "draft",
+            f"draft.{action}",
+            draft_md,
+            agent="analyst",
+        )
+        meta[str(update["meta_key"])] = next_version
+        if action == "default_update_draft":
+            meta["default_draft_v"] = next_version
+            meta[f"default_update_draft_round_{round_num}"] = True
+        else:
+            meta["general_draft_v"] = next_version
+            meta[f"general_update_draft_round_{round_num}"] = True
+        flow.store.save_artifact(artifact)
+        flow.logger.step_completed(
+            "draft",
+            f"draft.{action}",
+            f"Draft v{next_version}",
+            agent="analyst",
+            message=f"{label}：已補齊會議後需求草稿",
+            output_path=f"artifact/drafts/draft_v{next_version}.md",
+        )
+        flow.logger.artifact_created(
+            "draft",
+            f"draft.{action}",
+            f"Draft v{next_version} 已產生",
+            f"artifact/drafts/draft_v{next_version}.md",
+        )
+    flow.logger.stage_completed("draft", "草稿更新")
+    return artifact
 
 
 # ========
@@ -775,6 +878,8 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
+    artifact = ensure_formal_meeting_draft_updates(flow, artifact)
+    _check_flow_cancelled(flow)
     draft_version_after_formal = flow.store.get_draft_version()
     generated_new_draft_this_run = draft_version_after_formal > draft_version_before_formal
     if ran_general_meeting_this_run and generated_new_draft_this_run:
@@ -783,7 +888,7 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     run_specification_stage(
         flow,
         artifact,
-        force_regenerate=ran_general_meeting_this_run and generated_new_draft_this_run,
+        force_regenerate=generated_new_draft_this_run,
     )
     _check_flow_cancelled(flow)
     run_output_stage(flow)
@@ -875,6 +980,8 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.store.save_artifact(artifact)
 
     _check_flow_cancelled(flow)
+    artifact = ensure_formal_meeting_draft_updates(flow, artifact)
+    _check_flow_cancelled(flow)
     draft_version_after_formal = flow.store.get_draft_version()
     generated_new_draft_this_run = draft_version_after_formal > draft_version_before_formal
     if ran_general_meeting_this_run and generated_new_draft_this_run:
@@ -883,7 +990,7 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     run_specification_stage(
         flow,
         artifact,
-        force_regenerate=ran_general_meeting_this_run and generated_new_draft_this_run,
+        force_regenerate=generated_new_draft_this_run,
     )
     _check_flow_cancelled(flow)
     run_output_stage(flow)
