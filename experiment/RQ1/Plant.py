@@ -1,6 +1,5 @@
 # Runs the RQ1 Plant experiment workflow and writes evaluation outputs.
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -278,7 +277,7 @@ def main() -> None:
         print("開始執行全量評估實驗...")
         print("=" * 60)
 
-        checkpoint_payload: Dict[str, Any] = {}
+        checkpoint_payload: Dict[str, Any] = load_checkpoint_file(checkpoint_path)
         task_result_rows: List[Dict[str, Any]] = [
             row
             for row in (checkpoint_payload.get("task_result_rows", []) if isinstance(checkpoint_payload, dict) else [])

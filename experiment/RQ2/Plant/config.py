@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 
 from flow.setup import Flow
 from storage.artifact import save_artifact as save_split_artifact
-from storage.markdown import load_markdown as load_markdown_file
 from storage.markdown import save_markdown as save_markdown_file
 from utils import model_has_token_pricing
 
@@ -206,12 +205,6 @@ class ExperimentStore:
     # ========
     def load_draft(self, version: int):
         return None
-
-    # ========
-    # Defines load markdown function for this experiment module.
-    # ========
-    def load_markdown(self, filename: str) -> str:
-        return load_markdown_file(self.artifact_dir, self.output_dir, filename)
 
 # ========
 # Defines build plant cost payload function for this experiment module.
