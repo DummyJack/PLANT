@@ -156,10 +156,14 @@ def project_payload(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = N
         scenario = scenario_payload(existing.get("scenario", ""))
     if not stakeholders and isinstance(existing, dict):
         stakeholders = stakeholder_rows(existing)
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    if not meta and isinstance(existing, dict) and isinstance(existing.get("meta"), dict):
+        meta = existing.get("meta") or {}
     return {
         "rough_idea": rough_idea,
         "scenario": scenario,
         "stakeholders": stakeholders,
+        "meta": dict(meta),
     }
 
 
@@ -1441,6 +1445,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         ),
         "scenario": scenario_payload(project.get("scenario", "")),
         "stakeholders": stakeholder_list,
+        "meta": dict(project.get("meta") or {}) if isinstance(project.get("meta"), dict) else {},
         "feedback": feedback,
         "URL": requirement_payload_rows(requirements.get("URL", []) or []),
         "REQ": system_requirement_rows_from_sections(requirements),

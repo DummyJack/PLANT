@@ -401,6 +401,23 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             node for node in evidence_right_nodes
             if str(node.get("id") or "").strip() not in direct_url_model_node_ids
         ]
+        seen_direct_model_ids = {
+            str(node.get("id") or "").strip()
+            for node in direct_model_nodes
+            if str(node.get("id") or "").strip()
+        }
+        for column_name in ("Analysis", "Background"):
+            remaining_nodes = []
+            for node in groups[column_name]:
+                node_id = str(node.get("id") or "").strip()
+                node_type = str(node.get("type") or "").strip()
+                if node_id in direct_url_model_node_ids and node_type == "System Model":
+                    if node_id not in seen_direct_model_ids:
+                        direct_model_nodes.append(node)
+                        seen_direct_model_ids.add(node_id)
+                    continue
+                remaining_nodes.append(node)
+            groups[column_name] = remaining_nodes
 
         def stack_count_height(count: int, gap: int = stack_gap) -> int:
             return count * node_height + max(0, count - 1) * gap
@@ -463,30 +480,34 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         url_height = node_height if groups["User Requirement"] else 0
         support_nodes = evidence_left_nodes + evidence_right_nodes + groups["Background"]
         support_count = len(support_nodes)
+        support_individual_feedback_count = sum(
+            1
+            for node in support_nodes
+            if str(node.get("type") or "").strip() == "Feedback"
+        )
+        wrap_support_feedback = support_individual_feedback_count >= 2
         support_columns = 1 if support_count else 0
         support_rows = (support_count + support_columns - 1) // support_columns if support_columns else 0
+        model_support_count = len(direct_model_nodes)
+        wrap_model_support = model_support_count >= 2
+        model_support_columns = 1 if model_support_count else 0
+        model_support_rows = model_support_count
         support_gap_x = 16
         support_gap_y = 18
         support_width = evidence_width
         support_padding = 18
         support_title_height = 0
-        direct_model_ids = {
-            str(node.get("id") or "").strip()
-            for node in direct_model_nodes
-            if str(node.get("id") or "").strip()
-        }
-        direct_model_counts_by_source: Dict[str, int] = {}
-        for edge in edges_for_layout:
-            source_id = str(edge.get("from") or "").strip()
-            target_id = str(edge.get("to") or "").strip()
-            if target_id in direct_model_ids and source_id:
-                direct_model_counts_by_source[source_id] = direct_model_counts_by_source.get(source_id, 0) + 1
-        direct_model_rows = max(direct_model_counts_by_source.values(), default=0)
+        direct_model_rows = 0
         direct_feedback_ids = {
             str(node.get("id") or "").strip()
             for node in direct_feedback_nodes
             if str(node.get("id") or "").strip()
         }
+        wrap_direct_feedback = sum(
+            1
+            for node in direct_feedback_nodes
+            if str(node.get("type") or "").strip() == "Feedback"
+        ) >= 2
         direct_feedback_counts_by_source: Dict[str, int] = {}
         for edge in edges_for_layout:
             source_id = str(edge.get("from") or "").strip()
@@ -497,8 +518,10 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         direct_model_gap_y = 20
         direct_side_rows = max(direct_model_rows, direct_feedback_rows)
         direct_model_band_height = (
-            direct_model_gap_y + max(0, direct_side_rows - 1) * (node_height + support_gap_y)
-            if direct_side_rows > 1
+            direct_model_gap_y
+            + direct_side_rows * node_height
+            + max(0, direct_side_rows - 1) * support_gap_y
+            if direct_side_rows
             else 0
         )
         support_content_height = (
@@ -534,11 +557,36 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         support_main_gap = 96
         support_x = max(evidence_right_x, main_x + main_width + support_main_gap) if support_count else 0
         support_y = max(top, meeting_y - support_padding) if support_count else 0
+        model_support_width = (
+            model_support_columns * support_width
+            + max(0, model_support_columns - 1) * support_gap_x
+            + support_padding * 2
+            if model_support_count
+            else 0
+        )
+        model_support_height = (
+            model_support_rows * node_height
+            + max(0, model_support_rows - 1) * support_gap_y
+            + support_padding * 2
+            if model_support_count
+            else 0
+        )
+        model_support_x = (
+            max(24, main_x - model_support_width - support_main_gap)
+            if model_support_count and support_count
+            else max(24, main_x - model_support_width - support_main_gap)
+            if model_support_count
+            else 0
+        )
+        model_support_y = support_y + support_padding if model_support_count and support_count else max(top, meeting_y)
         if support_count:
             view_width = max(view_width, int(support_x + support_panel_width + 24))
+        if model_support_count:
+            view_width = max(view_width, int(model_support_x + model_support_width + 24))
         height = max(
             requirement_y + requirement_height + 18,
             support_y + support_height + 18 if support_count else 0,
+            model_support_y + model_support_height + 18 if model_support_count else 0,
         )
         support_panel = (
             {
@@ -549,6 +597,17 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                 "side": "right",
             }
             if support_count
+            else None
+        )
+        model_support_panel = (
+            {
+                "x": model_support_x,
+                "y": model_support_y - support_padding,
+                "width": model_support_width,
+                "height": model_support_height,
+                "side": "left",
+            }
+            if model_support_count
             else None
         )
 
@@ -649,7 +708,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                     target=name == "Requirement",
                 ))
         if url_count:
-            y = url_y + max(0, (url_band_height - node_height) // 2)
+            y = url_y if direct_side_rows else url_y + max(0, (url_band_height - node_height) // 2)
             for index, node in enumerate(groups["User Requirement"]):
                 x = url_start_x + index * (url_width + url_gap)
                 node_id = str(node.get("id") or "").strip()
@@ -672,25 +731,46 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             *,
             side: str,
             slot_by_source: Dict[str, int],
+            wrap_box: bool = False,
         ) -> None:
             nonlocal view_width
             side_gap = 80
+            direct_markup: List[str] = []
+            direct_rects: List[Tuple[int, int, int]] = []
             for node in nodes:
                 node_id = str(node.get("id") or "").strip()
-                source_id = next(
-                    (
-                        str(edge.get("from") or "").strip()
-                        for edge in edges_for_layout
-                        if str(edge.get("to") or "").strip() == node_id
-                        and str(edge.get("from") or "").strip() in node_positions
-                    ),
-                    "",
-                )
+                incoming_source_ids = [
+                    str(edge.get("from") or "").strip()
+                    for edge in edges_for_layout
+                    if str(edge.get("to") or "").strip() == node_id
+                    and str(edge.get("from") or "").strip() in node_positions
+                ]
+                if side == "below":
+                    source_id = next(
+                        (value for value in incoming_source_ids if value.startswith("URL-")),
+                        incoming_source_ids[0] if incoming_source_ids else "",
+                    )
+                else:
+                    source_id = incoming_source_ids[0] if incoming_source_ids else ""
                 source_position = node_positions.get(source_id)
                 if source_position:
                     slot = slot_by_source.get(source_id, 0)
                     slot_by_source[source_id] = slot + 1
-                    if side == "left":
+                    if side == "below":
+                        right_neighbors = [
+                            position
+                            for other_id, position in node_positions.items()
+                            if other_id.startswith("URL-")
+                            and position[1] == source_position[1]
+                            and position[0] > source_position[0]
+                        ]
+                        next_left = min((position[0] for position in right_neighbors), default=None)
+                        if next_left is not None and next_left - source_position[0] >= 96:
+                            x = int(next_left + slot * (support_width + support_gap_x))
+                        else:
+                            x = int(source_position[0] + slot * (support_width + support_gap_x))
+                        x = max(24, x)
+                    elif side == "left":
                         x = max(24, source_position[0] - support_width - side_gap)
                     else:
                         right_x = source_position[0] + source_position[2] + side_gap
@@ -698,11 +778,55 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                             x = int(right_x)
                         else:
                             x = int(right_x)
-                    y = source_position[1] + slot * (node_height + support_gap_y)
+                    if side == "below":
+                        y = source_position[1] + node_height + direct_model_gap_y
+                    else:
+                        y = source_position[1] + slot * (node_height + support_gap_y)
                 else:
                     x = max(24, url_start_x - support_width - 64) if side == "left" else url_start_x + url_width + 36
                     y = url_y
                 view_width = max(view_width, int(x + support_width + 24))
+                node_positions[node_id] = (x, y, support_width)
+                direct_rects.append((x, y, support_width))
+                direct_markup.append(trace_topology_svg_node(
+                    node_id=node_id,
+                    label=str(node.get("label") or node_id),
+                    node_type=str(node.get("type") or ""),
+                    title=str(node.get("title") or node_id),
+                    content=str(node.get("content") or ""),
+                    content_format=str(node.get("content_format") or "text"),
+                    x=x,
+                    y=y,
+                    width=support_width,
+                    target=False,
+                ))
+            if wrap_box and direct_rects:
+                min_x = min(rect[0] for rect in direct_rects) - support_padding
+                min_y = min(rect[1] for rect in direct_rects) - support_padding
+                max_x = max(rect[0] + rect[2] for rect in direct_rects) + support_padding
+                max_y = max(rect[1] + node_height for rect in direct_rects) + support_padding
+                node_markup.append(
+                    f'<rect class="dr-trace-support-box" x="{min_x}" y="{min_y}" '
+                    f'width="{max_x - min_x}" height="{max_y - min_y}" rx="8"></rect>'
+                )
+            node_markup.extend(direct_markup)
+
+        render_direct_side_nodes(
+            direct_feedback_nodes,
+            side="left",
+            slot_by_source={},
+            wrap_box=wrap_direct_feedback,
+        )
+        if model_support_count:
+            if wrap_model_support:
+                node_markup.append(
+                    f'<rect class="dr-trace-support-box" x="{model_support_x}" y="{model_support_y - support_padding}" '
+                    f'width="{model_support_width}" height="{model_support_height}" rx="8"></rect>'
+                )
+            for index, node in enumerate(direct_model_nodes):
+                x = int(model_support_x + support_padding)
+                y = int(model_support_y + index * (node_height + support_gap_y))
+                node_id = str(node.get("id") or "").strip()
                 node_positions[node_id] = (x, y, support_width)
                 node_markup.append(trace_topology_svg_node(
                     node_id=node_id,
@@ -716,16 +840,14 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                     width=support_width,
                     target=False,
                 ))
-
-        render_direct_side_nodes(direct_feedback_nodes, side="left", slot_by_source={})
-        render_direct_side_nodes(direct_model_nodes, side="right", slot_by_source=direct_model_slot_by_source)
         if support_count:
             total_support_width = support_columns * support_width + max(0, support_columns - 1) * support_gap_x
             support_start_x = support_x + support_padding
-            node_markup.append(
-                f'<rect class="dr-trace-support-box" x="{support_x}" y="{support_y}" '
-                f'width="{support_panel_width}" height="{support_height}" rx="8"></rect>'
-            )
+            if wrap_support_feedback:
+                node_markup.append(
+                    f'<rect class="dr-trace-support-box" x="{support_x}" y="{support_y}" '
+                    f'width="{support_panel_width}" height="{support_height}" rx="8"></rect>'
+                )
             y_start = support_y + support_padding + support_title_height
             for index, node in enumerate(support_nodes):
                 column_index = index % support_columns
@@ -755,6 +877,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             "view_width": view_width,
             "orientation": str(attempt.get("layout") or "horizontal"),
             "support_panel": support_panel,
+            "model_support_panel": model_support_panel,
             "issues": assess_trace_topology_layout(node_positions, valid_edges),
         }
 
@@ -769,7 +892,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         if not candidate["issues"]:
             break
     if selected_layout["issues"]:
-        main_chain_labels = {"分析", "整理", "衝突", "解決", "正式化", "精練"}
+        main_chain_labels = {"分析", "整理", "衝突", "解決", "正式化", "精煉"}
         selected_graph_edges = [
             {
                 **edge,
@@ -795,6 +918,20 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         if str(node.get("id") or "").strip()
     }
     has_evidence_nodes = bool(groups.get("Evidence"))
+
+    def display_edge_label(edge: Dict[str, Any]) -> str:
+        label = str(edge.get("relation") or "").strip()
+        if label:
+            return label
+        source_node = node_by_id.get(str(edge.get("from") or "").strip(), {})
+        target_node = node_by_id.get(str(edge.get("to") or "").strip(), {})
+        if (
+            str(source_node.get("type") or "").strip() == "Meeting Discussion"
+            and str(target_node.get("type") or "").strip() == "Meeting Discussion"
+            and str(edge.get("role") or "").strip() == "main_chain"
+        ):
+            return "精煉"
+        return ""
 
     def is_url_to_meeting_edge(edge: Dict[str, Any]) -> bool:
         source_node = node_by_id.get(str(edge.get("from") or "").strip(), {})
@@ -900,14 +1037,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             str(source_node.get("type") or "").strip() in {"Source", "Stakeholder Statement"}
             and str(target_node.get("type") or "").strip() in {"User Requirement", "User Requirement Group"}
             and str(edge.get("style") or "").strip() != "dashed"
-        )
-
-    def is_url_to_final_requirement_edge(edge: Dict[str, Any]) -> bool:
-        source_node = node_by_id.get(str(edge.get("from") or "").strip(), {})
-        target_node = node_by_id.get(str(edge.get("to") or "").strip(), {})
-        return (
-            str(source_node.get("type") or "").strip() in {"User Requirement", "User Requirement Group"}
-            and str(target_node.get("type") or "").strip() == "Requirement"
         )
 
     def bundled_source_to_url_paths(target: tuple[int, int, int], incoming: List[Dict[str, Any]]) -> str:
@@ -1059,6 +1188,32 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             for edge in visible_edges
         ]
         target_is_left = sum(target[1][0] + target[1][2] / 2 for target in targets) / len(targets) < source[0] + source[2] / 2
+        targets_below = all(target[1][1] >= source[1] + node_height for target in targets)
+        if targets_below:
+            source_x = source[0] + source[2]
+            source_y = source[1] + node_height / 2
+            target_points = [
+                (
+                    target[1][0] + target[1][2] / 2,
+                    target[1][1],
+                    target[2],
+                )
+                for target in targets
+            ]
+            bus_y = source_y
+            paths = [
+                f'<path class="dr-trace-edge dr-trace-edge--dashed" '
+                f'd="M {source_x:.1f} {source_y:.1f} L {max(point[0] for point in target_points):.1f} {bus_y:.1f}"></path>'
+            ]
+            for tx, ty, key in target_points:
+                paths.append(
+                    f'<path class="dr-trace-edge dr-trace-edge--dashed" data-source-edge="{html_attr(key)}" '
+                    f'd="M {tx:.1f} {bus_y:.1f} L {tx:.1f} {ty:.1f}" '
+                    f'marker-end="url(#{marker_id})"></path>'
+                )
+            label_x = source_x + max(22, (min(point[0] for point in target_points) - source_x) / 2)
+            paths.append(edge_label_markup(label_x, bus_y - 12, label))
+            return "".join(paths)
         if target_is_left:
             source_x = source[0]
             target_x = max(target[1][0] + target[1][2] for target in targets)
@@ -1160,7 +1315,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             target_x = sum(point[0] for point in target_points) / len(target_points)
             return (target_x, junction_y)
 
-        target_point = single_url_formalization_point() or meeting_bundle_junction("正式化") or meeting_bundle_junction("精練")
+        target_point = single_url_formalization_point() or meeting_bundle_junction("正式化") or meeting_bundle_junction("精煉")
         if target_point:
             target_x, target_y = target_point
         else:
@@ -1185,6 +1340,67 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         mid_x = target_x + max(30, (source_x - target_x) / 2)
         return (
             f'<path class="dr-trace-edge dr-trace-edge--dashed" data-support-summary="true" '
+            f'd="M {source_x:.1f} {source_y:.1f} C {mid_x:.1f} {source_y:.1f}, '
+            f'{mid_x:.1f} {target_y:.1f}, {target_x:.1f} {target_y:.1f}"></path>'
+        )
+
+    def model_support_to_meeting_path() -> str:
+        model_panel = selected_layout.get("model_support_panel") if isinstance(selected_layout, dict) else None
+        if not isinstance(model_panel, dict):
+            return ""
+
+        def meeting_bundle_junction(relation: str) -> Optional[Tuple[float, float]]:
+            bundle_edges = [
+                edge for edge in valid_edges
+                if str(edge.get("relation") or "").strip() == relation
+                and str(edge.get("from") or "").strip() in node_positions
+                and str(edge.get("to") or "").strip() in node_positions
+                and str(node_by_id.get(str(edge.get("to") or "").strip(), {}).get("type") or "").strip() == "Meeting Discussion"
+            ]
+            if not bundle_edges:
+                return None
+            source_points = [
+                (
+                    node_positions[str(edge.get("from") or "").strip()][0]
+                    + node_positions[str(edge.get("from") or "").strip()][2] / 2,
+                    node_positions[str(edge.get("from") or "").strip()][1] + node_height,
+                )
+                for edge in bundle_edges
+            ]
+            target_points = [
+                (
+                    node_positions[str(edge.get("to") or "").strip()][0]
+                    + node_positions[str(edge.get("to") or "").strip()][2] / 2,
+                    node_positions[str(edge.get("to") or "").strip()][1],
+                )
+                for edge in bundle_edges
+            ]
+            source_y = max(point[1] for point in source_points)
+            target_y = min(point[1] for point in target_points)
+            junction_y = source_y + max(20, (target_y - source_y) / 2)
+            target_x = sum(point[0] for point in target_points) / len(target_points)
+            return (target_x, junction_y)
+
+        target_point = meeting_bundle_junction("正式化") or meeting_bundle_junction("精煉")
+        if not target_point:
+            target_ids = [
+                str(node.get("id") or "").strip()
+                for node in groups["Meeting"]
+                if str(node.get("id") or "").strip() in node_positions
+            ]
+            if not target_ids:
+                return ""
+            target_id = min(target_ids, key=lambda node_id: node_positions[node_id][1])
+            target = node_positions[target_id]
+            target_point = (target[0], target[1] + node_height / 2)
+        source_x = float(model_panel.get("x") or 0) + float(model_panel.get("width") or 0)
+        panel_y = float(model_panel.get("y") or 0)
+        panel_height = float(model_panel.get("height") or 0)
+        target_x, target_y = target_point
+        source_y = min(max(target_y, panel_y + 26), panel_y + panel_height - 26)
+        mid_x = source_x + max(30, (target_x - source_x) / 2)
+        return (
+            f'<path class="dr-trace-edge dr-trace-edge--dashed" data-model-support="true" '
             f'd="M {source_x:.1f} {source_y:.1f} C {mid_x:.1f} {source_y:.1f}, '
             f'{mid_x:.1f} {target_y:.1f}, {target_x:.1f} {target_y:.1f}"></path>'
         )
@@ -1457,7 +1673,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         edges.append(bundled_side_evidence_paths(direct_feedback_edges, label="領域研究"))
         rendered_edge_keys.update(trace_topology_edge_key(edge) for edge in direct_feedback_edges)
     if single_url_model_edges:
-        edges.append(bundled_side_evidence_paths(single_url_model_edges, label="建模"))
+        edges.append(model_support_to_meeting_path())
         rendered_edge_keys.update(trace_topology_edge_key(edge) for edge in single_url_model_edges)
     if not single_url_mode:
         edges.append(support_summary_to_meeting_path())
@@ -1544,13 +1760,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                 source_edge=key,
             ))
         elif edge in single_url_model_edges:
-            edges.append(edge_path(
-                start,
-                end,
-                label="建模",
-                source_edge=key,
-                style=str(edge.get("style") or ""),
-            ))
+            continue
         else:
             target_id = str(edge.get("to") or "").strip()
             source_id = str(edge.get("from") or "").strip()
@@ -1565,7 +1775,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             edges.append(edge_path(
                 start,
                 end,
-                label="" if is_multi_conflict_edge else str(edge.get("relation") or ""),
+                label="" if is_multi_conflict_edge else display_edge_label(edge),
                 source_edge=key,
                 style=str(edge.get("style") or ""),
             ))
@@ -1592,4 +1802,3 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         + '</svg>'
         + "</div></div>"
     )
-

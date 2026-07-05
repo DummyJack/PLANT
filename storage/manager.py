@@ -15,7 +15,6 @@ from .artifact import (
 from .json import load_json_file, save_json_file
 from .markdown import (
     save_markdown_as_html,
-    load_markdown as markdown_load_markdown,
     markdown_target_dir,
     save_markdown as markdown_save_markdown,
 )
@@ -43,10 +42,12 @@ class Store:
         self.project_id = project_id
 
         self.projects_dir = self.base_dir / "projects"
+        self.doc_dir = self.base_dir / "doc"
         self.log_dir = self.base_dir / "log"
 
         if not project_id:
             self.projects_dir.mkdir(parents=True, exist_ok=True)
+            self.doc_dir.mkdir(parents=True, exist_ok=True)
             self.log_dir.mkdir(parents=True, exist_ok=True)
             return
 
@@ -57,6 +58,7 @@ class Store:
         for dir_path in [
             self.artifact_dir,
             self.output_dir,
+            self.doc_dir,
             self.log_dir,
         ]:
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -153,12 +155,6 @@ class Store:
     # ========
     def save_markdown(self, content: str, filename: str):
         markdown_save_markdown(self.artifact_dir, self.output_dir, content, filename)
-
-    # ========
-    # Defines load markdown function for this module workflow.
-    # ========
-    def load_markdown(self, filename: str) -> str:
-        return markdown_load_markdown(self.artifact_dir, self.output_dir, filename)
 
     # ========
     # Defines save markdown as html function for this module workflow.

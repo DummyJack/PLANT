@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 def trace_topology_edge_key(edge: Dict[str, Any]) -> str:
@@ -31,28 +31,3 @@ def trace_topology_natural_id_key(value: Any) -> tuple[int, int, int, str]:
         int(match.group(3) or 0),
         text,
     )
-
-
-
-
-def order_trace_topology_groups(
-    groups: Dict[str, List[Dict[str, Any]]],
-    graph_nodes: List[Dict[str, Any]],
-    graph_edges: List[Dict[str, Any]],
-    column_order: List[str],
-) -> None:
-    node_index = {
-        str(node.get("id") or "").strip(): index
-        for index, node in enumerate(graph_nodes or [])
-        if isinstance(node, dict) and str(node.get("id") or "").strip()
-    }
-
-    def node_order(node: Dict[str, Any]) -> tuple[int, int, int, str, int]:
-        node_id = str(node.get("id") or "").strip()
-        natural = trace_topology_natural_id_key(node_id)
-        return (*natural, node_index.get(node_id, 10**9))
-
-    for column in column_order or list(groups.keys()):
-        rows = groups.get(column)
-        if isinstance(rows, list):
-            rows.sort(key=node_order)

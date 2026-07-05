@@ -63,60 +63,6 @@ def remove_generated_markdown_toc(markdown_text: str) -> str:
     return source.strip() + "\n"
 
 
-def markdown_toc_entries(
-    markdown_text: str,
-    *,
-    min_level: int = 2,
-    max_level: int = 3,
-) -> list[tuple[int, str, str]]:
-    entries: list[tuple[int, str, str]] = []
-    in_fence = False
-    seen: dict[str, int] = {}
-    for line in (markdown_text or "").splitlines():
-        if re.match(r"^\s*```", line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
-        if not match:
-            continue
-        level = len(match.group(1))
-        if level < min_level or level > max_level:
-            continue
-        title = clean_heading_text(re.sub(r"\s+#+\s*$", "", match.group(2)))
-        if not title or title.lower() in {"目錄", "table of contents"}:
-            continue
-        base_slug = markdown_heading_slug(title)
-        count = seen.get(base_slug, 0)
-        seen[base_slug] = count + 1
-        slug = base_slug if count == 0 else f"{base_slug}-{count + 1}"
-        entries.append((level, title, slug))
-    return entries
-
-
-def insert_static_markdown_toc(markdown_text: str, *, title: str = "目錄") -> str:
-    source = remove_generated_markdown_toc(markdown_text)
-    entries = markdown_toc_entries(source)
-    if not entries:
-        return source
-    toc_lines = [
-        "<!-- plant-toc:start -->",
-        "",
-        f"## {title}",
-        "",
-    ]
-    for level, heading, slug in entries:
-        indent = "  " * max(0, level - 2)
-        toc_lines.append(f"{indent}- [{heading}](#{slug})")
-    toc_lines.extend(["", "<!-- plant-toc:end -->"])
-    toc = "\n".join(toc_lines).strip()
-    match = re.match(r"(?s)^(#\s+.+?\n)(.*)$", source)
-    if match:
-        return match.group(1).rstrip() + "\n\n" + toc + "\n\n" + match.group(2).lstrip()
-    return toc + "\n\n" + source
-
-
 def floating_toc_html(entries: list[tuple[int, str, str]]) -> str:
     if not entries:
         return ""
@@ -243,18 +189,6 @@ def save_markdown(
     target_dir.mkdir(parents=True, exist_ok=True)
     filepath = target_dir / filename
     atomic_write_text(filepath, clean_markdown_for_storage(content), encoding="utf-8")
-
-
-# ========
-# Defines load markdown function for this module workflow.
-# ========
-def load_markdown(artifact_dir: Path, output_dir: Path, filename: str) -> str:
-    target_dir = markdown_target_dir(artifact_dir, output_dir, filename)
-    filepath = target_dir / filename
-    if not filepath.exists():
-        return ""
-    with open(filepath, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 # ========
@@ -392,6 +326,42 @@ def normalize_html_document_links(html_body: str) -> str:
     )
 
 
+def normalize_srs_design_rationale_links(
+    html_body: str,
+    *,
+    project_id: Optional[str],
+) -> str:
+    if not project_id:
+        return html_body
+
+    def repl(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        quote = match.group("quote")
+        target = match.group("target")
+        tail = match.group("tail") or ""
+        path_part, sep, anchor = target.partition("#")
+        normalized_path = path_part.strip().strip("/")
+        normalized_path = re.sub(r"^(?:\./)+", "", normalized_path)
+        if normalized_path.lower() not in {
+            "dr",
+            "design_rationale.html",
+            "design_rationale.md",
+            "results/design_rationale.html",
+            "output/design_rationale.md",
+        }:
+            return match.group(0)
+        href = f"/{project_id}/manual/dr"
+        if sep:
+            href += f"#{anchor}"
+        return f'<a{attrs} href={quote}{href}{quote}{tail}>'
+
+    return re.sub(
+        r"""<a(?P<attrs>[^>]*)\shref=(?P<quote>['"])(?P<target>[^'"]+)(?P=quote)(?P<tail>[^>]*)>""",
+        repl,
+        html_body,
+    )
+
+
 # ========
 # Defines external link target function for this module workflow.
 # ========
@@ -494,7 +464,7 @@ def wrap_html_document(
       z-index: 20;
       width: 236px;
       max-height: calc(100vh - 48px);
-      overflow-y: auto;
+      overflow: hidden;
       scrollbar-width: none;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
@@ -503,7 +473,13 @@ def wrap_html_document(
       padding: 10px;
     }}
     .plant-floating-toc::-webkit-scrollbar {{ display: none; }}
-    .plant-floating-toc__title {{ margin: 0 0 6px; min-height: 20px; font-size: 13px; font-weight: 700; color: #1e293b; }}
+    .plant-floating-toc__title {{
+      margin: 0 0 6px;
+      min-height: 20px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e293b;
+    }}
     .plant-floating-toc__title {{
       display: flex;
       align-items: center;
@@ -525,9 +501,21 @@ def wrap_html_document(
       overflow: visible;
       padding: 8px 10px;
     }}
-    .plant-floating-toc:not([open]) .plant-floating-toc__title {{ margin: 0; }}
+    .plant-floating-toc:not([open]) .plant-floating-toc__title {{
+      margin: 0;
+    }}
     .plant-floating-toc:not([open]) .plant-floating-toc__title::after {{ content: "目錄"; }}
-    .plant-floating-toc__items {{ display: flex; flex-direction: column; gap: 2px; }}
+    .plant-floating-toc__items {{
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-height: calc(100vh - 86px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 2px;
+      scrollbar-width: none;
+    }}
+    .plant-floating-toc__items::-webkit-scrollbar {{ display: none; }}
     .plant-floating-toc__link {{
       display: block;
       border-radius: 7px;
@@ -644,6 +632,11 @@ def save_markdown_as_html(
     )
     html_body = normalize_markdown_document_links(html_body)
     html_body = normalize_html_document_links(html_body)
+    if html_path.name == "srs.html":
+        html_body = normalize_srs_design_rationale_links(
+            html_body,
+            project_id=project_id,
+        )
     html_body = normalize_external_links(html_body)
     html_body = normalize_heading_ids(html_body)
     html_body = normalize_system_model_heading_ids(html_body)

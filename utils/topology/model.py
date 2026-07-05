@@ -38,33 +38,6 @@ def strip_trace_html(value: Any) -> str:
     return clean_repeated_text(text)
 
 
-def trace_source_text(value: Any) -> str:
-    if isinstance(value, (list, tuple, set)):
-        return "、".join(
-            strip_trace_html(item)
-            for item in value
-            if strip_trace_html(item)
-        )
-    return strip_trace_html(value)
-
-
-def user_requirement_content_text(node: Dict[str, Any]) -> str:
-    node_id = str(node.get("id") or "").strip()
-    text = strip_trace_html(node.get("content")) or strip_trace_html(node.get("label"))
-    if not text:
-        return ""
-    if node_id:
-        text = re.sub(
-            rf"^\s*{re.escape(node_id)}\s*[:：]\s*",
-            "",
-            text,
-            count=1,
-        )
-    text = re.sub(r"\s*利害關係人\s*[:：]\s*.+?\s+來源\s*[:：]\s*.+$", "", text)
-    text = re.sub(r"\s*來源\s*[:：]\s*.+$", "", text)
-    return clean_repeated_text(text)
-
-
 def compact_stakeholder_statement_nodes(
     graph_nodes: List[Dict[str, Any]],
     graph_edges: List[Dict[str, Any]],
@@ -136,98 +109,6 @@ def compact_stakeholder_statement_nodes(
     return compact_nodes, compact_edges
 
 
-def compact_user_requirement_nodes(
-    graph_nodes: List[Dict[str, Any]],
-    graph_edges: List[Dict[str, Any]],
-    *,
-    target_id: str,
-    threshold: int = 3,
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    conflict_ids = {
-        str(node.get("id") or "").strip()
-        for node in graph_nodes
-        if str(node.get("type") or "").strip() == "Conflict"
-        and str(node.get("id") or "").strip()
-    }
-    conflict_url_ids = {
-        str(edge.get("from") or "").strip()
-        for edge in graph_edges
-        if str(edge.get("to") or "").strip() in conflict_ids
-        and str(edge.get("from") or "").strip().startswith("URL-")
-    }
-    conflict_url_ids.update(
-        str(edge.get("to") or "").strip()
-        for edge in graph_edges
-        if str(edge.get("from") or "").strip() in conflict_ids
-        and str(edge.get("to") or "").strip().startswith("URL-")
-    )
-    url_nodes = [
-        node for node in graph_nodes
-        if str(node.get("type") or "").strip() == "User Requirement"
-        and str(node.get("id") or "").strip()
-        and str(node.get("id") or "").strip() not in conflict_url_ids
-    ]
-    if len(url_nodes) <= threshold:
-        return graph_nodes, graph_edges
-
-    url_ids = {str(node.get("id") or "").strip() for node in url_nodes}
-    group_id = f"URL-GROUP-{re.sub(r'[^A-Za-z0-9_-]+', '-', target_id).strip('-') or 'REQ'}"
-    rows = []
-    for node in url_nodes:
-        node_id = str(node.get("id") or "").strip()
-        content = user_requirement_content_text(node)
-        source = trace_source_text(
-            node.get("source")
-            or node.get("source_id")
-            or node.get("related_sources")
-            or node.get("related_statement_ids")
-        )
-        rows.append(
-            "<tr>"
-            f"<td>{html_attr(node_id)}</td>"
-            f"<td>{html_attr(content)}</td>"
-            f"<td>{html_attr(source)}</td>"
-            "</tr>"
-        )
-    group_content = (
-        '<table class="dr-trace-feedback-table dr-trace-user-requirement-table"><thead><tr>'
-        "<th>ID</th><th>Requirement</th><th>Source</th>"
-        "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
-    )
-    group_node = {
-        "id": group_id,
-        "type": "User Requirement Group",
-        "label": f"URL({len(url_nodes)} 筆)",
-        "title": f"User Requirement（{len(url_nodes)} 筆）",
-        "content": group_content,
-        "content_format": "html",
-        "column": "User Requirement",
-    }
-    compact_nodes = [
-        node for node in graph_nodes
-        if str(node.get("id") or "").strip() not in url_ids
-    ] + [group_node]
-
-    compact_edges: List[Dict[str, Any]] = []
-    for edge in graph_edges:
-        from_id = str(edge.get("from") or "").strip()
-        to_id = str(edge.get("to") or "").strip()
-        if not from_id or not to_id:
-            continue
-        next_edge = dict(edge)
-        if from_id in url_ids:
-            next_edge["from"] = group_id
-        if to_id in url_ids:
-            next_edge["to"] = group_id
-        if next_edge["from"] == next_edge["to"]:
-            continue
-        if next_edge not in compact_edges:
-            compact_edges.append(next_edge)
-    return compact_nodes, compact_edges
-
-
 def collect_valid_trace_edges(
     graph_edges: List[Dict[str, Any]],
     node_positions: Dict[str, tuple[int, int, int]],
@@ -254,5 +135,3 @@ def validate_rendered_trace_edges(
     missing_render_edges = sorted(required_edge_keys - rendered_edge_keys)
     if missing_render_edges:
         raise ValueError(f"trace topology render missing edges: {', '.join(missing_render_edges)}")
-
-

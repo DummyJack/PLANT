@@ -1,10 +1,8 @@
 # Handles atomic file writes for project storage.
-import json
 import os
 import tempfile
 
 from pathlib import Path
-from typing import Any
 
 
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
@@ -47,16 +45,3 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
         tmp_path.unlink(missing_ok=True)
         raise
 
-
-def atomic_write_json(
-    path: Path,
-    data: Any,
-    *,
-    ensure_ascii: bool = False,
-    indent: int = 2,
-) -> None:
-    atomic_write_text(
-        path,
-        json.dumps(data, ensure_ascii=ensure_ascii, indent=indent),
-        encoding="utf-8",
-    )
