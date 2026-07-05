@@ -831,10 +831,15 @@ export function HeaderBar() {
         }),
       );
       setApiKeyValues((current) => ({ ...current, [variables.provider]: "" }));
-      setApiKeyMessages((current) => ({ ...current, [variables.provider]: undefined }));
+      setApiKeyMessages((current) => ({
+        ...current,
+        [variables.provider]: {
+          tone: "success",
+          text: t.saved,
+        },
+      }));
       queryClient.invalidateQueries({ queryKey: ["model-api-keys"] });
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
-      testKeyMut.mutate({ provider: variables.provider });
     },
     onError: (error, variables) => {
       setApiKeyMessages((current) => ({
@@ -890,13 +895,21 @@ export function HeaderBar() {
           ...current,
           [variables.provider]: true,
         }));
+      } else {
+        pushNotice({
+          tone: "success",
+          title: t.testPassed,
+          message: providerLabel(variables.provider),
+        });
       }
       setApiKeyMessages((current) => ({
         ...current,
-        [variables.provider]: {
-          tone: valid ? "success" : "error",
-          text: valid ? t.testPassed : t.invalidApiKey,
-        },
+        [variables.provider]: valid
+          ? undefined
+          : {
+              tone: "error",
+              text: t.invalidApiKey,
+            },
       }));
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
     },

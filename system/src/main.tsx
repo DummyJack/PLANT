@@ -5,10 +5,11 @@ import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { UI_TEXT } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
+import { isReferencePreviewPath, ReferencePreviewPage } from "@/features/upload/ReferencePreviewPage";
 import App from "./App";
 import "./index.css";
 
-const FRONTEND_HOST = (import.meta.env.frontend_host ?? "plant.dummyjack.com").trim();
+const FRONTEND_HOST = (import.meta.env.frontend_host ?? "localhost").trim();
 
 function isLocalFrontendHost(hostname: string): boolean {
   return (
@@ -25,7 +26,11 @@ function isAllowedFrontendHost(): boolean {
 }
 
 function isKnownFrontendPath(): boolean {
-  return window.location.pathname === "/" || window.location.pathname === "/index.html";
+  return (
+    window.location.pathname === "/" ||
+    window.location.pathname === "/index.html" ||
+    isReferencePreviewPath()
+  );
 }
 
 function StatusPage({
@@ -98,7 +103,7 @@ createRoot(document.getElementById("root")!).render(
     ) : isKnownFrontendPath() ? (
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>
-          <App />
+          {isReferencePreviewPath() ? <ReferencePreviewPage /> : <App />}
         </ErrorBoundary>
       </QueryClientProvider>
     ) : (

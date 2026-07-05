@@ -898,10 +898,7 @@ function ScopeReviewEditor({
                     <div className="text-xs font-semibold text-red-700">
                       {t.removeItem}
                     </div>
-                    <p className="mt-1 break-words text-xs leading-5 text-red-600">
-                      {item.trim() || placeholder}
-                    </p>
-                    <p className="text-xs leading-5 text-red-500">
+                    <p className="mt-1 text-xs leading-5 text-red-500">
                       {t.irreversibleAction}
                     </p>
                     <div className="mt-2 flex justify-end gap-2">
@@ -2160,7 +2157,9 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     </div>
   );
   const hasActionMenu =
-    canDownloadOutput || !!relatedMessageId || (manualOutputLock && currentAutoOutputPath);
+    canDownloadOutput ||
+    !!relatedMessageId ||
+    (manualOutputLock && currentAutoOutputPath);
   const actionMenu = hasActionMenu ? (
     <div ref={actionMenuRef} className="relative">
       <button

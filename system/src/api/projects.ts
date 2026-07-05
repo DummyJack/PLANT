@@ -66,7 +66,11 @@ export function referenceDownloadUrl(projectId: string, name: string) {
 }
 
 export function referencePreviewUrl(projectId: string, name: string) {
-  return apiUrl(`/api/projects/${projectId}/references/${encodeURIComponent(name)}?inline=true`);
+  return apiUrl(`/${encodeURIComponent(projectId)}/references/${encodeURIComponent(name)}?inline=true`);
+}
+
+export function referencePreviewPageUrl(projectId: string, name: string) {
+  return apiUrl(`/${encodeURIComponent(projectId)}/references/${encodeURIComponent(name)}/preview`);
 }
 
 export function manualIndexUrl(projectId: string) {

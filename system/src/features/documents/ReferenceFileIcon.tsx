@@ -23,7 +23,7 @@ export function ReferenceFileIcon({
         ? { label: "PPT", fill: "#f97316", fold: "#fed7aa" }
       : ext === ".xlsx" || ext === ".csv"
         ? { label: ext === ".csv" ? "CSV" : "XLS", fill: "#16a34a", fold: "#bbf7d0" }
-      : ext === ".docx"
+      : ext === ".doc" || ext === ".docx"
         ? { label: "DOC", fill: "#2563eb", fold: "#bfdbfe" }
       : ext === ".md"
         ? { label: "MD", fill: "#475569", fold: "#cbd5e1" }

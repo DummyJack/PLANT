@@ -39,7 +39,7 @@ export function NoticeStack() {
 
   useEffect(() => {
     for (const notice of notices) {
-      const ttl = notice.tone === "error" ? 3000 : 1000;
+      const ttl = notice.tone === "error" ? 3000 : 1500;
       if (now - notice.createdAt > ttl) dismissNotice(notice.id);
     }
   }, [dismissNotice, notices, now]);
@@ -47,10 +47,10 @@ export function NoticeStack() {
   if (!notices.length) return null;
 
   return (
-    <div className="pointer-events-none fixed right-4 top-16 z-50 flex w-80 flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
       {notices.map((notice) => {
         const styles = TONE_STYLES[notice.tone];
-        const ttl = notice.tone === "error" ? 3000 : 1000;
+        const ttl = notice.tone === "error" ? 3000 : 1500;
         const fadeStart = ttl - 900;
         const age = now - notice.createdAt;
         const fadeProgress = Math.max(0, Math.min(1, (age - fadeStart) / 900));
@@ -59,7 +59,7 @@ export function NoticeStack() {
             key={notice.id}
             style={{
               opacity: 1 - fadeProgress,
-              transform: `translateY(${fadeProgress * -4}px)`,
+              transform: `translateY(${fadeProgress * 4}px)`,
             }}
             className={cn(
               "pointer-events-auto rounded-card border p-3 shadow-lg transition-[opacity,transform] duration-200",

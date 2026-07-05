@@ -174,6 +174,20 @@ function completedStageOverrides(
   return Object.keys(overrides).length ? overrides : undefined;
 }
 
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function attachedReferencePathSet(artifact: Record<string, unknown> | undefined) {
+  const meta = artifact?.meta;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return new Set<string>();
+  }
+  return new Set(stringList((meta as Record<string, unknown>).attached_references));
+}
+
 function stakeholderStatementMentionIds(
   decision: NonNullable<ReturnType<typeof useActiveRun>["activeRun"]>["pending_decision"],
 ) {
@@ -244,6 +258,15 @@ function forceRegenerateFlags(config: Record<string, unknown> | undefined) {
     : {};
 }
 
+function positiveInteger(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function elicitationTurnLimit(config: Record<string, unknown> | undefined) {
+  return positiveInteger(config?.elicitation_max_turns) ?? positiveInteger(config?.max_turns);
+}
+
 function stageOverridesWithForce(
   overrides: Record<string, boolean> | undefined,
   config: Record<string, unknown> | undefined,
@@ -254,6 +277,17 @@ function stageOverridesWithForce(
     if (enabled === true) next[key] = true;
   });
   return Object.keys(next).length ? next : undefined;
+}
+
+function reopenDomainResearchForReferences(
+  overrides: Record<string, boolean> | undefined,
+  enabled: boolean,
+) {
+  if (!enabled) return overrides;
+  return {
+    ...(overrides ?? {}),
+    research_domain: true,
+  };
 }
 
 export function MeetingPanel({ projectId }: MeetingPanelProps) {
@@ -357,6 +391,19 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         ? buildReferenceRows(references.data?.references ?? [])
         : buildReferenceRows(stagedReferenceRows),
     [projectId, references.data?.references, stagedReferenceRows],
+  );
+  const knownAttachedReferencePaths = useMemo(
+    () => attachedReferencePathSet(project.data?.project),
+    [project.data?.project],
+  );
+  const newLibraryReferencePaths = useMemo(
+    () =>
+      projectId
+        ? referenceRows
+            .map((row) => `${projectId}/${row.name}`)
+            .filter((path) => !knownAttachedReferencePaths.has(path))
+        : [],
+    [knownAttachedReferencePaths, projectId, referenceRows],
   );
   const referenceMentionOptions = useMemo(
     () => referenceRows.map((row) => ({ name: row.name })),
@@ -550,14 +597,20 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     () => completedStageOverrides(projectId, artifactItems, project.data?.project),
     [projectId, artifactItems, project.data?.project],
   );
+  const hasContinueReferenceTargets =
+    !!projectId && (attachedDocIds.length > 0 || newLibraryReferencePaths.length > 0);
   const effectiveStageOverrides = useMemo(
-    () => restrictCompletedStageOverrides(
-      stageOverridesWithForce(stageOverrides, configQuery.data),
-      docsComplete,
+    () => reopenDomainResearchForReferences(
+      restrictCompletedStageOverrides(
+        stageOverridesWithForce(stageOverrides, configQuery.data),
+        docsComplete,
+      ),
+      hasContinueReferenceTargets,
     ),
-    [configQuery.data, docsComplete, stageOverrides],
+    [configQuery.data, docsComplete, hasContinueReferenceTargets, stageOverrides],
   );
   const agentStageOverrides = projectId ? effectiveStageOverrides : INITIAL_AGENT_STAGE_OVERRIDES;
+  const hideElicitationMessages = elicitationTurnLimit(configQuery.data) === 1;
   const { loading: historyLoading } = useProjectChatHydration(
     projectId,
     artifactItems,
@@ -591,8 +644,12 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     mutationFn: async () => {
       const replacementStage = projectId ? rawRunCheckpoint : null;
       setContinueReplacementStage(replacementStage);
-      if (projectId) trimRunStatusMessagesForContinue(replacementStage);
-      else clearMessages();
+      if (projectId) {
+        trimRunStatusMessagesForContinue("document_generation");
+        trimRunStatusMessagesForContinue(replacementStage);
+      } else {
+        clearMessages();
+      }
       const trimmed = projectId ? "" : input.trim();
       const runIdea = projectId ? "" : (trimmed || roughIdea);
       if (!canWrite) throw new Error(t.activationRequiredAction);
@@ -602,15 +659,6 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             queryKey: ["config"],
             queryFn: async () => (await fetchConfig()).config,
           }))
-        : undefined;
-      const stageOverridesForRun = projectId
-        ? restrictCompletedStageOverrides(
-            stageOverridesForCheckpoint(
-              stageOverridesWithForce(stageOverrides, runConfig),
-              rawRunCheckpoint,
-            ),
-            docsComplete,
-          )
         : undefined;
       const targetProjectId = projectId ?? (await createProject(runIdea)).project_id;
       if (!projectId && stagedReferenceFiles.length) {
@@ -624,14 +672,29 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       const stagedPaths = !projectId
         ? stagedReferenceFiles.map((file) => `${targetProjectId}/${file.name}`)
         : [];
+      const attachedReferencePaths = Array.from(
+        new Set([...attachedPaths, ...stagedPaths]),
+      );
+      const stageOverridesForRun = projectId
+        ? reopenDomainResearchForReferences(
+            restrictCompletedStageOverrides(
+              stageOverridesForCheckpoint(
+                stageOverridesWithForce(stageOverrides, runConfig),
+                rawRunCheckpoint,
+              ),
+              docsComplete,
+            ),
+            attachedReferencePaths.length > 0 || newLibraryReferencePaths.length > 0,
+          )
+        : undefined;
       const run = await createRun({
         project_id: targetProjectId,
         mode: projectId ? "continue" : "new",
         rounds: projectId || meetingRoundsOverridden ? meetingRounds : undefined,
         max_issues: meetingMaxIssuesOverridden ? meetingMaxIssues : undefined,
         rough_idea: runIdea || undefined,
-        attached_reference_paths: [...attachedPaths, ...stagedPaths].length
-          ? [...attachedPaths, ...stagedPaths]
+        attached_reference_paths: attachedReferencePaths.length
+          ? attachedReferencePaths
           : undefined,
         enable_agents: enabledAgents,
         stage_overrides: stageOverridesForRun,
@@ -791,16 +854,16 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const stopping = activeRun?.status === "cancelling" || cancelMut.isPending;
   const continueStageSyncPending = !!projectId && !artifacts.isSuccess;
   const continueStageLocked = !!projectId;
-  const stageDisabled = runActive || !canWrite || continueStageSyncPending || continueStageLocked;
+  const stageReadonly = continueStageLocked && !runActive && canWrite && !continueStageSyncPending;
+  const stageDisabled = runActive || !canWrite || continueStageSyncPending;
   const stageDisabledReason = !canWrite
     ? t.activationRequiredStages
     : continueStageSyncPending
       ? t.loadingProjectStages
       : runActive
         ? t.runningStageDisabled
-      : continueStageLocked
-        ? t.continueStageDisabled
       : undefined;
+  const stageReadonlyReason = stageReadonly ? t.continueStageDisabled : undefined;
 
   return (
     <PanelChrome
@@ -810,10 +873,18 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           <StageToggleMenu
             disabled={stageDisabled}
             disabledReason={stageDisabledReason}
-            stageOverrides={stageOverrides}
+            readOnly={stageReadonly}
+            readOnlyReason={stageReadonlyReason}
+            stageOverrides={projectId ? effectiveStageOverrides : stageOverrides}
             existingOutputs={existingStageOutputs}
             compact={headerCompact}
-            enabledRowIds={docsComplete ? ["general_meeting", "DR", "SRS"] : undefined}
+            enabledRowIds={
+              docsComplete
+                ? hasContinueReferenceTargets
+                  ? ["research_domain", "general_meeting", "DR", "SRS"]
+                  : ["general_meeting", "DR", "SRS"]
+                : undefined
+            }
           />
         </>
       }
@@ -840,6 +911,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             inline
             runCheckpoint={runCheckpoint}
             artifactItems={artifactItems ?? []}
+            activeRun={activeRun}
           />
           <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             <ChatFeed
@@ -848,6 +920,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               artifactItems={artifactItems ?? []}
               historyLoading={historyLoading}
               activeRun={activeRun}
+              hideElicitationMessages={hideElicitationMessages}
             />
           </div>
           {activeRun?.status === "waiting_for_human" && activeRun.pending_decision && (

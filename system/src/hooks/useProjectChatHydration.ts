@@ -134,6 +134,27 @@ function historicalRunMessages(run: RunState, events: unknown[]): ChatMessage[] 
   return messages;
 }
 
+function trimCurrentMessagesForCheckpoint(
+  messages: ChatMessage[],
+  checkpoint?: Parameters<typeof trimRunDisplayMessagesFromStage>[1],
+  removeDocumentGeneration = false,
+) {
+  const baseMessages = removeDocumentGeneration
+    ? trimRunDisplayMessagesFromStage(messages, "document_generation")
+    : messages;
+  const stage = typeof checkpoint === "string"
+    ? checkpoint.trim()
+    : String(checkpoint?.stage_id ?? "").trim();
+  if (stage !== "document_generation") {
+    return trimRunDisplayMessagesFromStage(
+      trimTrailingRunDisplayMessages(baseMessages),
+      checkpoint,
+    );
+  }
+
+  return trimRunDisplayMessagesFromStage(baseMessages, checkpoint);
+}
+
 async function loadRunEvents(runId: string): Promise<unknown[]> {
   const res = await fetch(
     runEventsUrl(runId, 0),
@@ -269,18 +290,21 @@ export function useProjectChatHydration(
       }
 
       const mergedHistoryMessages = mergeChatMessages([...seed, ...logMsgs]);
-      const trimStage = continueReplacementStage || activeRun?.run_checkpoint;
-      const historyMessages = active && trimStage
-        ? trimRunDisplayMessagesFromStage(
-            trimTrailingRunDisplayMessages(mergedHistoryMessages),
-            trimStage,
-          )
+      const removeDocumentGeneration = active && activeRun?.mode === "continue";
+      const trimStage = removeDocumentGeneration
+        ? "document_generation"
+        : continueReplacementStage || activeRun?.run_checkpoint || null;
+      const currentMessagesForMerge = active && (trimStage || removeDocumentGeneration)
+        ? trimCurrentMessagesForCheckpoint(currentMessages, trimStage, removeDocumentGeneration)
+        : currentMessages;
+      const historyMessages = active && (trimStage || removeDocumentGeneration)
+        ? trimCurrentMessagesForCheckpoint(mergedHistoryMessages, trimStage, removeDocumentGeneration)
         : mergedHistoryMessages;
       setMessages(
         mergeChatMessages(
           uniqueChatMessages(
-            active && currentMessages.length
-              ? [...historyMessages, ...currentMessages]
+            active && currentMessagesForMerge.length
+              ? [...historyMessages, ...currentMessagesForMerge]
               : historyMessages,
           ),
         ),

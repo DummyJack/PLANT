@@ -3,7 +3,7 @@ import { Bot, ListTree, UserRound } from "lucide-react";
 import { UI_TEXT, useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
-import type { ChatMessage, FileTreeNode, RunCheckpoint } from "@/types/api";
+import type { ChatMessage, FileTreeNode, RunCheckpoint, RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { checkpointCleanupLabel, checkpointStageLabel } from "./RunCheckpointNotice";
 
@@ -554,7 +554,11 @@ function applyFlowTarget(
   };
 }
 
-function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): FlowItem[] {
+function artifactFlowItems(
+  items: FileTreeNode[],
+  messages: ChatMessage[],
+  hideGeneratedDocuments = false,
+): FlowItem[] {
   const t = tx();
   const paths = new Set(
     items
@@ -663,7 +667,9 @@ function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): Flow
       tone: "action",
     }, messages, t.meetingRoundTitle(round), path));
   });
-  const drPath = firstExistingPath(paths, ["results/design_rationale.html", "output/design_rationale.md"]);
+  const drPath = hideGeneratedDocuments
+    ? undefined
+    : firstExistingPath(paths, ["results/design_rationale.html", "output/design_rationale.md"]);
   if (drPath) {
     flowItems.push(applyFlowTarget({
       id: "artifact-flow-design-rationale",
@@ -674,7 +680,9 @@ function artifactFlowItems(items: FileTreeNode[], messages: ChatMessage[]): Flow
       tone: "designRationale",
     }, messages, "Design Rationale", drPath));
   }
-  const srsPath = firstExistingPath(paths, ["results/srs.html", "output/srs.md"]);
+  const srsPath = hideGeneratedDocuments
+    ? undefined
+    : firstExistingPath(paths, ["results/srs.html", "output/srs.md"]);
   if (srsPath) {
     flowItems.push(applyFlowTarget({
       id: "artifact-flow-srs",
@@ -924,11 +932,13 @@ export function WorkspaceFlowIndex({
   inline = false,
   runCheckpoint = null,
   artifactItems = [],
+  activeRun = null,
 }: {
   compact?: boolean;
   inline?: boolean;
   runCheckpoint?: RunCheckpoint | null;
   artifactItems?: FileTreeNode[];
+  activeRun?: RunState | null;
 }) {
   const { language, t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -950,7 +960,9 @@ export function WorkspaceFlowIndex({
       const item = messageToFlowItem(message);
       if (item) messageItems.push({ ...item, messageIndex: index });
     });
-    const artifactItemsForFlow = artifactFlowItems(artifactItems, messages);
+    const hideGeneratedDocuments = activeRun?.mode === "continue" &&
+      ["queued", "running", "waiting_for_human", "cancelling"].includes(activeRun.status);
+    const artifactItemsForFlow = artifactFlowItems(artifactItems, messages, hideGeneratedDocuments);
     const byKey = new Map<string, FlowItem>();
     messageItems.forEach((item) => byKey.set(flowIdentity(item), item));
     artifactItemsForFlow.forEach((item) => {
@@ -975,7 +987,7 @@ export function WorkspaceFlowIndex({
         ...item,
         outputPath: outputPathForFlowItem(item, availablePaths),
       }));
-  }, [artifactItems, language, messages]);
+  }, [activeRun?.mode, activeRun?.status, artifactItems, language, messages]);
   const activeItemId = useMemo(() => {
     if (!activeFlowMessageId) return items[0]?.id ?? null;
     const itemIds = new Set(items.map((item) => item.id));

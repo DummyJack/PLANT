@@ -707,6 +707,56 @@ function isFormalMeetingMomMessage(msg: ChatMessage) {
   return msg.stage === "formal_meeting" && isMomPath(msg.outputPath);
 }
 
+function isFormalMeetingArtifactPath(path?: string) {
+  return !!path && /^artifact\/meeting\/formal_meeting_r\d+\.json$/i.test(path);
+}
+
+function isFormalMeetingDisplayMessage(msg: ChatMessage) {
+  return msg.stage === "formal_meeting" || isMomPath(msg.outputPath) || isFormalMeetingArtifactPath(msg.outputPath);
+}
+
+function isDocumentGenerationDisplayMessage(msg: ChatMessage) {
+  return (
+    (msg.role === "system" && msg.kind === "stage" && msg.stage === "document_generation") ||
+    isSrsOrDesignRationalePath(msg.outputPath)
+  );
+}
+
+function moveFormalMeetingBlocksBeforeDocumentGeneration(messages: ChatMessage[]) {
+  const documentGenerationIndex = messages.findIndex(isDocumentGenerationDisplayMessage);
+  if (documentGenerationIndex < 0) return messages;
+
+  const beforeDocumentGeneration = messages.slice(0, documentGenerationIndex);
+  const afterDocumentGeneration = messages.slice(documentGenerationIndex);
+  const delayedMeetingMessages: ChatMessage[] = [];
+  const remainingAfterDocumentGeneration: ChatMessage[] = [];
+
+  for (let index = 0; index < afterDocumentGeneration.length; index += 1) {
+    const message = afterDocumentGeneration[index];
+    if (!isFormalMeetingDisplayMessage(message)) {
+      remainingAfterDocumentGeneration.push(message);
+      continue;
+    }
+
+    delayedMeetingMessages.push(message);
+    let cursor = index + 1;
+    while (cursor < afterDocumentGeneration.length) {
+      const next = afterDocumentGeneration[cursor];
+      if (next.role === "system" && next.kind === "stage") break;
+      delayedMeetingMessages.push(next);
+      cursor += 1;
+    }
+    index = cursor - 1;
+  }
+
+  if (delayedMeetingMessages.length === 0) return messages;
+  return [
+    ...beforeDocumentGeneration,
+    ...delayedMeetingMessages,
+    ...remainingAfterDocumentGeneration,
+  ];
+}
+
 function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
   const round = formalMeetingRoundFromStage(segment[0]);
   if (!round) return segment;
@@ -791,7 +841,11 @@ function arrangeMeetingPlanMomMessages(messages: ChatMessage[]) {
 
     const segment: ChatMessage[] = [message];
     let cursor = index + 1;
-    while (cursor < messages.length && !formalMeetingRoundFromStage(messages[cursor])) {
+    while (
+      cursor < messages.length &&
+      !formalMeetingRoundFromStage(messages[cursor]) &&
+      !(messages[cursor].role === "system" && messages[cursor].kind === "stage")
+    ) {
       segment.push(messages[cursor]);
       cursor += 1;
     }
@@ -2719,6 +2773,13 @@ function isStagePillMessage(msg: ChatMessage) {
   return msg.role === "system" && msg.kind === "stage";
 }
 
+function isElicitationDisplayMessage(msg: ChatMessage) {
+  return (
+    msg.stage === "elicitation" ||
+    /^artifact\/meeting\/elicitation_meeting\.json$/i.test(msg.outputPath ?? "")
+  );
+}
+
 function applyCollapsedStagePills(
   messages: ChatMessage[],
   collapsedIds: Set<string>,
@@ -3025,6 +3086,7 @@ interface ChatFeedProps {
   artifactItems?: FileTreeNode[];
   historyLoading?: boolean;
   activeRun?: RunState | null;
+  hideElicitationMessages?: boolean;
 }
 
 export function ChatFeed({
@@ -3032,6 +3094,7 @@ export function ChatFeed({
   artifactItems = [],
   historyLoading = false,
   activeRun = null,
+  hideElicitationMessages = false,
 }: ChatFeedProps) {
   const { language } = useI18n();
   const messages = useChatStore((s) => s.messages);
@@ -3169,8 +3232,13 @@ export function ChatFeed({
   }, [scrollTargetMessageId, setScrollTargetMessageId, updateScrollPosition]);
 
   const arrangedMessages = useMemo(
-    () => arrangeMeetingPlanMomMessages(messages.filter((message) => !shouldHideChatMessage(message))),
-    [language, messages],
+    () => arrangeMeetingPlanMomMessages(
+      moveFormalMeetingBlocksBeforeDocumentGeneration(messages.filter((message) => {
+        if (hideElicitationMessages && isElicitationDisplayMessage(message)) return false;
+        return !shouldHideChatMessage(message);
+      })),
+    ),
+    [hideElicitationMessages, language, messages],
   );
   const collapsedView = useMemo(
     () => applyCollapsedStagePills(arrangedMessages, collapsedStagePills),

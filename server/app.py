@@ -1,10 +1,6 @@
 import os
 from pathlib import Path
 
-from setup import apply_runtime_setup
-
-apply_runtime_setup()
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -119,7 +115,7 @@ def forbidden_page() -> HTMLResponse:
 
 
 def frontend_origins() -> list[str]:
-    frontend_host = os.getenv("frontend_host", "plant.dummyjack.com").strip() or "plant.dummyjack.com"
+    frontend_host = os.getenv("frontend_host", "localhost").strip() or "localhost"
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -148,6 +144,7 @@ app.add_middleware(
 )
 
 app.include_router(projects.router, prefix="/api")
+app.include_router(projects.public_router)
 app.include_router(config.router, prefix="/api")
 app.include_router(artifacts.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")

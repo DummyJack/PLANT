@@ -3,7 +3,7 @@ import type { ChatMessage, RunCheckpoint } from "@/types/api";
 
 type ContinueTrimTarget =
   | string
-  | Pick<RunCheckpoint, "stage_id" | "step_id" | "round">
+  | Pick<RunCheckpoint, "stage_id" | "step_id" | "round" | "last_round">
   | null
   | undefined;
 
@@ -36,6 +36,45 @@ function isTrailingGeneratedDocumentMessage(message: ChatMessage) {
     message.stage === "document_generation" &&
     (message.speaker === "documentor" || message.kind === "stage" || message.kind === "action")
   );
+}
+
+function isGeneratedDocumentDisplayMessage(message: ChatMessage) {
+  return isGeneratedDocumentPath(message.outputPath) || message.stage === "document_generation";
+}
+
+function messageTime(message: ChatMessage) {
+  const value = message.timestamp ? new Date(message.timestamp).getTime() : NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
+function trimDocumentGenerationMessagesForContinue(messages: ChatMessage[]) {
+  let latestActiveDocumentStage = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message.role === "system" &&
+      message.kind === "stage" &&
+      message.stage === "document_generation" &&
+      message.status === "running"
+    ) {
+      latestActiveDocumentStage = index;
+      break;
+    }
+  }
+
+  if (latestActiveDocumentStage < 0) {
+    return messages.filter((message) => !isGeneratedDocumentDisplayMessage(message));
+  }
+
+  const activeStageTime = messageTime(messages[latestActiveDocumentStage]);
+  return messages.filter((message, index) => {
+    if (!isGeneratedDocumentDisplayMessage(message)) return true;
+    if (index < latestActiveDocumentStage) return false;
+    if (index === latestActiveDocumentStage) return true;
+    if (activeStageTime === null) return true;
+    const currentTime = messageTime(message);
+    return currentTime === null || currentTime >= activeStageTime;
+  });
 }
 
 function isDuplicateStagePill(a: ChatMessage, b: ChatMessage) {
@@ -149,8 +188,12 @@ export function trimRunDisplayMessagesFromStage(
     : String(target?.stage_id ?? "").trim();
   if (!stage) return trimTrailingRunDisplayMessages(messages);
   const round = typeof target === "object" && target
-    ? Number(target.round ?? 0)
+    ? Number(target.round || target.last_round || 0)
     : 0;
+
+  if (stage === "document_generation") {
+    return trimDocumentGenerationMessagesForContinue(messages);
+  }
 
   let start = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -170,9 +213,6 @@ export function trimRunDisplayMessagesFromStage(
     }
   }
   if (start < 0) return trimTrailingRunDisplayMessages(messages);
-  if (stage === "document_generation") {
-    return messages.slice(0, start);
-  }
   return messages.slice(0, start + 1);
 }
 

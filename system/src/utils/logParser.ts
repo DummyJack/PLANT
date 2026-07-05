@@ -5,7 +5,7 @@ function displayText(value: string): string {
   return value.replace(
     /\b([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*[A-Za-z0-9])\b/g,
     (match) => {
-      if (/\.(?:json|md|html|png|svg|plantuml|txt|csv|pdf|docx|xlsx|pptx)$/i.test(match)) {
+      if (/\.(?:json|md|html|png|svg|plantuml|txt|csv|pdf|doc|docx|xlsx|pptx)$/i.test(match)) {
         return match;
       }
       return match.replace(/_/g, " ");
@@ -220,6 +220,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
 
   if (event.type === "stage_started") {
     if (event.stage_id === "export") return null;
+    if (event.stage_id === "conflict_review") return null;
     const label = workspaceEventText(event, "階段開始");
     if (event.stage_id === "formal_meeting" && /^正式會議$/.test(label.trim())) {
       return null;
@@ -239,6 +240,8 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   if (event.type === "step_started") {
     if (
       event.step_id === "elicitation.run_meeting" ||
+      event.step_id === "conflict_detection.detect_pairs" ||
+      event.step_id === "conflict_detection.detect_groups" ||
       /^formal_meeting\.round_\d+\.run_meeting$/i.test(event.step_id ?? "")
     ) {
       return null;
@@ -304,6 +307,12 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   }
 
   if (event.type === "step_completed") {
+    if (
+      event.step_id === "conflict_detection.detect_pairs" ||
+      event.step_id === "conflict_detection.detect_groups"
+    ) {
+      return null;
+    }
     if (
       event.output_path &&
       (

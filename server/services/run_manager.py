@@ -36,6 +36,58 @@ from .run_checkpoint import clear_run_checkpoint, clear_run_checkpoint_for_conti
 
 UI_ERROR_MAX_LENGTH = 500
 MAX_STEP_DELTA_EVENTS_PER_RUN = 1000
+SUPPORTED_REFERENCE_EXTS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".md",
+    ".json",
+    ".csv",
+}
+
+
+def _merge_unique_strings(*groups: List[str]) -> List[str]:
+    rows: List[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for value in group or []:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                continue
+            rows.append(text)
+            seen.add(text)
+    return rows
+
+
+def _project_reference_paths(store: Store) -> List[str]:
+    project_id = str(getattr(store, "project_id", "") or "").strip()
+    if not project_id:
+        return []
+    references_dir = store.base_dir / "doc" / project_id
+    if not references_dir.exists():
+        return []
+    return [
+        f"{project_id}/{path.name}"
+        for path in sorted(references_dir.iterdir())
+        if path.is_file() and path.suffix.lower() in SUPPORTED_REFERENCE_EXTS
+    ]
+
+
+def _artifact_reference_paths(artifact: Dict[str, Any]) -> List[str]:
+    meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+    return [
+        str(path or "").strip()
+        for path in (meta.get("attached_references") or [])
+        if str(path or "").strip()
+    ]
+
+
+def _new_project_reference_paths(store: Store, artifact: Dict[str, Any]) -> List[str]:
+    known = set(_artifact_reference_paths(artifact))
+    return [path for path in _project_reference_paths(store) if path not in known]
 
 
 def _ui_error_message(exc: Exception) -> str:
@@ -148,6 +200,12 @@ class RunManager:
         if not project_dir.exists() or not project_dir.is_dir():
             raise ValueError("Project not found")
         store = Store(self.base_dir, project_id)
+
+        if mode == "continue" and _new_project_reference_paths(store, store.load_artifact() or {}):
+            stage_overrides = {
+                **(stage_overrides or {}),
+                "research_domain": True,
+            }
 
         base_config = copy.deepcopy(config) if config else Store(self.base_dir).load_config()
         resolved_config = apply_run_stage_overrides(base_config, stage_overrides)
@@ -605,7 +663,23 @@ class RunManager:
 
         if attached_reference_paths:
             meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
-            meta["attached_references"] = attached_reference_paths
+            existing_references = [
+                str(path or "").strip()
+                for path in (meta.get("attached_references") or [])
+                if str(path or "").strip()
+            ]
+            existing_reference_set = set(existing_references)
+            new_references = [
+                path for path in attached_reference_paths if path not in existing_reference_set
+            ]
+            meta["attached_references"] = _merge_unique_strings(
+                existing_references,
+                attached_reference_paths,
+            )
+            if mode == "continue" and new_references:
+                meta["domain_research_referenced_files"] = _merge_unique_strings(new_references)
+                meta.pop("research_domain_completed", None)
+                meta.pop("research_domain_coverage", None)
             artifact["meta"] = meta
             changed = True
 

@@ -4,9 +4,18 @@ import path from "path";
 
 const envDir = path.resolve(__dirname, "..");
 
+function isLocalFrontendHost(host: string) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, envDir, ["frontend_"]);
-  const frontendHost = env.frontend_host?.trim() || "plant.dummyjack.com";
+  const configuredFrontendHost = env.frontend_host?.trim() || "";
+  const frontendHost = configuredFrontendHost || "localhost";
+  const serverHost =
+    configuredFrontendHost && !isLocalFrontendHost(configuredFrontendHost)
+      ? "0.0.0.0"
+      : "127.0.0.1";
 
   return {
     plugins: [react()],
@@ -27,8 +36,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      host: serverHost,
       port: 3000,
-      allowedHosts: [frontendHost],
+      allowedHosts: ["localhost", "127.0.0.1", frontendHost],
       watch: {
         ignored: [
           path.resolve(envDir, ".env"),
@@ -41,6 +51,14 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
         "/manual": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+        },
+        "^/[^/]+/references/[^/]+/preview-file$": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+        },
+        "^/[^/]+/references/[^/]+$": {
           target: "http://127.0.0.1:8000",
           changeOrigin: true,
         },

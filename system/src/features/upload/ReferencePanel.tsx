@@ -1,10 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, FileUp, MoreHorizontal, Search, Trash2, X } from "lucide-react";
+import { Download, ExternalLink, FileUp, Loader2, MoreHorizontal, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   deleteReference,
   referenceDownloadUrl,
+  referencePreviewPageUrl,
   referencePreviewUrl,
   uploadReference,
 } from "@/api/projects";
@@ -63,6 +66,7 @@ type DataTransferItemWithEntry = DataTransferItem & {
 
 const SUPPORTED_REFERENCE_EXTS = [
   ".pdf",
+  ".doc",
   ".docx",
   ".xlsx",
   ".pptx",
@@ -97,7 +101,7 @@ function referenceIconMeta(name: string): { label: string; fill: string; fold: s
   if (ext === ".pptx") return { label: "PPT", fill: "#f97316", fold: "#fed7aa" };
   if (ext === ".xlsx" || ext === ".csv")
     return { label: ext === ".csv" ? "CSV" : "XLS", fill: "#16a34a", fold: "#bbf7d0" };
-  if (ext === ".docx") return { label: "DOC", fill: "#2563eb", fold: "#bfdbfe" };
+  if (ext === ".doc" || ext === ".docx") return { label: "DOC", fill: "#2563eb", fold: "#bfdbfe" };
   if (ext === ".md") return { label: "MD", fill: "#475569", fold: "#cbd5e1" };
   if (ext === ".txt") return { label: "TXT", fill: "#64748b", fold: "#cbd5e1" };
   if (ext === ".json") return { label: "JSN", fill: "#7c3aed", fold: "#ddd6fe" };
@@ -157,6 +161,44 @@ function isPdfReference(name: string): boolean {
 function isSupportedReferenceName(name: string): boolean {
   const lowerName = name.toLowerCase();
   return SUPPORTED_REFERENCE_EXTS.some((ext) => lowerName.endsWith(ext));
+}
+
+function csvRows(content: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
 }
 
 function hasSupportedDragFile(items: DataTransferItemList): boolean {
@@ -228,6 +270,15 @@ function triggerDownload(url: string, filename: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+async function previewResponseError(response: Response, fallback: string) {
+  try {
+    const body = await response.json();
+    return typeof body?.detail === "string" ? body.detail : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function ReferencePanel({ projectId }: ReferencePanelProps) {
@@ -448,16 +499,25 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     setPreview(null);
   };
 
+  const openPreviewInNewTab = () => {
+    if (!preview || !projectId) return;
+    window.open(referencePreviewPageUrl(projectId, preview.name), "_blank", "noopener,noreferrer");
+  };
+
   const openReferencePreview = async (name: string) => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
-    const kind = isTextReference(name) ? "text" : isPdfReference(name) ? "pdf" : "unsupported";
+    const kind = isTextReference(name)
+      ? "text"
+      : isPdfReference(name)
+        ? "pdf"
+        : "unsupported";
     setPreview({ name, kind, loading: true });
     try {
       if (projectId) {
         const url = referencePreviewUrl(projectId, name);
         if (kind === "text") {
           const response = await fetch(url);
-          if (!response.ok) throw new Error(t.readFileFailed);
+          if (!response.ok) throw new Error(await previewResponseError(response, t.readFileFailed));
           setPreview({ name, kind, loading: false, content: await response.text() });
           return;
         }
@@ -496,6 +556,75 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         error: errorMessage(error, t.readFileFailed),
       });
     }
+  };
+
+  const renderTextPreview = (item: ReferencePreview) => {
+    const content = item.content || "";
+    const ext = referenceExt(item.name);
+    if (ext === ".md") {
+      return (
+        <div className="markdown-body max-w-none rounded-control border border-gray-100 bg-white p-4 text-sm text-slate-800">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content || t.noContent}
+          </ReactMarkdown>
+        </div>
+      );
+    }
+    if (ext === ".json") {
+      let formatted = content;
+      try {
+        formatted = JSON.stringify(JSON.parse(content), null, 2);
+      } catch {
+        formatted = content;
+      }
+      return (
+        <pre className="whitespace-pre-wrap break-words rounded-control bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-50">
+          {formatted || t.noContent}
+        </pre>
+      );
+    }
+    if (ext === ".csv") {
+      const rows = csvRows(content);
+      if (!rows.length) {
+        return (
+          <p className="rounded-control bg-slate-50 p-3 text-sm text-slate-500">
+            {t.noContent}
+          </p>
+        );
+      }
+      const [headers, ...bodyRows] = rows;
+      return (
+        <div className="overflow-auto rounded-control border border-gray-200">
+          <table className="min-w-full border-collapse text-left text-xs">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {headers.map((cell, index) => (
+                  <th key={index} className="border-b border-r border-gray-200 px-2 py-1.5 font-semibold last:border-r-0">
+                    {cell}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/60">
+                  {headers.map((_, cellIndex) => (
+                    <td key={cellIndex} className="border-b border-r border-gray-100 px-2 py-1.5 align-top text-slate-700 last:border-r-0">
+                      {row[cellIndex] ?? ""}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    return (
+      <pre className="whitespace-pre-wrap break-words rounded-control bg-slate-50 p-3 font-mono text-xs leading-5 text-slate-700">
+        {content || t.noContent}
+      </pre>
+    );
   };
 
   const toolbar = (
@@ -839,6 +968,17 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                 <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">
                   {preview.name}
                 </h3>
+                {projectId && (preview.kind === "pdf" || preview.kind === "text") && !preview.loading && !preview.error && (
+                  <button
+                    type="button"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-control text-slate-500 hover:bg-gray-50 hover:text-slate-900"
+                    aria-label={t.openInNewTab}
+                    title={t.openInNewTab}
+                    onClick={openPreviewInNewTab}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="inline-flex h-7 w-7 items-center justify-center rounded-control text-slate-500 hover:bg-gray-50 hover:text-slate-900"
@@ -850,7 +990,10 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4">
                 {preview.loading ? (
-                  <p className="text-sm text-slate-500">{t.readingFile}</p>
+                  <div className="flex min-h-[180px] flex-col items-center justify-center gap-3 text-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+                    <p className="text-sm text-slate-500">{t.readingFile}</p>
+                  </div>
                 ) : preview.error ? (
                   <div className="flex flex-col items-center gap-3 text-center">
                     <p className="text-sm leading-6 text-slate-500">{preview.error}</p>
@@ -870,9 +1013,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     className="h-[60vh] w-full rounded-control border border-gray-200"
                   />
                 ) : (
-                  <pre className="whitespace-pre-wrap break-words rounded-control bg-slate-50 p-3 text-xs leading-5 text-slate-700">
-                    {preview.content || t.noContent}
-                  </pre>
+                  renderTextPreview(preview)
                 )}
               </div>
             </div>

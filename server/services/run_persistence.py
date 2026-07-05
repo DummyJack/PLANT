@@ -54,15 +54,6 @@ class RunPersistence:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    def load_state(self, project_id: str, run_id: str) -> Optional[Dict[str, Any]]:
-        path = self.state_path(project_id, run_id)
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
-
     def load_events(self, project_id: str, run_id: str, since: int = 0) -> List[Dict[str, Any]]:
         path = self.events_path(project_id, run_id)
         if not path.exists():

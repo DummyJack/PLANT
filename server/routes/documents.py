@@ -10,6 +10,7 @@ router = APIRouter()
 
 ALLOWED_DOC_EXTS = {
     ".pdf",
+    ".doc",
     ".docx",
     ".xlsx",
     ".pptx",

@@ -59,19 +59,31 @@ export function useRunEvents(
       const eventStage = String(event.stage_id || "").trim();
       const eventText = String(event.message || event.title || "").trim();
       const trimKey = `${run?.run_id || ""}:${checkpointStage}:${checkpointRound || ""}`;
-      if (
+      const shouldTrimContinueDocumentGeneration =
         event.type === "stage_started" &&
-        checkpointStage &&
-        eventStage === checkpointStage &&
+        run?.mode === "continue" &&
+        eventStage === "document_generation" &&
+        trimmedCheckpointStageRef.current !== `${run?.run_id || ""}:document_generation`;
+      if (
+        shouldTrimContinueDocumentGeneration ||
         (
-          checkpointStage !== "formal_meeting" ||
-          checkpointRound <= 0 ||
-          new RegExp(`第\\s*${checkpointRound}\\s*輪正式會議開始`, "u").test(eventText)
-        ) &&
-        trimmedCheckpointStageRef.current !== trimKey
+          event.type === "stage_started" &&
+          checkpointStage &&
+          eventStage === checkpointStage &&
+          (
+            checkpointStage !== "formal_meeting" ||
+            checkpointRound <= 0 ||
+            new RegExp(`第\\s*${checkpointRound}\\s*輪正式會議開始`, "u").test(eventText)
+          ) &&
+          trimmedCheckpointStageRef.current !== trimKey
+        )
       ) {
-        trimRunStatusMessagesForContinue(checkpointTarget);
-        trimmedCheckpointStageRef.current = trimKey;
+        trimRunStatusMessagesForContinue(
+          shouldTrimContinueDocumentGeneration ? "document_generation" : checkpointTarget,
+        );
+        trimmedCheckpointStageRef.current = shouldTrimContinueDocumentGeneration
+          ? `${run?.run_id || ""}:document_generation`
+          : trimKey;
       }
       const chats = logEventToChats(event);
       if (

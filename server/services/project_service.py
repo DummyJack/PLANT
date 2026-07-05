@@ -16,6 +16,7 @@ from .security import sanitize_filename, validate_project_id, write_upload_file
 
 ALLOWED_REFERENCE_EXTS = {
     ".pdf",
+    ".doc",
     ".docx",
     ".xlsx",
     ".pptx",
@@ -274,7 +275,18 @@ class ProjectService:
     def reference_path(self, project_id: str, name: str) -> Path:
         self.ensure_project(project_id)
         safe = sanitize_filename(name)
-        target = self.references_dir(project_id) / safe
+        ref_dir = self.references_dir(project_id)
+        target = ref_dir / safe
+        if target.exists() and target.is_file():
+            return target
+        if safe and not Path(safe).suffix:
+            for path in sorted(ref_dir.iterdir()):
+                if (
+                    path.is_file()
+                    and path.suffix.lower() in ALLOWED_REFERENCE_EXTS
+                    and path.stem == safe
+                ):
+                    return path
         if not target.exists() or not target.is_file():
             raise HTTPException(status_code=404, detail="Reference not found")
         return target

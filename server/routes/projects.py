@@ -16,6 +16,7 @@ from .auth import require_project_read_access, require_write_access
 
 
 router = APIRouter()
+public_router = APIRouter()
 
 
 class ProjectCreate(BaseModel):
@@ -149,6 +150,15 @@ def list_references(project_id: str, request: Request):
 
 @router.get("/projects/{project_id}/references/{name}")
 def download_reference(project_id: str, name: str, request: Request, inline: bool = False):
+    return reference_response(project_id, name, request, inline=inline)
+
+
+@public_router.get("/{project_id}/references/{name}")
+def public_download_reference(project_id: str, name: str, request: Request, inline: bool = False):
+    return reference_response(project_id, name, request, inline=inline)
+
+
+def reference_response(project_id: str, name: str, request: Request, *, inline: bool = False):
     require_project_read_access(request, project_id)
     target = project_service(request).reference_path(project_id, name)
     return FileResponse(

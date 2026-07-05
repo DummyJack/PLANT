@@ -86,6 +86,8 @@ function setForceRegenerateOutputs(
 interface StageToggleMenuProps {
   disabled?: boolean;
   disabledReason?: string;
+  readOnly?: boolean;
+  readOnlyReason?: string;
   stageOverrides?: Record<string, boolean>;
   existingOutputs?: {
     [key: string]: boolean | undefined;
@@ -97,6 +99,8 @@ interface StageToggleMenuProps {
 export function StageToggleMenu({
   disabled = false,
   disabledReason,
+  readOnly = false,
+  readOnlyReason,
   stageOverrides,
   existingOutputs,
   compact = false,
@@ -149,7 +153,7 @@ export function StageToggleMenu({
   }, [disabled]);
 
   const toggleStage = (keys: string[]) => {
-    if (disabled) return;
+    if (disabled || readOnly) return;
     const config = configQuery.data;
     if (!config) return;
     const nextEnabled = !stageEnabled(config, keys, stageOverrides);
@@ -175,11 +179,13 @@ export function StageToggleMenu({
           compact ? "w-7 justify-center px-0" : "px-2.5",
           disabled && !open
             ? "border-gray-200 bg-gray-50 text-slate-400 hover:border-slate-300 hover:text-slate-600"
+            : readOnly && !open
+              ? "border-gray-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700"
             : open
             ? "border-slate-300 bg-slate-50 text-slate-800"
             : "border-gray-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-800",
         )}
-        title={disabled ? (disabledReason ?? t.runningStageReadonly) : t.stage}
+        title={disabled ? (disabledReason ?? t.runningStageReadonly) : readOnly ? (readOnlyReason ?? t.runningStageReadonly) : t.stage}
         onClick={() => {
           if (disabled) return;
           setOpen((v) => !v);
@@ -204,16 +210,17 @@ export function StageToggleMenu({
                 const completed = row.keys.some((key) => (stageOverrides ?? {})[key] === false);
                 const forceSupported = row.keys.some((key) => FORCE_REGENERATE_KEYS.has(key));
                 const rowDisabled = !!rowEnabledIds && !rowEnabledIds.has(row.id);
+                const rowLocked = disabled || readOnly || saveMut.isPending || !configQuery.data || rowDisabled;
                 return (
                   <button
                     key={row.id}
                     type="button"
-                    disabled={disabled || saveMut.isPending || !configQuery.data || rowDisabled}
+                    disabled={rowLocked}
                     title={
                       rowDisabled
                         ? t.completedStageRerunOnly
-                        : disabled
-                        ? (disabledReason ?? t.runningStageDisabled)
+                        : disabled || readOnly
+                        ? (disabledReason ?? readOnlyReason ?? t.runningStageDisabled)
                         : completed && !enabled && forceSupported
                           ? t.completedStageWillRegenerate
                           : undefined

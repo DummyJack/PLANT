@@ -1,5 +1,8 @@
+import io
+import zipfile
+
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from server.services.artifact_service import ArtifactService
@@ -40,6 +43,71 @@ def project_manual_response(project_id: str, file_path: str, request: Request) -
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return dynamic_file_response(target)
+
+
+def project_manual_zip_response(project_id: str, request: Request) -> StreamingResponse:
+    require_project_read_access(request, project_id)
+    svc = service(request)
+    root = svc.project_dir(project_id)
+    manual_root = root / "manual"
+    if not manual_root.exists() or not manual_root.is_dir():
+        raise HTTPException(status_code=404, detail="Manual not found")
+
+    shared_manual_root = request.app.state.base_dir / "manual"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(manual_root.rglob("*")):
+            if not path.is_file() or path.name == ".DS_Store":
+                continue
+            arcname = f"manual/{path.relative_to(manual_root).as_posix()}"
+            if path.name == "index.html":
+                html = path.read_text(encoding="utf-8")
+                html = html.replace('href="../../../manual/styles.css"', 'href="styles.css"')
+                html = html.replace('src="../../../manual/main.js"', 'src="main.js"')
+                archive.writestr(arcname, html)
+            else:
+                archive.write(path, arcname)
+
+        if shared_manual_root.exists():
+            for path in sorted(shared_manual_root.rglob("*")):
+                if not path.is_file() or path.name == ".DS_Store":
+                    continue
+                arcname = f"manual/{path.relative_to(shared_manual_root).as_posix()}"
+                if arcname not in archive.namelist():
+                    archive.write(path, arcname)
+
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            **NO_CACHE_HEADERS,
+            "Content-Disposition": 'attachment; filename="manual.zip"',
+        },
+    )
+
+
+def shared_manual_zip_response(request: Request) -> StreamingResponse:
+    shared_manual_root = request.app.state.base_dir / "manual"
+    if not shared_manual_root.exists() or not shared_manual_root.is_dir():
+        raise HTTPException(status_code=404, detail="Manual assets not found")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(shared_manual_root.rglob("*")):
+            if not path.is_file() or path.name == ".DS_Store":
+                continue
+            archive.write(path, f"manual/{path.relative_to(shared_manual_root).as_posix()}")
+
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            **NO_CACHE_HEADERS,
+            "Content-Disposition": 'attachment; filename="manual.zip"',
+        },
+    )
 
 
 def shared_manual_response(file_path: str, request: Request) -> FileResponse:
@@ -103,9 +171,19 @@ def serve_manual_file(project_id: str, file_path: str, request: Request):
     return project_manual_response(project_id, file_path, request)
 
 
+@router.get("/projects/{project_id}/manual.zip")
+def download_manual_zip(project_id: str, request: Request):
+    return project_manual_zip_response(project_id, request)
+
+
 @router.get("/manual/{file_path:path}")
 def serve_shared_manual_file(file_path: str, request: Request):
     return shared_manual_response(file_path, request)
+
+
+@router.get("/manual.zip")
+def download_shared_manual_zip(request: Request):
+    return shared_manual_zip_response(request)
 
 
 @router.get("/projects/{project_id}/{file_path:path}")
@@ -117,6 +195,16 @@ def serve_project_static_file(project_id: str, file_path: str, request: Request)
 @public_router.get("/{project_id}/manual/")
 def serve_public_manual_index(project_id: str, request: Request):
     return project_manual_response(project_id, "index.html", request)
+
+
+@public_router.get("/{project_id}/manual.zip")
+def serve_public_manual_zip(project_id: str, request: Request):
+    return project_manual_zip_response(project_id, request)
+
+
+@public_router.get("/manual.zip")
+def serve_public_shared_manual_zip(request: Request):
+    return shared_manual_zip_response(request)
 
 
 @public_router.get("/{project_id}/manual/srs")

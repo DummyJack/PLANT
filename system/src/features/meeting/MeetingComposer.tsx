@@ -1,6 +1,7 @@
 import { Bot, Plus, Send, Square } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DragEvent } from "react";
 import { fetchConfig, updateConfig } from "@/api/config";
 import { fetchModelApiKeys } from "@/api/secrets";
@@ -203,8 +204,11 @@ export function MeetingComposer({
   const setSelectedReferences = onReviewReferencesChange ?? setInternalSelectedReferences;
   const [referenceDragOver, setReferenceDragOver] = useState(false);
   const [compactButtons, setCompactButtons] = useState(false);
+  const [agentPopoverLeft, setAgentPopoverLeft] = useState(8);
+  const [agentPopoverBottom, setAgentPopoverBottom] = useState(8);
   const composerRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
+  const agentPopoverRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const configQuery = useQuery({
     queryKey: ["config"],
@@ -273,12 +277,36 @@ export function MeetingComposer({
     if (!showAgentPopover) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
-      if (showAgentPopover && agentRef.current && !agentRef.current.contains(target)) {
+      if (
+        showAgentPopover &&
+        agentRef.current &&
+        !agentRef.current.contains(target) &&
+        !agentPopoverRef.current?.contains(target)
+      ) {
         setShowAgentPopover(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, [showAgentPopover]);
+
+  useEffect(() => {
+    if (!showAgentPopover) return;
+    const updatePosition = () => {
+      const rect = agentRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = 256;
+      const padding = 8;
+      setAgentPopoverLeft(Math.min(Math.max(padding, rect.left), window.innerWidth - width - padding));
+      setAgentPopoverBottom(Math.max(padding, window.innerHeight - rect.top + padding));
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
   }, [showAgentPopover]);
 
   useEffect(() => {
@@ -564,8 +592,12 @@ export function MeetingComposer({
             <span className={cn(compactButtons && "sr-only")}>Agent</span>
           </button>
 
-          {showAgentPopover && (
-            <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-control border border-gray-200 bg-white shadow-lg">
+          {showAgentPopover && createPortal(
+            <div
+              ref={agentPopoverRef}
+              className="fixed z-[100] w-64 rounded-control border border-gray-200 bg-white shadow-lg"
+              style={{ left: agentPopoverLeft, bottom: agentPopoverBottom }}
+            >
               <div className="border-b border-gray-100 px-3 py-2">
                 <p className="text-center text-xs font-semibold text-slate-800">{t.agentSettings}</p>
               </div>
@@ -664,7 +696,8 @@ export function MeetingComposer({
                   );
                 })}
               </div>
-            </div>
+            </div>,
+            document.body,
           )}
         </div>
 
