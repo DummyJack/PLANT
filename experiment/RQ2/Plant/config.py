@@ -58,12 +58,14 @@ class ExperimentLogger:
     # Defines stage started function for this experiment module.
     # ========
     def stage_started(self, stage_id: str, title: str, *, message: str | None = None):
+        _ = stage_id
         self.info(message or title)
 
     # ========
     # Defines stage completed function for this experiment module.
     # ========
     def stage_completed(self, stage_id: str, title: str, *, message: str | None = None):
+        _ = stage_id
         self.info(message or title)
 
     # ========
@@ -78,6 +80,7 @@ class ExperimentLogger:
         agent: str | None = None,
         message: str | None = None,
     ):
+        _ = stage_id
         if agent:
             self.info("%s: %s", agent, message or title)
         else:
@@ -96,6 +99,7 @@ class ExperimentLogger:
         agent: str | None = None,
         title: str | None = None,
     ):
+        _ = (stage_id, delta_type)
         return None
 
     # ========
@@ -112,6 +116,7 @@ class ExperimentLogger:
         output_path: str | None = None,
         summary: dict | None = None,
     ):
+        _ = stage_id
         text = message or title
         if output_path:
             text = f"{text} ({output_path})"
@@ -132,6 +137,7 @@ class ExperimentLogger:
         *,
         message: str | None = None,
     ):
+        _ = stage_id
         self.info("%s: %s (%s)", step_id, message or title, output_path)
 
     # ========
@@ -144,6 +150,7 @@ class ExperimentLogger:
         *,
         message: str = "仍在處理中",
     ):
+        _ = stage_id
         self.info("%s", message)
 
 # ========
@@ -174,6 +181,7 @@ class ExperimentStore:
     # Defines save json function for this experiment module.
     # ========
     def save_json(self, data: Dict[str, Any], filepath: str, indent: int = 2):
+        _ = (filepath, indent)
         pass
 
     # ========
@@ -186,6 +194,7 @@ class ExperimentStore:
     # Defines save plantuml files function for this experiment module.
     # ========
     def save_plantuml_files(self, model_data: Dict[str, Any]):
+        _ = model_data
         pass
 
     # ========

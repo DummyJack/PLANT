@@ -103,6 +103,7 @@ class ReqElicitGym(gym.Env):
         return task
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        _ = options
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)

@@ -228,7 +228,6 @@ def main() -> None:
     if not isinstance(tasks, list):
         raise TypeError(f"資料檔格式錯誤，必須是 list: {data_path}")
 
-    total_tasks_in_file = len(tasks)
     selected_application_types = choose_application_types(tasks)
     if selected_application_types:
         selected_set = set(selected_application_types)
@@ -421,7 +420,7 @@ def main() -> None:
             )
             task_result_rows.append(task_record)
             completed_task_ids.add(task_id)
-            cost_payload = persist_progress()
+            persist_progress()
             print(
                 f"\n任務 {i} 完成：總輪數={int(task_record.get('turns', 0) or 0)}，"
                 f"已取得需求數={int(task_record.get('total_elicited', 0) or 0)}"

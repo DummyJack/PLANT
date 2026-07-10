@@ -185,6 +185,7 @@ class OracleUserAgent(UserAgent):
     def generate_stakeholder_requirements(
         self, rough_idea: str, selected_stakeholders: List[str]
     ) -> List[Dict[str, Any]]:
+        _ = selected_stakeholders
         initial = task_initial_requirements(self.current_task) or str(rough_idea or "").strip()
         return [
             {

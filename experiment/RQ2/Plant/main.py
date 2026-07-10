@@ -206,7 +206,6 @@ def run_type_group_batch(
         gi, row = items[k]
         tkey = str(row.get("types") or type_name)
         pair_details = details_by_index.get(k, {})
-        review_details = pair_details.get("details") if isinstance(pair_details, dict) else {}
         results_by_idx[gi] = (
             preds[k],
             {
@@ -317,7 +316,7 @@ def run_conflict(
     requirements_artifact.setdefault("URL", [])
     task_cost_rows: List[Dict[str, Any]] = []
 
-    for type_idx, (g, items) in enumerate(grouped.items()):
+    for g, items in grouped.items():
         print(
             f"========== 類型：{g}（{len(items)} 筆）==========",
             flush=True,
