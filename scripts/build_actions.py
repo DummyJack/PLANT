@@ -7,7 +7,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -19,7 +19,6 @@ from agents.profile.analyst.actions.draft.create import create_draft
 from agents.profile.analyst.actions.draft.update import update_draft
 from agents.profile.analyst.actions.report.create import create_report
 from agents.profile.analyst.actions.report.resolution import report_resolution
-from agents.profile.analyst.actions.reqt.analyze import analyze_requirement
 from agents.profile.analyst.actions.reqt.extract import extract_requirement
 from agents.profile.analyst.actions.reqt.refine import refine_requirement
 from agents.profile.analyst.actions.reqt.update import update_requirement
@@ -95,30 +94,30 @@ SKILLS_SRC = ROOT / "agents" / "skills"
 
 SAMPLE_ISSUE = {
     "id": "I-R1-001",
-    "title": "訂單狀態規則是否一致",
+    "title": "資料修改規則是否一致",
     "category": "clarify_requirement",
-    "description": "消費者、餐廳與外送員對訂單取消條件的理解是否一致？",
+    "description": "使用者、審核人員與管理者對資料修改條件的理解是否一致？",
     "meeting_id": "R1-M1",
 }
 
 SAMPLE_OQ_ISSUE = {
     "id": "OQ",
     "title": "回答 analyst 的問題",
-    "description": "取消規則應以出餐前還是出餐後為準？",
+    "description": "修改規則應以送審前還是核准後為準？",
     "category": "clarify_requirement",
 }
 
 SAMPLE_ELICIT_ISSUE = {
     "id": "ELICIT-1",
     "title": "需求擷取訪談",
-    "description": "補足訂單取消與狀態規則的理解缺口。",
+    "description": "補足資料修改與狀態規則的理解缺口。",
     "category": "clarify_requirement",
-    "target_stakeholders": ["消費者"],
+    "target_stakeholders": ["使用者"],
 }
 
 SAMPLE_RESOLVE_ISSUE = {
     "id": "I-R1-002",
-    "title": "解決訂單取消衝突",
+    "title": "解決資料修改衝突",
     "category": "resolve_conflict",
     "description": "針對 CR-1 的解決選項做取捨。",
     "meeting_id": "R1-M1",
@@ -140,8 +139,8 @@ SAMPLE_CONTEXT = {
         "requirements": [
             {
                 "id": "REQ-1",
-                "title": "訂餐",
-                "description": "系統應支援線上訂餐",
+                "title": "服務管理",
+                "description": "系統應支援線上服務管理",
             }
         ]
     }
@@ -150,24 +149,18 @@ SAMPLE_CONTEXT = {
 SAMPLE_EXISTING_URL = [
     {
         "id": "URL-1",
-        "text": "消費者能完成線上訂餐",
-        "stakeholder": "消費者",
+        "text": "使用者能完成資料提交",
+        "stakeholder": "使用者",
         "source": "initial",
     }
 ]
-
-SAMPLE_PLAN_CONTEXT = {
-    "round_num": 1,
-    "latest_draft": "",
-    "proposal_context": {},
-}
 
 SAMPLE_PAIR_ROWS = [
     {
         "pair_index": 0,
         "requirements": [
-            {"id": "URL-1", "text": "消費者能隨時取消訂單"},
-            {"id": "URL-2", "text": "出餐後不可取消訂單"},
+            {"id": "URL-1", "text": "使用者能在送審前修改資料"},
+            {"id": "URL-2", "text": "核准後不可修改資料"},
         ],
     }
 ]
@@ -175,24 +168,24 @@ SAMPLE_PAIR_ROWS = [
 SAMPLE_DR_REQUIREMENTS = [
     {
         "id": "REQ-1",
-        "title": "線上訂餐",
+        "title": "線上服務管理",
         "type": "functional",
-        "description": "系統應支援消費者線上訂餐",
+        "description": "系統應支援使用者線上服務管理",
     }
 ]
 
-SAMPLE_DRAFT_SNIPPET = "# 需求草稿\n\n## scope\n\n### 系統範圍（in_scope）\n- 線上訂餐\n"
+SAMPLE_DRAFT_SNIPPET = "# 需求草稿\n\n## scope\n\n### 系統範圍（in_scope）\n- 線上服務管理\n"
 
 SAMPLE_STAKEHOLDERS = [
-    {"name": "消費者", "type": "primary_user", "text": []},
+    {"name": "使用者", "type": "primary_user", "text": []},
 ]
 
-SAMPLE_ROUGH_IDEA = "訂餐外送系統"
+SAMPLE_ROUGH_IDEA = "線上服務管理系統"
 
 SAMPLE_RESEARCH_STATE = {
     "scenario": SAMPLE_ROUGH_IDEA,
-    "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
-    "URL": [{"id": "URL-1", "text": "消費者能完成線上訂餐"}],
+    "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
+    "URL": [{"id": "URL-1", "text": "使用者能完成資料提交"}],
     "REQ": [],
     "open_questions": [],
 }
@@ -214,16 +207,6 @@ def append_available_data(task: str, context: Optional[Dict[str, Any]] = None) -
 
 SAMPLE_ANALYZE_SCENARIO_CONTEXT = {"rough_idea": SAMPLE_ROUGH_IDEA}
 
-SAMPLE_ANALYZE_REQUIREMENTS_CONTEXT = {
-    "stakeholder": {
-        "name": "消費者",
-        "type": "primary_user",
-        "source_text": "我希望可以隨時取消尚未出餐的訂單。",
-        "all_text": ["我希望可以隨時取消尚未出餐的訂單。"],
-    },
-    "existing_requirements": SAMPLE_EXISTING_URL,
-}
-
 SAMPLE_SCOPE_GENERATE_CONTEXT = {
     "scenario": SAMPLE_ROUGH_IDEA,
     "URL": SAMPLE_EXISTING_URL,
@@ -237,9 +220,9 @@ SAMPLE_SCOPE_REFINE_CONTEXT = {
         "category": SAMPLE_ISSUE["category"],
         "trace": {},
     },
-    "current_scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+    "current_scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
     "requirements": SAMPLE_EXISTING_URL,
-    "discussion": ["消費者：第三方配送流程不屬於本系統責任。"],
+    "discussion": ["使用者：第三方整合流程不屬於本系統責任。"],
     "scenario": SAMPLE_ROUGH_IDEA,
 }
 
@@ -253,7 +236,7 @@ SAMPLE_REQUIREMENT_UPDATE_CONTEXT = {
     },
     "current_URL": SAMPLE_EXISTING_URL,
     "current_REQ": [],
-    "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+    "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
     "feedback": {},
     "system_models": [],
     "discussion": [],
@@ -276,9 +259,9 @@ SAMPLE_REQUIREMENT_REFINE_CONTEXT = {
     "current_REQ": [
         {
             "id": "REQ-1",
-            "title": "線上訂餐",
+            "title": "線上服務管理",
             "type": "functional",
-            "description": "系統應支援消費者線上訂餐",
+            "description": "系統應支援使用者線上服務管理",
             "source": ["URL-1"],
         }
     ],
@@ -288,10 +271,10 @@ SAMPLE_REQUIREMENT_REFINE_CONTEXT = {
 
 SAMPLE_CONFLICT_DETECTION_CONTEXT = {
     "scenario": SAMPLE_ROUGH_IDEA,
-    "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+    "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
     "requirements": [
-        {"id": "URL-1", "text": "消費者能隨時取消訂單", "stakeholder": "消費者"},
-        {"id": "URL-2", "text": "出餐後不可取消訂單", "stakeholder": "餐廳"},
+        {"id": "URL-1", "text": "使用者能在送審前修改資料", "stakeholder": "使用者"},
+        {"id": "URL-2", "text": "核准後不可修改資料", "stakeholder": "審核人員"},
     ],
 }
 
@@ -313,8 +296,8 @@ SAMPLE_CONFLICT_REPORT_ROW = {
     "final_type": "scope",
     "description": "取消規則無法同時成立",
     "requirements": [
-        {"id": "URL-1", "text": "消費者能隨時取消訂單"},
-        {"id": "URL-2", "text": "出餐後不可取消訂單"},
+        {"id": "URL-1", "text": "使用者能在送審前修改資料"},
+        {"id": "URL-2", "text": "核准後不可修改資料"},
     ],
 }
 
@@ -322,15 +305,10 @@ SAMPLE_CONFLICT_REPORT_CONTEXT = {
     "conflict_report": [SAMPLE_CONFLICT_REPORT_ROW],
 }
 
-SAMPLE_CONFLICT_REPORT_UPDATE_CONTEXT = {
-    "previous_conflict_report": "# 需求衝突報告\n\n## 衝突ID：取消規則\n",
-    **SAMPLE_CONFLICT_REPORT_CONTEXT,
-}
-
 SAMPLE_CONFLICT_RESOLUTION_CONTEXT = SAMPLE_CONFLICT_REPORT_ROW
 
 SAMPLE_DRAFT_CREATE_CONTEXT = {
-    "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+    "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
     "URL": SAMPLE_EXISTING_URL,
     "open_questions": [],
     "feedback": {},
@@ -348,9 +326,9 @@ SAMPLE_DRAFT_UPDATE_CONTEXT = {
     "REQ": [
         {
             "id": "REQ-1",
-            "title": "線上訂餐",
+            "title": "線上服務管理",
             "type": "functional",
-            "description": "系統應支援消費者線上訂餐",
+            "description": "系統應支援使用者線上服務管理",
             "source": ["URL-1"],
         }
     ],
@@ -360,7 +338,7 @@ SAMPLE_DRAFT_UPDATE_CONTEXT = {
 SAMPLE_DOMAIN_RESEARCH_CONTEXT = {
     "issue": SAMPLE_ISSUE,
     "scenario": SAMPLE_ROUGH_IDEA,
-    "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+    "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
     "URL": SAMPLE_EXISTING_URL,
     "REQ": [],
     "stakeholders": SAMPLE_STAKEHOLDERS,
@@ -388,8 +366,8 @@ SAMPLE_PROPOSE_ISSUES_CONTEXT = {
 
 EXPERT_AVAILABLE_ACTIONS = {
     "answer_question": "使用時機：有人在 open_questions 中指定 expert 回答。不要使用：一般議題發言或領域研究。寫回或影響：只回答問題，不更新專案資料。",
-    "respond_issue": "使用時機：只需要根據 issue、前文與現有資料表達領域意見。不要使用：需要專案文件證據、外部法規/標準、第三方限制或 feedback 更新時。寫回或影響：只產生會議發言，不更新 feedback。",
-    "research_domain": "流程 action。使用時機：議題需要文件證據、外部知識、法規/標準、第三方限制、合規、安全或隱私風險判斷。不要使用：一般功能偏好、純需求語意討論或現有資料已足夠。寫回或影響：內部依需要執行 read_reference_docs、research_issue、update_feedback；正式產物只寫回 feedback，不直接定案需求。",
+    "respond_issue": "使用時機：只需要根據 issue、前文與現有資料表達領域意見。不要使用：coverage、gaps、user_guidance、referenced_files 或 issue 明確指出需要專案文件證據、外部查證或 feedback 更新時。寫回或影響：只產生會議發言，不更新 feedback。",
+    "research_domain": "流程 action。使用時機：coverage、gaps、user_guidance、referenced_files 或 issue 明確指出需要文件證據、外部查證或 feedback 更新。不要使用：一般功能偏好、純需求語意討論或現有資料已足夠。寫回或影響：內部依需要執行 read_reference_docs、research_issue、update_feedback；正式產物只寫回 feedback，不直接定案需求。",
 }
 
 MODELER_AVAILABLE_ACTIONS = {
@@ -422,11 +400,11 @@ PROPOSE_ISSUE_VARIANTS = [
             agent_label="domain / compliance / risk",
             focus="外部限制、風險、證據缺口或待確認議題",
             value_gate=[
-                "會阻礙需求規格的外部限制、合規/安全風險、證據依據、品質底線或待確認義務定稿。",
+                "會阻礙需求規格的外部限制、證據依據、品質底線或待確認義務定稿。",
                 "需要正式會議確認適用範圍、風險取捨、是否轉成需求或是否交由人類裁決；若只是研究建議或可直接寫入 feedback，不要提出。",
             ],
             reject_rule=(
-                "不要提出：一般最佳實務提醒、無明確適用範圍的法規猜測、低影響風險、"
+                "不要提出：一般最佳實務提醒、無明確適用範圍的外部猜測、低影響風險、"
                 "可由 research_domain 直接更新 feedback 的事項。若單一限制或風險會影響一組需求、"
                 "驗收底線或是否能寫入 SRS，可以提出，但 reason 必須說清楚共同領域問題。"
             ),
@@ -689,9 +667,9 @@ def export_analyst() -> None:
             task=extract_requirement(
                 scenario_json=json.dumps(SAMPLE_ROUGH_IDEA, ensure_ascii=False, indent=2),
                 stakeholder_row={
-                    "name": "消費者",
+                    "name": "使用者",
                     "type": "primary_user",
-                    "text": "我希望可以隨時取消尚未出餐的訂單。",
+                    "text": "我希望可以修改尚未核准的資料。",
                 },
                 existing_rows=[],
                 mode_name="",
@@ -810,7 +788,7 @@ def export_analyst() -> None:
 
 
 def export_expert() -> None:
-    query = "確認訂單取消與退款是否涉及消費者保護或支付相關限制"
+    query = "確認資料修改與通知是否存在文件缺口或外部查證需求"
     write(
         "expert/read_reference_docs.txt",
         domain_prompt(
@@ -848,7 +826,7 @@ def export_modeler() -> None:
         "stakeholders": SAMPLE_STAKEHOLDERS,
         "URL": SAMPLE_EXISTING_URL,
         "REQ": [],
-        "scope": {"in_scope": ["線上訂餐"], "out_of_scope": []},
+        "scope": {"in_scope": ["線上服務管理"], "out_of_scope": []},
         "feedback": {},
         "open_questions": [],
         "current_models": [],
@@ -864,7 +842,7 @@ def export_modeler() -> None:
     type_name = "Sequence Diagram"
     req_text = json.dumps(SAMPLE_EXISTING_URL, ensure_ascii=False, indent=2)
     context_text = json.dumps(
-        {"scope": {"in_scope": ["線上訂餐"]}, "feedback": {}},
+        {"scope": {"in_scope": ["線上服務管理"]}, "feedback": {}},
         ensure_ascii=False,
         indent=2,
     )
@@ -872,9 +850,9 @@ def export_modeler() -> None:
     description_rule, description_field = model_description_contract(diagram_type)
     existing_plantuml = (
         "@startuml\n"
-        "actor 消費者\n"
-        "participant 訂餐系統\n"
-        "消費者 -> 訂餐系統: 提交訂單\n"
+        "actor 使用者\n"
+        "participant 服務管理系統\n"
+        "使用者 -> 服務管理系統: 提交資料\n"
         "@enduml"
     )
     write(
@@ -1031,7 +1009,7 @@ def export_mediator_and_user() -> None:
         "mediator/resolve_issue.txt",
         close_issue(
             issue=SAMPLE_ISSUE,
-            discussion_text="消費者：取消規則應在出餐前。\n餐廳：出餐後不可取消。",
+            discussion_text="使用者：修改規則應在送審前。\n審核人員：核准後不可修改。",
             readiness={"stance": "ready_to_close", "summary": "主要立場已收斂"},
         ),
     )
@@ -1039,7 +1017,7 @@ def export_mediator_and_user() -> None:
         "mediator/judge_issue.txt",
         judge_options(
             issue=SAMPLE_ISSUE,
-            discussion_text="消費者：取消規則應在出餐前。\n餐廳：出餐後不可取消。",
+            discussion_text="使用者：修改規則應在送審前。\n審核人員：核准後不可修改。",
             decision_context=None,
         ),
     )
@@ -1048,16 +1026,16 @@ def export_mediator_and_user() -> None:
         select_issues(
             proposals=[
                 {
-                    "title": "訂單狀態規則是否一致",
+                    "title": "資料修改規則是否一致",
                     "category": "clarify_requirement",
                     "issue_focus": "requirement_completeness",
                     "importance": "high",
-                    "reason": "取消規則影響需求可驗收性",
+                    "reason": "修改規則影響需求可驗收性",
                     "sources": [
                         {
                             "artifact": "URL",
                             "ids": ["URL-1", "URL-2"],
-                            "evidence": "兩筆需求對取消時點描述不一致",
+                            "evidence": "兩筆需求對修改時點描述不一致",
                         }
                     ],
                 }
@@ -1087,7 +1065,7 @@ def export_mediator_and_user() -> None:
             active_types=list(issue_type_ids),
             category_definitions=category_definitions,
             registered=["user", "analyst", "expert", "modeler"],
-            stakeholder_names=["消費者"],
+            stakeholder_names=["使用者"],
         ),
     )
     write(
@@ -1096,9 +1074,9 @@ def export_mediator_and_user() -> None:
             turn=1,
             max_turns=3,
             default_participants=["analyst", "expert", "modeler", "user"],
-            stakeholder_names=["消費者"],
+            stakeholder_names=["使用者"],
             scenario=SAMPLE_ROUGH_IDEA,
-            scope={"in_scope": ["線上訂餐"], "out_of_scope": []},
+            scope={"in_scope": ["線上服務管理"], "out_of_scope": []},
             current_requirements=SAMPLE_EXISTING_URL,
             previous_turn_summary={},
             recent_ask_history=[],
@@ -1148,7 +1126,7 @@ def export_mediator_and_user() -> None:
     write(
         "user/write_stakeholder_text.txt",
         write_stakeholder_text(
-            stakeholder_list="1. 消費者",
+            stakeholder_list="1. 使用者",
             scenario_context=scenario_context,
         ),
     )

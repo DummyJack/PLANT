@@ -725,7 +725,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                     width=url_width,
                     target=False,
                 ))
-        direct_model_slot_by_source: Dict[str, int] = {}
         def render_direct_side_nodes(
             nodes: List[Dict[str, Any]],
             *,
@@ -841,7 +840,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                     target=False,
                 ))
         if support_count:
-            total_support_width = support_columns * support_width + max(0, support_columns - 1) * support_gap_x
             support_start_x = support_x + support_padding
             if wrap_support_feedback:
                 node_markup.append(
@@ -1165,7 +1163,8 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                 parts.append(edge_label_markup(tx, label_y, label))
         if not label_each_target:
             label_y = junction_y + 18 if reverse_or_mixed_flow else junction_y - 14
-            parts.append(edge_label_markup((min_x + max_x) / 2, label_y, label))
+            label_x = target_points[0][0] if len(target_points) == 1 else (min_x + max_x) / 2
+            parts.append(edge_label_markup(label_x, label_y, label))
         return "".join(parts)
 
     def bundled_side_evidence_paths(edges_for_bundle: List[Dict[str, Any]], *, label: str) -> str:
@@ -1546,15 +1545,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         return "".join(parts)
 
     def bundled_edge_paths(target: tuple[int, int, int], incoming: List[Dict[str, Any]]) -> str:
-        target_id = str(incoming[0].get("to") or "").strip() if incoming else ""
-        target_node = next(
-            (
-                node
-                for node in graph_nodes
-                if str(node.get("id") or "").strip() == target_id
-            ),
-            {},
-        )
         ex, ey = target[0], target[1] + node_height // 2
         junction_x = ex - 28
         junction_y = ey
@@ -1563,7 +1553,6 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         dashed_incoming: List[Dict[str, Any]] = []
         for edge in incoming:
             key = trace_topology_edge_key(edge)
-            source_id = str(edge.get("from") or "").strip()
             start = node_positions[str(edge.get("from") or "").strip()]
             sx, sy = start[0] + start[2], start[1] + node_height // 2
             edge_class = "dr-trace-edge dr-trace-edge--dashed" if str(edge.get("style") or "").strip() == "dashed" else "dr-trace-edge"

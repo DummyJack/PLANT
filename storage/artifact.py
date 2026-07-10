@@ -603,29 +603,10 @@ def reindex_conflict_report_rows(rows: Any) -> List[Dict[str, Any]]:
 
 
 def conflict_report_title(row: Dict[str, Any]) -> str:
-    title = str(row.get("title") or "").strip()
-    if title:
-        return title
-    requirements = row.get("requirements")
-    if isinstance(requirements, list):
-        texts = [
-            str(item.get("text") or "").strip()
-            for item in requirements
-            if isinstance(item, dict) and str(item.get("text") or "").strip()
-        ]
-        joined = " ".join(texts)
-        if "權限" in joined and "隱私" in joined:
-            return "權限控管與借閱隱私保護"
-        if "操作" in joined and "查詢" in joined and "效率" in joined:
-            return "館員操作與查詢效率提升"
-        if "通知" in joined and "預約" in joined:
-            return "預約通知與取書流程"
-    description = str(row.get("description") or "").strip()
-    if description:
-        for sep in ("，", "。", "；", ";"):
-            if sep in description:
-                return description.split(sep, 1)[0][:40].strip()
-        return description[:40].strip()
+    for key in ("title", "report_title"):
+        title = str(row.get(key) or "").strip()
+        if title:
+            return title
     return ""
 
 
@@ -1100,7 +1081,78 @@ def conflict_report_history_state(artifact_dir: Path) -> Dict[str, Any]:
 # ========
 def latest_conflict_report_payload(artifact_dir: Path) -> List[Dict[str, Any]]:
     state = conflict_report_history_state(artifact_dir)
-    return [dict(item) for item in (state.get("report") or []) if isinstance(item, dict)]
+    rows = [dict(item) for item in (state.get("report") or []) if isinstance(item, dict)]
+    md_rows = latest_conflict_report_markdown_rows(artifact_dir)
+    if not md_rows:
+        return rows
+    rows_by_signature = {
+        conflict_requirement_signature(row): row
+        for row in rows
+        if conflict_requirement_signature(row)
+    }
+    enriched_rows: List[Dict[str, Any]] = []
+    for row in md_rows:
+        signature = conflict_requirement_signature(row)
+        merged = dict(rows_by_signature.get(signature, {}))
+        merged.update({key: value for key, value in row.items() if value not in (None, "", [])})
+        enriched_rows.append(merged)
+    return enriched_rows
+
+
+def latest_conflict_report_markdown_rows(artifact_dir: Path) -> List[Dict[str, Any]]:
+    report_dir = artifact_dir / "report"
+    versioned_paths: List[tuple[int, Path]] = []
+    for path in report_dir.glob("conflict_report_v*.md"):
+        stem = path.stem
+        raw_version = stem[len("conflict_report_v"):]
+        if raw_version.isdigit():
+            versioned_paths.append((int(raw_version), path))
+    if not versioned_paths:
+        return []
+    versioned_paths.sort(key=lambda item: item[0])
+    return parse_conflict_report_markdown(versioned_paths[-1][1])
+
+
+def parse_conflict_report_markdown(path: Path) -> List[Dict[str, Any]]:
+    text = path.read_text(encoding="utf-8")
+    matches = list(
+        re.finditer(
+            r"^##\s+(CR-\d+)(?:\s*[：:-]\s*(?P<title>.+?))?\s*$",
+            text,
+            flags=re.MULTILINE,
+        )
+    )
+    rows: List[Dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        conflict_id = match.group(1).strip()
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        section = text[start:end]
+        requirements = [
+            {"id": req_id.strip(), "text": req_text.strip(" 。")}
+            for req_id, req_text in re.findall(
+                r"^\s*-\s*(URL-\d+)\s*[：:]\s*(.+?)\s*$",
+                section,
+                flags=re.MULTILINE,
+            )
+        ]
+        row: Dict[str, Any] = {"id": conflict_id}
+        title = str(match.group("title") or "").strip()
+        if title:
+            row["title"] = title
+        if requirements:
+            row["requirements"] = requirements
+        recommended_match = re.search(
+            r"^###\s+建議解法\s*$\n(?P<body>.*?)(?=^###\s+|\Z)",
+            section,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if recommended_match:
+            recommended = re.sub(r"\s+", " ", recommended_match.group("body")).strip()
+            if recommended:
+                row["recommended_resolution"] = recommended
+        rows.append(row)
+    return rows
 
 
 # ========
@@ -1136,6 +1188,10 @@ def discussions_payload(data: Dict[str, Any]) -> Dict[str, Any]:
             row_item["meeting_id"] = item.get("meeting_id")
         if item.get("issue_id") not in (None, ""):
             row_item["issue_id"] = item.get("issue_id")
+        for key in ("title", "summary", "description"):
+            value = item.get(key)
+            if value not in (None, ""):
+                row_item[key] = value
         category = str(item.get("category") or "").strip()
         if category:
             row_item["category"] = category
@@ -1364,7 +1420,6 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
 # Defines split payload function for this module workflow.
 # ========
 def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
-    base_dir = artifact_dir.parent.parent.parent
     project_dir = artifact_dir.parent
     project_file = artifact_dir / "project.json"
     requirements_file = artifact_dir / "requirements.json"
