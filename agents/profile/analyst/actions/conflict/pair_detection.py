@@ -27,6 +27,7 @@ def pair_detection(
   "conflicts": [
     {{
       "pair_index": 0,
+      "title": "簡短衝突標題",
       "final_label": "Conflict",
       "final_type": "scope",
       "reason": "一句繁中判斷理由"
@@ -45,5 +46,6 @@ def pair_detection(
 - 每筆必須包含 pair_index、final_label、reason。
 - pair_index 必須使用輸入 pair_rows 中的原始數字。
 - final_label 只能是 "Conflict" 或 "Neutral"。
-- final_label 是 "Conflict" 時必須包含 final_type。
+- final_label 是 "Conflict" 時必須包含 title 與 final_type。
+- title 必須是 4 到 30 字的名詞片語，描述此衝突主題；不可只輸出 Conflict、衝突、需求衝突或 CR 編號。
 - final_label 是 "Neutral" 時包含 pair_index、final_label、reason。"""

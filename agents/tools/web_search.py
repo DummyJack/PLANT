@@ -298,11 +298,12 @@ class WebSearchTool(BaseTool):
         if not isinstance(n, int) or n < 1:
             return "錯誤: max_results 為必填且必須是大於 0 的整數"
         max_results = n
+        search_results_limit = min(max(max_results * 3, max_results), 20)
 
         try:
             client = self.get_client()
             results = client.search(
-                query=query, max_results=max_results, search_depth="basic"
+                query=query, max_results=search_results_limit, search_depth="basic"
             )
         except ImportError:
             return "錯誤: tavily-python 套件未安裝，請執行 pip install tavily-python"
@@ -315,7 +316,7 @@ class WebSearchTool(BaseTool):
         items = [
             item for item in raw_items
             if credible_source_url(str(item.get("url") or ""))
-        ]
+        ][:max_results]
         if not items:
             body = "未找到符合可信來源條件的相關結果。"
         else:

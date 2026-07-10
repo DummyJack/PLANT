@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+from typing import Optional
 
 from agents.skills.base import get_skill
 from storage import parse_first_json
@@ -10,11 +11,11 @@ from storage.trace_req.schema import append_trace_req_row, trace_req_public_sign
 from .actions.feedback import update_feedback
 from .actions.read_reference import read_docs
 from .actions.research import research_issue
-from .plan import ExpertResearchPlan
+from .plan import ExpertResearchPlan, compact_research_query
 from .repair import repair_action_output
 from .skill import domain_skill_subset
 
-from .validation import clean_feedback, clean_research_result, requires_url_sources, source_records, source_urls
+from .validation import clean_feedback, clean_research_result, has_research_content, requires_url_sources, source_records, source_title_from_url, source_urls
 
 
 # ========
@@ -91,39 +92,275 @@ def research_open_questions(artifact):
 
 
 # ========
+# Defines research context query function for this module workflow.
+# ========
+def research_target_context(artifact: dict, target_type: str = "", target_ids: Optional[list[str]] = None) -> dict:
+    target_type = str(target_type or "").strip()
+    target_ids = [
+        str(value).strip()
+        for value in (target_ids or [])
+        if str(value).strip()
+    ]
+    url_rows = research_requirement_candidates(artifact)
+    req_rows = artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else []
+    if target_type == "URL" and target_ids:
+        url_rows = [
+            row for row in url_rows
+            if str(row.get("id") or "").strip() in target_ids
+        ]
+        req_rows = [
+            row for row in req_rows
+            if isinstance(row, dict)
+            and (
+                str(row.get("source_id") or "").strip() in target_ids
+                or str(row.get("id") or "").strip() in target_ids
+            )
+        ]
+    return {
+        "target": {
+            "target_type": target_type or "issue",
+            "target_ids": target_ids,
+        },
+        "URL": url_rows,
+        "REQ": req_rows,
+    }
+
+
+def research_context_query(query: str, artifact: dict, target_type: str = "", target_ids: Optional[list[str]] = None) -> str:
+    """Build a narrow web-search query from the planned question plus target context."""
+    scenario = str(artifact.get("scenario") or artifact.get("rough_idea") or "").strip()
+    issue = artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {}
+    issue_text = " ".join(
+        str(issue.get(key) or "").strip()
+        for key in ("title", "description", "discussion_context")
+        if str(issue.get(key) or "").strip()
+    )
+    target_context = research_target_context(artifact, target_type, target_ids)
+    target_url_rows = target_context.get("URL") or []
+    query_keywords = feedback_keywords(" ".join([query, issue_text])) or feedback_keywords(scenario)
+    scored_requirements: list[tuple[int, str]] = []
+    for req in target_url_rows or research_requirement_candidates(artifact):
+        req_id = str(req.get("id") or "").strip()
+        req_text = str(req.get("text") or "").strip()
+        if not req_id or not req_text:
+            continue
+        overlap = query_keywords & feedback_keywords(req_text)
+        score = len(overlap)
+        if score:
+            scored_requirements.append((score, f"{req_id}: {req_text}"))
+    scored_requirements.sort(key=lambda row: (-row[0], row[1]))
+    target_requirement = scored_requirements[0][1] if scored_requirements else ""
+    if not target_requirement and target_url_rows:
+        first_target = target_url_rows[0]
+        req_id = str(first_target.get("id") or "").strip()
+        req_text = str(first_target.get("text") or "").strip()
+        if req_id and req_text:
+            target_requirement = f"{req_id}: {req_text}"
+
+    parts = []
+    if scenario:
+        parts.append(f"scenario: {scenario}")
+    if target_type or target_ids:
+        parts.append(f"target: {target_type or 'issue'} {', '.join(target_ids or [])}".strip())
+    if target_requirement:
+        parts.append(f"target requirement: {target_requirement}")
+    elif issue_text:
+        parts.append(f"issue: {issue_text}")
+    parts.append("intent: context-specific applicable regulation authority standard compliance official guidance")
+    parts.append(f"research question: {query}")
+    return compact_research_query(" | ".join(parts), max_chars=360)
+
+
+# ========
 # Defines feedback keywords function for this module workflow.
 # ========
 def feedback_keywords(text: str) -> set[str]:
     normalized = str(text or "").lower()
     keywords = set(re.findall(r"[A-Za-z0-9_]+", normalized))
-    for term in (
-        "付款",
-        "支付",
-        "金流",
-        "退款",
-        "通知",
-        "申訴",
-        "客服",
-        "補償",
-        "個資",
-        "隱私",
-        "資料",
-        "交易",
-        "紀錄",
-        "保存",
-        "稽核",
-        "安全",
-        "外送員",
-        "餐廳",
-        "消費者",
-        "第三方",
-        "責任",
-        "異常",
-        "訂單",
-    ):
-        if term in normalized:
-            keywords.add(term)
+    compact = re.sub(r"[\s　,，。；;:：、/\\|()（）【】「」『』［］\\[\\]{}<>《》\"'`~!！?？.-]+", "", normalized)
+    if len(compact) < 2:
+        return keywords
+    for size in (2, 3, 4):
+        if len(compact) < size:
+            continue
+        for index in range(0, len(compact) - size + 1):
+            token = compact[index:index + size]
+            if len(set(token)) <= 1:
+                continue
+            keywords.add(token)
     return keywords
+
+
+alignment_stopwords = {
+    "使用",
+    "需要",
+    "能夠",
+    "可以",
+    "系統",
+    "需求",
+    "資料",
+    "資訊",
+    "服務",
+    "流程",
+    "使用者",
+    "相關",
+    "提供",
+    "進行",
+    "必須",
+    "應該",
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "system",
+    "user",
+    "data",
+}
+
+
+# ========
+# Defines alignment keywords function for this module workflow.
+# ========
+def alignment_keywords(text: str) -> set[str]:
+    return {
+        token
+        for token in feedback_keywords(text)
+        if len(token) >= 2 and token not in alignment_stopwords
+    }
+
+
+# ========
+# Defines requirement text index function for this module workflow.
+# ========
+def requirement_text_index(artifact: dict) -> dict[str, str]:
+    rows: dict[str, str] = {}
+    for req in research_requirement_candidates(artifact):
+        req_id = str(req.get("id") or "").strip()
+        req_text = str(req.get("text") or "").strip()
+        if req_id and req_text:
+            rows[req_id] = req_text
+    for req in artifact.get("REQ") or []:
+        if not isinstance(req, dict):
+            continue
+        req_id = str(req.get("source_id") or req.get("id") or "").strip()
+        req_text = " ".join(
+            str(req.get(key) or "").strip()
+            for key in ("title", "description", "rationale")
+            if str(req.get(key) or "").strip()
+        )
+        if req_id and req_text:
+            rows.setdefault(req_id, req_text)
+    return rows
+
+
+# ========
+# Defines feedback row context aligned function for this module workflow.
+# ========
+def feedback_row_context_aligned(row: dict, requirement_texts: dict[str, str]) -> bool:
+    related_ids = [
+        str(value).strip()
+        for value in (row.get("related_requirement_ids") or [])
+        if str(value).strip()
+    ]
+    if not related_ids:
+        return False
+    evidence_type = str(row.get("evidence_type") or row.get("source_type") or "").strip().lower()
+    if evidence_type == "project_document" and any(req_id in requirement_texts for req_id in related_ids):
+        return True
+    row_text = str(row.get("text") or "").strip()
+    row_terms = alignment_keywords(row_text)
+    if not row_terms:
+        return False
+    for req_id in related_ids:
+        req_terms = alignment_keywords(requirement_texts.get(req_id, ""))
+        if len(row_terms & req_terms) >= 2:
+            return True
+    return False
+
+
+# ========
+# Defines filter feedback context alignment function for this module workflow.
+# ========
+def filter_feedback_context_alignment(feedback: dict, artifact: dict) -> dict:
+    if not isinstance(feedback, dict):
+        return feedback
+    requirement_texts = requirement_text_index(artifact)
+    if not requirement_texts:
+        return feedback
+    trace_gaps = [
+        dict(row) for row in (feedback.get("trace_gaps") or [])
+        if isinstance(row, dict)
+    ]
+    for section in ("findings", "constraints", "risks", "recommendations"):
+        rows = feedback.get(section)
+        if not isinstance(rows, list):
+            continue
+        kept = []
+        for index, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                continue
+            if feedback_row_context_aligned(row, requirement_texts):
+                kept.append(row)
+                continue
+            trace_gaps.append({
+                "artifact": "feedback",
+                "section": section,
+                "item_index": index,
+                "reason": "context_alignment_failed",
+                "candidate_ids": [
+                    str(value).strip()
+                    for value in (row.get("related_requirement_ids") or [])
+                    if str(value).strip()
+                ],
+                "source": row.get("source", ""),
+                "status": "needs_review",
+            })
+        if kept:
+            feedback[section] = kept
+        else:
+            feedback.pop(section, None)
+    if trace_gaps:
+        feedback["trace_gaps"] = trace_gaps
+    has_rows = any(
+        isinstance(feedback.get(section), list) and feedback.get(section)
+        for section in ("findings", "constraints", "risks", "recommendations")
+    )
+    if not has_rows:
+        feedback.pop("sources", None)
+    return feedback
+
+
+# ========
+# Defines research result URL sources function for this module workflow.
+# ========
+def research_result_url_sources(research_results) -> list[str]:
+    urls: list[str] = []
+    seen = set()
+    for result in research_results or []:
+        if not isinstance(result, dict):
+            continue
+        candidates = []
+        web_query = str(result.get("web_search_query") or "").strip()
+        if web_query:
+            candidates.append(web_query)
+        evidence = result.get("research_evidence")
+        if isinstance(evidence, dict):
+            candidates.extend(evidence.get("sources") or [])
+        extracted_urls = source_urls(candidates)
+        extracted_urls.extend(
+            str(source.get("url") or "").strip()
+            for source in source_records(candidates)
+            if str(source.get("url") or "").strip()
+        )
+        for url in extracted_urls:
+            if url in seen:
+                continue
+            urls.append(url)
+            seen.add(url)
+    return urls
 
 
 # ========
@@ -171,6 +408,15 @@ def normalize_feedback_links(feedback: dict, artifact: dict) -> dict:
         if str(value).strip().startswith("URL-")
     }
     allowed_url_ids = issue_url_ids or valid_url_ids
+    target_url_ids = {
+        str(value).strip()
+        for result in (artifact.get("research_results") or [])
+        if isinstance(result, dict) and str(result.get("target_type") or "").strip() == "URL"
+        for value in (result.get("target_ids") or [])
+        if str(value).strip() in valid_url_ids
+    }
+    if target_url_ids:
+        allowed_url_ids = allowed_url_ids & target_url_ids if allowed_url_ids else target_url_ids
     trace_gaps = [
         dict(row) for row in (feedback.get("trace_gaps") or [])
         if isinstance(row, dict)
@@ -267,6 +513,75 @@ def feedback_delta_item_count(feedback_delta: dict) -> int:
     for section in ("findings", "constraints", "risks", "recommendations"):
         count += len([item for item in (feedback_delta.get(section) or []) if isinstance(item, dict)])
     return count
+
+
+def document_evidence_feedback_delta(
+    artifact: dict,
+    document_evidence: list,
+    *,
+    source_ref: str,
+) -> dict:
+    if not isinstance(artifact, dict):
+        artifact = {}
+    valid_url_ids = {
+        str(row.get("id") or "").strip()
+        for row in (artifact.get("URL") or [])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    coverage_target_ids = [
+        str(row.get("target_id") or "").strip()
+        for row in (artifact.get("document_coverage") or [])
+        if isinstance(row, dict)
+        and str(row.get("target_id") or "").strip() in valid_url_ids
+        and str(row.get("status") or "").strip() != "not_found_in_documents"
+    ]
+    findings = []
+    seen = set()
+    for item in document_evidence or []:
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary") or "").strip()
+        source = str(item.get("source") or "").strip()
+        if not summary or not source:
+            continue
+        related_ids = [
+            str(value).strip()
+            for value in (item.get("related_requirement_ids") or [])
+            if str(value).strip() in valid_url_ids
+        ]
+        if not related_ids:
+            related_ids = list(dict.fromkeys(coverage_target_ids))
+        key = json.dumps([summary, related_ids, source], ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        trace_reason = "Referenced project document evidence was read from the uploaded/reference file."
+        section = str(item.get("section") or "").strip()
+        if section:
+            trace_reason += f" Section: {section}."
+        findings.append({
+            "text": summary,
+            "related_requirement_ids": related_ids,
+            "source": source_ref,
+            "source_ids": [source_ref],
+            "trace_reason": trace_reason,
+            "evidence_type": "project_document",
+        })
+    if not findings:
+        return {}
+    sources = [
+        {
+            "title": str(item.get("source") or "").strip().rstrip("/").split("/")[-1],
+            "url": str(item.get("source") or "").strip(),
+            "type": "file",
+        }
+        for item in document_evidence or []
+        if isinstance(item, dict) and str(item.get("source") or "").strip()
+    ]
+    return {
+        "findings": findings,
+        "sources": source_records(sources),
+    }
 
 
 def append_feedback_trace_req(artifact: dict, feedback_delta: dict, *, source_ref: str) -> None:
@@ -383,8 +698,21 @@ class ExpertDomainResearch(ExpertResearchPlan):
     ):
         url_requirements = research_requirement_candidates(artifact)
         existing = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+        existing_has_content = has_research_content(existing)
         scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
         meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+        coverage_rows = artifact.get("document_coverage", []) or []
+        coverage_statuses = {
+            str(row.get("status") or "").strip()
+            for row in coverage_rows
+            if isinstance(row, dict) and str(row.get("status") or "").strip()
+        }
+        baseline_research_needed = (
+            not existing_has_content
+            and not research_results
+            and "web_search" in self.tools
+            and bool(url_requirements or artifact.get("REQ") or artifact.get("open_questions") or scenario_source)
+        )
         resume_checkpoint = (
             meta.get("last_resume_checkpoint")
             if isinstance(meta.get("last_resume_checkpoint"), dict)
@@ -398,10 +726,14 @@ class ExpertDomainResearch(ExpertResearchPlan):
             "REQ": artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else [],
             "stakeholders": research_stakeholders(artifact),
             "open_questions": research_open_questions(artifact),
-            "has_existing_research": bool(existing),
+            "has_existing_research": existing_has_content,
             "research_results_count": len(research_results),
             "document_evidence_count": len(artifact.get("document_evidence", []) or []),
-            "document_coverage": artifact.get("document_coverage", []) or [],
+            "document_coverage": coverage_rows,
+            "not_found_in_documents": "not_found_in_documents" in coverage_statuses,
+            "document_conflict": "document_conflict" in coverage_statuses,
+            "needs_external_validation": "needs_external_validation" in coverage_statuses,
+            "baseline_research_needed": baseline_research_needed,
             "resume_checkpoint": resume_checkpoint,
             "has_read_file": "read_file" in self.tools,
             "has_web_search": "web_search" in self.tools,
@@ -514,13 +846,21 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 obs["summary"] = "研究失敗：未提供研究問題"
                 return obs
             value_reason = str(params.get("value_reason") or "").strip()
+            target_type = str(params.get("target_type") or "").strip()
+            target_ids = [
+                str(value).strip()
+                for value in (params.get("target_ids") or [])
+                if str(value).strip()
+            ]
             scenario_source = artifact.get("scenario") or artifact.get("rough_idea")
+            target_context = research_target_context(artifact, target_type, target_ids)
             context = {
                 "issue": artifact.get("current_issue") if isinstance(artifact.get("current_issue"), dict) else {},
                 "scenario": str(scenario_source or "").strip(),
                 "scope": artifact.get("scope", {}),
-                "URL": research_requirement_candidates(artifact),
-                "REQ": artifact.get("REQ", []) if isinstance(artifact.get("REQ"), list) else [],
+                "target": target_context["target"],
+                "URL": target_context["URL"],
+                "REQ": target_context["REQ"],
                 "stakeholders": research_stakeholders(artifact),
                 "open_questions": research_open_questions(artifact),
                 "document_evidence": artifact.get("document_evidence", []) or [],
@@ -532,14 +872,16 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 search_tool = self.tools["web_search"]
                 if callable(getattr(search_tool, "reset_session", None)):
                     search_tool.reset_session()
+                web_query = research_context_query(query, artifact, target_type, target_ids)
                 web_search_evidence = search_tool.execute(
-                    query=query,
-                    max_results=5,
-                    user_question=query,
+                    query=web_query,
+                    max_results=10,
+                    user_question=web_query,
                 )
                 web_urls = source_urls(web_search_evidence)
                 context["web_search_evidence"] = web_search_evidence
                 context["web_search_urls"] = web_urls
+                context["web_search_query"] = web_query
             source_ref = research_source(artifact)
             task = research_issue(
                 query=query,
@@ -568,14 +910,20 @@ class ExpertDomainResearch(ExpertResearchPlan):
                 if result:
                     research_results.append(
                         {
+                            "target_type": target_type,
+                            "target_ids": target_ids,
                             "query": query,
+                            "web_search_query": context.get("web_search_query", query),
                             "value_reason": value_reason,
                             "research_evidence": result,
                         }
                     )
                     artifact.setdefault("research_results", []).append(
                         {
+                            "target_type": target_type,
+                            "target_ids": target_ids,
                             "query": query,
+                            "web_search_query": context.get("web_search_query", query),
                             "value_reason": value_reason,
                             "research_evidence": result,
                         }
@@ -621,10 +969,29 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     action=action,
                     source_ref=source_ref,
                     cleaner=clean_feedback,
+                    url_sources=research_result_url_sources(research_results),
                     file_sources=self.feedback_file_sources(artifact, document_evidence),
                 )
                 if dr:
                     dr = normalize_feedback_links(dr, artifact)
+                    dr = filter_feedback_context_alignment(dr, artifact)
+                    if not feedback_delta_item_count(dr) and document_evidence:
+                        dr = document_evidence_feedback_delta(
+                            artifact,
+                            document_evidence,
+                            source_ref=source_ref,
+                        )
+                        dr = normalize_feedback_links(dr, artifact)
+                        dr = filter_feedback_context_alignment(dr, artifact)
+                elif document_evidence:
+                    dr = document_evidence_feedback_delta(
+                        artifact,
+                        document_evidence,
+                        source_ref=source_ref,
+                    )
+                    dr = normalize_feedback_links(dr, artifact)
+                    dr = filter_feedback_context_alignment(dr, artifact)
+                if dr:
                     merged = self.merge_feedback(existing, dr)
                     artifact["feedback"] = merged
                     append_feedback_trace_req(artifact, dr, source_ref=source_ref)
@@ -682,7 +1049,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
             return cleaned
         error = "輸出缺少有效 findings / constraints / risks / recommendations"
         if cleaned:
-            error = "輸出包含外部法規、標準、官方文件或合規主張，但缺少完整 URL 或專案引用文件證據"
+            error = "輸出包含需要外部證據支持的主張，但缺少完整 URL 或專案引用文件證據"
         repair_task = repair_action_output(
             action=action,
             raw=data,
@@ -694,6 +1061,8 @@ class ExpertDomainResearch(ExpertResearchPlan):
         repaired_cleaned = self.attach_url_sources(repaired_cleaned, url_sources)
         repaired_cleaned = self.attach_file_sources(repaired_cleaned, file_sources)
         if self.missing_url_sources(repaired_cleaned, file_sources=file_sources):
+            if action == "update_feedback":
+                return {}
             raise ValueError("Expert feedback with external claims must include URL sources or referenced project files")
         return repaired_cleaned
 
@@ -704,7 +1073,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
             return payload
         url_payloads = [
             {
-                "title": str(url).strip(),
+                "title": source_title_from_url(str(url).strip()),
                 "url": str(url).strip(),
             }
             for url in (urls or [])
@@ -766,7 +1135,7 @@ class ExpertDomainResearch(ExpertResearchPlan):
             source = str(row.get("source") or "").strip()
             return json.dumps([text, related, source], ensure_ascii=False)
 
-        merged = {"findings": [], "constraints": [], "risks": [], "recommendations": [], "sources": []}
+        merged = {"findings": [], "constraints": [], "risks": [], "recommendations": [], "sources": [], "trace_gaps": []}
         for section in ("findings", "constraints", "risks", "recommendations"):
             seen = set()
             for payload in (existing, delta):
@@ -790,6 +1159,17 @@ class ExpertDomainResearch(ExpertResearchPlan):
                     continue
                 merged["sources"].append(source)
                 seen_sources.add(key)
+
+        seen_gaps = set()
+        for payload in (existing, delta):
+            for gap in (payload.get("trace_gaps") if isinstance(payload, dict) else []) or []:
+                if not isinstance(gap, dict):
+                    continue
+                key = json.dumps(gap, ensure_ascii=False, sort_keys=True)
+                if key in seen_gaps:
+                    continue
+                merged["trace_gaps"].append(dict(gap))
+                seen_gaps.add(key)
 
         return {
             key: value

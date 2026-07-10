@@ -4,7 +4,7 @@ import html
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .trace import (
     DocumentorDrTraceGraphMixin,
@@ -369,6 +369,16 @@ class DocumentorDrContext(
             for source_id in cls.dr_req_sources(req):
                 source_to_req.setdefault(source_id, []).append(req_id)
 
+        formal_issues: List[Dict[str, Any]] = []
+        for discussion in artifact.get("discussions") or []:
+            if not isinstance(discussion, dict):
+                continue
+            issues = discussion.get("issues")
+            if isinstance(issues, list):
+                formal_issues.extend(issue for issue in issues if isinstance(issue, dict))
+            elif str(discussion.get("meeting_id") or "").strip():
+                formal_issues.append(discussion)
+
         statements: List[Dict[str, Any]] = []
 
         def add_statement(
@@ -378,6 +388,7 @@ class DocumentorDrContext(
             related_req: List[str],
             *,
             statement_id: str = "",
+            related_sources: Optional[List[str]] = None,
         ) -> None:
             clean_text = cls.clean_repeated_text(text)
             if not stakeholder or not clean_text:
@@ -390,6 +401,7 @@ class DocumentorDrContext(
                 "stakeholder": stakeholder,
                 "source": source,
                 "related_req": list(dict.fromkeys(related_req)),
+                "related_sources": list(dict.fromkeys(related_sources or [])),
                 "text": clean_text,
             }
             statements.append(row)
@@ -470,6 +482,66 @@ class DocumentorDrContext(
                         statement_id=str(row.get("id") or "").strip(),
                     )
 
+        for issue in formal_issues:
+            meeting_id = str(issue.get("meeting_id") or "").strip()
+            if not meeting_id:
+                continue
+            source_ids: List[str] = []
+            trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
+            source_ids.extend(
+                str(source_id).strip()
+                for source_id in (trace.get("artifact_ids") or [])
+                if str(source_id).strip()
+            )
+            for source in issue.get("sources") or []:
+                if not isinstance(source, dict):
+                    continue
+                source_ids.extend(
+                    str(source_id).strip()
+                    for source_id in (source.get("ids") or [])
+                    if str(source_id).strip()
+                )
+            resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
+            for update in resolution.get("url_updates") or []:
+                if not isinstance(update, dict):
+                    continue
+                source_ids.extend(
+                    str(source_id).strip()
+                    for source_id in (update.get("ids") or [])
+                    if str(source_id).strip()
+                )
+            conversation = issue.get("conversation") or []
+            conversation_text = json.dumps(conversation, ensure_ascii=False, default=str)
+            source_ids.extend(re.findall(r"\bURL-\d+\b", conversation_text, flags=re.IGNORECASE))
+            source_ids = list(dict.fromkeys(source_ids))
+            related_req = cls.dr_related_req_ids_from_sources(source_ids, source_to_req)
+            for entry_index, entry in enumerate(conversation, start=1):
+                if not isinstance(entry, dict):
+                    continue
+                speaker = str(entry.get("agent") or "").strip()
+                if not speaker or speaker.lower() in process_roles:
+                    continue
+                if known_stakeholders and speaker not in known_stakeholders:
+                    continue
+                response = entry.get("response")
+                if isinstance(response, dict):
+                    text = str(
+                        response.get("text")
+                        or response.get("content")
+                        or response.get("message")
+                        or ""
+                    ).strip()
+                else:
+                    text = str(response or entry.get("text") or entry.get("content") or "").strip()
+                add_statement(
+                    speaker,
+                    meeting_id,
+                    text,
+                    related_req,
+                    statement_id=f"ST-{meeting_id}-{entry_index}",
+                    related_sources=source_ids,
+                )
+
         statements_by_stakeholder: Dict[str, List[Dict[str, Any]]] = {}
         for statement in statements:
             stakeholder_name = str(statement.get("stakeholder") or "").strip()
@@ -493,6 +565,52 @@ class DocumentorDrContext(
             if not stakeholder_name or not candidates or not url_text:
                 return []
 
+            url_id = str(url.get("id") or "").strip()
+            source_match = re.fullmatch(
+                r"R(\d+)-M(\d+)",
+                source_text.strip(),
+                flags=re.IGNORECASE,
+            )
+            source_order = (
+                (int(source_match.group(1)), int(source_match.group(2)))
+                if source_match
+                else None
+            )
+
+            def is_available_at_update(statement: Dict[str, Any]) -> bool:
+                statement_source = str(statement.get("source") or "").strip()
+                statement_match = re.fullmatch(
+                    r"R(\d+)-M(\d+)",
+                    statement_source,
+                    flags=re.IGNORECASE,
+                )
+                if source_order is None or statement_match is None:
+                    return True
+                return (int(statement_match.group(1)), int(statement_match.group(2))) <= source_order
+
+            available_candidates = [
+                statement for statement in candidates if is_available_at_update(statement)
+            ]
+            direct_candidates = [
+                statement
+                for statement in available_candidates
+                if url_id and url_id in (statement.get("related_sources") or [])
+            ]
+            same_meeting_candidates = [
+                statement
+                for statement in available_candidates
+                if str(statement.get("source") or "").strip().upper() == source_text.strip().upper()
+            ]
+            same_meeting_direct_candidates = [
+                statement for statement in same_meeting_candidates if statement in direct_candidates
+            ]
+            preferred_candidates = (
+                same_meeting_direct_candidates
+                or same_meeting_candidates
+                or direct_candidates
+                or available_candidates
+            )
+
             def chinese_chars(value: str) -> set[str]:
                 return {
                     char
@@ -502,7 +620,7 @@ class DocumentorDrContext(
 
             url_chars = chinese_chars(url_text)
             scored: List[tuple[float, str]] = []
-            for statement in candidates:
+            for statement in preferred_candidates:
                 statement_id = str(statement.get("id") or "").strip()
                 statement_text = str(statement.get("text") or "").strip()
                 if not statement_id or not statement_text:
@@ -510,7 +628,7 @@ class DocumentorDrContext(
                 overlap = len(url_chars.intersection(chinese_chars(statement_text))) / max(1, len(url_chars))
                 sequence_ratio = SequenceMatcher(None, url_text, statement_text).ratio()
                 score = max(overlap, sequence_ratio)
-                if overlap >= 0.45 or sequence_ratio >= 0.30:
+                if direct_candidates or same_meeting_candidates or overlap >= 0.45 or sequence_ratio >= 0.30:
                     scored.append((score, statement_id))
             scored.sort(reverse=True)
             return [statement_id for _, statement_id in scored[:1]]
@@ -666,65 +784,60 @@ class DocumentorDrContext(
             })
 
         meeting_rows = []
-        for discussion in artifact.get("discussions") or []:
-            if not isinstance(discussion, dict):
-                continue
-            for issue in discussion.get("issues") or []:
-                if not isinstance(issue, dict):
+        for issue in formal_issues:
+            meeting_id = str(issue.get("meeting_id") or "").strip()
+            resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
+            related_req = [
+                str(req_id).strip()
+                for req_id in (resolution.get("affected_requirement_ids") or [])
+                if str(req_id).strip() in valid_req_ids
+            ]
+            related_conflicts = [
+                str(conflict_id).strip()
+                for conflict_id in (resolution.get("affected_conflict_ids") or [])
+                if str(conflict_id).strip()
+            ]
+            source_ids = []
+            trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
+            source_ids.extend(
+                str(source_id).strip()
+                for source_id in (trace.get("artifact_ids") or [])
+                if str(source_id).strip()
+            )
+            for source in issue.get("sources") or []:
+                if not isinstance(source, dict):
                     continue
-                meeting_id = str(issue.get("meeting_id") or "").strip()
-                resolution = issue.get("resolution") if isinstance(issue.get("resolution"), dict) else {}
-                related_req = [
-                    str(req_id).strip()
-                    for req_id in (resolution.get("affected_requirement_ids") or [])
-                    if str(req_id).strip() in valid_req_ids
-                ]
-                related_conflicts = [
-                    str(conflict_id).strip()
-                    for conflict_id in (resolution.get("affected_conflict_ids") or [])
-                    if str(conflict_id).strip()
-                ]
-                source_ids = []
-                trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
                 source_ids.extend(
                     str(source_id).strip()
-                    for source_id in (trace.get("artifact_ids") or [])
+                    for source_id in (source.get("ids") or [])
                     if str(source_id).strip()
                 )
-                for source in issue.get("sources") or []:
-                    if not isinstance(source, dict):
-                        continue
-                    source_ids.extend(
-                        str(source_id).strip()
-                        for source_id in (source.get("ids") or [])
-                        if str(source_id).strip()
-                    )
-                if not meeting_id:
+            if not meeting_id:
+                continue
+            participants = []
+            for entry in issue.get("conversation") or []:
+                if not isinstance(entry, dict):
                     continue
-                participants = []
-                for entry in issue.get("conversation") or []:
-                    if not isinstance(entry, dict):
-                        continue
-                    agent = str(entry.get("agent") or "").strip()
-                    if agent:
-                        participants.append(agent)
-                description = (
-                    resolution.get("summary")
-                    or issue.get("summary")
-                    or issue.get("title")
-                )
-                decision = resolution.get("decision") or ""
-                meeting_rows.append({
-                    "id": meeting_id,
-                    "category": str(issue.get("category") or "").strip(),
-                    "topic": str(issue.get("summary") or issue.get("title") or "").strip(),
-                    "related_req": list(dict.fromkeys(related_req)),
-                    "related_conflicts": list(dict.fromkeys(related_conflicts)),
-                    "source_ids": list(dict.fromkeys(source_ids)),
-                    "participants": list(dict.fromkeys(participants)),
-                    "description": cls.dr_summary(description),
-                    "decision": cls.dr_summary(decision, max_chars=420),
-                })
+                agent = str(entry.get("agent") or "").strip()
+                if agent:
+                    participants.append(agent)
+            description = (
+                resolution.get("summary")
+                or issue.get("summary")
+                or issue.get("title")
+            )
+            decision = resolution.get("decision") or ""
+            meeting_rows.append({
+                "id": meeting_id,
+                "category": str(issue.get("category") or "").strip(),
+                "topic": str(issue.get("summary") or issue.get("title") or "").strip(),
+                "related_req": list(dict.fromkeys(related_req)),
+                "related_conflicts": list(dict.fromkeys(related_conflicts)),
+                "source_ids": list(dict.fromkeys(source_ids)),
+                "participants": list(dict.fromkeys(participants)),
+                "description": cls.dr_summary(description),
+                "decision": cls.dr_summary(decision, max_chars=420),
+            })
 
         return {
             "stakeholder_statements": statements,

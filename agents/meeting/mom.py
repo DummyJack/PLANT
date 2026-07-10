@@ -95,6 +95,16 @@ def clean_id_list(values: Any, prefixes: tuple[str, ...]) -> List[str]:
     return out
 
 
+def conflict_title(row: Dict[str, Any]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    for key in ("title", "report_title"):
+        title = clean_repeated_text(row.get(key))
+        if title:
+            return title[:100].rstrip()
+    return ""
+
+
 def referenced_ids(
     issue: Dict[str, Any],
     conversation: List[Dict[str, Any]],
@@ -145,18 +155,27 @@ def build_conflict_rows(
             rows.append(
                 {
                     "id": conflict_id,
-                    "title": str(option.get("title") or "").strip(),
+                    "title": conflict_title(option),
                     "options": option.get("options") or [],
                     "recommended_resolution": option.get("recommended_resolution") or "",
                 }
             )
     if not rows:
+        title_by_id = {
+            str(option.get("conflict_id") or option.get("id") or "").strip(): conflict_title(option)
+            for option in conflict_options or []
+            if isinstance(option, dict)
+            and str(option.get("conflict_id") or option.get("id") or "").strip()
+        }
         affected_ids = [
             str(value).strip()
             for value in (resolution.get("affected_conflict_ids") or [])
             if str(value).strip().startswith("CR-")
         ]
-        rows = [{"id": conflict_id, "title": ""} for conflict_id in affected_ids]
+        rows = [
+            {"id": conflict_id, "title": title_by_id.get(conflict_id, "")}
+            for conflict_id in affected_ids
+        ]
     return rows
 
 
@@ -326,7 +345,7 @@ def write_conflict_discussion_groups(
 - 如果一段發言同時提到多個 CR，可以拆到多個 CR。
 - 如果無法判斷屬於哪個 CR，放到 overall_turns，不要亂塞。
 - overall_turns 是總結，不是逐字討論；speaker 可用「總結」，text 應像正式會議總結，摘要整體討論重點、已確認差異與決議方向。
-- 若總結提到選項 A/B/C，必須把選項內容自然寫進句子中，例如「採用選項 A：完整顯示配送費率與預估里程」，不可只寫 A/B/C。
+- 若總結提到選項 A/B/C，必須把選項內容自然寫進句子中，不可只寫 A/B/C。
 - 每個 discussion_groups item 的 conflict_id 必須使用 context.conflicts 中的 CR-N；若該 CR 有 title，title 必須保留。
 - 不要把 human decision 或最終裁決寫進討論紀錄；裁決留給 MoM 決議區。
 - speaker 必須沿用原始 speaker，例如 Analyst、Expert、Modeler、User。

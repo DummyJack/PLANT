@@ -23,29 +23,32 @@ def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> st
 # Generation Rules
 - research_evidence 作為後續 feedback 整理的證據來源。
 - 研究價值只用來聚焦，不需要寫入正式 feedback item。
-- 優先使用 document_evidence；不足時才用 web_search 補外部公開資料、法規、標準、官方文件、第三方條款或最佳實務。
-- 若 context 有 document_evidence / coverage / gaps，外部研究只能針對 not_found_in_documents、document_conflict、needs_external_validation、gaps，或支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償、申訴等高風險外部議題。
-- findings、constraints、risks、recommendations 的 trace_reason 必須說明該結論補足哪個文件缺口、文件衝突或外部高風險驗證。
-- 外部 URL 只接受可信來源：政府/主管機關、法規資料庫、標準組織、學術/研究機構、消費者保護組織，或官方公司條款/隱私/安全/合規文件。
-- sources 使用可信來源：政府/主管機關、法規資料庫、標準組織、學術/研究機構、消費者保護組織，或官方公司條款/隱私/安全/合規文件。
+- context.target 是本次研究唯一目標；研究結果只能服務此 target，不要延伸到其他需求或整體專案背景。
+- 優先蒐集能說明「為什麼適用目前 scenario + context.target」的情境專屬來源；通用規範或標準可作補充，但 trace_reason 必須說明它如何套用到目前 target。
+- 優先使用 document_evidence；不足時才用 web_search 補外部公開資料。
+- 若 context 有 document_evidence / coverage / gaps，外部研究只能針對 not_found_in_documents、document_conflict、needs_external_validation 或 gaps 指出的缺口。
+- findings、constraints、risks、recommendations 的 trace_reason 必須說明該結論補足哪個文件缺口、文件衝突或外部驗證需求，並說明來源為何適用目前 scenario + context.target。
+- 外部 URL 只接受可追溯的公開或官方來源；來源可信度依 URL、頁面標題、發布者與 context 中的 web_search_evidence 判斷。
+- sources 使用可追溯來源；不確定來源可信度時不要輸出該外部結論。
 - 若 context 內有 web_search_evidence / web_search_urls，必須只從這些搜尋證據中引用外部 URL。
-- findings、constraints、risks、recommendations 的每個 item 包含 text、related_requirement_ids、source 與 trace_reason。
-- related_requirement_ids 只能引用輸入 URL / User Requirements 中存在且與本次研究 context 相關的 URL-*；無法對應單一需求時用空陣列。
+- findings、constraints、risks、recommendations 的每個 item 包含 text、related_requirement_ids、source、trace_reason 與 evidence_type。
+- evidence_type 使用 web、project_document、user_statement、artifact_context 或 model_context；使用外部 URL 證據時必須是 web，使用專案引用文件時必須是 project_document。
+- related_requirement_ids 只能引用 context.target.target_ids 或輸入 URL 中存在且與本次研究 context 相關的 URL-*；無法對應 target 時用空陣列。
 - trace_reason 用一句話說明為什麼此研究證據對應這些 URL-*；若 related_requirement_ids 為空，也要說明無法明確對應的原因。
-- sources 集中放在最外層；web 來源使用 {{"title": "可讀來源名稱", "url": "完整 URL"}}，專案引用文件使用 {{"title": "檔名", "url": "專案文件路徑", "type": "file"}}。
-- title 使用人可讀的法規、標準、官方文件、組織文章或案例名稱。
-- 若輸出任何外部法規、標準、官方文件、第三方條款或最佳實務，sources 必須至少包含對應完整 URL；找不到 URL 或 context 沒有可用 URL 時不要輸出該外部結論。
+- sources 集中放在最外層；web 來源使用 {{"title": "web_search 或官方頁面提供的來源標題", "url": "完整 URL"}}，專案引用文件使用 {{"title": "檔名", "url": "專案文件路徑", "type": "file"}}。
+- sources.title 必須是人可讀的頁面標題、法規/文件名稱或「發布機關/組織：文件主題」；不得填 URL、網址路徑或純網域。若 web_search 只有 URL，請依來源發布者與頁面主題補成簡短標題，不可把完整 URL 放進 title。
+- 若輸出任何 evidence_type=web 的結論，sources 必須至少包含對應完整 URL；找不到 URL 或 context 沒有可用 URL 時不要輸出該外部結論。
 - constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
 - 本次 item.source 使用：{source_ref}
 
 # Output JSON
 {{
   "research_evidence": {{
-    "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
-    "sources": [{{"title": "電子支付機構管理條例", "url": "https://..."}}, {{"title": "參考文件.pdf", "url": "104431333156/參考文件.pdf", "type": "file"}}],
-    "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
-    "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}],
-    "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": ""}}]
+    "findings": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": "", "evidence_type": "web"}}],
+    "sources": [{{"title": "發布機關：文件主題", "url": "https://..."}}, {{"title": "參考文件.pdf", "url": "104431333156/參考文件.pdf", "type": "file"}}],
+    "constraints": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": "", "evidence_type": "web"}}],
+    "risks": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": "", "evidence_type": "web"}}],
+    "recommendations": [{{"text": "", "related_requirement_ids": [], "source": "{source_ref}", "trace_reason": "", "evidence_type": "web"}}]
   }}
 }}
 
@@ -54,6 +57,6 @@ def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> st
             "不輸出 feedback。",
             "不輸出正式需求或決策。",
             "不引用不可信來源。",
-            "不編造外部 URL、法規、標準或 requirement id。",
+            "不編造外部 URL、來源內容或 requirement id。",
         ]
     )}"""

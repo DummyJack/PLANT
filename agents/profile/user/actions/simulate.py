@@ -18,8 +18,8 @@ def suggest_stakeholders(*, scenario_context: str) -> str:
 
 # Type
 - primary_user：直接操作系統、輸入資料、接收通知、完成任務或接受服務的人。
-- system_owner：負責營運、管理、權限、資料品質、風險、穩定性、安全或維護的人。
-- external_party：外部合作、依賴、監管、金流、物流、稽核、契約或其他受影響單位。
+- system_owner：負責營運、管理、權限、資料品質、風險、穩定性或維護的人。
+- external_party：外部合作、依賴、監管、契約、資料交換或其他受影響單位。
 
 # Selection Rules
 - 選擇標準是需求視角不同，不是為了湊 type。

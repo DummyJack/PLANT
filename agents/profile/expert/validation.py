@@ -20,30 +20,6 @@ trace_fields = (
     "recommendations",
 )
 
-external_source_terms = (
-    "法規",
-    "法律",
-    "條例",
-    "規範",
-    "標準",
-    "官方",
-    "第三方",
-    "合規",
-    "稽核",
-    "金管會",
-    "NCC",
-    "PCI",
-    "ISO",
-    "GDPR",
-    "PDPA",
-    "FSC",
-    "regulation",
-    "law",
-    "standard",
-    "official",
-    "compliance",
-    "audit",
-)
 excluded_source_hosts = {
     "facebook.com",
     "www.facebook.com",
@@ -84,6 +60,8 @@ low_credibility_path_terms = (
 trusted_host_keywords = (
     ".gov.",
     ".gov/",
+    ".gov.tw/",
+    "gov.tw/",
     ".edu.",
     ".edu/",
     ".ac.",
@@ -208,38 +186,10 @@ def source_title_from_url(url: str) -> str:
     parsed = urlparse(text)
     host = parsed.netloc.lower().replace("www.", "")
     path = unquote(parsed.path or "")
-    if "law.banking.gov.tw" in host:
-        return "電子支付相關法規"
-    if "lawreview.law.ncku.edu.tw" in host:
-        return "金融與電子支付法制研究資料"
-    if "mjib.gov.tw" in host:
-        return "洗錢防制相關規範"
-    if "leaven-china.com" in host:
-        return "跨境金流與合規實務文章"
-    if "pdpc.gov.tw" in host:
-        return "個人資料保護相關指引"
-    if "informationsecurity.com.tw" in host:
-        return "資訊安全管理實務參考"
-    if "consumer.org.hk" in host:
-        return "外送平台消費爭議案例"
-    if "ly.gov.tw" in host or "ppg.ly.gov.tw" in host:
-        return "立法院法規與政策資料"
-    if "dlacp.gov.taipei" in host:
-        return "臺北市消費者保護公開資訊"
-    if "immigration.gov.tw" in host:
-        return "政府移民與個資公開資訊"
-    if "aia.kcg.gov.tw" in host:
-        return "高雄市政府公開資訊"
-    if "gov.tw" in host:
-        return "政府機關公開資料"
-    if "epicor.com" in host:
-        return "GDPR 合規參考"
-    if "kuritataiwan.com.tw" in host:
-        return "個人資料保護管理政策"
     if path:
         filename = path.rstrip("/").split("/")[-1]
         if filename:
-            return filename
+            return f"{host} / {filename}" if host else filename
     return host or text
 
 
@@ -279,7 +229,7 @@ def source_records(values: Any) -> List[Dict[str, str]]:
         url = urls[0] if urls else ""
         if not url or not credible_source_url(url):
             continue
-        if not title:
+        if not title or source_urls(title):
             title = source_title_from_url(url)
         key = url
         if key in seen:
@@ -295,19 +245,17 @@ def source_records(values: Any) -> List[Dict[str, str]]:
 def requires_url_sources(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
-
+    if source_records(payload.get("sources")):
+        return True
     for field in trace_fields:
         for item in payload.get(field) or []:
             if not isinstance(item, dict):
                 continue
-            text = " ".join(
-                [
-                    clean_text(item.get("text")),
-                    clean_text(item.get("source")),
-                ]
-            )
-            lowered = text.lower()
-            if any(term.lower() in lowered for term in external_source_terms):
+            evidence_type = clean_text(item.get("evidence_type") or item.get("source_type")).lower()
+            if evidence_type in {"web", "url", "external", "external_source", "research"}:
+                return True
+            source = clean_source_text(item.get("source"))
+            if source_urls(source):
                 return True
     return False
 
@@ -397,6 +345,9 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
         trace_reason = clean_text(value.get("trace_reason"))
         if trace_reason:
             row["trace_reason"] = trace_reason
+        evidence_type = clean_text(value.get("evidence_type") or value.get("source_type"))
+        if evidence_type:
+            row["evidence_type"] = evidence_type
 
         key = json.dumps(row, ensure_ascii=False, sort_keys=True)
         if key not in seen:
@@ -409,6 +360,7 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
 # Defines clean research result function for this module workflow.
 # ========
 def clean_research_result(raw: Any, *, context_source: str = "") -> Dict[str, Any]:
+    _ = context_source
     source = raw.get("research_evidence") if isinstance(raw, dict) and isinstance(raw.get("research_evidence"), dict) else {}
     result: Dict[str, Any] = {}
 
@@ -424,6 +376,7 @@ def clean_research_result(raw: Any, *, context_source: str = "") -> Dict[str, An
 # Defines clean feedback function for this module workflow.
 # ========
 def clean_feedback(raw: Any, *, context_source: str = "") -> Dict[str, Any]:
+    _ = context_source
     if not isinstance(raw, dict) or not isinstance(raw.get("feedback"), dict):
         return {}
     source = raw.get("feedback") or {}

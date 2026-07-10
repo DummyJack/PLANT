@@ -62,7 +62,7 @@ def select_issues(
 - human 議題不必固定排第一；Mediator 應依 blocking 程度、依賴順序、衝突風險、SRS 定稿影響安排討論順序。若 human 議題依賴其他議題的結論，可排在相關前置議題之後。
 - proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
 - proposal.issue_level 分為 blocking / improvement：
-  - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或合規底線，優先進 issues。
+  - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或外部證據底線，優先進 issues。
   - improvement：可改善需求品質、模型一致性、風險揭露或驗收完整性；只有本輪容量足夠且不擠壓 blocking 時才進 issues，否則放 backlog。
 - 一般議題不得重複提出預設會議已處理的泛稱衝突解決或需求正式化；需求衝突只由預設會議處理。
 - 需要正式會議才能處理的共同問題可進 issues/backlog；只有純格式、純措辭、無決策影響且不影響驗收、追蹤、責任邊界、風險、模型一致性或 SRS 可用性的項目才放 discarded。
@@ -141,7 +141,7 @@ def meeting_plan(
 
 - clarify_requirement：通常需要 analyst；只有需要利害關係人確認時才加入 user。
 - define_boundary：需要 analyst；涉及流程、資料、actor、狀態、系統邊界或責任分工時加入 modeler。
-- tradeoff：需要 analyst 與受影響的 user；涉及外部限制、合規或領域風險時加入 expert。
+- tradeoff：需要 analyst 與受影響的 user；若 feedback、evidence_type、coverage 或 gaps 指出外部限制或領域風險時加入 expert。
 - align_model：需要 modeler；會改 REQ 時加入 analyst；需要利害關係人確認流程時加入 user。
 
 - trace.artifact_ids 優先使用 proposal.sources[*].ids。

@@ -60,7 +60,7 @@ def build_elicitation_plan(
 - 不要把「動機」當成預設必問項；只有當動機會改變需求內容、優先級、成功標準或範圍時才追問。
 
 - analyst：使用者目標、需求語意、使用條件、成功結果與驗收邊界。
-- expert：外部限制、領域規則、政策/合規風險、營運風險、公平性與責任歸屬。
+- expert：外部限制、領域規則、營運風險、公平性、責任歸屬與證據缺口。
 - modeler：流程節點、狀態轉移、actor 責任、資料輸入輸出、例外流程與人工介入。
 - 每個 agent 安排符合自身分工的提問；若某 agent 本輪沒有符合分工的高價值問題，可以不安排該 agent 提問。
 - 每個 ask_user/supplement_question 必須指定 target_stakeholders，且問題內容必須從該 stakeholder 的立場出發。

@@ -71,7 +71,6 @@ class MediatorRecords:
         )
         req_ids = [rid for rid in artifact_ids if rid.startswith("REQ-")]
         model_ids = [rid for rid in artifact_ids if rid.startswith("SM-")]
-        oq_ids = [rid for rid in artifact_ids if rid.startswith("OQ-")]
 
         output_req_ids: List[str] = []
         output_model_ids: List[str] = []
@@ -104,18 +103,6 @@ class MediatorRecords:
             )
             if cls.clean_repeated_text(value)
         )
-        object_label = ""
-        if req_ids:
-            object_label = "、".join(sorted(req_ids, key=cls.artifact_id_sort_key)[:3])
-            if len(req_ids) > 3:
-                object_label += f" 等 {len(req_ids)} 筆需求"
-        elif model_ids:
-            object_label = "、".join(sorted(model_ids, key=cls.artifact_id_sort_key)[:3])
-            if len(model_ids) > 3:
-                object_label += f" 等 {len(model_ids)} 張模型"
-        elif oq_ids:
-            object_label = "、".join(sorted(oq_ids, key=cls.artifact_id_sort_key)[:3])
-
         if category == "resolve_conflict":
             prefix = "解決需求衝突"
         elif category == "align_model" or "模型" in original:
@@ -353,7 +340,7 @@ class MediatorRecords:
 - display_title 最多 80 字，必須保留原本已出現的 REQ/URL/SM/OQ id。
 - summary 必須像正式會議摘要：用 2 到 4 句整理本議題討論的核心問題、主要參與者關注點、已確認的差異與收斂方向；不要寫成流水帳或只列選項代號。
 - decision 必須像正式會議決議：明確寫出最後採納的處理方式、影響的需求/模型/衝突 ID、後續要落實的內容；不要只寫「採用 A」、「選 B」或只列狀態。
-- 若有 human_decision_notes，decision 必須把採納選項寫成完整內容，例如「採用選項 A：完整顯示配送費率與預估里程」，不可只寫「採用選項 A」。
+- 若有 human_decision_notes，decision 必須把採納選項寫成完整內容，不可只寫「採用選項 A」。
 - summary 或 decision 若提到選項 A/B/C，必須把選項內容自然寫進句子中；不要用孤立括號補充，也不可只寫 A/B/C。
 - 若沒有決議，decision 輸出「尚未形成決議；...」並說明仍缺什麼。
 - 不要只輸出 agreed、resolved、completed 或單一句狀態。
@@ -461,7 +448,6 @@ class MediatorRecords:
             participants = issue.get("participants") or []
         participants = list(dict.fromkeys(participants))
 
-        original_title = self.clean_repeated_text(issue.get("title", ""))
         display_title = self.normalized_issue_title(issue, conversation or [], resolution or {})
         summary = self.clean_repeated_text(resolution.get("summary", ""))
         decision = self.clean_repeated_text(resolution.get("decision", ""))
@@ -546,8 +532,7 @@ class MediatorRecords:
             conflict_blocks: List[Dict[str, Any]] = []
             for row in scoped_rows:
                 conflict_id = str(row.get("id") or "").strip()
-                row_title = str(row.get("title") or "").strip()
-                row_description = str(row.get("description") or "").strip()
+                row_title = mom.conflict_title(row)
                 recommended = str(row.get("recommended_resolution") or "").strip()
                 row_options: List[Dict[str, Any]] = []
                 for option in row.get("resolution_options") or []:
@@ -578,6 +563,35 @@ class MediatorRecords:
 
             return conflict_blocks
 
+        def fill_conflict_option_titles(option_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            if not option_rows:
+                return option_rows
+            title_by_id = {
+                str(row.get("id") or "").strip(): mom.conflict_title(row)
+                for row in latest_conflict_report_rows()
+                if isinstance(row, dict)
+                and str(row.get("id") or "").strip()
+                and mom.conflict_title(row)
+            }
+            if not title_by_id:
+                return option_rows
+            filled: List[Dict[str, Any]] = []
+            for option in option_rows:
+                if not isinstance(option, dict):
+                    filled.append(option)
+                    continue
+                if option.get("kind") != "conflict_decision":
+                    filled.append(option)
+                    continue
+                item = dict(option)
+                conflict_id = str(item.get("conflict_id") or item.get("id") or "").strip()
+                if conflict_id and not mom.conflict_title(item):
+                    title = title_by_id.get(conflict_id, "")
+                    if title:
+                        item["title"] = title
+                filled.append(item)
+            return filled
+
         if str((issue or {}).get("category") or "").strip() == "resolve_conflict":
             has_conflict_options = any(
                 isinstance(option, dict) and option.get("kind") == "conflict_decision"
@@ -585,6 +599,8 @@ class MediatorRecords:
             )
             if not has_conflict_options:
                 options = conflict_report_decision_options() or options
+            elif isinstance(options, list):
+                options = fill_conflict_option_titles(options)
             recommendation = {}
 
         def option_detail_map(option_rows: List[Dict[str, Any]]) -> Dict[str, str]:

@@ -2,7 +2,7 @@
 
 
 def conflict_detection_base_task() -> str:
-    return f"""# 任務
+    return """# 任務
 根據輸入的 User Requirements 判斷 Conflict / Neutral。
 
 # Action Boundary

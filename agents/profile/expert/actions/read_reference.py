@@ -35,7 +35,7 @@ def read_docs(*, query: str, attached_references: Optional[List[str]] = None) ->
 - 若文件沒有相關內容，document_evidence 輸出空陣列，並在 gaps 說明缺口。
 - 每筆 document_evidence 必須包含 source；source 要能追蹤到文件名稱、路徑或片段位置。
 - 必須對相關 URL / REQ / open_questions 做 coverage 判斷，status 只能是 document_supported、not_found_in_documents、document_conflict、needs_external_validation。
-- 若文件只有局部支持、內容過時、互相矛盾，或涉及支付、退款、個資、隱私、安全、法規、合規、第三方、資料保存、稽核、責任歸屬、補償或申訴，coverage 應標成 needs_external_validation 或 document_conflict，不要誤標為完全支持。
+- 若文件只有局部支持、內容過時、互相矛盾，或 query / issue / user_guidance / referenced_files 指出仍需外部查證，coverage 應標成 needs_external_validation 或 document_conflict，不要誤標為完全支持。
 - related_requirement_ids 只能引用輸入 URL / User Requirements 中存在的 id；不能編造 URL-*。
 - 文件證據只做 evidence summary。
 

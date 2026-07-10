@@ -322,7 +322,6 @@ class DocumentorSrs:
             )
 
         def remove_empty_requirement_group(match: re.Match) -> str:
-            heading = match.group("heading")
             body = match.group("body")
             has_requirement = bool(re.search(r"(?m)^####\s+(?:FR|NFR)-\d+\b", body))
             if has_requirement:

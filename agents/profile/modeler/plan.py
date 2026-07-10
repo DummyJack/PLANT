@@ -111,7 +111,7 @@ def target_prompt(*, context: dict) -> str:
 - 若 detail 圖已經涵蓋多個不相關情境，應 create 新的聚焦圖或 update 後縮小範圍，不要把所有情境塞進同一張圖。
 - 圖型選擇優先順序：
   1. 若需求重點是狀態、生命週期、狀態轉移、完成/取消/失敗/審核中/待補件/已結案等狀態規則，優先選 state_machine，不要用 activity_diagram 取代。
-  2. 若需求重點是多角色或系統間的互動順序、通知、回覆、等待、申訴審核、補償決策或跨方協作責任，優先選 sequence_diagram，不要用 activity_diagram 取代。
+  2. 若需求重點是多角色或系統間的互動順序、通知、回覆、等待、審核決策、例外處理決策或跨方協作責任，優先選 sequence_diagram，不要用 activity_diagram 取代。
   3. 若需求重點是資料物件、欄位、紀錄保存、查詢權限、關聯、責任資料或需求層級 domain concept，優先選 class_diagram，不要用 activity_diagram 取代。
   4. 若需求重點是某角色可執行哪些系統能力，才選 use_case_diagram。
   5. 若需求重點是單一角色或系統內流程步驟、分支、例外流程與責任交接，才選 activity_diagram。

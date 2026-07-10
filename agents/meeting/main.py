@@ -161,9 +161,7 @@ def ingest_round_resolution_effects(
         decision_id = str(resolution.get("decision_id") or "").strip()
         if resolution.get("status") == "human_decision" and affected_conflict_ids and decision_id:
             from flow.meeting.conflict_review import mark_conflicts_resolved_by_ids
-            mark_conflicts_resolved_by_ids(
-                artifact, affected_conflict_ids, decision_id=decision_id,
-            )
+            mark_conflicts_resolved_by_ids(artifact, affected_conflict_ids)
         affected_requirement_ids = [
             str(rid).strip()
             for rid in (resolution.get("affected_requirement_ids", []) or [])
@@ -330,9 +328,7 @@ def execute_human_decision_queue(
         )
         if decision_text:
             from flow.meeting.conflict_review import mark_conflicts_resolved_by_ids
-            mark_conflicts_resolved_by_ids(
-                artifact, resolution.get("affected_conflict_ids", []), decision_id=decision_id,
-            )
+            mark_conflicts_resolved_by_ids(artifact, resolution.get("affected_conflict_ids", []))
             row["status"] = "decided"
         else:
             row["status"] = "deferred"
@@ -379,13 +375,40 @@ def run_human_decision_queue(
 # ========
 def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
     last_action_result: Optional[Dict[str, Any]] = None
-    while True:
+    try:
+        configured_issue_limit = int(runner.config.get("max_issues", 5) or 5)
+    except (AttributeError, TypeError, ValueError):
+        configured_issue_limit = 5
+    max_steps = max(60, configured_issue_limit * 12 + 30)
+    last_decision_signature = ""
+    repeated_decision_count = 0
+    for step_idx in range(1, max_steps + 1):
         observation = coordinator.observe_round_state(
             runner=runner,
             last_action_result=last_action_result,
         )
         decision = coordinator.plan_round_step(observation=observation)
         action = decision.get("action", "finish_round")
+        decision_signature = json.dumps(
+            {
+                "action": action,
+                "params": decision.get("params") or {},
+                "state": observation.get("state_summary") or {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        if decision_signature == last_decision_signature:
+            repeated_decision_count += 1
+        else:
+            repeated_decision_count = 1
+            last_decision_signature = decision_signature
+        if repeated_decision_count >= 5:
+            raise RuntimeError(
+                "formal meeting loop made no progress; repeated action "
+                f"{action} with params={decision.get('params') or {}}"
+            )
         coordinator.flow.logger.debug(
             "Formal meeting action: %s reason=%s",
             action,
@@ -433,6 +456,8 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
                     round_num=runner.round_num,
                 )
         last_action_result = result
+    else:
+        raise RuntimeError(f"formal meeting loop exceeded safety limit ({max_steps} steps)")
 
 
 # ========
@@ -487,7 +512,6 @@ class MeetingRunner:
         self.issue_states: Dict[str, Dict] = {}
         self.meeting_records: List[Dict] = []
         self.open_questions: List[Dict] = []
-        self.issue_idx = 0
 
     # Defines log agenda function for this module workflow.
     def log_agenda(
@@ -1299,6 +1323,10 @@ class MeetingRunner:
             "participant_reasoning": issue.get("participant_reasoning", {}),
             "discussion_mode": issue.get("discussion_mode", "sequential"),
         }
+        for key in ("title", "summary", "description"):
+            value = issue.get(key)
+            if value not in (None, ""):
+                meeting_record[key] = value
         issue_context = issue.get("issue_context")
         if isinstance(issue_context, dict) and issue_context:
             meeting_record["issue_context"] = issue_context
@@ -1323,6 +1351,10 @@ class MeetingRunner:
         meeting_record["participants"] = self.meeting_record_participants(issue)
         meeting_record["participant_reasoning"] = issue.get("participant_reasoning", {})
         meeting_record["discussion_mode"] = issue.get("discussion_mode", "sequential")
+        for key in ("title", "summary", "description"):
+            value = issue.get(key)
+            if value not in (None, ""):
+                meeting_record[key] = value
         issue_context = issue.get("issue_context")
         if isinstance(issue_context, dict) and issue_context:
             meeting_record["issue_context"] = issue_context
@@ -1463,8 +1495,10 @@ class MeetingRunner:
                         cleaned_text = self.cleaned_single_url_text(row)
                         if cleaned_text:
                             row["text"] = cleaned_text
-                    row["source"] = meeting_id or str(issue.get("id") or "").strip()
-                    row.pop("source_id", None)
+                    update_meeting_id = meeting_id or str(issue.get("id") or "").strip()
+                    row["source"] = update_meeting_id
+                    if update_meeting_id:
+                        row["updated_by_meeting"] = update_meeting_id
                     if reason:
                         row["resolution_reason"] = reason
                     changed = True
@@ -1521,8 +1555,10 @@ class MeetingRunner:
                 if cleaned_text and cleaned_text != str(row.get("text") or "").strip():
                     row["text"] = cleaned_text
                     changed = True
-                row["source"] = meeting_id or str(issue.get("id") or "").strip()
-                row.pop("source_id", None)
+                update_meeting_id = meeting_id or str(issue.get("id") or "").strip()
+                row["source"] = update_meeting_id
+                if update_meeting_id:
+                    row["updated_by_meeting"] = update_meeting_id
                 changed = True
             if not source_set:
                 continue
@@ -2238,13 +2274,10 @@ class MeetingRunner:
                     "假設",
                     "優先",
                     "資安",
-                    "合規",
-                    "安全",
                     "效能",
                     "可靠",
                     "同步",
                     "通知",
-                    "退款",
                     "公平",
                     "validation",
                     "metric",
@@ -3186,7 +3219,10 @@ class MeetingRunner:
                 if m:
                     nums.append(int(m.group(1)))
             next_num = (max(nums) if nums else 0) + 1
-            rows = list(existing)
+            rows = [
+                row for row in existing
+                if row.get("round") is not None and int(row.get("round") or -1) != int(self.round_num)
+            ]
             row_index = {
                 str(row.get("id") or "").strip(): idx
                 for idx, row in enumerate(rows)

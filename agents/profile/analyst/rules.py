@@ -1,6 +1,8 @@
 # Defines action usage timing and output rules.
-from agents.profile.base import label_rules, reason_rules, review_contract
+from agents.profile.base import label_rules as base_label_rules, reason_rules, review_contract
 from agents.profile.base import elicitation_action_rules, elicitation_action_task, elicitation_context
+
+label_rules = base_label_rules
 
 
 # ========

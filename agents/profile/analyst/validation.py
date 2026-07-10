@@ -173,6 +173,11 @@ def conflict_records(
                 "pair_index": pair_index,
                 "requirement_ids": rel_ids,
             }
+            title = clean_text(row.get("title"))
+            if label == "Conflict":
+                if not title:
+                    continue
+                entry["title"] = title
             reason = clean_text(row.get("reason"))
             if reason:
                 entry["initial_reason"] = reason
@@ -201,6 +206,11 @@ def conflict_records(
             entry["id"] = cid
         if rel_ids:
             entry["requirement_ids"] = rel_ids
+        title = clean_text(row.get("title"))
+        if label == "Conflict":
+            if not title:
+                continue
+            entry["title"] = title
         reason = clean_text(row.get("reason"))
         if reason:
             entry["initial_reason"] = reason

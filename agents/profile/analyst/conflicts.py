@@ -134,6 +134,21 @@ def conflict_report_markdown_from_rows(rows: List[Dict[str, Any]]) -> str:
     return clean_conflict_report_markdown("\n".join(blocks).strip())
 
 
+def ensure_conflict_report_titles(rows: List[Dict[str, Any]], *, stage: str) -> None:
+    missing = [
+        str(row.get("id") or "").strip() or f"index-{index}"
+        for index, row in enumerate(rows, start=1)
+        if isinstance(row, dict)
+        and str(row.get("final_label") or "").strip() == "Conflict"
+        and not str(row.get("title") or "").strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"{stage} 缺少 CR title: {', '.join(missing)}；"
+            "每筆 Conflict 必須先寫入 JSON title，或 report Markdown heading 必須包含 title。"
+        )
+
+
 # ========
 # Defines requirement ids function for this module workflow.
 # ========
@@ -315,6 +330,10 @@ def normalize_conflict_type(
 # Defines AnalystConflicts class for this module workflow.
 # ========
 class AnalystConflicts:
+    @staticmethod
+    def ensure_conflict_report_titles(rows: List[Dict[str, Any]], *, stage: str) -> None:
+        ensure_conflict_report_titles(rows, stage=stage)
+
     # Defines invoke conflict skill function for this module workflow.
     def invoke_conflict_skill(
         self,
@@ -884,6 +903,11 @@ class AnalystConflicts:
                 )
                 final_label = str(decision.get("final_label") or "").strip()
                 item = {"id": pair_id, "reason": description}
+                title = str(row.get("title") or "").strip()
+                if final_label == "Conflict":
+                    if not title:
+                        continue
+                    item["title"] = title
                 final_type = normalize_conflict_type(
                     row.get("final_type"),
                     final_label=final_label,
@@ -919,6 +943,7 @@ class AnalystConflicts:
         ]
         if not conflict_rows:
             return ""
+        ensure_conflict_report_titles(conflict_rows, stage="generate_conflict_report")
         out = conflict_report_markdown_from_rows(conflict_rows)
         if not out:
             raise RuntimeError("conflict report 無內容")
@@ -938,6 +963,7 @@ class AnalystConflicts:
         ]
         if not conflict_rows:
             return artifact
+        ensure_conflict_report_titles(conflict_rows, stage="resolve_conflicts")
         task = report_resolution()
         by_id: Dict[str, Dict[str, Any]] = {}
 

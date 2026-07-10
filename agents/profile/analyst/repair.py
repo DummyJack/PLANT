@@ -35,7 +35,7 @@ conflict_finalization_output_schema = """# Output JSON
 {
   "conflict_finalization": {
     "reasons": [
-      {"id": "PAIR-1", "description": "最終裁定描述", "final_type": "scope"}
+      {"id": "PAIR-1", "title": "簡短衝突標題", "description": "最終裁定描述", "final_type": "scope"}
     ]
   }
 }"""
@@ -70,7 +70,8 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - conflicts 必須逐筆涵蓋所有指定 pairs；即使 final_label 是 Neutral 也必須輸出。
 - 每筆必須包含 pair_index、final_label、reason。
 - final_label 只能是 "Conflict" 或 "Neutral"。
-- final_label 是 "Conflict" 時才可包含 final_type。
+- final_label 是 "Conflict" 時必須包含 title 與 final_type。
+- title 必須是 4 到 30 字的名詞片語，描述衝突主題；不可只輸出 Conflict、衝突、需求衝突或 CR 編號。
 - pair_index 只能來自指定 pairs。
 
 # 指定 pairs
@@ -88,7 +89,8 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # Repair Rules
 - 原始輸出沒有明確 group conflict 時，輸出 {{"conflicts":[]}}。
-- 每筆 Conflict 必須包含 final_label="Conflict" 與 requirement_ids。
+- 每筆 Conflict 必須包含 title、final_label="Conflict" 與 requirement_ids。
+- title 必須是 4 到 30 字的名詞片語，描述衝突主題；不可只輸出 Conflict、衝突、需求衝突或 CR 編號。
 - requirement_ids 必須包含至少 2 個需求 id。
 - related_pairs 可選；只有原始輸出有明確 pair 來源時才保留。
 - 輸出只包含上述 JSON object。
@@ -124,7 +126,8 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 最外層必須只有 conflict_finalization。
 - 必須只包含 decision_list 中存在的 id。
 - 每筆必須包含 id 與 description。
-- final_label 是 Conflict 時可包含 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- final_label 是 Conflict 時必須包含 title 與 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- title 必須是 4 到 30 字的名詞片語，描述衝突主題；不可只輸出 Conflict、衝突、需求衝突或 CR 編號。
 - final_label 是 Neutral 時只輸出 id 與 description。
 - 輸出只包含上述 conflict_finalization JSON object。
 

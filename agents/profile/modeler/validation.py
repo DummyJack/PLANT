@@ -15,10 +15,6 @@ diagram_type_set = {
 model_type_set = diagram_type_set | {"use_case_text"}
 model_op_set = {"create", "update"}
 max_model_targets = 4
-primitive_type_re = re.compile(
-    r"^([+#~\-\s]*[^:\n{}()]+):\s*(string|str|int|integer|decimal|float|double|number|datetime|date|time|boolean|bool)\s*$",
-    re.IGNORECASE,
-)
 generic_interface_values = {
     "平台前台",
     "平台前台（app或web）",
@@ -42,6 +38,7 @@ generic_interface_prefixes = {
     "app或web",
 }
 interface_entry_re = re.compile(r"^[^－-]+[－-].+入口(?:（.*）)?$")
+missing_interface_marker = "待補充"
 
 
 # ========
@@ -69,95 +66,17 @@ def compact_text_key(value: Any) -> str:
 
 
 # ========
-# Defines use case interface pages function for this module workflow.
-# ========
-def use_case_interface_pages(actor: str, name: str, interface: str = "") -> str:
-    actor_text = clean_text(actor)
-    name_text = clean_text(name)
-    interface_text = clean_text(interface)
-    value = f"{actor_text} {name_text} {interface_text}"
-
-    if "瀏覽" in value or "搜尋" in value:
-        if "餐廳" in value:
-            return "首頁搜尋列、餐廳列表頁、餐廳詳情頁"
-        return "搜尋頁、結果列表頁、詳情頁"
-    if "購物車" in value or "加點" in value:
-        return "餐廳菜單頁、購物車頁"
-    if "建立" in value or "下單" in value or "訂單" in value and "管理" in value and "消費" in actor_text:
-        return "購物車頁、結帳頁、訂單確認頁、訂單列表頁"
-    if "付款" in value or "退款" in value or "金流" in value:
-        return "結帳頁、支付頁面（整合第三方金流介面）、退款狀態頁"
-    if "申訴" in value or "異常" in value or "客訴" in value:
-        if "外送" in actor_text:
-            return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
-        return "訂單詳情頁、異常回報頁、申訴處理進度頁"
-    if "聯絡" in value:
-        return "訂單詳情頁、外送員聯絡頁"
-    if "新訂單" in value or "備餐" in value:
-        return "餐廳後台訂單列表頁、訂單詳情頁、備餐狀態頁"
-    if "菜單" in value or "庫存" in value:
-        return "餐廳後台菜單管理頁、庫存管理頁、餐點編輯頁"
-    if "取餐" in value:
-        if "外送" in actor_text and "路線" in value:
-            return "外送員配送任務頁、取餐資訊頁、路線地圖頁"
-        return "餐廳後台訂單詳情頁、取餐通知介面"
-    if "接收" in value and "外送" in actor_text:
-        return "外送員任務列表頁、配送任務詳情頁"
-    if "路線" in value:
-        return "外送員配送任務頁、路線地圖頁"
-    if "回報" in value and "外送" in actor_text:
-        return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
-    if "監控" in value or "營運數據" in value:
-        return "營運後台儀表板、訂單監控頁、營運報表頁"
-    if "活動" in value or "促銷" in value:
-        return "營運後台活動管理頁、通知規則設定頁"
-    if ("追蹤" in value or "進度" in value or "配送" in value) and "消費" in actor_text:
-        return "訂單追蹤頁（顯示地圖與狀態列）、訂單詳情頁"
-    if "通知" in value:
-        channels = [
-            hint for hint in ("App 推播", "簡訊", "Email")
-            if hint.replace(" ", "") in interface_text.replace(" ", "") or hint in interface_text
-        ]
-        suffix = "、" + "、".join(dict.fromkeys(channels)) if channels else ""
-        return f"通知中心、訂單詳情頁、通知偏好設定頁{suffix}"
-    if "合作夥伴" in value or "表現" in value:
-        return "營運後台合作夥伴管理頁、餐廳表現頁、外送員表現頁"
-    if "糾紛" in value or "濫用" in value:
-        return "營運後台申訴案件頁、交易糾紛處理頁、濫用風險審查頁"
-    if "穩定" in value or "彈性" in value or "維護" in value:
-        return "營運後台系統狀態頁、服務監控頁、維護設定頁"
-    if "餐廳" in actor_text:
-        return f"餐廳後台{name_text}頁"
-    if "外送" in actor_text:
-        return f"外送員{name_text}頁"
-    if "營運" in actor_text or "主管" in actor_text:
-        return f"營運後台{name_text}頁"
-    return f"{name_text}頁"
-
-
-# ========
 # Defines normalize use case interface function for this module workflow.
 # ========
-def normalize_use_case_interface(actor: str, name: str, interface: str) -> str:
-    actor_text = clean_text(actor)
-    name_text = clean_text(name)
+def normalize_use_case_interface(_actor: str, _name: str, interface: str) -> str:
     interface_text = clean_text(interface)
-    value = f"{actor_text} {name_text} {interface_text}"
-    if "餐廳" in actor_text and "取餐" in value:
-        return "餐廳後台訂單詳情頁、取餐通知介面"
-    if "外送" in actor_text and "回報" in value:
-        return "外送員配送任務頁、配送狀態回報頁、異常回報頁"
-    if "外送" in actor_text and "路線" in value:
-        return "外送員配送任務頁、取餐資訊頁、路線地圖頁"
-    if ("營運" in actor_text or "主管" in actor_text) and ("活動" in value or "促銷" in value):
-        return "營運後台活動管理頁、通知規則設定頁"
     compact = compact_text_key(interface_text)
     is_generic = compact in generic_interface_values or any(
         compact.startswith(prefix) for prefix in generic_interface_prefixes
     ) or bool(interface_entry_re.match(interface_text))
     if interface_text and not is_generic:
         return interface_text
-    return use_case_interface_pages(actor, name, interface)
+    return missing_interface_marker
 
 
 # ========

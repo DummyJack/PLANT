@@ -157,16 +157,16 @@ class DocumentorDrTraceGraphMixin:
             row for row in (requirement.get("meetings") or [])
             if isinstance(row, dict) and str(row.get("id") or "").strip() in known_node_ids
         ]
-        formalization_meeting_ids = [
+        formalization_meeting_ids = sorted([
             str(row.get("id") or "").strip()
             for row in meeting_rows
             if cls.is_requirement_formalization_meeting(row)
-        ]
-        conflict_resolution_meeting_ids = [
+        ], key=lambda value: cls.meeting_order_key({"id": value}))
+        conflict_resolution_meeting_ids = sorted([
             str(row.get("id") or "").strip()
             for row in meeting_rows
             if cls.is_conflict_resolution_meeting(row)
-        ]
+        ], key=lambda value: cls.meeting_order_key({"id": value}))
         trace_meeting_ids = sorted(
             {
                 node_id
@@ -188,10 +188,24 @@ class DocumentorDrTraceGraphMixin:
             key=lambda value: cls.meeting_order_key({"id": value}),
         )
         visible_meeting_ids = trace_meeting_ids or source_meeting_ids
+        def preferred_formalization_entry() -> str:
+            if not formalization_meeting_ids:
+                return ""
+            if conflict_resolution_meeting_ids:
+                last_resolution_key = max(
+                    cls.meeting_order_key({"id": meeting_id})
+                    for meeting_id in conflict_resolution_meeting_ids
+                )
+                for meeting_id in formalization_meeting_ids:
+                    if cls.meeting_order_key({"id": meeting_id}) > last_resolution_key:
+                        return meeting_id
+            return formalization_meeting_ids[0]
+
         if direct_formalization_meeting_ids:
+            entry_formalization_meeting_id = preferred_formalization_entry() or entry_formalization_meeting_id
             terminal_meeting_id = direct_formalization_meeting_ids[-1]
         elif formalization_meeting_ids:
-            entry_formalization_meeting_id = formalization_meeting_ids[0]
+            entry_formalization_meeting_id = preferred_formalization_entry() or formalization_meeting_ids[0]
             terminal_meeting_id = formalization_meeting_ids[-1]
         elif visible_meeting_ids:
             entry_formalization_meeting_id = visible_meeting_ids[0]
@@ -673,6 +687,18 @@ class DocumentorDrTraceGraphMixin:
         def conflict_report_html(row: Dict[str, Any]) -> str:
             markdown_entry = str(row.get("report_markdown_entry") or "").strip()
             if markdown_entry:
+                markdown_entry = re.sub(
+                    r"(?m)^\s*#{1,6}\s*CR-\d+(?:\s*[：:].*)?\s*\n+",
+                    "",
+                    markdown_entry,
+                    count=1,
+                ).strip()
+                markdown_entry = re.sub(
+                    r"(?m)^\s*CR-\d+(?:\s*[：:].*)?\s*\n+",
+                    "",
+                    markdown_entry,
+                    count=1,
+                ).strip()
                 return markdown_to_html(markdown_entry)
             raw = row.get("raw_report_row") if isinstance(row.get("raw_report_row"), dict) else row
             visible = {

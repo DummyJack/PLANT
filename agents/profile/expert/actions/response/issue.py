@@ -61,7 +61,7 @@ def render_response_prompt(
             "不輸出 artifact patch。",
             "不輸出 research_evidence 或 feedback JSON。",
             "不把 feedback 或外部研究結果定案為正式需求。",
-            "不編造外部 URL、法規、標準、REQ-*、URL-* 或 CR-*。",
+            "不編造外部 URL、來源內容、REQ-*、URL-* 或 CR-*。",
         ]
     )}"""
 
@@ -69,7 +69,7 @@ def render_response_prompt(
 def category_rules(category: str) -> str:
     if category == "tradeoff":
         return """# 本議題特別要求（tradeoff）
-- 說明外部限制、證據強度、風險後果，以及在合規/安全底線下不可接受的選項。
+- 說明已取得的外部限制、證據強度、風險後果，以及不可接受的選項。
 - 若本議題涉及 NFR，說明品質底線、可接受風險、FR/NFR priority 影響與驗證依據；constraint 不作 priority 取捨。"""
     if category == "clarify_requirement":
         return """# 本議題特別要求（clarify_requirement）
@@ -82,7 +82,7 @@ def category_rules(category: str) -> str:
     if category == "align_model":
         return """# 本議題特別要求（align_model）
 - 說明模型揭露的流程、資料、狀態或責任歸屬是否受到外部限制或風險影響。
-- 若本議題涉及 NFR，說明品質要求對可靠性、安全性、可用性或驗證方式的外部依據。"""
+- 若本議題涉及 NFR，說明品質要求對可靠性、可用性或驗證方式的外部依據。"""
     return ""
 
 
@@ -91,11 +91,11 @@ def expert_response_contract() -> str:
 - text 必須有依據，不可只表態或宣告最終決議。
 - 若本輪已產生或更新 feedback，text 必須引用本輪 feedback 結果說明它如何影響本議題的限制、風險、證據強度、驗收邊界或可接受方案；不要只說已更新 feedback。
 - 若本輪沒有更新 feedback，但當前專案資料已有與本議題相關的 feedback.json 內容，可以引用既有 findings、constraints、risks 或 recommendations 來支撐發言；若引用既有 feedback，需明確說出引用的是哪一類內容與它支持或揭露的需求點。
-- 只有議題涉及法規、外部標準、支付/退款、資料保存、隱私、安全、稽核、可靠性或高風險營運限制時，才需要 domain research；一般需求語意或模型對齊問題優先使用既有 feedback 或直接發言。
+- 只有 coverage、gaps、user_guidance、referenced_files、issue 或既有 feedback 明確指出需要文件證據、外部查證或 feedback 更新時，才需要 domain research；一般需求語意或模型對齊問題優先使用既有 feedback 或直接發言。
 - 若進行新的 domain research，必須更新 feedback.json，並保留來源 URL；不要只在會議發言中描述研究結論。
 - 不要為了引用 feedback 而硬套無關資料；feedback 與本議題無關時，直接以外部限制、風險或證據觀點回答。
 - open_questions 只放真正需要後續回答、且會影響限制、風險、驗收邊界或本議題結論的具體問題；沒有就輸出空陣列。
-- ready_to_close 仍可提出 open_questions；若目前已有可落地結論，但某個具體答案會影響限制、風險、驗收邊界、合規假設或需求可接受條件，應輸出 open_questions，而不是只寫進風險或假設。
+- ready_to_close 仍可提出 open_questions；若目前已有可落地結論，但某個具體答案會影響限制、風險、驗收邊界或需求可接受條件，應輸出 open_questions，而不是只寫進風險或假設。
 - stance.state 表示本次發言的討論狀態：ready_to_close=資訊已足夠且可讓 mediator 結束本議題；needs_more_discussion=還需要其他參與者補充或回應。
 - 若 stance.state 是 needs_more_discussion，必須在 stance.proposal 提供 proposal，說明建議的領域限制、風險或處理方案。
 - ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。

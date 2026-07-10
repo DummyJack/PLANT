@@ -7,11 +7,18 @@ from typing import Any, Dict, List, Optional
 class ToolRegistry:
 
     # Defines __init__ function for this module workflow.
-    def __init__(self, config: Dict[str, Any], policy, artifact_path: Optional[str] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        policy,
+        artifact_path: Optional[str] = None,
+        doc_dir: Optional[str] = None,
+    ):
         self.config = config
         self.policy = policy
         self.enable_tools = config.get("enable_tools") or {}
         self.artifact_path = artifact_path
+        self.doc_dir = Path(doc_dir) if doc_dir else Path("doc")
 
     # Defines build tools for agent function for this module workflow.
     def build_tools_for_agent(self, agent_name: str) -> List[Any]:
@@ -27,7 +34,7 @@ class ToolRegistry:
             built.append(WebSearchTool(stop_config=None))
 
         if "read_file" in allowed and self.enable_tools.get("read_file", True):
-            doc_dir = Path("doc")
+            doc_dir = self.doc_dir
             doc_dir.mkdir(parents=True, exist_ok=True)
             if has_supported_files(doc_dir):
                 built.append(ReadFileTool(base_dir=doc_dir))

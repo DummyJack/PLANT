@@ -44,7 +44,7 @@ class MediatorAgentSupport:
             "並將職責內的判斷填入 proposed_label（Conflict 或 Neutral）。"
             "若該 pair 不屬於自己的職責範圍，應維持 current_label，並在 reason 說明原因。\n"
             "角色分工：Analyst 判斷需求槽位、SRS 邊界與是否需要合併/改寫/裁定；"
-            "Expert 只判斷外部法規、標準、合規、安全、隱私、稽核、第三方限制、領域風險或品質底線；"
+            "Expert 只判斷已有 feedback、evidence_type、coverage 或 gaps 支持的外部證據、外部限制、領域風險或品質底線；"
             "Modeler 只判斷流程、狀態、資料、角色互動、責任邊界與模型可共存性。\n"
             "必須同時做兩層檢視：\n"
             "1) 整體檢視：說明對整批標註品質的整體判斷（是否有系統性偏誤）。\n"

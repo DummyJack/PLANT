@@ -797,38 +797,11 @@ class AnalystRequirementFlow:
     @staticmethod
     # Defines coerce mixed requirement rows function for this module workflow.
     def coerce_mixed_requirement_rows(rows: Any) -> List[Dict[str, Any]]:
-        constraint_terms = (
-            "法規", "合規", "政策", "規範", "主管機關", "稽核", "違規",
-            "資料申報", "責任", "限制", "必須遵守", "不能違反",
-        )
-        quality_terms = (
-            "效能", "穩定", "可靠", "可用", "即時", "延遲", "回應時間",
-            "SLA", "高峰", "錯誤率", "準確率",
-        )
         out: List[Dict[str, Any]] = []
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
-            item = dict(row)
-            req_type = str(item.get("type") or "").strip().lower().replace("_", "-")
-            if req_type != "functional":
-                out.append(item)
-                continue
-            text = " ".join(
-                str(item.get(key) or "")
-                for key in ("title", "description", "rationale")
-            )
-            if any(term in text for term in constraint_terms):
-                item["type"] = "constraint"
-            elif any(term in text for term in quality_terms):
-                item["type"] = "non-functional"
-                if not str(item.get("category") or "").strip():
-                    item["category"] = "Performance" if any(term in text for term in ("效能", "延遲", "回應時間", "高峰")) else "Reliability"
-                if not str(item.get("metric") or "").strip():
-                    item["metric"] = "以相關來源需求與會議決議中的可觀察條件驗證"
-                if not str(item.get("validation") or "").strip():
-                    item["validation"] = "inspection"
-            out.append(item)
+            out.append(dict(row))
         return out
 
     @staticmethod
@@ -940,20 +913,6 @@ class AnalystRequirementFlow:
     @staticmethod
     # Defines type issues function for this module workflow.
     def type_issues(rows: Any) -> List[str]:
-        quality_terms = (
-            "穩定性", "可用性", "可靠性", "效能", "性能", "回應時間",
-            "故障率", "服務中斷", "SLA", "吞吐", "高峰", "負載",
-            "正確率", "錯誤率",
-        )
-        constraint_terms = (
-            "法規", "主管機關", "保存年限", "資料保存", "刪除限制",
-            "合規", "隱私", "個資", "稽核", "不能違反",
-        )
-        capability_terms = (
-            "提供", "允許", "支援", "顯示", "查詢", "通知", "建立", "更新",
-            "修改", "刪除", "回報", "申訴", "管理", "設定", "記錄", "匯出",
-            "偵測", "標示", "提示", "處理",
-        )
         multi_intent_markers = ("且", "並且", "以及", "同時", "；", ";")
         issues: List[str] = []
         source_rows: Dict[str, List[Dict[str, Any]]] = {}
@@ -964,37 +923,16 @@ class AnalystRequirementFlow:
                 if source_id.startswith("URL-"):
                     source_rows.setdefault(source_id, []).append(row)
             req_type = str(row.get("type") or "").strip().lower().replace("_", "-")
-            text_parts = [
-                str(row.get(key) or "")
-                for key in ("id", "title", "description")
-            ]
-            text = " ".join(text_parts)
-            has_quality = any(term in text for term in quality_terms)
-            has_constraint = any(term in text for term in constraint_terms)
-            has_capability = any(term in text for term in capability_terms)
             req_id = str(row.get("id") or f"REQ[{idx}]").strip()
-            marker_count = sum(1 for m in multi_intent_markers if m in text)
-            has_multiple_intents = (
-                (1 if has_capability else 0)
-                + (1 if has_quality else 0)
-                + (1 if has_constraint else 0)
-            ) >= 2
-            if marker_count >= 1 and has_multiple_intents:
-                issues.append(
-                    f"{req_id} 可能混有多核心意圖，請檢查是否為功能、品質、限制同時出現"
-                )
-            if req_type == "functional" and has_capability and has_quality:
-                issues.append(
-                    f"{req_id} 是 functional，但同時包含可獨立追蹤的品質、穩定性或效能語意"
-                )
-            if req_type == "functional" and has_capability and has_constraint:
-                issues.append(
-                    f"{req_id} 是 functional，但同時包含可獨立追蹤的限制、法規或政策語意"
-                )
-            if req_type == "non-functional" and has_capability and not has_quality:
-                issues.append(
-                    f"{req_id} 是 non-functional，但內容主要是系統能力"
-                )
+            description = str(row.get("description") or "")
+            marker_count = sum(1 for marker in multi_intent_markers if marker in description)
+            if marker_count >= 2:
+                issues.append(f"{req_id} 可能混有多核心意圖，請檢查是否需要拆分")
+            if req_type == "non-functional":
+                if not str(row.get("metric") or "").strip():
+                    issues.append(f"{req_id} 是 non-functional，但缺少 metric")
+                if not str(row.get("validation") or "").strip():
+                    issues.append(f"{req_id} 是 non-functional，但缺少 validation")
         for source_id, mapped_rows in source_rows.items():
             if len(mapped_rows) < 2:
                 continue
@@ -1577,6 +1515,7 @@ class AnalystRequirementFlow:
         ]
         report_rows = unresolved_conflict_report_rows(report_rows, resolved_signatures)
         report_rows = reindex_conflict_report_rows(report_rows)
+        self.ensure_conflict_report_titles(report_rows, stage="analyze_conflicts")
         report_artifact = {
             **(current if isinstance(current, dict) else artifact),
             "conflict": {
@@ -1597,6 +1536,7 @@ class AnalystRequirementFlow:
         ]
         report_rows = unresolved_conflict_report_rows(report_rows, resolved_signatures)
         report_rows = reindex_conflict_report_rows(report_rows)
+        self.ensure_conflict_report_titles(report_rows, stage="analyze_conflicts")
         artifact["conflict"] = {
             **(artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}),
             **(report_artifact.get("conflict", payload) or {}),

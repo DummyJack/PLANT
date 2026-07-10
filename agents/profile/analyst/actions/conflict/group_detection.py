@@ -9,13 +9,7 @@ def group_detection(*, base_task: str) -> str:
 # Generation Rules
 - 本步只找跨多筆需求的共同決策主題。
 - pairwise_conflicts 作為可聚合線索之一。
-- 第一步先找「決策主題」。可用主題包含：
-  - 資料揭露、保存、查詢權限、稽核責任。
-  - 流程責任邊界、人工介入與自動化分工。
-  - 即時性、效率、簡化流程 vs 安全、驗證、合規。
-  - 使用者自主權、平台控管、營運效率、公平性或風險控管。
-  - 狀態一致性、資料同步、付款/退款/取消/配送狀態。
-  - scope、角色責任、第三方服務或人工流程邊界。
+- 第一步先從輸入需求與 pairwise_conflicts 中抽象出共同「決策主題」；不要使用預設主題清單。
 - 第二步才判斷：同一決策主題下，是否有兩筆以上 User Requirements 不能直接同時定稿。
 - group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。2 條也可以，但必須代表共同決策主題。
 - 整體判斷應以共同決策主題、規則邊界或一致性問題選取需求。
@@ -27,6 +21,18 @@ def group_detection(*, base_task: str) -> str:
 - 若 group 來自既有 pairwise_conflicts，才輸出 related_pairs；若是直接從 User Requirements 發現，related_pairs 可省略或輸出空陣列。
 - 若沒有可定義的 group conflict，輸出 {{"conflicts": []}}。
 - conflicts 只包含 final_label="Conflict" 的項目。
+- 每筆 Conflict 必須包含 title。
+- title 必須是 4 到 30 字的名詞片語，描述共同決策主題；不可只輸出 Conflict、衝突、需求衝突或 CR 編號。
 
 # Output JSON
-{{"conflicts":[...]}}"""
+{{
+  "conflicts": [
+    {{
+      "title": "簡短衝突標題",
+      "requirement_ids": ["URL-1", "URL-2"],
+      "final_label": "Conflict",
+      "final_type": "scope",
+      "reason": "一句繁中判斷理由"
+    }}
+  ]
+}}"""

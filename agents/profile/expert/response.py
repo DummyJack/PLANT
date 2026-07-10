@@ -43,7 +43,7 @@ class ExpertResponse:
                 return {
                     "action": "done",
                     "params": {},
-                    "reasoning": "議題涉及外部法規、合規、安全、支付、隱私或第三方限制，先執行領域研究。",
+                    "reasoning": "議題包含尚未補證的外部查證需求，先執行領域研究。",
                     "action_plan": {
                         "goal": "用 URL-backed feedback 支撐 Expert 會議發言",
                         "steps": [
@@ -51,7 +51,7 @@ class ExpertResponse:
                                 "id": "research_domain",
                                 "action": "research_domain",
                                 "params": {},
-                                "reasoning": "外部限制訊號需要先取得或更新 feedback，再產生會議發言。",
+                            "reasoning": "外部查證訊號需要先取得或更新 feedback，再產生會議發言。",
                             }
                         ],
                     },
@@ -62,8 +62,8 @@ class ExpertResponse:
             active_reasoning="根據議題類型選擇對應的單輪專家回應策略。",
             available_actions={
                 "answer_question": "使用時機：有人在 open_questions 中指定 expert 回答。不要使用：一般議題發言或領域研究。寫回或影響：只回答問題，不更新專案資料。",
-                "respond_issue": "使用時機：只需要根據 issue、前文與現有資料表達領域意見。不要使用：需要專案文件證據、外部法規/標準、第三方限制或 feedback 更新時。寫回或影響：只產生會議發言，不更新 feedback。",
-                "research_domain": "流程 action。使用時機：議題需要文件證據、外部知識、法規/標準、第三方限制、合規、安全或隱私風險判斷。不要使用：一般功能偏好、純需求語意討論或現有資料已足夠。寫回或影響：內部依需要執行 read_reference_docs、research_issue、update_feedback；正式產物只寫回 feedback，不直接定案需求。",
+                "respond_issue": "使用時機：只需要根據 issue、前文與現有資料表達領域意見。不要使用：coverage、gaps、user_guidance、referenced_files 或 issue 明確指出需要專案文件證據、外部查證或 feedback 更新時。寫回或影響：只產生會議發言，不更新 feedback。",
+                "research_domain": "流程 action。使用時機：coverage、gaps、user_guidance、referenced_files 或 issue 明確指出需要文件證據、外部查證或 feedback 更新。不要使用：一般功能偏好、純需求語意討論或現有資料已足夠。寫回或影響：內部依需要執行 read_reference_docs、research_issue、update_feedback；正式產物只寫回 feedback，不直接定案需求。",
             },
             default_action="respond_issue",
             last_result=last_result,

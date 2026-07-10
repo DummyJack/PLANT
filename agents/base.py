@@ -68,10 +68,6 @@ def insert_context_before_task(content: str, context: Optional[Dict[str, Any]]) 
         return f"{content[:idx]}{block}{content[idx:]}"
     return f"{block}{content}"
 
-
-insert_available_data_after_task = insert_context_before_task
-
-
 # ========
 # Defines parse json payload function for this module workflow.
 # ========
