@@ -484,34 +484,6 @@ def review_considerations(
     return rows
 
 
-def feedback_covered_url_ids(artifact: Dict[str, Any]) -> set[str]:
-    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
-    covered: set[str] = set()
-    for section in ("findings", "constraints", "risks", "recommendations"):
-        for item in feedback.get(section) or []:
-            if not isinstance(item, dict):
-                continue
-            covered.update(
-                str(value).strip()
-                for value in (item.get("related_requirement_ids") or [])
-                if str(value).strip().startswith("URL-")
-            )
-    return covered
-
-
-def feedback_covers_current_urls(artifact: Dict[str, Any]) -> bool:
-    url_ids = {
-        str(row.get("id") or "").strip()
-        for row in (artifact.get("URL") or [])
-        if isinstance(row, dict)
-        and str(row.get("id") or "").strip()
-        and str(row.get("status") or "").strip().lower() not in {"removed", "inactive", "rejected"}
-    }
-    if not url_ids:
-        return False
-    return url_ids.issubset(feedback_covered_url_ids(artifact))
-
-
 def merge_elicited_requirements(flow, artifact: Dict[str, Any]) -> bool:
     elicited_reqts = (artifact.get("elicitation") or {}).get("elicited_reqts", []) or []
     if not elicited_reqts:
@@ -944,7 +916,6 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     )
     force_elicitation = force_regenerate_output(flow.config, "elicitation")
     force_conflict_detection = force_regenerate_output(flow.config, "conflict_detection")
-    force_research_domain = force_regenerate_output(flow.config, "research_domain")
     force_system_model = force_regenerate_output(flow.config, "system_model")
     force_draft = force_regenerate_output(flow.config, "draft")
 
@@ -1083,8 +1054,6 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     ran_research_domain = False
     reused_research_domain = False
     meta = artifact.setdefault("meta", {})
-    research_domain_completed = bool(meta.get("research_domain_completed"))
-    feedback_covers_urls = feedback_covers_current_urls(artifact)
     if skip_before_resume_stage(artifact, "research_domain"):
         flow.logger.info("依 checkpoint 略過領域研究")
         require_stage_inputs(flow, artifact, "research_domain")
@@ -1093,7 +1062,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     else:
         references = []
         project_id = str(getattr(flow.store, "project_id", "") or "").strip()
-        references_dir = flow.store.base_dir / "doc" / project_id if project_id else None
+        references_dir = flow.store.doc_dir / project_id if project_id else None
         if references_dir and references_dir.exists():
             references = [
                 {"name": path.name, "size": path.stat().st_size}

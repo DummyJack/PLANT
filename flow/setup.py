@@ -81,6 +81,7 @@ class Flow:
             config=self.config,
             policy=self.policy,
             artifact_path=artifact_path,
+            doc_dir=str(getattr(self.store, "doc_dir", "doc")),
         )
 
         analyst_tools = self.tool_registry.build_tools_for_agent("analyst")

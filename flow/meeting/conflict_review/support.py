@@ -17,8 +17,6 @@ def conflict_current_label(conflict: Dict[str, Any]) -> str:
 def mark_conflicts_resolved_by_ids(
     artifact: Dict[str, Any],
     conflict_ids: List[str],
-    *,
-    decision_id: Optional[str] = None,
 ) -> None:
     if not conflict_ids:
         return
@@ -53,9 +51,8 @@ def normalize_expert_non_intervention_review(
         "unless a specific",
         "無外部",
         "沒有外部",
-        "沒有法規",
-        "無法規",
-        "不屬於合規衝突",
+        "沒有外部證據",
+        "不屬於外部證據衝突",
     )
     if not any(marker in reason for marker in non_intervention_markers):
         return review
@@ -423,7 +420,6 @@ def consensus_decisions(
         "unresolved_ids_preview": [],
     }
     for cid, conflict in conflicts_by_id.items():
-        current_label = conflict_current_label(conflict)
         reviews = reviews_by_id.get(cid, [])
         review_agents = {
             str(r.get("agent") or "").strip()

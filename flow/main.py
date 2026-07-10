@@ -477,14 +477,14 @@ def run_specification_stage(
     force_dr = force_regenerate or force_regenerate_output(flow.config, "DR")
     force_srs = force_regenerate or force_regenerate_output(flow.config, "SRS")
     if not stage_enabled(flow.config, "DR", stage_enabled(flow.config, "SRS")):
-        flow.logger.info("跳過 DR")
+        flow.logger.info("跳過設計緣由")
     elif has_existing_dr(flow) and not force_dr:
         require_dr_draft_inputs(flow)
-        flow.logger.info("DR 已存在，不重新產生")
+        flow.logger.info("設計緣由已存在，不重新產生")
     else:
         require_dr_draft_inputs(flow)
         if force_dr and has_existing_dr(flow):
-            flow.logger.info("已要求重新產生 DR")
+            flow.logger.info("已要求重新產生設計緣由")
         _checkpoint_step(
             flow,
             stage_id="document_generation",
@@ -496,14 +496,14 @@ def run_specification_stage(
         flow.store.save_artifact(artifact)
 
     if not stage_enabled(flow.config, "SRS"):
-        flow.logger.info("跳過 SRS")
+        flow.logger.info("跳過規格化")
     elif has_existing_srs(flow) and not force_srs:
         require_srs_draft_inputs(flow)
-        flow.logger.info("SRS 已存在，不重新產生")
+        flow.logger.info("規格化已存在，不重新產生")
     else:
         require_srs_draft_inputs(flow)
         if force_srs and has_existing_srs(flow):
-            flow.logger.info("已要求重新產生 SRS")
+            flow.logger.info("已要求重新產生規格化")
         _checkpoint_step(
             flow,
             stage_id="document_generation",
@@ -593,8 +593,6 @@ def run_export_html_stage(flow, *, force: bool = False) -> None:
     project_dir = flow.store.project_dir
     results_dir = project_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
-    html_count = 0
-    model_count = 0
 
     for child in results_dir.glob("*"):
         if child.is_file():
@@ -605,7 +603,6 @@ def run_export_html_stage(flow, *, force: bool = False) -> None:
     model_counter = {"count": 0}
     copy_model_assets(flow.store.artifact_dir, results_dir, counter_ref=model_counter)
     copy_model_assets(flow.store.output_dir, results_dir, counter_ref=model_counter)
-    model_count = model_counter["count"]
 
     artifact_root = flow.store.artifact_dir
     output_root = flow.store.output_dir
@@ -625,7 +622,6 @@ def run_export_html_stage(flow, *, force: bool = False) -> None:
                 results_dir,
                 project_id=flow.store.project_id,
             )
-            html_count += 1
 
     flow.logger.info("已轉成 html: results/*")
 

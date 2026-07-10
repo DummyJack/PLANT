@@ -308,7 +308,6 @@ def default_issues(
                 }
             )
 
-    meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
     requirements = artifact.get("URL")
     url_ids = [
         str(row.get("id") or "").strip()
@@ -586,29 +585,14 @@ def has_content(value: Any) -> bool:
     return True
 
 
-WEAK_FIELD_TERMS = (
-    "待確認",
-    "待協議",
-    "合理",
-    "快速",
-    "穩定",
-    "清楚",
-    "明確",
-    "適時",
-    "即時",
-)
-STAKEHOLDER_TITLE_TERMS = (
-    "消費者",
-    "餐廳店員",
-    "外送員",
-    "平台營運",
-    "平台營運主管",
-    "店家管理者",
-    "財務",
-    "客服",
-)
-
-
+def metric_is_observable(metric: str) -> bool:
+    text = str(metric or "").strip()
+    if not text:
+        return False
+    has_number = bool(re.search(r"\d", text))
+    has_bound = bool(re.search(r"(<=|>=|<|>|至少|至多|不超過|不少於|低於|高於|百分之|%)", text))
+    has_unit = bool(re.search(r"(秒|分鐘|小時|天|週|月|%|次|筆|件|人|ms|s|sec|min|hour|day|rate|count)", text, re.IGNORECASE))
+    return has_number and (has_bound or has_unit)
 def requirement_field_gap_proposals(
     artifact: Dict[str, Any],
     *,
@@ -955,9 +939,6 @@ def draft_gaps(
         block = row["block"]
         reasons: List[str] = []
         is_nfr = bool(re.search(r"^\s*-\s*Type:\s*non-functional\s*$", block, re.MULTILINE))
-        title = row["title"]
-        if any(term in title for term in STAKEHOLDER_TITLE_TERMS):
-            reasons.append("Title 可能混入 stakeholder，需確認是否可改成需求核心短語")
 
         if is_nfr and not re.search(r"^\s*-\s*Category:\s*(.+?)\s*$", block, re.MULTILINE):
             reasons.append("NFR 缺 Category")
@@ -979,8 +960,8 @@ def draft_gaps(
         metric_match = re.search(r"^\s*-\s*Metric:\s*(.+?)\s*$", block, re.MULTILINE)
         if metric_match:
             metric = metric_match.group(1).strip()
-            if any(term in metric for term in WEAK_FIELD_TERMS):
-                reasons.append(f"Metric 仍含待確認或抽象條件：{metric}")
+            if not metric_is_observable(metric):
+                reasons.append(f"Metric 缺少可觀測數值、界線或單位：{metric}")
         elif is_nfr:
             reasons.append("NFR 缺 Metric")
 

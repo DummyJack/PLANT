@@ -2,8 +2,6 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from storage.requirements import requirement_discussion_pool
-from agents.profile.analyst.conflicts import conflict_entries_count
 from utils import stage_enabled
 from agents.meeting.main import (
     run_meeting_loop as run_mediator_meeting_loop,
@@ -117,24 +115,7 @@ class MeetingCoordinator:
         action_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         action_kwargs = dict(action_kwargs or {})
-        observation = {
-            "stage": stage,
-            "round_num": round_num,
-            "requirements_count": len(requirement_discussion_pool(artifact)),
-            "conflicts_count": conflict_entries_count(artifact),
-            "open_questions_count": len(artifact.get("open_questions", []) or []),
-        }
-        decision = {
-            "action": stage,
-            "params": self.json_safe_trace_value(action_kwargs),
-            "reasoning": f"執行 {stage} pipeline step。",
-        }
         updated_artifact = action_fn(**action_kwargs)
-        result = {
-            "status": "success",
-            "summary": f"completed {stage}",
-            "artifact_changed": updated_artifact is not None,
-        }
         return updated_artifact if updated_artifact is not None else artifact
 
     # ========

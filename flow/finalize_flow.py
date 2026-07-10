@@ -11,7 +11,7 @@ def generate_dr(
     flow.logger.step_started(
         "document_generation",
         "document_generation.generate_dr",
-        "產生 Design Rationale",
+        "產生設計緣由",
         agent="documentor",
     )
     dr_md = flow.documentor_agent.generate_dr(artifact)
@@ -27,14 +27,14 @@ def generate_dr(
     flow.logger.step_completed(
         "document_generation",
         "document_generation.generate_dr",
-        "Design Rationale",
+        "設計緣由",
         agent="documentor",
         output_path="output/design_rationale.md",
     )
     flow.logger.artifact_created(
         "document_generation",
         "document_generation.generate_dr",
-        "Design Rationale 已產生",
+        "設計緣由已產生",
         "output/design_rationale.md",
     )
     flow.store.save_artifact(artifact)
@@ -47,7 +47,7 @@ def generate_srs(
     flow.logger.step_started(
         "document_generation",
         "document_generation.generate_srs",
-        "產生 SRS",
+        "產生規格化",
         agent="documentor",
     )
     srs_md = flow.documentor_agent.generate_srs()
@@ -63,14 +63,14 @@ def generate_srs(
     flow.logger.step_completed(
         "document_generation",
         "document_generation.generate_srs",
-        "SRS",
+        "規格化",
         agent="documentor",
         output_path="output/srs.md",
     )
     flow.logger.artifact_created(
         "document_generation",
         "document_generation.generate_srs",
-        "SRS 已產生",
+        "規格化已產生",
         "output/srs.md",
     )
 

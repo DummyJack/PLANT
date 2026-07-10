@@ -982,7 +982,6 @@ def run_elicitation(
             coordinator, conversation, artifact, round_num=round_num, turn=turn
         )
         conversation_rows: List[Dict[str, Any]] = []
-        pending_targets_for_row: List[str] = []
         for c in raw_conversation:
             if not isinstance(c, dict):
                 continue
@@ -1007,8 +1006,6 @@ def run_elicitation(
                     for name in targets
                     if str(name).strip()
                 ]
-                if agent_name != "user":
-                    pending_targets_for_row = list(row["target_stakeholders"])
             speaking_as = resp.get("speaking_as")
             if isinstance(speaking_as, str):
                 speaking_as = [speaking_as]
@@ -1018,8 +1015,6 @@ def run_elicitation(
                     for name in speaking_as
                     if str(name).strip()
                 ]
-            if agent_name == "user":
-                pending_targets_for_row = []
             conversation_rows.append(row)
 
         should_stop_after_this_turn = bool(interviewer_finish or oracle_judge_finish)
