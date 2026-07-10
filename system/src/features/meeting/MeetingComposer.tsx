@@ -126,7 +126,7 @@ function requiredAgentReasons(
     add("mediator", t.stageLabels.general_meeting);
   }
   if (stageEnabled(config, stageOverrides, "DR") || stageEnabled(config, stageOverrides, "SRS")) {
-    add("documentor", "SRS / DR");
+    add("documentor", `${t.stageLabels.SRS} / ${t.stageLabels.DR}`);
   }
   return reasons;
 }

@@ -154,12 +154,12 @@ function actionDisplay(msg: ChatMessage): { title: string; detail: string } {
       done: t.updatedDraft,
     },
     generate_dr: {
-      title: "Design Rationale",
+      title: t.stageLabels.DR,
       running: t.generatingDesignRationale,
       done: t.updatedDesignRationale,
     },
     generate_srs: {
-      title: "SRS",
+      title: t.stageLabels.SRS,
       running: t.generatingSpecDocument,
       done: t.updatedSrs,
     },
@@ -201,8 +201,8 @@ function outputLabel(path?: string, text?: string) {
   if (/result\.json$/i.test(path)) return "Conflict";
   const draft = /draft_v(\d+)/i.exec(path)?.[1];
   if (draft) return `Draft v${draft}`;
-  if (/srs\.(html|md)$/i.test(path)) return "SRS";
-  if (/design_rationale\.(html|md)$/i.test(path)) return "Design Rationale";
+  if (/srs\.(html|md)$/i.test(path)) return t.stageLabels.SRS;
+  if (/design_rationale\.(html|md)$/i.test(path)) return t.stageLabels.DR;
   if (/models\/.+\.(png|svg|plantuml|puml)$/i.test(path)) return t.systemModelGeneration;
   return snippet(text ?? path, path);
 }
@@ -219,8 +219,8 @@ function meetingRoundFromTitle(title?: string) {
 }
 
 function outputTone(label: string): FlowItem["tone"] {
-  if (label === "Design Rationale") return "designRationale";
-  if (label === "SRS") return "srs";
+  if (label === "Design Rationale" || label === "設計緣由") return "designRationale";
+  if (label === "SRS" || label === "規格書" || label === "規格化") return "srs";
   return "output";
 }
 
@@ -412,8 +412,8 @@ function actionDedupeKey(msg: ChatMessage) {
 }
 
 function actionTone(title: string): FlowItem["tone"] {
-  if (title === "Design Rationale") return "designRationale";
-  if (title === "SRS") return "srs";
+  if (title === "Design Rationale" || title === "設計緣由") return "designRationale";
+  if (title === "SRS" || title === "規格書" || title === "規格化") return "srs";
   return "action";
 }
 
@@ -492,7 +492,10 @@ function messageToFlowItem(msg: ChatMessage): FlowItem | null {
       label === "Scope" ||
       /meeting\/elicitation_meeting\.json$/i.test(msg.outputPath ?? "") ||
       label === "Design Rationale" ||
-      label === "SRS"
+      label === "設計緣由" ||
+      label === "SRS" ||
+      label === "規格書" ||
+      label === "規格化"
     ) {
       return {
         id: msg.id,
@@ -673,12 +676,12 @@ function artifactFlowItems(
   if (drPath) {
     flowItems.push(applyFlowTarget({
       id: "artifact-flow-design-rationale",
-      title: "Design Rationale",
+      title: t.stageLabels.DR,
       detail: t.updated,
       dedupeKey: "output:design_rationale",
       outputPath: drPath,
       tone: "designRationale",
-    }, messages, "Design Rationale", drPath));
+    }, messages, t.stageLabels.DR, drPath));
   }
   const srsPath = hideGeneratedDocuments
     ? undefined
@@ -686,12 +689,12 @@ function artifactFlowItems(
   if (srsPath) {
     flowItems.push(applyFlowTarget({
       id: "artifact-flow-srs",
-      title: "SRS",
+      title: t.stageLabels.SRS,
       detail: t.updated,
       dedupeKey: "output:srs",
       outputPath: srsPath,
       tone: "srs",
-    }, messages, "SRS", srsPath));
+    }, messages, t.stageLabels.SRS, srsPath));
   }
   return flowItems;
 }
@@ -712,7 +715,7 @@ function flowItemOrder(item: FlowItem) {
   if (item.dedupeKey === "decision:meeting_issues") return 71;
   if (item.dedupeKey === "decision:stakeholder_selection") return 11;
   if (/選擇利害關係人/.test(value)) return 10;
-  if (isHumanDecision && /消費者|外送員|利害關係人/.test(value)) return 11;
+  if (isHumanDecision && /利害關係人/.test(value)) return 11;
   if (/利害關係人發言/.test(value)) return 10;
   if (/需求分析|需求候選/.test(value)) return 20;
   if (isHumanDecision && /議題/.test(value)) return 71;
@@ -720,13 +723,21 @@ function flowItemOrder(item: FlowItem) {
   if (isHumanDecision && /衝突|Conflict|CR-/.test(value)) return 21;
   if (isHumanDecision) return 21;
   if (/需求擷取會議/.test(value)) return 30;
+  if (/run_review/i.test(item.rawTitle ?? item.dedupeKey)) return 44;
+  if (
+    item.dedupeKey === "output:conflict" ||
+    /artifact\/result\.json|conflict_report/i.test(item.outputPath ?? "") ||
+    /衝突報告|Conflict Report|Report v\d+/i.test(value)
+  ) {
+    return 46;
+  }
   if (/衝突辨識|衝突解決/.test(value)) return 45;
   if (/領域研究|Feedback/.test(value)) return 47;
   if (/系統模型生成|模型生成|系統模型|System Models/.test(value)) return 50;
   if (/Draft|草稿/.test(value)) return 60;
   if (/正式會議/.test(value)) return 70;
-  if (/Design Rationale/.test(value)) return 80;
-  if (/\bSRS\b/.test(value)) return 85;
+  if (/Design Rationale|設計緣由/.test(value)) return 80;
+  if (/\bSRS\b|規格書|規格化/.test(value)) return 85;
   return 100;
 }
 
@@ -740,7 +751,7 @@ function stageCardStatus(item: FlowItem) {
   if (/發言完成|已整理利害關係人|statement complete/i.test(detail)) return t.statementComplete;
   if (/人類建議|suggestion complete/i.test(detail)) return t.suggestionComplete;
   if (/需求分析|需求候選|Requirements|analysis complete/i.test(`${item.title} ${detail}`)) return t.analysisComplete;
-  if (/修正完成|已更新|updated|Scope|領域研究|System Models|Draft|Design Rationale|SRS|revision complete/i.test(detail)) return t.revisionComplete;
+  if (/修正完成|已更新|updated|Scope|領域研究|System Models|Draft|Design Rationale|設計緣由|SRS|規格書|規格化|revision complete/i.test(detail)) return t.revisionComplete;
   if (/已完成|完成|completed|done/i.test(detail)) return t.generationComplete;
   return t.generationComplete;
 }
@@ -830,10 +841,10 @@ function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
       `artifact/MoM/R${meetingRound}-M1.md`,
     ]) ?? latestVersionedPath(paths, new RegExp(`R${meetingRound}-M(\\d+)\\.(?:html|md)$`, "i"));
   }
-  if (/Design Rationale/.test(value)) {
+  if (/Design Rationale|設計緣由/.test(value)) {
     return firstExistingPath(paths, ["results/design_rationale.html", "output/design_rationale.md"]);
   }
-  if (/\bSRS\b/.test(value)) {
+  if (/\bSRS\b|規格書|規格化/.test(value)) {
     return firstExistingPath(paths, ["results/srs.html", "output/srs.md"]);
   }
   return undefined;
@@ -846,10 +857,10 @@ function flowIdentity(item: FlowItem) {
   const draftVersion = /Draft v(\d+)/i.exec(item.title)?.[1] ??
     /draft_v(\d+)/i.exec(item.outputPath ?? "")?.[1];
   if (draftVersion) return `draft:v${draftVersion}`;
-  if (item.title === "Design Rationale" || /design_rationale/i.test(item.outputPath ?? "")) {
+  if (item.title === "Design Rationale" || item.title === "設計緣由" || /design_rationale/i.test(item.outputPath ?? "")) {
     return "document:design_rationale";
   }
-  if (item.title === "SRS" || /(?:^|\/)srs\.(?:html|md)$/i.test(item.outputPath ?? "")) {
+  if (item.title === "SRS" || item.title === "規格書" || item.title === "規格化" || /(?:^|\/)srs\.(?:html|md)$/i.test(item.outputPath ?? "")) {
     return "document:srs";
   }
   if (item.dedupeKey === "output:system_models") return "artifact:system_models";

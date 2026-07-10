@@ -1,42 +1,33 @@
 import { RotateCcw, X } from "lucide-react";
-import { useI18n } from "@/i18n";
+import { UI_TEXT, useI18n } from "@/i18n";
+import { useUiStore } from "@/stores/uiStore";
 import type { RunCheckpoint } from "@/types/api";
 import { cn } from "@/utils/cn";
 
-const STAGE_LABELS: Record<string, string> = {
-  formal_meeting: "正式會議",
-  meeting_issue_proposal_review: "正式會議",
-  draft: "草稿化",
-  document_generation: "規格化",
-  export: "匯出",
-  init: "初始階段",
-  elicitation: "需求擷取",
-  conflict_detection: "需求衝突辨識",
-  research_domain: "領域研究",
-  system_model: "系統模型",
-};
-
 function stageLabel(stageId?: string) {
   const key = String(stageId || "").trim();
-  return (STAGE_LABELS[key] ?? key) || "上一階段";
+  const t = UI_TEXT[useUiStore.getState().language];
+  const labels = t.checkpointStageLabels as Record<string, string>;
+  return (labels[key] ?? key) || t.previousStage;
 }
 
 function cleanupLabel(paths?: string[]) {
+  const t = UI_TEXT[useUiStore.getState().language];
   const rows = paths ?? [];
-  if (!rows.length) return "將清理此階段可能未完成的產出";
+  if (!rows.length) return t.cleanupUnfinishedOutputs;
   if (rows.some((path) => /\/MoM\/|artifact\/MoM\//i.test(path))) {
-    return "將清理最新 MoM 與對應預覽";
+    return t.cleanupMomPreview;
   }
   if (rows.some((path) => /draft_v\d+\.(?:md|html)$/i.test(path))) {
-    return "將清理最新草稿與預覽";
+    return t.cleanupDraftPreview;
   }
   if (rows.some((path) => /(?:srs|design_rationale)\.(?:md|html)$/i.test(path))) {
-    return "將清理 SRS、Design Rationale 與預覽";
+    return t.cleanupSrsPreview;
   }
   if (rows.some((path) => /^results(?:\/|$)/i.test(path))) {
-    return "將清理 results 預覽輸出";
+    return t.cleanupResultsPreview;
   }
-  return `將清理 ${rows.length} 個可能未完成的產出`;
+  return t.cleanupOutputCount(rows.length);
 }
 
 function stageLabelText(stageId: string | undefined, t: ReturnType<typeof useI18n>["t"]) {

@@ -66,7 +66,7 @@ def _project_reference_paths(store: Store) -> List[str]:
     project_id = str(getattr(store, "project_id", "") or "").strip()
     if not project_id:
         return []
-    references_dir = store.base_dir / "doc" / project_id
+    references_dir = store.doc_dir / project_id
     if not references_dir.exists():
         return []
     return [
@@ -88,6 +88,14 @@ def _artifact_reference_paths(artifact: Dict[str, Any]) -> List[str]:
 def _new_project_reference_paths(store: Store, artifact: Dict[str, Any]) -> List[str]:
     known = set(_artifact_reference_paths(artifact))
     return [path for path in _project_reference_paths(store) if path not in known]
+
+
+def _artifact_has_feedback_content(artifact: Dict[str, Any]) -> bool:
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    return any(
+        isinstance(feedback.get(section), list) and bool(feedback.get(section))
+        for section in ("findings", "constraints", "risks", "recommendations")
+    )
 
 
 def _ui_error_message(exc: Exception) -> str:
@@ -200,8 +208,14 @@ class RunManager:
         if not project_dir.exists() or not project_dir.is_dir():
             raise ValueError("Project not found")
         store = Store(self.base_dir, project_id)
+        artifact = store.load_artifact() or {}
+        project_reference_paths = _project_reference_paths(store)
+        new_project_reference_paths = _new_project_reference_paths(store, artifact)
+        has_reference_research_content = _artifact_has_feedback_content(artifact)
 
-        if mode == "continue" and _new_project_reference_paths(store, store.load_artifact() or {}):
+        if mode == "continue" and (
+            new_project_reference_paths or (project_reference_paths and not has_reference_research_content)
+        ):
             stage_overrides = {
                 **(stage_overrides or {}),
                 "research_domain": True,
@@ -216,6 +230,13 @@ class RunManager:
             project_id,
             attached_reference_paths,
         )
+        if mode == "continue":
+            auto_reference_paths = (
+                project_reference_paths
+                if project_reference_paths and not has_reference_research_content
+                else new_project_reference_paths
+            )
+            attached_paths = _merge_unique_strings(attached_paths, auto_reference_paths)
 
         with self._lock:
             active_id = self._project_active.get(project_id)
@@ -668,16 +689,12 @@ class RunManager:
                 for path in (meta.get("attached_references") or [])
                 if str(path or "").strip()
             ]
-            existing_reference_set = set(existing_references)
-            new_references = [
-                path for path in attached_reference_paths if path not in existing_reference_set
-            ]
             meta["attached_references"] = _merge_unique_strings(
                 existing_references,
                 attached_reference_paths,
             )
-            if mode == "continue" and new_references:
-                meta["domain_research_referenced_files"] = _merge_unique_strings(new_references)
+            if mode == "continue":
+                meta["domain_research_referenced_files"] = _merge_unique_strings(attached_reference_paths)
                 meta.pop("research_domain_completed", None)
                 meta.pop("research_domain_coverage", None)
             artifact["meta"] = meta

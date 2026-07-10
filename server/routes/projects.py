@@ -12,7 +12,7 @@ from utils.language import sync_output_language
 
 from server.services.project_service import ProjectService
 from server.services.run_config import general_formal_meeting_enabled
-from .auth import require_project_read_access, require_write_access
+from .auth import can_read_project, is_activated, require_project_read_access, require_write_access
 
 
 router = APIRouter()
@@ -46,6 +46,7 @@ def project_service(request: Request) -> ProjectService:
 def bootstrap(request: Request):
     service = project_service(request)
     run_manager = request.app.state.run_manager
+    activated = is_activated(request)
     store = Store(base_dir(request))
     config_status: Dict[str, Any] = {"loaded": False, "error": None}
     model_summary = ""
@@ -61,8 +62,9 @@ def bootstrap(request: Request):
         "config": config_status,
         "model_summary": model_summary,
         "api_keys": key_status,
-        "projects": service.list_projects_enriched(),
-        "active_runs": service.active_runs_map(),
+        "activated": activated,
+        "projects": readable_projects(request, service.list_projects_enriched()),
+        "active_runs": service.active_runs_map() if activated else {},
         "interrupted_run_count": run_manager.count_interrupted_runs(),
         "formal_meeting_enabled": bool(
             config
@@ -79,8 +81,18 @@ def bootstrap(request: Request):
 def list_projects(request: Request, enriched: bool = True):
     service = project_service(request)
     if enriched:
-        return {"projects": service.list_projects_enriched()}
-    return {"projects": Store(base_dir(request)).list_projects()}
+        return {"projects": readable_projects(request, service.list_projects_enriched())}
+    return {"projects": readable_projects(request, Store(base_dir(request)).list_projects())}
+
+
+def readable_projects(request: Request, rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    if is_activated(request):
+        return rows
+    return [
+        row
+        for row in rows
+        if can_read_project(request, str(row.get("project_id") or ""))
+    ]
 
 
 @router.post("/projects")
@@ -205,7 +217,7 @@ def delete_project(project_id: str, request: Request):
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, request: Request):
     require_project_read_access(request, project_id)
-    store = Store(base_dir(request), project_id)
+    store = project_service(request).ensure_project(project_id)
     return {
         "project_id": project_id,
         "project": store.load_artifact(),

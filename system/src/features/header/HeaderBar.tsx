@@ -702,6 +702,7 @@ export function HeaderBar() {
   const queryClient = useQueryClient();
   const bootstrap = useBootstrap();
   const projectId = useUiStore((s) => s.activeProjectId);
+  const setActiveProjectId = useUiStore((s) => s.setActiveProjectId);
   const enabledAgents = useUiStore((s) => s.enabledAgents);
   const visiblePanels = useUiStore((s) => s.visiblePanels);
   const darkMode = useUiStore((s) => s.darkMode);
@@ -709,9 +710,11 @@ export function HeaderBar() {
   const togglePanelVisibility = useUiStore((s) => s.togglePanelVisibility);
   const toggleDarkMode = useUiStore((s) => s.toggleDarkMode);
   const setLanguage = useUiStore((s) => s.setLanguage);
+  const canWrite = useUiStore((s) => s.canWrite);
   const setCanWrite = useUiStore((s) => s.setCanWrite);
   const pushNotice = useNoticeStore((s) => s.pushNotice);
-  const { activeRun } = useActiveRun(projectId);
+  const canReadLiveRun = canWrite || bootstrap.data?.activated === true;
+  const { activeRun } = useActiveRun(canReadLiveRun ? projectId : null);
   const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -993,6 +996,8 @@ export function HeaderBar() {
       setActivationCode("");
       setActivationMessage({ tone: "success", text: t.successActivated });
       queryClient.invalidateQueries({ queryKey: ["activation-status"] });
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
     onError: (error) => {
       setActivationMessage({
@@ -1008,9 +1013,18 @@ export function HeaderBar() {
       setConfirmAction(null);
       setActivated(false);
       setCanWrite(false);
+      if (runActive) {
+        setActiveProjectId(null);
+      }
       setActivationCode("");
       setActivationMessage({ tone: "success", text: t.successRemoved });
       queryClient.invalidateQueries({ queryKey: ["activation-status"] });
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+      queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["references"] });
+      queryClient.invalidateQueries({ queryKey: ["file"] });
     },
     onError: (error) => {
       setActivationMessage({
@@ -1021,10 +1035,10 @@ export function HeaderBar() {
   });
 
   useEffect(() => {
-    const next = !!activationQuery.data?.activated;
+    const next = !!(activationQuery.data?.activated ?? bootstrap.data?.activated);
     setActivated(next);
     setCanWrite(next);
-  }, [activationQuery.data?.activated, setCanWrite]);
+  }, [activationQuery.data?.activated, bootstrap.data?.activated, setCanWrite]);
 
   useEffect(() => {
     if (!activated) {

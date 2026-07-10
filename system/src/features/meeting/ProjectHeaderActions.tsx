@@ -10,6 +10,14 @@ import { useUiStore } from "@/stores/uiStore";
 import { errorMessage } from "@/utils/errorMessage";
 import { CostSummaryModal } from "./CostSummaryModal";
 
+const ACTIVE_PROJECT_STATUSES = new Set([
+  "queued",
+  "running",
+  "waiting_for_human",
+  "cancelling",
+]);
+const PUBLIC_READABLE_RESULT_STATUSES = new Set(["completed", "idle"]);
+
 function projectOptionLabel(project: {
   project_id: string;
   rough_idea?: string;
@@ -26,14 +34,31 @@ function projectOptionLabel(project: {
 
 function isVisibleProject(project: {
   project_id: string;
+  rough_idea?: string;
+  scenario?: string;
   has_results?: boolean;
   active_run?: unknown;
   status_hint?: string;
 }) {
+  if (String(project.scenario ?? project.rough_idea ?? "").trim()) return true;
   if (project.has_results) return true;
   if (project.active_run) return true;
   const status = String(project.status_hint ?? "").trim();
   return !!status && status !== "idle";
+}
+
+function isPublicReadableProject(project: {
+  has_results?: boolean;
+  active_run?: unknown;
+  status_hint?: string;
+}) {
+  const status = String(project.status_hint ?? "").trim();
+  return (
+    !!project.has_results &&
+    !project.active_run &&
+    !ACTIVE_PROJECT_STATUSES.has(status) &&
+    PUBLIC_READABLE_RESULT_STATUSES.has(status || "idle")
+  );
 }
 
 function uniqueProjectsById<T extends { project_id: string }>(projects: T[]): T[] {
@@ -72,45 +97,51 @@ export function ProjectHeaderActions({
   const projectId = useUiStore((s) => s.activeProjectId);
   const setActiveProjectId = useUiStore((s) => s.setActiveProjectId);
   const canWrite = useUiStore((s) => s.canWrite);
-  const { activeRun } = useActiveRun(projectId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [costModalOpen, setCostModalOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
 
+  const projects = useMemo(
+    () => uniqueProjectsById(bootstrap.data?.projects ?? []),
+    [bootstrap.data?.projects],
+  );
+  const hasWriteAccess = canWrite || bootstrap.data?.activated === true;
+  const visibleProjects = useMemo(
+    () =>
+      projects.filter((project) => {
+        if (!hasWriteAccess && !isPublicReadableProject(project)) return false;
+        return project.project_id === projectId || isVisibleProject(project);
+      }),
+    [hasWriteAccess, projectId, projects],
+  );
+  const hasProjects = visibleProjects.length > 0;
+  const current = projects.find(
+    (p) =>
+      p.project_id === projectId &&
+      (hasWriteAccess || isPublicReadableProject(p)),
+  );
+  const readableProjectId = projectId && (hasWriteAccess || current) ? projectId : null;
+  const { activeRun } = useActiveRun(readableProjectId);
   const runActive =
     !!activeRun &&
     ["queued", "running", "waiting_for_human", "cancelling"].includes(
       activeRun.status,
     );
-
-  const projects = useMemo(
-    () => uniqueProjectsById(bootstrap.data?.projects ?? []),
-    [bootstrap.data?.projects],
-  );
-  const visibleProjects = useMemo(
-    () =>
-      projects.filter((project) =>
-        project.project_id === projectId || isVisibleProject(project),
-      ),
-    [projectId, projects],
-  );
-  const hasProjects = visibleProjects.length > 0;
-  const current = projects.find((p) => p.project_id === projectId);
   const artifactsQuery = useQuery({
-    queryKey: ["artifacts", projectId],
-    queryFn: () => fetchArtifacts(projectId!),
-    enabled: !!projectId,
+    queryKey: ["artifacts", readableProjectId],
+    queryFn: () => fetchArtifacts(readableProjectId!),
+    enabled: !!readableProjectId,
   });
   const hasManual = (artifactsQuery.data?.items ?? []).some(
     (item) => item.kind === "file" && item.path === "manual/index.html",
   );
   const hasCostSummary = !!current?.has_cost_summary;
   const costQuery = useQuery({
-    queryKey: ["cost-summary", projectId],
-    queryFn: () => fetchCostSummary(projectId!),
-    enabled: !!projectId && hasCostSummary && costModalOpen,
+    queryKey: ["cost-summary", readableProjectId],
+    queryFn: () => fetchCostSummary(readableProjectId!),
+    enabled: !!readableProjectId && hasCostSummary && costModalOpen,
   });
 
   useEffect(() => {
@@ -143,7 +174,7 @@ export function ProjectHeaderActions({
 
   return (
     <div className="relative flex min-w-0 items-center gap-1.5">
-      {projectId && hasCostSummary && !compact && (
+      {readableProjectId && hasCostSummary && !compact && (
         <button
           type="button"
           className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
@@ -156,14 +187,14 @@ export function ProjectHeaderActions({
         </button>
       )}
 
-      {projectId && hasManual && !compact && (
+      {readableProjectId && hasManual && !compact && (
         <button
           type="button"
           className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-gray-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:border-gray-300 hover:bg-gray-50 focus:border-slate-400 focus:outline-none"
           aria-label={t.manual}
           title={t.manual}
           onClick={() => {
-            window.open(manualIndexUrl(projectId), "_blank", "noopener");
+            window.open(manualIndexUrl(readableProjectId), "_blank", "noopener");
           }}
         >
           <BookOpen className="h-3.5 w-3.5" />
@@ -180,8 +211,8 @@ export function ProjectHeaderActions({
           title={
             current
               ? `${current.project_id} — ${current.scenario ?? current.rough_idea ?? ""}`
-              : projectId
-                ? projectId
+              : readableProjectId
+                ? readableProjectId
               : hasProjects
                 ? t.selectProject
                 : t.noProjects
@@ -190,8 +221,8 @@ export function ProjectHeaderActions({
             if (!runActive && hasProjects) setProjectMenuOpen((open) => !open);
           }}
         >
-          <span className={projectId ? "min-w-0 truncate text-slate-700" : "text-slate-400"}>
-            {current ? projectOptionLabel(current, true) : projectId ?? t.selectProject}
+          <span className={readableProjectId ? "min-w-0 truncate text-slate-700" : "text-slate-400"}>
+            {current ? projectOptionLabel(current, true) : readableProjectId ?? t.selectProject}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
         </button>
@@ -225,7 +256,7 @@ export function ProjectHeaderActions({
         )}
       </div>
 
-      {projectId && (
+      {readableProjectId && (
         <div ref={actionMenuRef} className="relative shrink-0">
           <button
             type="button"
@@ -238,7 +269,7 @@ export function ProjectHeaderActions({
           </button>
           {actionMenuOpen && (
             <div className="absolute right-0 top-full z-40 mt-3 w-32 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
-              {projectId && hasCostSummary && compact && (
+              {readableProjectId && hasCostSummary && compact && (
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
@@ -257,7 +288,7 @@ export function ProjectHeaderActions({
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
                   onClick={() => {
                     setActionMenuOpen(false);
-                    window.open(manualIndexUrl(projectId), "_blank", "noopener");
+                    window.open(manualIndexUrl(readableProjectId), "_blank", "noopener");
                   }}
                 >
                   <BookOpen className="h-3.5 w-3.5" />
@@ -266,7 +297,7 @@ export function ProjectHeaderActions({
               )}
               <button
                 type="button"
-                disabled={runActive || !canWrite}
+                disabled={runActive || !hasWriteAccess}
                 className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => {
                   setActionMenuOpen(false);
@@ -278,7 +309,7 @@ export function ProjectHeaderActions({
               </button>
               <button
                 type="button"
-                disabled={deletingProject || runActive || !canWrite}
+                disabled={deletingProject || runActive || !hasWriteAccess}
                 className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => {
                   setActionMenuOpen(false);

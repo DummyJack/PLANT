@@ -38,8 +38,8 @@ export const STAGE_GROUPS: StageGroup[] = [
       { key: "general_update_draft", label: "一般更新草稿" },
       { key: "default_formal_meeting", label: "預設正式會議" },
       { key: "default_update_draft", label: "預設更新草稿" },
-      { key: "DR", label: "設計緣由 (DR)" },
-      { key: "SRS", label: "需求規格 (SRS)" },
+      { key: "DR", label: "設計緣由" },
+      { key: "SRS", label: "規格化" },
     ],
   },
 ];

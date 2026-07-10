@@ -1,5 +1,11 @@
 import { agentLabel } from "@/constants/agents";
+import { UI_TEXT } from "@/i18n";
+import { useUiStore } from "@/stores/uiStore";
 import type { ChatMessage, RunEvent } from "@/types/api";
+
+function currentTexts() {
+  return UI_TEXT[useUiStore.getState().language];
+}
 
 function displayText(value: string): string {
   return value.replace(
@@ -377,7 +383,9 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
         action: event.step_id ?? event.action,
         stage: event.stage_id,
         status: "done",
-        text: workspaceEventText(event, event.step_id === "document_generation.generate_srs" ? "SRS" : "Design Rationale"),
+        text: event.step_id === "document_generation.generate_srs"
+          ? currentTexts().stageLabels.SRS
+          : currentTexts().stageLabels.DR,
         outputPath: event.output_path,
         timestamp: event.timestamp,
       };

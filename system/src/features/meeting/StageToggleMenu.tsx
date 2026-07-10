@@ -21,8 +21,8 @@ const STAGE_ROWS: Array<{
   { id: "draft", keys: ["draft"] },
   { id: "default_meeting", keys: ["default_formal_meeting", "default_update_draft"] },
   { id: "general_meeting", keys: ["general_formal_meeting", "general_update_draft"] },
-  { id: "DR", label: "Design Rationale", keys: ["DR"] },
-  { id: "SRS", label: "SRS", keys: ["SRS"] },
+  { id: "DR", keys: ["DR"] },
+  { id: "SRS", keys: ["SRS"] },
 ];
 
 const FORCE_REGENERATE_KEYS = new Set([

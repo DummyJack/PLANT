@@ -6,7 +6,7 @@ const STAGE_KEYWORDS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /model|建模/i, label: "系統建模" },
   { pattern: /draft|草案/i, label: "草案更新" },
   { pattern: /meeting|會議|開會/i, label: "正式會議" },
-  { pattern: /SRS|規格/i, label: "規格書產生" },
+  { pattern: /SRS|規格/i, label: "規格化" },
   { pattern: /DR|設計緣由/i, label: "設計緣由" },
 ];
 

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchConfig } from "@/api/config";
 import {
@@ -17,12 +17,19 @@ import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
-import type { FileTreeNode } from "@/types/api";
+import type { FileTreeNode, ProjectSummary } from "@/types/api";
 
 const LAYOUT_KEY = "plant-layout-v16";
 const TABLET_LAYOUT_KEY = "plant-layout-tablet-v1";
 const TABLET_AUX_LAYOUT_KEY = "plant-layout-tablet-aux-v1";
 const EMPTY_ITEMS: FileTreeNode[] = [];
+const ACTIVE_PROJECT_STATUSES = new Set([
+  "queued",
+  "running",
+  "waiting_for_human",
+  "cancelling",
+]);
+const PUBLIC_READABLE_RESULT_STATUSES = new Set(["completed", "idle"]);
 
 type LayoutMode = "desktop" | "tablet" | "mobile";
 
@@ -50,9 +57,21 @@ function useLayoutMode() {
   return mode;
 }
 
+function isPublicReadableProject(project: ProjectSummary | undefined) {
+  if (!project) return false;
+  const status = String(project.status_hint ?? "").trim();
+  return (
+    !!project.has_results &&
+    !project.active_run &&
+    !ACTIVE_PROJECT_STATUSES.has(status) &&
+    PUBLIC_READABLE_RESULT_STATUSES.has(status || "idle")
+  );
+}
+
 export default function App() {
   const projectId = useUiStore((s) => s.activeProjectId);
   const setActiveProjectId = useUiStore((s) => s.setActiveProjectId);
+  const canWrite = useUiStore((s) => s.canWrite);
   const clearMessages = useChatStore((s) => s.clearMessages);
   const clearAttachedDocs = useUiStore((s) => s.clearAttachedDocs);
   const setEnabledAgents = useUiStore((s) => s.setEnabledAgents);
@@ -67,7 +86,17 @@ export default function App() {
     queryFn: async () => (await fetchConfig()).config,
     refetchInterval: 3000,
   });
-  const { artifacts } = useProjectData(projectId);
+  const currentProject = useMemo(
+    () => bootstrap.data?.projects.find((project) => project.project_id === projectId),
+    [bootstrap.data?.projects, projectId],
+  );
+  const hasWriteAccess = canWrite || bootstrap.data?.activated === true;
+  const readableProjectId = useMemo(() => {
+    if (!projectId) return null;
+    if (hasWriteAccess) return projectId;
+    return isPublicReadableProject(currentProject) ? projectId : null;
+  }, [currentProject, hasWriteAccess, projectId]);
+  const { artifacts } = useProjectData(readableProjectId);
 
   useEffect(() => {
     const config = configQuery.data;
@@ -86,35 +115,38 @@ export default function App() {
   useEffect(() => {
     clearMessages();
     clearAttachedDocs();
-  }, [projectId, clearMessages, clearAttachedDocs]);
+  }, [readableProjectId, clearMessages, clearAttachedDocs]);
 
   useEffect(() => {
     if (!projectId || !bootstrap.data) return;
     if (bootstrap.isFetching) return;
-    const exists = bootstrap.data.projects.some(
-      (project) => project.project_id === projectId,
-    );
+    const project = bootstrap.data.projects.find((row) => row.project_id === projectId);
+    const exists = !!project;
     const hasActiveRun = !!bootstrap.data.active_runs?.[projectId];
-    if (hasActiveRun) return;
+    if (hasWriteAccess && hasActiveRun) return;
+    if (!hasWriteAccess && !isPublicReadableProject(project)) {
+      setActiveProjectId(null);
+      return;
+    }
     if (!exists) setActiveProjectId(null);
-  }, [bootstrap.data, bootstrap.isFetching, projectId, setActiveProjectId]);
+  }, [bootstrap.data, bootstrap.isFetching, hasWriteAccess, projectId, setActiveProjectId]);
 
   const items = artifacts.data?.items ?? EMPTY_ITEMS;
   const panelCount = Object.values(visiblePanels).filter(Boolean).length;
 
   const referencesPanel = visiblePanels.references ? (
     <Panel key="references" defaultSize={20} minSize={14}>
-      <ReferencePanel projectId={projectId} />
+      <ReferencePanel projectId={readableProjectId} />
     </Panel>
   ) : null;
   const workspacePanel = visiblePanels.workspace ? (
     <Panel key="workspace" defaultSize={45} minSize={30}>
-      <MeetingPanel projectId={projectId} />
+      <MeetingPanel projectId={readableProjectId} />
     </Panel>
   ) : null;
   const outputPanel = visiblePanels.output ? (
     <Panel key="output" defaultSize={35} minSize={22}>
-      <ResultPreview projectId={projectId} items={items} />
+      <ResultPreview projectId={readableProjectId} items={items} />
     </Panel>
   ) : null;
 
@@ -140,11 +172,11 @@ export default function App() {
     const auxItems = [
       visiblePanels.references && {
         key: "references",
-        node: <ReferencePanel projectId={projectId} />,
+        node: <ReferencePanel projectId={readableProjectId} />,
       },
       visiblePanels.output && {
         key: "output",
-        node: <ResultPreview projectId={projectId} items={items} />,
+        node: <ResultPreview projectId={readableProjectId} items={items} />,
       },
     ].filter(Boolean) as Array<{ key: string; node: React.ReactNode }>;
     const auxGroup =
@@ -172,11 +204,11 @@ export default function App() {
 
     if (panelCount === 1) {
       const only = visiblePanels.workspace ? (
-        <MeetingPanel projectId={projectId} />
+        <MeetingPanel projectId={readableProjectId} />
       ) : visiblePanels.output ? (
-        <ResultPreview projectId={projectId} items={items} />
+        <ResultPreview projectId={readableProjectId} items={items} />
       ) : (
-        <ReferencePanel projectId={projectId} />
+        <ReferencePanel projectId={readableProjectId} />
       );
       return (
         <PanelGroup direction="horizontal" className="h-full">
@@ -189,9 +221,9 @@ export default function App() {
 
     if (panelCount === 2 && visiblePanels.workspace) {
       const side = visiblePanels.references ? (
-        <ReferencePanel projectId={projectId} />
+        <ReferencePanel projectId={readableProjectId} />
       ) : (
-        <ResultPreview projectId={projectId} items={items} />
+        <ResultPreview projectId={readableProjectId} items={items} />
       );
       return (
         <PanelGroup
@@ -204,7 +236,7 @@ export default function App() {
           </Panel>
           <PanelResizeHandle />
           <Panel key="workspace-tablet" defaultSize={66} minSize={40}>
-            <MeetingPanel projectId={projectId} />
+            <MeetingPanel projectId={readableProjectId} />
           </Panel>
         </PanelGroup>
       );
@@ -244,7 +276,7 @@ export default function App() {
           auxGroup,
           visiblePanels.workspace && (
             <Panel key="workspace-tablet" defaultSize={66} minSize={40}>
-              <MeetingPanel projectId={projectId} />
+              <MeetingPanel projectId={readableProjectId} />
             </Panel>
           ),
         ])}
@@ -256,17 +288,17 @@ export default function App() {
     <div className="mobile-layout-scroll flex h-full min-w-0 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-2">
       {visiblePanels.workspace && (
         <section className="h-[78vh] min-h-[560px] min-w-0 shrink-0 overflow-hidden">
-          <MeetingPanel projectId={projectId} />
+          <MeetingPanel projectId={readableProjectId} />
         </section>
       )}
       {visiblePanels.output && (
         <section className="h-[72vh] min-h-[480px] min-w-0 shrink-0 overflow-hidden">
-          <ResultPreview projectId={projectId} items={items} />
+          <ResultPreview projectId={readableProjectId} items={items} />
         </section>
       )}
       {visiblePanels.references && (
         <section className="h-[56vh] min-h-[360px] min-w-0 shrink-0 overflow-hidden">
-          <ReferencePanel projectId={projectId} />
+          <ReferencePanel projectId={readableProjectId} />
         </section>
       )}
     </div>

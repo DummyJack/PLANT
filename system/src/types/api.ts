@@ -27,6 +27,7 @@ export interface BootstrapResponse {
   config: { loaded: boolean; error: string | null };
   model_summary: string;
   api_keys: { valid: boolean; error: string | null };
+  activated?: boolean;
   projects: ProjectSummary[];
   active_runs: Record<string, { run_id: string; status: RunStatus }>;
   interrupted_run_count: number;

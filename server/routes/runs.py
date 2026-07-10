@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from storage import Store
 from server.services.run_manager import sse_done, sse_format, sse_heartbeat
 from server.services.run_config import normalize_agent_models_to_valid_provider
-from .auth import require_project_read_access, require_write_access
+from .auth import can_read_project, is_activated, require_project_read_access, require_write_access
 
 
 router = APIRouter()
@@ -37,7 +37,14 @@ def manager(request: Request):
 def list_runs(request: Request, project_id: Optional[str] = Query(default=None)):
     if project_id:
         require_project_read_access(request, project_id)
-    return {"runs": manager(request).list_runs(project_id=project_id)}
+    runs = manager(request).list_runs(project_id=project_id)
+    if not project_id and not is_activated(request):
+        runs = [
+            run
+            for run in runs
+            if can_read_project(request, str(run.get("project_id") or ""))
+        ]
+    return {"runs": runs}
 
 
 @router.post("/runs")

@@ -542,8 +542,18 @@ function titleFromMessage(msg: ChatMessage) {
   );
 }
 
-function titleFromFileContent(content: string, type?: string, outputPath?: string) {
-  if (/^(output\/srs\.md|results\/srs\.html)$/i.test(outputPath ?? "")) return "SRS";
+function titleFromFileContent(
+  content: string,
+  type?: string,
+  outputPath?: string,
+  labels?: { designRationale: string; specification: string },
+) {
+  if (/^(output\/srs\.md|results\/srs\.html)$/i.test(outputPath ?? "")) {
+    return labels?.specification ?? "規格化";
+  }
+  if (/^(output\/design_rationale\.md|results\/design_rationale\.html)$/i.test(outputPath ?? "")) {
+    return labels?.designRationale ?? "設計緣由";
+  }
   if (isMarkdownPreview(type, outputPath)) return firstMarkdownHeading(content);
   if (type === "html") return firstHtmlHeading(content);
   return "";
@@ -1985,6 +1995,7 @@ function OutputPreview({
   modelImages: OutputFile[];
   momFiles: OutputFile[];
 }) {
+  const { t } = useI18n();
   const previewPath = resolvePreferredOutputPath(msg.outputPath, outputFiles) ?? msg.outputPath;
   const stakeholderStatementCard =
     msg.action === "stakeholder_statement" ||
@@ -2022,9 +2033,10 @@ function OutputPreview({
       file.data?.content ?? "",
       file.data?.type,
       previewPath,
+      { designRationale: t.stageLabels.DR, specification: t.stageLabels.SRS },
     );
     return fileTitle || titleFromMessage(msg);
-  }, [file.data?.content, file.data?.type, file.isError, file.isLoading, msg, previewPath, stakeholderStatementCard]);
+  }, [file.data?.content, file.data?.type, file.isError, file.isLoading, msg, previewPath, stakeholderStatementCard, t.stageLabels.DR, t.stageLabels.SRS]);
   const structuredBlocks = useMemo(() => {
     if (file.isLoading || file.isError) return [];
     if (isDocumentPreviewPath(previewPath)) {
@@ -3362,7 +3374,9 @@ export function ChatFeed({
             <p className="text-sm font-medium text-slate-500">
               {projectId
                 ? "已選擇此專案，按「執行」可以繼續討論"
-                : "請在下方輸入初步想法並按「執行」，Agent 團隊將協助您生成 SRS"}
+                : language === "en"
+                  ? "Enter an initial idea below and press Run. The Agent team will help you produce the Specification."
+                  : "請在下方輸入初步想法並按「執行」，Agent 團隊將協助您進行規格化"}
             </p>
           </div>
         )}

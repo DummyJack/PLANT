@@ -1929,6 +1929,22 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     });
   };
 
+  const blockHtmlDocumentFileDrops = () => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc || doc.documentElement.dataset.fileDropBlocked === "true") return;
+
+    const blockFileDrop = (event: globalThis.DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+
+    doc.documentElement.dataset.fileDropBlocked = "true";
+    doc.addEventListener("dragover", blockFileDrop, true);
+    doc.addEventListener("drop", blockFileDrop, true);
+  };
+
   const collectHtmlToc = () => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
@@ -1938,6 +1954,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       style.textContent = "html, body { background: #f8fafc !important; }";
       doc.head.appendChild(style);
     }
+    blockHtmlDocumentFileDrops();
     wireHtmlDocumentLinks();
     if (isGeneratedDocumentArtifact) {
       doc.querySelectorAll("h2").forEach((heading) => {

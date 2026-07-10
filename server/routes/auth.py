@@ -8,8 +8,13 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request, Response
 
+from server.services.security import validate_project_id
+
 ACTIVATION_COOKIE = "plant_activation"
 WRITE_FORBIDDEN_MESSAGE = "需要啟動碼才能執行此操作"
+READ_FORBIDDEN_MESSAGE = "需要啟動碼才能查看執行中或尚未產生成果的專案"
+ACTIVE_RUN_STATUSES = {"queued", "running", "waiting_for_human", "cancelling"}
+PUBLIC_READABLE_RESULT_STATUSES = {"completed", "idle"}
 
 
 def _valid_codes(base_dir: Path) -> List[str]:
@@ -36,13 +41,62 @@ def require_write_access(request: Request) -> None:
         raise HTTPException(status_code=403, detail=WRITE_FORBIDDEN_MESSAGE)
 
 
-def require_project_read_access(request: Request, project_id: str) -> None:
-    # Current deployment model has shared read access and activation-gated writes.
-    # Keep this hook centralized so project ownership checks can be added without
-    # touching every route.
+def project_exists(request: Request, project_id: str) -> bool:
+    project_id = validate_project_id(project_id)
     project_dir = request.app.state.base_dir / "projects" / project_id
-    if not project_dir.exists() or not project_dir.is_dir():
+    project_file = project_dir / "artifact" / "project.json"
+    return project_dir.exists() and project_dir.is_dir() and project_file.exists()
+
+
+def project_has_results(request: Request, project_id: str) -> bool:
+    project_id = validate_project_id(project_id)
+    results_dir = request.app.state.base_dir / "projects" / project_id / "results"
+    return results_dir.exists() and any(path.is_file() for path in results_dir.rglob("*"))
+
+
+def project_has_active_run(request: Request, project_id: str) -> bool:
+    project_id = validate_project_id(project_id)
+    run_manager = getattr(request.app.state, "run_manager", None)
+    if not run_manager:
+        return False
+    if run_manager.get_active_run(project_id):
+        return True
+    runs = run_manager.list_runs(project_id=project_id)
+    latest = runs[0] if runs else {}
+    return str(latest.get("status") or "").strip() in ACTIVE_RUN_STATUSES
+
+
+def project_latest_status(request: Request, project_id: str) -> str:
+    project_id = validate_project_id(project_id)
+    run_manager = getattr(request.app.state, "run_manager", None)
+    if not run_manager:
+        return "idle"
+    runs = run_manager.list_runs(project_id=project_id)
+    if not runs:
+        return "idle"
+    return str(runs[0].get("status") or "idle").strip() or "idle"
+
+
+def can_read_project(request: Request, project_id: str) -> bool:
+    try:
+        if not project_exists(request, project_id):
+            return False
+        if is_activated(request):
+            return True
+        return (
+            project_has_results(request, project_id)
+            and not project_has_active_run(request, project_id)
+            and project_latest_status(request, project_id) in PUBLIC_READABLE_RESULT_STATUSES
+        )
+    except HTTPException:
+        return False
+
+
+def require_project_read_access(request: Request, project_id: str) -> None:
+    if not project_exists(request, project_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    if not can_read_project(request, project_id):
+        raise HTTPException(status_code=403, detail=READ_FORBIDDEN_MESSAGE)
 
 
 def _cross_site_cookie(request: Request) -> bool:

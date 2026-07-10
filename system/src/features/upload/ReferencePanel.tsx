@@ -324,6 +324,27 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const uploadDisabled = !canWrite;
   const writeDisabled = !canWrite;
 
+  useEffect(() => {
+    const blockExternalFileDropOutsideLibrary = (event: globalThis.DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+
+      const target = event.target instanceof Element ? event.target : null;
+      const dropzone = target?.closest<HTMLElement>("[data-reference-dropzone]");
+      if (dropzone?.dataset.referenceDropzone === "enabled") return;
+
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+      if (event.type === "drop") event.stopPropagation();
+    };
+
+    window.addEventListener("dragover", blockExternalFileDropOutsideLibrary, true);
+    window.addEventListener("drop", blockExternalFileDropOutsideLibrary, true);
+    return () => {
+      window.removeEventListener("dragover", blockExternalFileDropOutsideLibrary, true);
+      window.removeEventListener("drop", blockExternalFileDropOutsideLibrary, true);
+    };
+  }, []);
+
   const handleReferenceDragStart = (event: DragEvent<HTMLElement>, row: { name: string }) => {
     if (uploadDisabled) {
       event.preventDefault();
@@ -453,7 +474,14 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   };
 
   const updateDragState = (event: DragEvent<HTMLElement>) => {
-    if (uploadDisabled) return;
+    if (uploadDisabled) {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      setDragOver(false);
+      setDragRejected(true);
+      return;
+    }
     if (isInternalAppDrag(event.dataTransfer)) {
       setDragOver(false);
       setDragRejected(false);
@@ -660,7 +688,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         disabled={uploadDisabled}
         title={t.uploadFile}
         className={cn(
-          "inline-flex h-8 shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40",
+          "inline-flex h-8 shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed",
           controlsNarrow && "w-8 justify-center px-0",
         )}
         onClick={() => fileRef.current?.click()}
@@ -691,11 +719,11 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       }
     >
       <div
+        data-reference-dropzone={uploadDisabled ? "disabled" : "enabled"}
         className={cn(
           "relative flex min-h-0 flex-1 flex-col bg-slate-50/50 transition-colors",
           dragOver && !uploadDisabled && "bg-slate-50",
-          dragRejected && !uploadDisabled && "cursor-not-allowed",
-          uploadDisabled && "opacity-50",
+          dragRejected && "cursor-not-allowed",
         )}
         onDragEnter={updateDragState}
         onDragOver={(e) => {
@@ -708,6 +736,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
           }
         }}
         onDrop={async (e) => {
+          e.preventDefault();
           if (uploadDisabled) return;
           if (isInternalAppDrag(e.dataTransfer)) {
             setDragOver(false);
@@ -726,13 +755,13 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
               className={cn(
                 "flex min-h-full w-full flex-col items-center justify-center px-3 py-8 text-center transition-colors",
                 dragOver && !uploadDisabled && "bg-slate-50",
-                dragRejected && !uploadDisabled && "cursor-not-allowed",
+                dragRejected && "cursor-not-allowed",
               )}
             >
               <FileUp className="mb-3 h-6 w-6 text-slate-400" />
               <p className="text-sm font-semibold text-slate-600">
                 {!canWrite
-                  ? t.activateBeforeUpload
+                  ? t.noReferenceFiles
                   : dragOver
                     ? t.releaseToUpload
                     : dragRejected
@@ -789,7 +818,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                         type="button"
                         title={t.deleteSelectedFiles}
                         disabled={writeDisabled}
-                        className="rounded p-1 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded p-1 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed"
                         onClick={() =>
                           setDeleteTarget({ kind: "multiple", names: selectedVisibleNames })
                         }
@@ -882,7 +911,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                               <button
                                 type="button"
                                 disabled={writeDisabled}
-                                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 disabled:cursor-not-allowed"
                                 onClick={() =>
                                   setDeleteTarget({ kind: "single", names: [row.name] })
                                 }

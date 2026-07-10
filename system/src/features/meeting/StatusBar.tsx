@@ -73,8 +73,8 @@ function mapLogToAgentAction(message: string, t: UiTexts): { agent: string; acti
     { pattern: /領域研究|domain|research/i, agent: "expert", action: t.domainResearch },
     { pattern: /系統模型|PlantUML|use case|用例圖|情境圖|model/i, agent: "modeler", action: t.systemModelGeneration },
     { pattern: /draft|草稿/i, agent: "analyst", action: t.updateDraft },
-    { pattern: /SRS|軟體需求規格/i, agent: "documentor", action: "SRS" },
-    { pattern: /Design Rationale|design_rationale|設計緣由/i, agent: "documentor", action: "Design Rationale" },
+    { pattern: /SRS|軟體需求規格|規格書|規格化/i, agent: "documentor", action: t.stageLabels.SRS },
+    { pattern: /Design Rationale|design_rationale|設計緣由/i, agent: "documentor", action: t.stageLabels.DR },
   ];
 
   const hit = rules.find(({ pattern }) => pattern.test(text));

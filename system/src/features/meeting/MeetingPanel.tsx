@@ -290,6 +290,28 @@ function reopenDomainResearchForReferences(
   };
 }
 
+function normalizedProjectIdea(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function resolveExistingProjectForIdea(
+  bootstrap: BootstrapResponse | undefined,
+  idea: string,
+) {
+  const normalized = normalizedProjectIdea(idea);
+  if (!normalized) return null;
+  const matches = (bootstrap?.projects ?? []).filter((project) => {
+    const roughIdea = normalizedProjectIdea(project.rough_idea);
+    const scenario = normalizedProjectIdea(project.scenario);
+    return roughIdea === normalized || scenario === normalized;
+  });
+  if (!matches.length) return null;
+  return [...matches].sort((a, b) =>
+    String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")) ||
+    String(b.project_id).localeCompare(String(a.project_id)),
+  )[0];
+}
+
 export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -660,7 +682,17 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
             queryFn: async () => (await fetchConfig()).config,
           }))
         : undefined;
-      const targetProjectId = projectId ?? (await createProject(runIdea)).project_id;
+      const existingProject = projectId ? null : resolveExistingProjectForIdea(
+        queryClient.getQueryData<BootstrapResponse>(["bootstrap"]) ??
+          (await queryClient.fetchQuery({
+            queryKey: ["bootstrap"],
+            queryFn: fetchBootstrap,
+          })),
+        runIdea,
+      );
+      const targetProjectId =
+        projectId ?? existingProject?.project_id ?? (await createProject(runIdea)).project_id;
+      const continuingExistingProject = !!projectId || !!existingProject;
       if (!projectId && stagedReferenceFiles.length) {
         for (const file of stagedReferenceFiles) {
           await uploadReference(targetProjectId, file);
@@ -675,7 +707,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
       const attachedReferencePaths = Array.from(
         new Set([...attachedPaths, ...stagedPaths]),
       );
-      const stageOverridesForRun = projectId
+      const stageOverridesForRun = continuingExistingProject
         ? reopenDomainResearchForReferences(
             restrictCompletedStageOverrides(
               stageOverridesForCheckpoint(
@@ -689,10 +721,10 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         : undefined;
       const run = await createRun({
         project_id: targetProjectId,
-        mode: projectId ? "continue" : "new",
-        rounds: projectId || meetingRoundsOverridden ? meetingRounds : undefined,
+        mode: continuingExistingProject ? "continue" : "new",
+        rounds: continuingExistingProject || meetingRoundsOverridden ? meetingRounds : undefined,
         max_issues: meetingMaxIssuesOverridden ? meetingMaxIssues : undefined,
-        rough_idea: runIdea || undefined,
+        rough_idea: continuingExistingProject ? undefined : runIdea || undefined,
         attached_reference_paths: attachedReferencePaths.length
           ? attachedReferencePaths
           : undefined,
