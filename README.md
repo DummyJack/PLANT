@@ -6,14 +6,14 @@
 
 請先安裝：
 
-- Python 3
+- Python
 - Node.js
 - npm
 
 確認環境是否已安裝：
 
 ```bash
-python3 --version
+python --version
 node --version
 npm --version
 ```
@@ -23,7 +23,7 @@ npm --version
 建立虛擬環境：
 
 ```bash
-python3 -m venv venv
+python -m venv venv
 ```
 
 macOS 或 Linux：
@@ -77,7 +77,17 @@ npm install
 
 ```bash
 python -m server.run
+
+uvicorn server.app:app --reload
 ```
+
+- 修改 Python 程式碼後會自動重新啟動。
+
+```bash
+uvicorn server.app:app
+```
+
+- 修改程式碼後不會自動重新啟動，適合正式環境。
 
 開啟另一個終端機並啟動前端：
 
