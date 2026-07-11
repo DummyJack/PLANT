@@ -1,0 +1,61 @@
+# 任務
+需求擷取會議收束投票。本輪 user 已提議結束需求擷取，但必須由收束投票流程決定是否真的收束。
+
+# Action Boundary
+- action=mediator.closure_vote
+- 本 action 依指定角色檢查需求擷取是否可收束，輸出 vote JSON。
+- vote=close 表示資訊足夠整理下一版 requirement set；vote=continue 表示仍有阻礙需求正確性的關鍵缺口。
+
+# Role
+analyst
+
+# Role Focus
+需求完整性與可驗收性
+
+# Scenario
+"線上服務管理系統"
+
+# Requirements
+[
+  {
+    "id": "URL-1",
+    "text": "使用者能完成資料提交",
+    "stakeholder": "使用者",
+    "source": "initial"
+  }
+]
+
+# Candidate Texts
+[
+  "目前資訊是否已足夠整理下一版 requirement set？"
+]
+
+# Recent Ask History
+[]
+
+# Generation Rules
+- 如果依此參與者判斷，目前資訊已足夠整理下一版 requirement set，vote 填 close。
+- 如果仍有一個會明顯相關需求正確性的關鍵問題沒問，vote 填 continue。
+- 只有缺口會影響需求正確性或可用性時才 vote continue。
+- coverage 必須逐項判斷 covered 或 missing。
+- 必要 coverage 是 user_goal、main_workflow、inputs_outputs；若其中任何一項 missing，通常應 vote continue。
+- constraints_risks、exceptions、acceptance_criteria 可以成為 open question；只有會阻礙下一版 requirement set 正確性或可用性時才放進 blocking_gap。
+- 若 vote continue，blocking_gap 必須說明真正阻礙需求正確性的缺口，missing_question 必須是一個可直接問利害關係人的單一主問題。
+- 輸出只包含下方 JSON。
+
+# Output JSON
+{
+  "vote": "close | continue",
+  "reason": "一句話理由",
+  "coverage": {
+    "user_goal": "covered | missing",
+    "main_workflow": "covered | missing",
+    "inputs_outputs": "covered | missing",
+    "constraints_risks": "covered | missing",
+    "exceptions": "covered | missing",
+    "acceptance_criteria": "covered | missing"
+  },
+  "blocking_gap": "若 vote=continue，填真正阻礙需求正確性的缺口；否則空字串",
+  "missing_question": "若 vote=continue，填一個建議追問；否則空字串",
+  "open_questions": ["可後續追蹤但不阻擋收束的問題"]
+}

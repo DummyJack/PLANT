@@ -1,0 +1,61 @@
+# 任務
+請根據非預設議題提案進行分流，產生本輪正式會議議題、backlog 與 discarded。
+
+# 非預設議題提案
+[
+  {
+    "title": "資料修改規則是否一致",
+    "category": "clarify_requirement",
+    "issue_focus": "requirement_completeness",
+    "importance": "high",
+    "reason": "修改規則影響需求可驗收性",
+    "sources": [
+      {
+        "artifact": "URL",
+        "ids": [
+          "URL-1",
+          "URL-2"
+        ],
+        "evidence": "兩筆需求對修改時點描述不一致"
+      }
+    ]
+  }
+]
+
+- 本輪 round=1，is_last_round=false，max_issues=5，already_discussed_artifact_ids=["URL-1"]。
+- 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。
+- proposal 是候選訊號；Mediator 負責合併、淘汰、排序與定題。
+- proposed_by="human" 是人工加入議題；只要格式有效且數量未超過 max_issues，必須納入本輪 issues，不得直接 discarded、不得只放 backlog，也不得被一般 agent 議題擠掉。
+- human 議題不必固定排第一；Mediator 應依 blocking 程度、依賴順序、衝突風險、SRS 定稿影響安排討論順序。若 human 議題依賴其他議題的結論，可排在相關前置議題之後。
+- proposal.category 只表示正式會議類型；proposal.issue_focus 表示排序焦點。
+- proposal.issue_level 分為 blocking / improvement：
+  - blocking：會阻礙 SRS 定稿、可驗收性、可追蹤性、一致性、責任邊界或外部證據底線，優先進 issues。
+  - improvement：可改善需求品質、模型一致性、風險揭露或驗收完整性；只有本輪容量足夠且不擠壓 blocking 時才進 issues，否則放 backlog。
+- 一般議題不得重複提出預設會議已處理的泛稱衝突解決或需求正式化；需求衝突只由預設會議處理。
+- 需要正式會議才能處理的共同問題可進 issues/backlog；只有純格式、純措辭、無決策影響且不影響驗收、追蹤、責任邊界、風險、模型一致性或 SRS 可用性的項目才放 discarded。
+- 正式議題優先代表一組相關需求背後的共同問題。
+- 單一 REQ、單一 open question、單一 acceptance criteria、單一 source 或單一模型項目，只要 source/evidence 具體且可能影響驗收、追蹤、責任邊界、風險、模型一致性或 SRS 可用性，也可以進 issues/backlog；不要只因為範圍小就丟棄。
+- 若多筆提案指向同一共同問題，合併成一個議題，保留 trace.proposal_ids 與來源追蹤。
+- 在不犧牲 blocking 優先級與具體 source 的前提下，issues 應盡量涵蓋不同 category / issue_focus；避免本輪全部選成同一類型，除非其他類型沒有足夠證據或都已討論過。
+- 若同一類型有多筆相近候選，先選該類型中最值得討論、最能阻礙或改善 SRS 品質的一筆代表；其餘合併或放 backlog。
+- 避免重複討論 already_discussed_artifact_ids 已涵蓋的提案。
+- 不要新增輸入資料沒有支持的新需求。
+
+1. requirement_completeness：既有 REQ-* 缺或弱化 acceptance criteria、NFR category、metric、validation、外部限制影響、source coverage，或 title、description、rationale、risks、assumptions 不清楚、混雜、不可測、不可追溯、只是重述需求。
+2. boundary_responsibility：系統、人工、第三方或角色責任不清。
+3. tradeoff：多方需求有方案取捨但尚未形成衝突。
+4. model_alignment：模型揭露流程、狀態、actor、資料或責任不一致。
+5. new_requirement：新增或延伸需求；只有前面高優先缺口不阻礙定稿時才選入。
+
+- issues：blocking 優先；若仍有容量，可放入 source 具體且能明顯改善 Specific / Testable / Traceable / Consistent 的 improvement。
+- backlog：有價值但本輪排不下、證據尚不成熟、或屬 improvement 但容量不足的候選。
+- discarded：低價值、重複、已涵蓋、沒有 source、只補格式/措辭且不影響需求品質，或不需要正式會議的候選。
+- importance=low 除非最後一輪且會阻礙定稿，否則放 discarded；不要放 backlog。
+- discarded 每筆至少保留 title、reason、source proposal id 或 trace，並用一句話說明丟棄原因；discarded 不會進入會議，但會保留供稽核。
+
+# 輸出 JSON
+{
+  "issues": [],
+  "backlog": [],
+  "discarded": []
+}

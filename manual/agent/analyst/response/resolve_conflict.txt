@@ -1,0 +1,53 @@
+# Issue
+議題 [I-R1-002]: 解決資料修改衝突
+描述: 針對 CR-1 的解決選項做取捨。
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "服務管理",
+        "description": "系統應支援線上服務管理"
+      }
+    ]
+  }
+}
+
+# 任務
+直接針對既有衝突報告中的解決選項與建議解法做取捨。
+
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與需求處理建議。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
+
+# Rules
+# Resolution Response Boundary
+- 本 response 只針對既有 conflict resolution options 做取捨或調整建議。
+- 不重新執行 conflict detection、不改變 Conflict/Neutral label。
+- 不直接更新 artifact；若需要修改 URL，放在 stance.proposal.url_updates 供會議流程處理。
+
+- 不重新判斷 Conflict/Neutral，也不重新執行 conflict detection。
+- 以衝突報告已提供的解決選項與建議解法為主要討論對象。
+- text 需說明：哪些既有方案可採用、哪些需要調整、調整理由、以及會影響哪些需求或驗收條件。
+- 必須把結論落到 URL 層級：在 stance.proposal.url_updates 輸出 keep / revise / remove；revise 必須給出改寫後 text。
+- url_updates 不得把多筆 URL 串成一筆巨大需求；若需要語意整合，應保留 URL 粒度並在後續 REQ 中整合。
+- 若會議內容已足以採用或調整某個 resolution，stance.state 填 ready_to_close，stance.proposal 填具體建議方案與 url_updates。
+- 若缺少業務取捨、領域規則或模型影響判斷，stance.state 填 needs_more_discussion，stance.proposal 仍須填目前最合理的候選方案或可裁決選項；不要提出 open_questions。
+- 若無法在會議中做出內容抉擇，stance.proposal 應整理可交由人類裁決的方案，而不是要求重新分析衝突或延長討論。
+
+# Output JSON
+{
+    "text": "依需求分析立場對此議題的自然會議發言",
+    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "會影響本議題結論的具體問題", "reason": "此答案會如何影響本議題結論"}],
+    "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
+- 不新增未被來源支持的新需求。
+- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。

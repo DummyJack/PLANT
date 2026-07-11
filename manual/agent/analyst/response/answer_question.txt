@@ -1,0 +1,43 @@
+# Issue
+議題 [OQ]: 回答 analyst 的問題
+描述: 修改規則應以送審前還是核准後為準？
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "服務管理",
+        "description": "系統應支援線上服務管理"
+      }
+    ]
+  }
+}
+
+# 任務
+以需求分析角度直接回答提問。
+
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與需求處理建議。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
+
+# Rules
+- 只回答 description 中的問題；不要做正式議題提案或收斂判斷。
+- 回答需聚焦需求語意、scope、驗收條件、來源追蹤或需求缺口。
+- 不更新專案資料，不輸出 stance。
+- open_questions 預設輸出空陣列；只有問題本身無法回答且答案會影響本議題結論時才提出。
+
+# Output JSON
+{
+    "text": "直接回答問題",
+    "open_questions": []
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
+- 不新增未被來源支持的新需求。
+- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。

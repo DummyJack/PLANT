@@ -1,0 +1,47 @@
+# 任務
+根據已收斂的正式會議議題，整理可寫入 formal_meeting 的具體決議。
+
+# Action Boundary
+- action=mediator.close_issue
+- 本 action 將已收斂議題整理成 formal_meeting decision JSON。
+- decision、requirement_changes、model_changes 與 open_questions 只反映本議題已收斂內容。
+
+# Issue
+標題: 資料修改規則是否一致
+類型: clarify_requirement
+描述: 使用者、審核人員與管理者對資料修改條件的理解是否一致？
+預期結果: 
+
+# Readiness
+{
+  "stance": "ready_to_close",
+  "summary": "主要立場已收斂"
+}
+
+# Discussion
+使用者：修改規則應在送審前。
+審核人員：核准後不可修改。
+
+# 決議規則
+- 整理已明確收斂的內容。
+- decision 必須是可執行決議，不要只寫「可以結束」。
+- requirement_changes / model_changes 只列本議題造成或確認的變更；沒有就回空陣列。
+- open_questions 只列仍會影響 SRS 的未解問題；沒有就回空陣列。
+- affected_requirement_ids 使用議題來源追蹤中的 REQ-*；沒有就回空陣列。
+- affected_conflict_ids 優先使用議題來源追蹤中的 CR-*；若本議題是解決需求衝突，必須包含每一個來源 CR-*。
+- 請使用繁體中文產生所有自然語言內容。技術術語、產品名稱、API 名稱、程式碼識別字與必要 ID 可保留其慣用形式。
+
+# Output JSON
+{
+  "summary": "決議摘要",
+  "decision": "具體決議",
+  "agreed_points": ["已同意重點"],
+  "affected_requirement_ids": ["REQ-1"],
+  "affected_conflict_ids": ["CR-1"],
+  "requirement_changes": [{"id": "REQ-1", "change": "confirmed_or_updated"}],
+  "model_changes": [{"id": "SM-1", "change": "updated"}],
+  "open_questions": [{"question": "仍待確認問題", "related_source": "REQ-1"}]
+}
+# 輸出契約
+- 只輸出符合指定 schema 的合法 JSON。
+- 不輸出 Markdown 說明、程式碼區塊、前言或額外文字。

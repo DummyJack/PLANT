@@ -1,0 +1,82 @@
+# Context
+{
+  "scenario": "線上服務管理系統",
+  "scope": {
+    "in_scope": [
+      "線上服務管理"
+    ],
+    "out_of_scope": []
+  },
+  "requirements": [
+    {
+      "id": "URL-1",
+      "text": "使用者能在送審前修改資料",
+      "stakeholder": "使用者"
+    },
+    {
+      "id": "URL-2",
+      "text": "核准後不可修改資料",
+      "stakeholder": "審核人員"
+    }
+  ],
+  "pairwise_conflicts": [
+    {
+      "pair_index": 0,
+      "final_label": "Conflict",
+      "final_type": "scope",
+      "reason": "取消時點不一致"
+    }
+  ]
+}
+
+# 任務
+根據輸入的 User Requirements 判斷 Conflict / Neutral。
+
+# Action Boundary
+- action=detect_conflicts
+- 本 action 只輸出 conflicts JSON。
+
+# Generation Rules
+- 本步做 requirement candidate conflict classification。
+- 輸出呼叫端指定的 JSON。
+- 產品情境與需求範圍只作為產品邊界背景；Conflict / Neutral 仍以 User Requirements 原文為主要依據。
+
+# 判斷要求
+- final_label 只用英文 "Conflict" 或 "Neutral"。
+- 若 final_label 是 "Conflict"，必須輸出 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- 若無法歸入前八類但仍是 Conflict，final_type 使用 other。
+- Neutral 項目包含 final_label 與 reason。
+- 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
+- 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- Conflict 不限於執行時互斥；只要兩項需求改變同一功能、資料、使用者權限、流程、輸出、限制或驗收目標的 SRS 邊界，且不能原樣同時寫入同一份 SRS，就標為 Conflict。
+- 先判斷是否同一需求槽位；不同槽位且可並存時標 Neutral。同一槽位內若限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界不同，且需要合併、改寫、刪除或人工裁定，標為 Conflict。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，標為 Conflict；若只是可無損合併的同義重複或不同上下文/流程階段，標為 Neutral。
+- 不要只因兩項需求可同時實作、可做成選項、可合併、或其中一項較具體，就判 Neutral；只有原文清楚表示不同情境、不同使用者群體、不同事件、不同資料類型、不同階段，或一者明確包含另一者且不改變驗收邊界時，才判 Neutral。
+- 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
+
+# 輸出要求
+- 兩兩判斷：只需輸出 pair_index、final_label、reason；若 final_label 是 Conflict，再輸出 final_type。
+- 整體判斷：Conflict 需包含 requirement_ids。
+- 整體判斷的 requirement_ids 必須精確對應直接涉及的需求。
+
+# Input
+- User Requirements、pairwise_conflicts 與相關 artifact context 由 runtime context 提供。
+
+# Generation Rules
+- 本步只找跨多筆需求的共同決策主題。
+- pairwise_conflicts 作為可聚合線索之一。
+- 第一步先從輸入需求與 pairwise_conflicts 中抽象出共同「決策主題」；不要使用預設主題清單。
+- 第二步才判斷：同一決策主題下，是否有兩筆以上 User Requirements 不能直接同時定稿。
+- group 可以包含 2 條或 3 條以上需求；requirement_ids 至少 2 個。2 條也可以，但必須代表共同決策主題。
+- 整體判斷應以共同決策主題、規則邊界或一致性問題選取需求。
+- pairwise_conflicts 只作為參考；若多個 pairwise conflicts 其實是同一個決策主題，請聚合成一筆 Conflict。
+- 即使沒有 pairwise_conflicts，只要 User Requirements 顯示多筆需求在同一決策主題下無法一起寫入 SRS，也要輸出 Conflict。
+- 若只是資訊不足、需要補問、語意模糊但尚未形成不能同時定稿的需求關係，可以在 reason 中說明分類依據。
+- conflicts 收錄會影響需求取捨、改寫、合併、刪除、責任分工或人類裁決的 Conflict。
+- 每筆 Conflict 的 reason 必須說明「共同決策主題」以及「為什麼這些需求不能直接同時定稿」。
+- 若 group 來自既有 pairwise_conflicts，才輸出 related_pairs；若是直接從 User Requirements 發現，related_pairs 可省略或輸出空陣列。
+- 若沒有可定義的 group conflict，輸出 {"conflicts": []}。
+- conflicts 只包含 final_label="Conflict" 的項目。
+
+# Output JSON
+{"conflicts":[...]}

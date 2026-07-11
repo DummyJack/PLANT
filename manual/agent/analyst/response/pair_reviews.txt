@@ -1,0 +1,93 @@
+# Issue
+議題 [I-R1-003]: 衝突再審查
+描述: 逐筆再審查 Conflict/Neutral 項目。
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "服務管理",
+        "description": "系統應支援線上服務管理"
+      }
+    ]
+  }
+}
+
+# 任務
+請逐筆再審查目前這批 Conflict/Neutral 項目，先根據 User Requirements（URL-*）原文獨立重判，並將重判結果填入 proposed_label。
+
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與需求處理建議。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
+
+# Rules
+# Conflict Response Boundary
+- 本 response 提供指定 pair/multiple conflict 的會議審查意見。
+- 後續 signoff action 會裁定 final_label。
+
+- 外層必須只有 text 欄位。
+- text 的值必須是 JSON object 字串，不是巢狀 object。
+- text JSON 結構必須為：{"pair_reviews":[...]}。
+- pair_reviews 必須逐筆涵蓋每個 [PAIR-xxx] 或 [MULTIPLE-xxx]；每筆都要有：id、proposed_label、reason。
+- 不可用類 JSON 條列或文字摘要取代合法 JSON。
+- 先只根據 User Requirements（URL-*）原文獨立判斷 proposed_label；不要先順著既有標籤想理由。
+- 本 action 只判斷需求語意與 SRS 邊界：判斷是否同一需求槽位、是否能原樣共同放入 SRS、是否需要合併、改寫、刪除或人工裁定。
+- Conflict 不限於執行時互斥；若同一需求槽位的支援範圍、限制、條件、門檻、輸出、允許集合或驗收口徑不同，且 SRS 必須合併、改寫、選擇、刪除或交由人工裁定，proposed_label 應為 Conflict。
+- 判斷骨架：
+  1. 不同需求槽位且可並存：通常 Neutral。
+  2. 同一需求槽位且改變支援集合、義務強度、門檻、輸出行為、允許/禁止範圍或驗收邊界：通常 Conflict。
+  3. 若有明確共存條件：不同情境/例外、不同條件分支、限定試辦範圍、方法與必要配件/前置條件通常 Neutral。
+  4. 資訊不足時維持 current_label 並說明缺哪個關鍵依據。
+- 同一槽位中，標準/非標準、精確/半精確、即時/未限定、量化/未量化、一般/具體、子集/超集、不同 UI 輸出、不同授權層級、shall/must/should/may 等規範強度差異，支持 Conflict；不要用「可同時實作、可擴充、可合併、可澄清」改判 Neutral。
+- 對同一事件要求不同輸出物名稱（box/dialog/list/message）、對同一資料集合要求 standard/non-standard、對同一能力要求 full/partial/semi 程度、對同一繼承來源要求 higher/other level、對同一支援範圍要求 named subset/all，視為需要 SRS 統一或裁定，支持 Conflict。
+- 若 requirement 原文明確指定 display/output 形式，不要把 box/dialog/list/message 等差異降格為 implementation detail；同一事件的輸出形式差異支持 Conflict。
+- standard/non-standard、named subset/all 即使表面上可同時支援，也代表支援集合邊界不同；不要用「broader includes subset」或「additive」改判 Neutral。
+- 若其中一項只是用 including / such as / for example 舉例說明支援資料，不是 only/限定集合，與另一項 named subset/standard 通常可並存，支持 Neutral。
+- 若兩句除了 shall/must/should/may 等規範助動詞外幾乎相同，仍視為規範強度不同，支持 Conflict，不是同義 Neutral。
+- 同一既有流程中，一項要求 mimic/preserve/follow existing practice，另一項要求 improve/make practical/change the same process，視為流程保留程度不同，支持 Conflict；不要只因都能改善使用者體驗就支持 Neutral。
+- 同一 capability 中 personalized 與 semi-personalized 是支援程度與驗收邊界差異，支持 Conflict。
+- 同一品質或效率目標中，一般 improvement 與 quantified threshold 是驗收門檻差異，支持 Conflict。
+- 互補 guard condition（例如條件成立時做 A、條件不成立時等待/做 B）、方法與必要設備/憑證/步驟、階層深度與成員資格限制、限定試辦範圍與一般規則，除非原文要求同一條件下只能二選一，否則支持 Neutral。
+- 若一項需求限定在 pilot/trial/exception/special case，另一項沒有相同限定範圍，即使兩者方法不同，也支持 Neutral；只有兩者都明確落在同一限定範圍或同一條件下才支持 Conflict。
+- 不要推定 pilot/trial/exception/special case 與一般規則必然重疊；除非兩句原文都明確指向同一限定範圍，否則支持 Neutral，即使方法不同或一般規則使用 only。
+- 若一項是 only if/enough/unique/success 條件成立時的自動行為，另一項是 if not/not enough/not unique/failure 條件下的等待或人工選擇，這是互補 guard condition，支持 Neutral。
+- 若一項描述結構能力（hierarchy/subclass/tree depth/creation），另一項描述成員資格、憑證、設備、PIN、reader 或其他前置條件，不是同一槽位，支持 Neutral；不要把 hierarchy depth 與 membership cardinality 合併成同一衝突。
+- 「允許客製能力」與「降低/最小化客製程度」可作為能力與政策並存；除非兩者同時對同一設定寫出 only/禁止/不得，否則支持 Neutral，不要只因方向看似相反就判 Conflict。
+- 具體能力（例如 creation of personalized templates）與廣義設計政策（例如 minimize individual customization / similar across practices）可並存；除非政策明確禁止該具體能力，支持 Neutral。
+- user class 是否可替代或補充 security keys，與 user class 可定義在 hospital-wide/service scope，是用途限制與組織範圍，不是同一槽位，支持 Neutral。
+- 一般 allow/support 某能力，與提供該能力的強化版本（例如 real-time、decision support、advanced support）通常是一般能力與細化能力，可並存；除非兩者都定義同一必須時效或互斥門檻，支持 Neutral。
+- 若兩項都在同一敏感資料顯示槽位，但一項要求 authorized users 可見/顯示，另一項要求 only if not authorized 才顯示，屬於相反顯示條件，支持 Conflict。
+- 可無損合併不是 Neutral 的充分理由；若合併前必須選擇某個詞、範圍、門檻、格式或規範強度，支持 Conflict。完全同義且不改變任何邊界才支持 Neutral。
+- 不要只因兩項需求可同時實作、可設為選項、可合併、或其中一項較具體，就支持 Neutral；Neutral 必須指出明確的不同槽位、不同情境、互補條件或無損包含關係。
+- reason 必須寫成完整審查意見：說明獨立判斷依據，並說明需求語意、範圍、條件、互斥點或可驗證性；不要只重述兩句需求文字。
+- proposed_label 可以和其他審查者相同，但 reason 必須提供獨立判斷依據；不要只重複一般語意判斷。
+- reason 必須根據需求原文或會議中可追溯的證據，不可臆測不存在的需求、設計方案或外部情境。
+- 需特別檢查：是否為同一需求槽位、重複／近似重複、細化、範圍重疊，或需要合併、改寫、刪除、人工裁定後才能放入軟體需求規格書。
+- 若只是語意模糊、範圍未明、使用者群體不同、情境不同、優先級不同或仍需補充條件，不能因看不出衝突就直接支持 Neutral。
+- 若支持 Conflict，必須清楚指出互斥點；若支持 Neutral，必須清楚說明為何既不衝突、也不重複，且無直接語義關係。
+- 以兩層判斷收斂理由：先說是否同一需求槽位，再說同槽位差異是否改變驗收邊界或需要裁定。
+- 不要處理外部法規/合規研究，也不要處理模型可共存性推論；若只能從那些角度判斷，維持 current_label 並說明非本職責範圍。
+- 不要跳到實作方案或最終決策。
+- 外層輸出只包含 text 欄位的 JSON object。
+- text 必須是 JSON object 字串，不是巢狀 object。
+- text JSON 結構必須為 {"pair_reviews":[...]}。
+- pair_reviews 必須逐筆涵蓋 本輪必須涵蓋的 pair id 中每個 id，不能遺漏、不能新增未知 id。
+- 每筆 pair_reviews 都必須有 id、proposed_label、reason。
+- proposed_label 只能是 Conflict 或 Neutral；它不是最終裁決，而是依本 action 判斷範圍提出的審查標籤。
+- 若 pair 不屬於本 action 判斷範圍，proposed_label 應維持 current_label；current_label 來自每筆 pair_card.current_label 或 conflict_review_contract.current_labels_by_id。
+- 本輪必須涵蓋的 pair id：["PAIR-1"]
+
+# Output JSON
+{
+    "text": "{\"pair_reviews\":[{\"id\":\"PAIR-1 或 MULTIPLE-1\",\"proposed_label\":\"Conflict | Neutral\",\"reason\":\"完整審查理由\"}]}"
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
+- 不新增未被來源支持的新需求。
+- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。

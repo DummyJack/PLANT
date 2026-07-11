@@ -1,0 +1,68 @@
+# Skill: requirements-analyst
+
+**Universal User Story Format:**
+```yaml
+User Story:
+  as_a: [user role/persona]
+  i_want: [feature/capability]
+  so_that: [business value/benefit]
+```
+
+# 任務
+從本輪利害關係人回答中抽取尚未記錄的新 User Requirements。
+
+# Action Boundary
+- action=extract_requirement
+- 本 action 將本輪利害關係人回答轉成 requirement_candidates JSON。
+- requirement_candidates 是尚未正式化的 User Requirement 候選項。
+- runtime 會驗證後合併到 artifact.URL。
+
+# Context Rules
+- Stakeholder 回答是唯一可新增候選需求的直接來源。
+- 產品情境只作為語境背景，不可單獨產生新需求。
+- 目前已有的候選需求摘要只用於去重，不可改寫既有需求。
+
+# Input
+產品情境:
+"線上服務管理系統"
+
+Stakeholder 回答:
+{
+  "name": "使用者",
+  "type": "primary_user",
+  "text": "我希望可以修改尚未核准的資料。"
+}
+
+# Generation Rules
+1. 只抽取輸入明確支持的需求。
+2. 保持粗粒度；同一個利害關係人目標下的細節要合併。
+3. 不要把按鈕、欄位、通知、狀態變化、例外、SOP 步驟或驗收細節拆成獨立需求。
+4. 每筆 text 應能回答：哪個利害關係人在什麼目標或情境下，需要什麼能力、結果或限制。
+5. 抽取時以 skill 的 User Story 三要素判斷需求是否成立：as_a、i_want、so_that。
+6. 輸出時不要使用 User Story 欄位；請合併成一條中性的 User Requirement text。
+7. 若輸入包含數值門檻、驗收條件、系統處理方式或技術限制，URL 只保留 stakeholder goal；細節留到 refine_requirement。
+8. 不要產生系統規格、實作細節、量化指標、驗證方式、優先級、相依性、風險或假設。
+9. 不使用第一人稱；不要輸出「我需要」「我希望」「我擔心」等發言語氣。請改寫為以利害關係人為主詞的中性需求描述。
+10. 若輸入有利害關係人名稱，沿用原名稱。
+
+# 輸出
+- 只輸出 requirement_candidates JSON object。
+- requirement_candidates 每筆只包含 text。
+- text 用中性需求描述，表達該利害關係人的目標、需求或限制。
+- 若回答只是重述、同義改寫或細化目前已有候選需求，且沒有形成新的 stakeholder goal、need、constraint 或責任邊界，回傳空陣列。
+- 若回答補充的條件、例外、處理方式、SOP 或量化門檻會改變 stakeholder goal、need、constraint、責任邊界或可接受/不可接受情況，必須抽成粗粒度 User Requirement。
+- 單純補欄位、單一步驟、單一 UI 細節或驗收方式，且不形成新的需求目標或限制時，回傳空陣列。
+- requirement_candidates 每筆只包含 text。
+
+# Output JSON
+{
+  "requirement_candidates": [
+    {"text": "候選 User Requirement"}
+  ]
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 REQ、scope_updates、draft_plan 或 conflicts。
+- 不輸出舊格式，例如最外層直接使用陣列。
+- 不從產品情境或既有候選需求摘要單獨創造新需求。

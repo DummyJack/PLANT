@@ -1,0 +1,64 @@
+# Issue
+議題 [ELICIT-1]: 需求擷取訪談
+描述: 補足資料修改與狀態規則的理解缺口。
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "服務管理",
+        "description": "系統應支援線上服務管理"
+      }
+    ]
+  }
+}
+
+# Elicitation Context
+# Requirement Elicitation Interview
+- 這是同一場需求擷取會議的接續發言，不是自由提問。
+- 必須遵守本輪 action：ask_user/supplement_question 代表向利害關係人提問；propose_finish 只能輸出固定停止句。
+- 問題必須承接目前需求理解、前面發言、利害關係人已回答內容與上一輪摘要。
+- 不要重複問已確認、已拒絕、利害關係人說不在意、或已被記錄成候選需求的內容。
+- 若目前理解已足夠，可以提出收束；停止句只代表提議收束，系統會再進入收束投票流程決定是否真的結束。
+
+- 聚焦 User Requirement 是否能成立：使用者目標、使用價值、產出內容、成功標準與待確認缺口。
+- 若需要提問，只提出最會影響需求文字、範圍或可驗證性的那一個問題。
+- 若資訊足以支撐需求草稿，提出收束，不要為了分工硬問。
+
+# 任務
+依本輪 action 發言。若 action 是 ask_user 或 supplement_question，先用 1 句重述目前理解或缺口，再提出當下最重要、最能推進需求確認的一個問題（總長 2-4 句）；若判斷目前已蒐集到足夠資訊、可以收束本輪需求擷取，則 text 請只輸出以下固定句（勿加引號、勿改寫、勿額外說明）：我已蒐集足夠資訊
+
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與需求處理建議。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新需求。
+
+# Rules
+- 輸出停止句不是單方結束會議，只是進入三方收束投票。
+- 若本輪 action 是 propose_finish，text 必須只輸出停止句：我已蒐集足夠資訊
+- 若本輪 action 是 ask_user 或 supplement_question，只提出當下最重要的一個問題；不要合併多題。
+- 若本輪 action 是 ask_user 或 supplement_question，必須輸出 target_stakeholders，從已選利害關係人中選擇一位或多位。
+- 問題內容必須對應 target_stakeholders 的立場、責任、痛點、利益或限制；不得把其他 stakeholder 的情境直接拿來問。
+- 若同一主題要問不同 stakeholder，必須改寫成該 stakeholder 會關心的影響與判斷點，不得複製同一題。
+- 問題必須可回答，且答案會明顯影響需求文字、範圍、限制、流程邊界或是否收束。
+- 提問前必須避開 closed_issues 與 do_not_repeat；不要重問利害關係人已回答、已說不在意、或已表示 covered 的方向。
+- 避免使用「還有什麼需求」「請多說一點」等泛問。
+- 提問應承接目前理解，避免孤立訪談題。
+- target_stakeholders 優先選擇能說明需求目標、使用情境、成功標準或待確認缺口的 stakeholder。
+- 問題應直接補足最關鍵的需求判斷缺口；不要只問一般動機。
+- 不要詢問領域法規、系統狀態建模或技術流程細節；這些不屬於本 action 補問範圍。
+
+# Output JSON
+{
+    "text": "依需求分析立場對此議題的自然會議發言",
+    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 requirement_update、scope_updates、draft_plan 或 conflicts。
+- 不新增未被來源支持的新需求。
+- 不編造不存在的 REQ-*、URL-*、SM-* 或 CR-*。

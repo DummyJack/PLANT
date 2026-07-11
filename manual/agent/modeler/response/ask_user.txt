@@ -1,0 +1,69 @@
+# Issue
+議題 [ELICIT-1]: 需求擷取訪談
+描述: 補足資料修改與狀態規則的理解缺口。
+
+# Related Context
+{
+  "related_context": {
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "title": "服務管理",
+        "description": "系統應支援線上服務管理"
+      }
+    ]
+  }
+}
+
+# Elicitation Context
+# Requirement Elicitation Interview
+- 這是同一場需求擷取會議的接續發言，不是自由提問。
+- 必須遵守本輪 action：ask_user/supplement_question 代表向利害關係人提問；propose_finish 只能輸出固定停止句。
+- 問題必須承接目前需求理解、前面發言、利害關係人已回答內容與上一輪摘要。
+- 不要重複問已確認、已拒絕、利害關係人說不在意、或已被記錄成候選需求的內容。
+- 若目前理解已足夠，可以提出收束；停止句只代表提議收束，系統會再進入收束投票流程決定是否真的結束。
+
+- 聚焦使用者實際流程：怎麼開始、輸入、選擇、產生、查看結果、判斷任務完成，以及流程中的判斷點、例外情況與人工介入。
+- 請用 user 能回答的需求訪談語言，不要要求使用者理解 UML、類別、狀態機或技術實作。
+- 若需要提問，只提出最會影響流程、參與者互動、輸入/輸出、狀態或例外邊界的那一個問題。
+- 若目前流程、操作與例外理解已足夠，提出收束，不要為了模型細節硬問。
+
+# 任務
+依本輪 action 發言。若 action 是 ask_user 或 supplement_question，先用 1 句重述目前理解或缺口，再提出當下最重要、最能推進需求確認的一個問題（總長 2-4 句）；若判斷目前已蒐集到足夠資訊、可以收束本輪需求擷取，則 text 請只輸出以下固定句（勿加引號、勿改寫、勿額外說明）：我已蒐集足夠資訊
+
+# Action Boundary
+- action=issue_response
+- 本 action 產生會議回應 JSON，內容包含發言、表態、提問與模型觀點建議。
+- 需要建立或更新模型時，應透過 system_modeling action 執行。
+- Related Context 只能作為會議發言依據，不可單獨創造未被來源支持的新模型或需求。
+
+# Rules
+- 輸出停止句不是單方結束會議，只是進入三方收束投票。
+- 若本輪 action 是 propose_finish，text 必須只輸出停止句：我已蒐集足夠資訊
+- 若本輪 action 是 ask_user 或 supplement_question，只提出當下最重要的一個問題；不要合併多題。
+- 若本輪 action 是 ask_user 或 supplement_question，必須輸出 target_stakeholders，從已選利害關係人中選擇一位或多位。
+- 問題內容必須對應 target_stakeholders 的立場、責任、痛點、利益或限制；不得把其他 stakeholder 的情境直接拿來問。
+- 若同一主題要問不同 stakeholder，必須改寫成該 stakeholder 會關心的影響與判斷點，不得複製同一題。
+- 問題必須可回答，且答案會明顯影響需求文字、範圍、限制、流程邊界或是否收束。
+- 提問前必須避開 closed_issues 與 do_not_repeat；不要重問利害關係人已回答、已說不在意、或已表示 covered 的方向。
+- 避免使用「還有什麼需求」「請多說一點」等泛問。
+- 提問應承接目前理解，避免孤立訪談題。
+- target_stakeholders 優先選擇最清楚實際操作流程、交接、例外處理、狀態判斷或人工介入的 stakeholder。
+- 問題應聚焦流程節點、狀態轉移、actor 責任、資料輸入輸出、例外流程或人工介入。
+- 不要詢問一般需求優先級、領域法規或風險底線；這些不屬於本 action 補問範圍。
+- 提問前必須避開 `closed_issues` 與 `do_not_repeat`；不要重問利害關係人已回答、已說不在意、或已表示 covered 的流程/互動方向。
+- 避免使用「還有什麼需求」「請多說一點」等泛問。
+- 問題應承接目前理解，避免孤立訪談題。
+
+# Output JSON
+{
+    "text": "依需求建模立場對此議題的自然會議發言",
+    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]
+}
+
+# Forbidden Output
+- 不輸出 Markdown 說明。
+- 不輸出 artifact patch。
+- 不輸出 PlantUML 或 system model JSON。
+- 不從模型反推新增需求。
+- 不編造不存在的 SM-*、REQ-*、URL-* 或 CR-*。

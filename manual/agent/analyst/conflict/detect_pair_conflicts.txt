@@ -1,0 +1,186 @@
+# Skill: conflict-analyzer
+
+### Step 2: Systematic Conflict Detection
+
+Use `references/conflict_patterns.md` to scan for 8 conflict types:
+
+**1. Logical Conflicts**
+- Direct contradictions (A says yes, B says no)
+- Mutually exclusive features
+- Opposite behaviors
+- Example: "Work offline" vs "Require continuous internet"
+
+**2. Technical Conflicts**
+- Platform incompatibilities
+- Technology stack conflicts
+- API/library version mismatches
+- Protocol incompatibilities
+- Example: "Support IE11" vs "Use ES2022 features"
+
+**3. Resource Conflicts**
+- Team capacity limitations
+- Budget constraints
+- Infrastructure limits
+- Bandwidth/performance limits
+- Example: "1000 concurrent streams" vs "1 Gbps bandwidth limit"
+
+**4. Temporal Conflicts**
+- Dependency deadline mismatches
+- Impossible timelines
+- Frequency conflicts
+- Processing time conflicts
+- Example: "Dashboard by March 1" depends on "Auth by March 15"
+
+**5. Data Conflicts**
+- Format incompatibilities
+- Validation rule conflicts
+- Data type mismatches
+- Uniqueness conflicts
+- Retention policy conflicts
+- Example: "Email must be unique" vs "Allow multiple accounts per email"
+
+**6. State Conflicts**
+- Invalid state transitions
+- State definition overlaps
+- Circular state dependencies
+- Concurrent state conflicts
+- Example: "Processing orders can't be modified" vs "Processing orders can be cancelled"
+
+**7. Priority Conflicts**
+- Competing stakeholder priorities
+- Performance vs security trade-offs
+- UX vs compliance conflicts
+- Cost vs reliability tensions
+- Example: "Both features critical for v1" but "Only time for one"
+
+**8. Scope Conflicts**
+- Feature outside defined scope
+- Platform expansion beyond bounds
+- Integration beyond standalone scope
+- Component boundary violations
+- Example: "Web app only" vs "Upload from mobile app"
+
+## Common Pitfalls to Avoid
+
+**Don't flag as conflicts when:**
+- Requirements are complementary, not contradictory
+- One requirement is subset of another (specialization)
+- Apparent conflict is due to unclear wording (ambiguity issue)
+- Requirements apply to different contexts or users
+- Timeline allows sequential implementation
+
+**Do flag as conflicts when:**
+- Literally impossible to satisfy both
+- Would require mutually exclusive technology choices
+- Same resource needed for multiple things simultaneously
+- Dependencies create impossible sequences
+- Stakeholders have incompatible expectations
+
+# Context
+{
+  "scenario": "線上服務管理系統",
+  "scope": {
+    "in_scope": [
+      "線上服務管理"
+    ],
+    "out_of_scope": []
+  },
+  "requirements": [
+    {
+      "id": "URL-1",
+      "text": "使用者能在送審前修改資料",
+      "stakeholder": "使用者"
+    },
+    {
+      "id": "URL-2",
+      "text": "核准後不可修改資料",
+      "stakeholder": "審核人員"
+    }
+  ]
+}
+
+# 任務
+根據輸入的 User Requirements 判斷 Conflict / Neutral。
+
+# Action Boundary
+- action=detect_conflicts
+- 本 action 只輸出 conflicts JSON。
+
+# Generation Rules
+- 本步做 requirement candidate conflict classification。
+- 輸出呼叫端指定的 JSON。
+- 產品情境與需求範圍只作為產品邊界背景；Conflict / Neutral 仍以 User Requirements 原文為主要依據。
+
+# 判斷要求
+- final_label 只用英文 "Conflict" 或 "Neutral"。
+- 若 final_label 是 "Conflict"，必須輸出 final_type；final_type 只能是 logical、technical、resource、temporal、data、state、priority、scope、other。
+- 若無法歸入前八類但仍是 Conflict，final_type 使用 other。
+- Neutral 項目包含 final_label 與 reason。
+- 檢查所有有分析價值的需求對或需求群；不同互斥核心請拆成不同項目。
+- 若需求不能原樣共同放入 SRS，必須先合併、改寫、刪除或人工裁定，標為 Conflict。
+- Conflict 不限於執行時互斥；只要兩項需求改變同一功能、資料、使用者權限、流程、輸出、限制或驗收目標的 SRS 邊界，且不能原樣同時寫入同一份 SRS，就標為 Conflict。
+- 先判斷是否同一需求槽位；不同槽位且可並存時標 Neutral。同一槽位內若限制、範圍、條件、角色、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界不同，且需要合併、改寫、刪除或人工裁定，標為 Conflict。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，標為 Conflict；若只是可無損合併的同義重複或不同上下文/流程階段，標為 Neutral。
+- 不要只因兩項需求可同時實作、可做成選項、可合併、或其中一項較具體，就判 Neutral；只有原文清楚表示不同情境、不同使用者群體、不同事件、不同資料類型、不同階段，或一者明確包含另一者且不改變驗收邊界時，才判 Neutral。
+- 若判定為 Neutral，reason 需說明為何兩者不產生需求衝突。
+
+# 輸出要求
+- 兩兩判斷：只需輸出 pair_index、final_label、reason；若 final_label 是 Conflict，再輸出 final_type。
+- 整體判斷：Conflict 需包含 requirement_ids。
+- 整體判斷的 requirement_ids 必須精確對應直接涉及的需求。
+
+# 兩兩判斷
+- 本步處理指定 pair_rows。
+- 每筆輸出必須可由 pair_index 對回輸入 pair。
+- Output key 使用 conflicts，語意是「所有輸入 pair 的分類結果」。
+- conflicts array 必須逐筆涵蓋所有輸入 pair_rows；即使 final_label 是 Neutral 也必須輸出。
+- 只判斷下列指定 pair，pair 之間互相獨立。
+- 配對方式固定為需求順序 1 對 2、3 對 4、5 對 6；若最後剩一筆需求，不判斷。
+- 每一個 pair 都必須輸出恰好一筆結果。
+- pair_index 必須與下列清單一致。
+- 不需要輸出 requirement_ids，系統會根據 pair_index 自動對回 requirements。
+- 本步只處理指定 pair；群組衝突留給整體判斷。
+
+# Input
+指定 pairs:
+[
+  {
+    "pair_index": 0,
+    "requirements": [
+      {
+        "id": "URL-1",
+        "text": "使用者能在送審前修改資料"
+      },
+      {
+        "id": "URL-2",
+        "text": "核准後不可修改資料"
+      }
+    ]
+  }
+]
+
+# Output JSON
+{
+  "conflicts": [
+    {
+      "pair_index": 0,
+      "final_label": "Conflict",
+      "final_type": "scope",
+      "reason": "一句繁中判斷理由"
+    },
+    {
+      "pair_index": 1,
+      "final_label": "Neutral",
+      "reason": "一句繁中判斷理由"
+    }
+  ]
+}
+
+# Output Contract
+- 輸出 JSON object。
+- conflicts 必須是 array，且長度必須等於輸入 pair_rows 數量。
+- 每筆必須包含 pair_index、final_label、reason。
+- pair_index 必須使用輸入 pair_rows 中的原始數字。
+- final_label 只能是 "Conflict" 或 "Neutral"。
+- final_label 是 "Conflict" 時必須包含 final_type。
+- final_label 是 "Neutral" 時包含 pair_index、final_label、reason。

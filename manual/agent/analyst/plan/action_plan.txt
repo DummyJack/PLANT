@@ -1,0 +1,67 @@
+# 任務
+請根據 observation 規劃本次正式會議發言前要執行的 action plan。
+
+# Observation
+{
+  "role": "analyst",
+  "issue": {
+    "id": "I-R1-001",
+    "title": "資料修改規則是否一致",
+    "category": "clarify_requirement",
+    "description": "使用者、審核人員與管理者對資料修改條件的理解是否一致？",
+    "meeting_id": "R1-M1"
+  },
+  "issue_category": "clarify_requirement",
+  "previous_response_count": 0,
+  "recent_responses": [],
+  "has_related_context": true,
+  "recent_ask_history": []
+}
+
+- answer_question：使用時機：有人在 open_questions 中指定 analyst 回答。不要使用：一般議題發言或資料更新。寫回或影響：只回答問題，不更新專案資料。
+- respond_issue：使用時機：只需要根據議題、前文與現有資料表達分析意見。不要使用：需要抽取需求、更新 scope、正式化 REQ-* 需求條目或處理衝突時。寫回或影響：只產生會議發言，不更新需求、scope 或衝突報告。
+- refine_scope：使用時機：議題明確討論系統邊界、in scope / out of scope、外部系統或第三方責任。不要使用：只是在補需求文字或處理衝突解法。寫回或影響：更新 scope.json。
+- update_requirement：使用時機：預設需求正式化會議，需要把全部 User Requirements 整理成 REQ-* 需求條目。不要使用：一般議題只修正少數既有 REQ，或 mixed/granularity cleanup；這些交給 refine_requirement。寫回或影響：URL / User Requirements → REQ，包含類型、驗收條件、風險、假設與來源追蹤。
+- refine_requirement：使用時機：一般正式會議已針對既有 REQ 收斂，需要依討論結果修正受影響的 REQ 欄位。不要使用：把全部 URL 重新正式化，或 stakeholder 剛提出尚未整理的新需求。寫回或影響：只更新本議題影響到的 REQ-*。
+- discuss_conflict：使用時機：針對既有衝突報告的解決選項與建議解法做採用、調整或人類裁決取捨。不要使用：有新需求需重新跑衝突辨識。寫回或影響：只形成會議發言與提案，不直接重跑衝突辨識。
+
+# action 選擇策略
+- 只使用「可用 action」中列出的 action。
+- action_plan.steps 必須至少有 1 筆合法 action。
+- steps 可包含 1 到 3 個 action；只在本次發言前確實需要連續工作時使用多個 step。
+- 若只是根據既有資料表達立場，選最小必要 action，通常是 respond_issue。
+- 若沒有其他必要 action，也必須輸出 1 筆 respond_issue step；不要輸出空 steps。
+- 若 recent_responses 出現新增、否定、修正或補充需求語意、條件、驗收方式、限制、責任邊界或優先級，且可用 action 中有會寫回對應 artifact 的 action，才選該 action。
+- 若可用 action 沒有合適寫回 action，使用 respond_issue，並在發言中清楚說明可沉澱到 artifact 的修改方向與依據。
+- 若 recent_responses 只是一般立場、偏好或未形成可記錄變更，使用 respond_issue。
+- step 順序就是執行順序；不要重複相同 action，也不要為了湊數加 action。
+- 每個 step.reasoning 用一句話說明此 action 為何必要。
+
+# 收斂品質門檻
+- stance.state 只有 ready_to_close 或 needs_more_discussion。
+- ready_to_close 表示本輪已足以產生下一版 draft 或 resolution；不代表所有細節都已完美。
+- 若本議題已有可收束內容，但仍需要人類在多個可行需求規則中裁決，stance.state 仍填 ready_to_close，並加上 stance.needs_human_decision=true。
+- 符合以下條件時，應填 ready_to_close：
+  - 本議題的主要需求語意、成功結果、責任邊界或取捨方向已能落地記錄。
+  - 若會形成或更新 system requirement，已有可追溯來源。
+  - 剩餘不足可明確寫成 acceptance_criteria=待確認、assumptions、risks 或 open_questions，而不會阻止本輪結論。
+- 只有缺少會改變結論的關鍵資訊時，才填 needs_more_discussion。
+- needs_more_discussion 必須同時提供最小可行 proposal，說明目前建議如何處理，以及仍缺哪個關鍵答案。
+
+# response 輸出規則
+- action plan 完成後仍要產生自然語言發言；不要把 action 結果、JSON 或大型報告直接當成發言。
+- 若 action 產生或更新 artifact，發言只說明它如何影響本議題的需求、限制、風險、模型或取捨。
+
+
+# 輸出 JSON
+{
+  "action": "done",
+  "params": {},
+  "reasoning": "...",
+  "action_plan": {
+    "goal": "本次正式會議發言目標",
+    "steps": [
+      {"id": "respond_issue", "action": "respond_issue", "params": {}, "reasoning": "..."}
+    ]
+  }
+}

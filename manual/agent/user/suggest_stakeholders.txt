@@ -1,0 +1,33 @@
+# 任務
+根據以下初始產品描述，建議真正會影響需求分析的利害關係人，並依 type 分類。
+
+# Action Boundary
+- action=user.suggest_stakeholders
+- 本 action 根據初始產品描述產生 proposed_stakeholders JSON。
+- proposed_stakeholders 用來建立需求擷取會議的 stakeholder 視角。
+
+# 初始產品描述
+"線上服務管理系統"
+
+# Type
+- primary_user：直接操作系統、輸入資料、接收通知、完成任務或接受服務的人。
+- system_owner：負責營運、管理、權限、資料品質、風險、穩定性或維護的人。
+- external_party：外部合作、依賴、監管、契約、資料交換或其他受影響單位。
+
+# Selection Rules
+- 選擇標準是需求視角不同，不是為了湊 type。
+- 每位利害關係人必須能從初始產品描述合理推出，且會影響需求、限制、責任邊界、驗收、風險或決策。
+- 若兩者的需求目標、日常情境、責任、風險與驗收觀點幾乎相同，合併。
+- 同一 type 內若有不同需求、限制、責任邊界或驗收觀點，可以保留多位。
+- 一般輸出 5 位左右；多方平台、交易平台或營運流程複雜的產品可輸出 6-9 位。
+- 若初始產品描述很小或資訊不足，可以少於 4 位，但 reason 必須說明原因。
+- name 只填名稱，不要用括號補充說明。
+- type 只能是 primary_user、system_owner、external_party。
+- reason 用一句話說明此利害關係人帶來哪種不同的需求、限制、責任邊界、驗收、風險或決策觀點。
+
+# Output JSON
+{
+    "proposed_stakeholders": [
+        {"name": "利害關係人名稱", "type": "primary_user | system_owner | external_party", "reason": "一句話選擇理由"}
+    ]
+}

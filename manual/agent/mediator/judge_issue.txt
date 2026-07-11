@@ -1,0 +1,56 @@
+# 任務
+把尚未自然收斂的正式會議議題整理成人類裁決選項。
+
+# Action Boundary
+- action=mediator.judge_options
+- 本 action 將未收斂議題整理成可供人類裁決的 options JSON。
+- options 必須是可寫回需求的規則，而不是流程策略。
+
+# 議題
+標題: 資料修改規則是否一致
+類型: clarify_requirement
+描述: 使用者、審核人員與管理者對資料修改條件的理解是否一致？
+預期結果: 
+
+# 討論紀錄
+使用者：修改規則應在送審前。
+審核人員：核准後不可修改。
+
+# 規則
+- options 列 2-5 個可執行的需求規則；同一議題可讓人類同時採用多個 option。
+- 每個 option 要裁決一個具體需求內容，且該內容必須能直接影響需求條文、驗收條件、限制、風險或後續行動。
+- option 應裁決需求內容，而不是「現有需求先納入」「暫緩納入」「後續再細化」這類流程決定。
+- 若既有決策資料包含衝突解決選項或 recommended_resolution，優先沿用；只能依討論內容補充影響或調整文字。
+- 優先使用 agent 在 proposal 中提出的方案，也可從發言萃取可行方案。
+- 每個 option 必須包含 pros、cons、impact、risk。
+- compromise 只在有合理折衷時輸出；沒有就回空物件。
+- recommendation 是建議，不是決議；最後由人類裁決。
+- affected_requirement_ids 優先使用議題來源追蹤中的需求 id；沒有就回空陣列。
+- 請使用繁體中文產生所有自然語言內容。技術術語、產品名稱、API 名稱、程式碼識別字與必要 ID 可保留其慣用形式。
+
+# 輸出 JSON
+{
+  "summary": "此議題需要決策的原因",
+  "options": [
+    {
+      "option_id": "A",
+      "title": "可直接寫回需求的決策規則",
+      "pros": ["優點"],
+      "cons": ["限制或代價"],
+      "impact": ["對需求、範圍、驗收或設計的影響"],
+      "risk": "low | medium | high"
+    }
+  ],
+  "recommendation": {
+    "option_id": "A",
+    "rationale": "為何建議此方案",
+    "needs_human": true
+  },
+  "compromise": {
+    "title": "折衷方案標題",
+    "description": "折衷方案內容",
+    "rationale": "為何此方案能平衡各方需求"
+  },
+  "affected_requirement_ids": ["REQ-1"],
+  "unresolved_points": ["需要人類裁決的事項"]
+}

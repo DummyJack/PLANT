@@ -1,0 +1,105 @@
+# 任務
+根據目前專案狀態與上一步結果，決定本輪 domain research 要做什麼。
+
+# Action Boundary
+- action=expert.plan_research_domain
+- 本 action 規劃 domain research 的 action_plan。
+- action_plan 可安排 read_reference_docs、research_issue、update_feedback 或 done。
+- read_reference_docs 與 research_issue 取得證據；update_feedback 寫回正式 feedback artifact。
+- 即使 has_existing_research=true，也必須先做一次全面 coverage/gap audit：檢查既有 feedback 是否已覆蓋目前 scenario、scope、URL、REQ、stakeholders、open_questions、coverage、gaps、user_guidance 與 referenced_files 指出的外部證據缺口與驗收風險。
+- 若全面檢查後沒有缺口、沒有外部證據缺口、也沒有 user_guidance / referenced_files 需要查證，才選 done，reasoning 必須明確說明已檢查既有 feedback 足夠。
+- 若有 referenced_files 並執行 read_reference_docs，最後必須 update_feedback，把文件證據整理成 feedback。
+- 不得把 feedback 直接定案成需求；需求正式化由 Analyst action 處理。
+- user_guidance 若存在，是人類審查建議與查證方向，不是已確認需求或強制結論；必須納入研究規劃，但只有取得文件、外部來源或既有 artifact 支持時才能寫入 feedback。
+- user_guidance 是全局研究提醒，不代表每個 URL / REQ / stakeholder 都受影響；不得把同一建議套用到所有需求或整份 feedback。
+- 若 user_guidance 指向特定主題，只規劃與該主題有明確關聯且高價值的查證；沒有 artifact 或證據關聯的部分只能視為待釐清方向。
+
+# 目前專案狀態
+{
+  "scenario": "線上服務管理系統",
+  "scope": {
+    "in_scope": [
+      "線上服務管理"
+    ],
+    "out_of_scope": []
+  },
+  "URL": [
+    {
+      "id": "URL-1",
+      "text": "使用者能完成資料提交"
+    }
+  ],
+  "REQ": [],
+  "open_questions": []
+}
+
+# 上一步結果
+{
+  "has_existing_research": false,
+  "research_results_count": 0
+}
+
+- read_reference_docs：讀專案內部文件，取得文件證據。
+- research_issue：針對文件缺口、文件衝突、外部驗證需求或需要查證的公開來源取得證據。
+- update_feedback：把已取得的研究結果寫回 feedback。
+- done：沒有需要研究，或已完成寫回。
+
+- 研究問題必須來自目前 issue、scenario、scope、stakeholders、open_questions、URL 或 REQ。
+- research_issue.query 必須指出要查證的 artifact 切面，例如特定 URL/REQ、scope 條目、open question 或 issue；不得只寫泛用主題詞。
+- 每個 research_issue.params 必須包含 target_type 與 target_ids；target_type 只能是 URL、REQ、scope、open_question、issue。
+- 若查證對象是使用者需求，優先使用 target_type="URL" 並填入具體 URL-*；不得用空泛 issue 取代可定位的 URL/REQ。
+- 不要把 scenario 從研究問題中拿掉；若 query 聚焦某個子議題，仍須讓 runtime 能看出它是目前專案情境下的子議題。
+- 若 user_guidance 指出特定方向，優先判斷它是否對需求成立、系統邊界、驗收標準或外部證據缺口有影響；有影響才規劃 read_reference_docs 或 research_issue 查證。
+- 不要因為 user_guidance 提到某方向，就把所有研究問題都改成該方向；只在目前 artifact 明確相關的研究問題中反映。
+- 只規劃 high-value research_issue，不為了湊數研究。
+- high-value 指會影響需求是否成立、系統邊界、驗收標準、多個 URL/REQ，或目前 artifact 沒有清楚答案。
+- 不研究低價值內容：一般功能偏好、已清楚的 UI 操作、不影響需求條文的背景知識、與 scope 無關的產業介紹。
+- 若既有 artifact / feedback 已足夠涵蓋目前高價值問題，選 done，不重複研究；但 reasoning 必須說明檢查了哪些面向且為何沒有漏掉需要新增研究的部分。
+- 若 resume_checkpoint 存在且 stage_id=research_domain，表示本輪是失敗後繼續；已存在的 document_evidence、document_coverage、research_results 或 feedback 不要重做，只針對 checkpoint.step_id / action 之後尚未完成的缺口繼續。
+- referenced_files 或使用者上傳文件存在時，採「文件優先、外部補證」：必須先規劃 read_reference_docs，不能直接用 research_issue 取代文件查證。
+- read_reference_docs 必須對相關 URL / REQ / open_questions 做 coverage 分類：document_supported、not_found_in_documents、document_conflict、needs_external_validation。
+- 只有文件 coverage 顯示 not_found_in_documents、document_conflict、needs_external_validation，或 issue / user_guidance / referenced_files / gaps 明確標記需要外部查證時，才規劃 research_issue。
+- 若 baseline_research_needed=true，代表本輪研究階段尚未建立任何 feedback，但已有 scenario / URL / REQ / open_questions 與 web_search 可用；此時規劃 1 個中性的 research_issue，優先確認目前 scenario 與 target requirement 是否涉及適用的法規、主管機關指引、產業標準、平台政策或可信公開證據。
+- baseline research 應以「情境專屬適用」優先：先找能說明為何適用目前 scenario + target 的來源；若只有通用規範，也必須說明它如何套用到目前 target，否則不要寫入 feedback。
+- 如果 has_existing_research=false 且 research_results_count=0，只有在 baseline_research_needed、user_guidance、referenced_files、coverage、gaps 或 issue 明確標記需要外部查證時，才至少取得 1 個外部證據；但若 referenced_files 存在，必須先 read_reference_docs，再針對文件缺口或仍需外部查證的議題規劃 research_issue。
+- 如果沒有上述外部研究觸發條件、沒有高價值且可取得可靠來源的研究問題，可以選 done，但 reasoning 必須明確說明未觸發外部查證條件。
+- 只有存在 high-value research_issue 時，才規劃 research_issue；若已讀取引用文件或取得研究結果，最後執行 update_feedback。
+- 需要專案文件證據時先用 read_reference_docs。
+- 若目前專案狀態包含 referenced_files，必須先規劃 read_reference_docs，且 query 應聚焦使用者建議與這些文件。
+- 若 referenced_files 為空，不要因為文件庫有檔案就自動規劃 read_reference_docs；只有研究問題明確需要專案文件證據時才使用。
+- 需要外部證據時用 research_issue；每個 research_issue 只處理一個明確高價值問題，且 query / value_reason 必須說明它是文件缺口、文件衝突、外部證據缺口或時效性驗證。
+- value_reason 必須連回目前 artifact context，說明此查證會影響哪個需求品質面向；不能只說「查標準」或「查最佳實務」。
+- 若多個高價值問題分屬不同面向，可以拆成多個 research_issue；最多 4 個。
+- 不要把多個互不相干的外部查證問題塞進同一個過大的 query。
+- 每個 research_issue.params 必須包含 query 與 value_reason。
+- 每個 research_issue 只能處理 target_ids 指定的目標；若有多個互不相干 target，拆成多個 research_issue。
+- 只要有 read_reference_docs、research_issue 或已有 research_results，最後必須 update_feedback。
+- update_feedback 只允許放在 action_plan 最後一次。
+- feedback.sources 集中列出來源；web 來源使用 {"title": "web_search 或官方頁面提供的人可讀頁面/文件標題，不可填 URL", "url": "完整 URL"}，專案引用文件使用 {"title": "檔名", "url": "專案文件路徑", "type": "file"}。
+- 若 user_guidance 沒有足夠證據支持，feedback 不得把它寫成確定限制；只能記錄為風險、不確定性或後續待釐清方向。
+- feedback 只寫入被 document_evidence / research_results 支持且能對應到相關 artifact 的內容；不要把 user_guidance 原文逐項轉成 findings、constraints、risks 或 recommendations。
+
+# Output JSON
+{
+  "research_plan": {
+    "action": "done",
+    "params": {},
+    "reasoning": "使用目前輸出語系的一句說明",
+    "action_plan": {
+      "goal": "本輪 domain research 目標",
+      "steps": [
+        {"action": "read_reference_docs", "params": {"query": "具體文件查詢問題"}},
+        {
+          "action": "research_issue",
+          "params": {
+            "target_type": "URL",
+            "target_ids": ["URL-1"],
+            "query": "具體高價值研究問題",
+            "value_reason": "為什麼此問題會影響需求品質"
+          }
+        },
+        {"action": "update_feedback", "params": {}}
+      ]
+    }
+  }
+}

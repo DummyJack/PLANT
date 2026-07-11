@@ -1,0 +1,47 @@
+# 任務
+根據 User Requirements（URL-*）原文與各 agent 的逐筆 pair_reviews，對每筆 Conflict/Neutral 項目做最終裁定。
+
+# Action Boundary
+- action=review_conflict_signoff
+- 本 action 裁定 final_label 與一句 reason。
+- 最外層輸出 conflict_signoff。
+
+# Input
+Proposal List:
+[]
+
+Agent Pair Reviews:
+[]
+
+Discussion Rows:
+[]
+
+# Generation Rules
+- 先看 User Requirements（URL-*）原文，再看各 agent 的 pair_reviews。
+- discussion_rows 只在 pair_reviews 證據不足時作補充參考。
+- 解讀 pair_reviews 時需依審查職責加權：需求語意與 SRS 邊界、外部證據/風險、模型可共存性各自只代表其職責範圍。
+- 若某審查者因 pair 不屬於自身職責而維持 current_label，這不是一般投票支持，而是「職責外不介入」。
+- 「沒有外部證據介入」只代表沒有外部限制介入；不得因此把需求語意、SRS 邊界或模型衝突改判為 Neutral。
+- 若需求語意與模型邊界都指出衝突，而外部證據審查只表示無外部介入，通常應維持或裁定 Conflict。
+- 裁定骨架：不同槽位且可並存為 Neutral；同一槽位且改變支援集合、義務強度、門檻、輸出行為、允許/禁止範圍或驗收邊界為 Conflict；明確例外、條件分支、方法與配件可共存時為 Neutral。
+- 若 pair_reviews 與 pair 原文足以支持改判，final_label 可改為 Conflict 或 Neutral。
+- 若 extracted_pair_reviews 為空，預設維持 current_label，除非 User Requirements（URL-*）原文本身已足以明確推翻現標籤。
+- 若證據不足、理由不一致或沒有明確共識，維持 current_label。
+- 先判斷兩項需求是否屬於同一需求槽位：同一主要功能、流程步驟、資料物件、輸出行為、使用者權限、狀態、限制或驗收目標。
+- 若不是同一需求槽位，且可在 SRS 中作為不同需求並存，支持 Neutral；不要因領域相關、同屬同一系統或可能互相補充就判 Conflict。
+- 若是同一需求槽位，再檢查是否存在不同限制、範圍、條件、使用者群體、狀態、格式、數量、頻率、門檻、唯一性、允許集合或驗收邊界。
+- 同一需求槽位內，只要上述差異會造成 SRS 需要合併、改寫、刪除或人工裁定，支持 Conflict；Conflict 不只表示執行時互斥。
+- 一般/具體、子集/超集、細化、補充步驟、近似重複或不同措辭，若改變同一槽位的驗收門檻、允許範圍、必要條件或完成邊界，支持 Conflict。
+- 純同義重複、可無損合併的補充描述、不同上下文或不同流程階段的可並存要求，支持 Neutral；reason 必須說明為何不是同一槽位差異或為何可無衝突合併。
+- proposal_list 中每一個項目都必須輸出一筆 decision；即使決定維持 current_label，也不可省略。
+- 輸出 conflict_signoff JSON。
+- 請直接做最終裁定。
+
+# Output JSON
+{
+  "conflict_signoff": {
+    "decisions": [
+      {"id": "衝突ID", "final_label": "Conflict 或 Neutral", "reason": "一句繁中裁定理由"}
+    ]
+  }
+}

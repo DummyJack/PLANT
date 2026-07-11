@@ -1,0 +1,30 @@
+# 任務
+安排衝突批次再審查的討論模式與參與者。
+
+# Action Boundary
+- action=mediator.plan_conflict_review
+- 本 action 為 conflict review 選擇 discussion_mode 與 participants。
+- participants 必須從可選參與者代號 analyst、expert、modeler 中挑選。
+
+- sequential：參與者依 participants 陣列順序逐一發言。
+- simultaneous：每位參與者各自獨立、同時提出看法（實作上並行蒐集發言），不強調逐一輪替。
+
+- 待審項目數（Conflict + Neutral）：2
+
+# 可選參與者
+["analyst", "expert", "modeler"]
+
+# 輸出 JSON
+{
+  "discussion_mode": "sequential 或 simultaneous",
+  "participants": ["至少兩位可選參與者代號"]
+}
+
+- participants 從可選參與者代號中挑選。
+- participants 至少需要兩位；若某參與者觀點對本批項目沒有幫助，可以不安排。
+- conflict review 應依職責安排，不是讓所有 agent 都投票：
+  - analyst：需求槽位、SRS 邊界、可驗證性、是否需要合併/改寫/裁定；通常應參與。
+  - expert：只有待審項目已有 feedback / evidence_type / coverage / gaps 指出外部證據、外部限制、領域風險、品質底線或證據缺口時才安排。
+  - modeler：只有待審項目涉及流程、狀態、資料、參與者互動、責任邊界、模型多重度或可共存性時才安排。
+- participants 的陣列順序即為 sequential 時的發言順序。
+- 若需逐步比對證據、修正他人判準或逐筆重判，可優先 sequential；若只需快速蒐集獨立判斷可選 simultaneous。
