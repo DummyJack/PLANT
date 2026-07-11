@@ -3,11 +3,6 @@ openapi: 3.1.0
 info:
   title: PLANT System API
   version: 1.0.0
-  description: |
-    PLANT 需求開發系統後端 API。
-
-    寫入操作需要先透過啟動碼取得 `plant_activation` HttpOnly Cookie。
-    已完成且具有公開結果的專案可匿名讀取；執行中或尚未產生成果的專案需要啟動 Cookie。
 
 servers:
   - url: http://127.0.0.1:8000

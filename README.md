@@ -73,7 +73,7 @@ npm install
 
 ### 方式一：網站
 
-啟動後端：
+專案根目錄啟動後端：
 
 ```bash
 python -m server.run
@@ -171,3 +171,20 @@ python main.py
 - `valid`：上一次測試成功
 - `invalid`：上一次測試失敗
 - `untested`：尚未測試
+
+## API 文件
+
+位置：`server/swagger.yml` 和 `server/swagger.html`。
+
+### 安裝套件
+
+```bash
+cd system
+npm install
+```
+
+### 產生或更新 HTML
+
+```bash
+npm run build:swagger
+```

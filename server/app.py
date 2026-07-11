@@ -119,6 +119,8 @@ def frontend_origins() -> list[str]:
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
         f"https://{frontend_host}",
         f"http://{frontend_host}",
     ]
