@@ -14,15 +14,12 @@ tags:
   - name: Bootstrap
     description: 前端初始化資料
   - name: Projects
-    description: 專案生命週期與成本摘要
   - name: References
-    description: 專案參考文件管理
   - name: Artifacts
-    description: 專案產物與檔案預覽
+    description: 專案產出物
   - name: Runs
     description: Agent 執行、事件、人工決策與取消
   - name: Configuration
-    description: 系統設定
   - name: Secrets
     description: 模型 API Key 與啟動碼
   - name: Health
