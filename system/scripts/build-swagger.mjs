@@ -17,6 +17,47 @@ const [yamlSource, cssSource, bundleSource, presetSource] = await Promise.all([
 const openapi = parse(yamlSource);
 const excludedTags = new Set(["Bootstrap", "Health", "Public Manual"]);
 
+// Swagger UI resolves even document-local $ref values against the current page URL.
+// That fails when this self-contained file is opened directly with file://, so expand
+// all local references before embedding the specification in the HTML.
+const resolveJsonPointer = (document, reference) => {
+  if (!reference.startsWith("#/")) {
+    throw new Error(`Only document-local OpenAPI references are supported: ${reference}`);
+  }
+  return reference
+    .slice(2)
+    .split("/")
+    .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
+    .reduce((value, part) => value?.[part], document);
+};
+
+const dereference = (value, document, activeReferences = new Set()) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => dereference(item, document, activeReferences));
+  }
+  if (!value || typeof value !== "object") return value;
+
+  if (typeof value.$ref === "string") {
+    const reference = value.$ref;
+    if (activeReferences.has(reference)) {
+      throw new Error(`Circular OpenAPI reference cannot be embedded for file:// use: ${reference}`);
+    }
+    const target = resolveJsonPointer(document, reference);
+    if (target === undefined) throw new Error(`Unresolved OpenAPI reference: ${reference}`);
+
+    const nextReferences = new Set(activeReferences).add(reference);
+    const { $ref: _ignored, ...siblings } = value;
+    return {
+      ...dereference(target, document, nextReferences),
+      ...dereference(siblings, document, nextReferences),
+    };
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, dereference(item, document, activeReferences)]),
+  );
+};
+
 openapi.tags = (openapi.tags ?? []).filter((tag) => !excludedTags.has(tag.name));
 delete openapi.security;
 if (openapi.components?.securitySchemes) {
@@ -37,7 +78,7 @@ for (const [path, pathItem] of Object.entries(openapi.paths ?? {})) {
   }
 }
 
-const specification = JSON.stringify(openapi).replaceAll("</", "<\\/");
+const specification = JSON.stringify(dereference(openapi, openapi)).replaceAll("</", "<\\/");
 const css = cssSource.replaceAll("</style", "<\\/style");
 // Live Server injects its reload client before the first literal </body> it finds.
 // Escape only document-closing strings; replacing every </ would corrupt JS regexes.
