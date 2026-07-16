@@ -1,10 +1,31 @@
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "path";
 
 const envDir = path.resolve(__dirname, "..");
-const backendRuntimeFile = path.resolve(envDir, "log/backend-runtime.json");
+const workspaceKey = createHash("sha256").update(envDir).digest("hex").slice(0, 16);
+const backendRuntimeFile = path.join(tmpdir(), "plant-runtime", workspaceKey, "backend.json");
+
+function backendRuntimeSyncPlugin(): Plugin {
+  let restartTimer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    name: "plant-backend-runtime-sync",
+    configureServer(server) {
+      server.watcher.add(backendRuntimeFile);
+    },
+    hotUpdate({ file, server }) {
+      if (path.resolve(file) !== backendRuntimeFile) return;
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        void server.restart();
+      }, 150);
+      return [];
+    },
+  };
+}
 
 function validPort(value: unknown): number | null {
   const port = Number(value);
@@ -53,7 +74,7 @@ export default defineConfig(({ mode }) => {
       : "127.0.0.1";
 
   return {
-    plugins: [react()],
+    plugins: [react(), backendRuntimeSyncPlugin()],
     envDir,
     envPrefix: ["frontend_"],
     build: {

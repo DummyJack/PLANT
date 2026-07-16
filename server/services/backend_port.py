@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import socket
 import sys
+import tempfile
 from pathlib import Path
 
 
 DEFAULT_BACKEND_PORT = 8000
 BACKEND_PORT_SEARCH_LIMIT = 100
-BACKEND_RUNTIME_FILE = Path("log/backend-runtime.json")
+
+
+def backend_runtime_path(base_dir: Path) -> Path:
+    workspace_key = hashlib.sha256(
+        str(Path(base_dir).resolve()).encode("utf-8")
+    ).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / "plant-runtime" / workspace_key / "backend.json"
 
 
 def configured_backend_port() -> int:
@@ -57,7 +65,7 @@ def first_available_backend_port(
 
 
 def write_backend_runtime(base_dir: Path, host: str, port: int) -> Path:
-    runtime_path = base_dir / BACKEND_RUNTIME_FILE
+    runtime_path = backend_runtime_path(base_dir)
     runtime_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"host": host, "port": port, "pid": os.getpid()}
     runtime_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -70,5 +78,9 @@ def remove_backend_runtime(runtime_path: Path) -> None:
         if int(payload.get("pid") or 0) != os.getpid():
             return
         runtime_path.unlink(missing_ok=True)
+        try:
+            runtime_path.parent.rmdir()
+        except OSError:
+            pass
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return

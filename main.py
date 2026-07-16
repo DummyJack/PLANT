@@ -6,6 +6,15 @@ for stream_name in ("stdin", "stdout", "stderr"):
     if hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
+from utils.preflight import preflight_enabled, prepare_python_environment
+
+
+BASE_DIR = Path(__file__).resolve().parent
+prepare_python_environment(
+    BASE_DIR,
+    enabled=preflight_enabled(BASE_DIR, "server"),
+)
+
 # CLI entrypoint: selects project mode, collects input, and starts the flow.
 import uuid
 
@@ -29,7 +38,7 @@ from utils.stage_validation import validate_stage_plan
 
 
 def main():
-    base_dir = Path(__file__).parent
+    base_dir = BASE_DIR
 
     env_path = base_dir / ".env"
     load_dotenv(dotenv_path=env_path)
