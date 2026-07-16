@@ -1,58 +1,12 @@
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "path";
 
 const envDir = path.resolve(__dirname, "..");
-const workspaceKey = createHash("sha256").update(envDir).digest("hex").slice(0, 16);
-const backendRuntimeFile = path.join(tmpdir(), "plant-runtime", workspaceKey, "backend.json");
-
-function backendRuntimeSyncPlugin(): Plugin {
-  let restartTimer: ReturnType<typeof setTimeout> | undefined;
-  return {
-    name: "plant-backend-runtime-sync",
-    configureServer(server) {
-      server.watcher.add(backendRuntimeFile);
-    },
-    hotUpdate({ file, server }) {
-      if (path.resolve(file) !== backendRuntimeFile) return;
-      clearTimeout(restartTimer);
-      restartTimer = setTimeout(() => {
-        void server.restart();
-      }, 150);
-      return [];
-    },
-  };
-}
 
 function validPort(value: unknown): number | null {
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
-}
-
-function processIsRunning(pid: unknown): boolean {
-  const processId = Number(pid);
-  if (!Number.isInteger(processId) || processId <= 0) return false;
-  try {
-    process.kill(processId, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function runtimeBackendPort(): number | null {
-  try {
-    const runtime = JSON.parse(readFileSync(backendRuntimeFile, "utf8")) as {
-      port?: unknown;
-      pid?: unknown;
-    };
-    return processIsRunning(runtime.pid) ? validPort(runtime.port) : null;
-  } catch {
-    return null;
-  }
 }
 
 function isLocalFrontendHost(host: string) {
@@ -63,7 +17,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, envDir, ["frontend_", "backend_"]);
   const configuredFrontendHost = env.frontend_host?.trim() || "";
   const frontendHost = configuredFrontendHost || "127.0.0.1";
-  const backendPort = runtimeBackendPort() ?? validPort(env.backend_port) ?? 8000;
+  const backendPort = validPort(env.backend_port) ?? 8000;
   const backendProxy = {
     target: `http://127.0.0.1:${backendPort}`,
     changeOrigin: true,
@@ -74,7 +28,7 @@ export default defineConfig(({ mode }) => {
       : "127.0.0.1";
 
   return {
-    plugins: [react(), backendRuntimeSyncPlugin()],
+    plugins: [react()],
     envDir,
     envPrefix: ["frontend_"],
     build: {
