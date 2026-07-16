@@ -214,20 +214,81 @@ def _dependency_install_lock(base_dir: Path) -> Iterator[None]:
             pass
 
 
+def _pip_is_healthy(environment: dict[str, str]) -> bool:
+    """Check a pip command that imports the resolver, not just its metadata."""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--dry-run",
+                "pip",
+            ],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def _ensure_pip(environment: dict[str, str]) -> None:
+    if _pip_is_healthy(environment):
+        return
+
     try:
         importlib.metadata.version("pip")
-        return
     except importlib.metadata.PackageNotFoundError:
         pass
+    else:
+        print("偵測到 pip 安裝損壞，正在自動重建…", flush=True)
 
     result = subprocess.run(
         [sys.executable, "-m", "ensurepip", "--upgrade"],
         env=environment,
         check=False,
     )
-    if result.returncode != 0:
-        raise RuntimeError("無法自動準備 pip")
+    if result.returncode == 0 and _pip_is_healthy(environment):
+        return
+
+    # ensurepip does not overwrite a broken pip when its recorded version is
+    # newer than the bundled wheel.  In that case, run the bundled copy in an
+    # isolated import path and use it to replace the damaged installation.
+    try:
+        import ensurepip
+
+        bundle_dir = Path(ensurepip.__file__).resolve().parent / "_bundled"
+        pip_wheels = sorted(bundle_dir.glob("pip-*.whl"), reverse=True)
+        pip_wheel = pip_wheels[0]
+    except (ImportError, IndexError, OSError):
+        raise RuntimeError("無法自動準備 pip") from None
+
+    recovery_environment = environment.copy()
+    existing_pythonpath = recovery_environment.get("PYTHONPATH")
+    recovery_environment["PYTHONPATH"] = str(pip_wheel)
+    if existing_pythonpath:
+        recovery_environment["PYTHONPATH"] += os.pathsep + existing_pythonpath
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--force-reinstall",
+            str(pip_wheel),
+        ],
+        env=recovery_environment,
+        check=False,
+    )
+    if result.returncode != 0 or not _pip_is_healthy(environment):
+        raise RuntimeError("pip 已損壞且自動重建失敗")
 
 
 def _check_python_install_directory() -> None:
