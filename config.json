@@ -89,7 +89,7 @@
     "claude": "invalid"
   },
   "preflight": {
-    "system": false,
-    "server": false
+    "system": true,
+    "server": true
   }
 }
