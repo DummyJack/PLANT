@@ -527,8 +527,6 @@ class IssueResponseSupport:
                     step_action = str(step.get("action") or "").strip()
                     if step_action in seen_step_actions:
                         continue
-                    if step_action == "analyze_conflicts" and "analyze_requirements" not in seen_step_actions:
-                        continue
                     filtered_steps.append(step)
                     seen_step_actions.add(step_action)
                 steps = filtered_steps

@@ -4,7 +4,6 @@ import json
 from typing import Dict, List, Any, Optional
 
 from agents.profile.mediator.agent import MediatorAgent
-from agents.profile.analyst.conflicts import clean_conflict_report_markdown
 from agents.profile.mediator.validation import (
     meeting_actions,
     category_labels,
@@ -852,7 +851,6 @@ class MeetingRunner:
         self.issue_states[issue_id]["discussed"] = True
         self.issue_states[issue_id]["conversation"] = conversation
         self.save_progress(issue, conversation=conversation)
-        self.update_conflict_report(conversation)
         self.artifact.pop("_issue_research_results", None)
         self.artifact.pop("current_issue", None)
         requirement_updated = self.conversation_updated_requirements(conversation)
@@ -1160,87 +1158,6 @@ class MeetingRunner:
                 if summary:
                     context["conflict_report"] = summary
         return context
-
-    def update_conflict_report(self, conversation: List[Dict[str, Any]]) -> None:
-        report_rows: List[Dict[str, Any]] = []
-        report_md = ""
-        generated = False
-        for record_entry in conversation or []:
-            if not isinstance(record_entry, dict):
-                continue
-            if record_entry.get("is_reply"):
-                continue
-            response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
-            action_results = response.get("issue_action_results")
-            if not isinstance(action_results, list):
-                continue
-            for result in action_results:
-                if not isinstance(result, dict):
-                    continue
-                if str(result.get("action") or "").strip() != "analyze_conflicts":
-                    continue
-                rows = result.get("conflict_report")
-                if isinstance(rows, list) and rows:
-                    report_rows = [dict(row) for row in rows if isinstance(row, dict)]
-                markdown = str(result.get("conflict_report_markdown") or "").strip()
-                if markdown:
-                    report_md = markdown
-                steps = result.get("steps")
-                if isinstance(steps, list):
-                    generated = any(
-                        isinstance(step, dict)
-                        and str(step.get("action") or "").strip() == "generate_conflict_report"
-                        for step in steps
-                    )
-        if not generated or not report_rows:
-            return
-        try:
-            from storage.artifact import (
-                load_json_path,
-                reindex_conflict_report_rows,
-                save_json_path,
-            )
-
-            report_rows = reindex_conflict_report_rows(report_rows)
-            report_dir = self.store.artifact_dir / "report"
-            latest_path = None
-            latest_version = -1
-            if report_dir.exists():
-                for path in report_dir.glob("conflict_report_v*.json"):
-                    raw_version = path.stem[len("conflict_report_v"):]
-                    if raw_version.isdigit() and int(raw_version) > latest_version:
-                        latest_version = int(raw_version)
-                        latest_path = path
-            if latest_path is None:
-                report_dir.mkdir(parents=True, exist_ok=True)
-                latest_version = max(0, int(self.round_num or 0))
-                report_path = report_dir / f"conflict_report_v{latest_version}.json"
-            elif load_json_path(latest_path, []) == report_rows:
-                report_path = latest_path
-            else:
-                latest_version += 1
-                report_path = report_dir / f"conflict_report_v{latest_version}.json"
-            save_json_path(self.store.base_dir, report_rows, report_path)
-            conflict_state = self.artifact.setdefault("conflict", {})
-            if isinstance(conflict_state, dict):
-                conflict_state["report"] = report_rows
-            self.artifact["conflict_report"] = report_rows
-            if report_md and hasattr(self.store, "save_markdown"):
-                self.store.save_markdown(
-                    clean_conflict_report_markdown(report_md),
-                    f"conflict_report_v{latest_version}.md",
-                )
-            self.store.save_artifact(self.artifact)
-            version = report_path.stem.removeprefix("conflict_report_v")
-            self.logger.step_completed(
-                "conflict_detection",
-                "conflict_detection.write_report",
-                "產生衝突報告",
-                agent="analyst",
-                output_path=f"artifact/report/conflict_report_v{version}.md",
-            )
-        except Exception as e:
-            raise RuntimeError("更新 conflict report 失敗") from e
 
     def discussion_round_block(self, *, create: bool = True) -> Optional[Dict[str, Any]]:
         discussions = self.artifact.setdefault("discussions", [])
@@ -2335,12 +2252,6 @@ class MeetingRunner:
                     updates.setdefault("scope", {}).setdefault("actions", [])
                     if action not in updates["scope"]["actions"]:
                         updates["scope"]["actions"].append(action)
-                elif action == "analyze_conflicts":
-                    updates.setdefault("conflict_report", {}).setdefault("actions", [])
-                    if action not in updates["conflict_report"]["actions"]:
-                        updates["conflict_report"]["actions"].append(action)
-                    if isinstance(result.get("conflict_report"), list):
-                        updates["conflict_report"]["count"] = len(result.get("conflict_report") or [])
                 elif action in {"research_domain", "update_feedback"} or result.get("feedback") not in (None, "", [], {}):
                     feedback = result.get("feedback") if isinstance(result.get("feedback"), dict) else {}
                     updates["feedback"] = {
@@ -2939,10 +2850,6 @@ class MeetingRunner:
                 reason = str(row.get("reason") or "").strip()
                 if reason:
                     artifacts["requirement_reason"] = reason
-            elif action == "analyze_conflicts":
-                conflict_report = row.get("conflict_report")
-                if conflict_report not in (None, "", [], {}):
-                    artifacts["conflict_report"] = MeetingRunner.conflict_report_summary(conflict_report)
             elif action == "refine_scope":
                 scope_updates = row.get("scope_updates")
                 if isinstance(scope_updates, dict) and any(scope_updates.get(key) for key in scope_updates):

@@ -131,9 +131,6 @@ def referenced_ids(
             for row in (result.get("system_models") or result.get("model_changes") or []):
                 if isinstance(row, dict):
                     values.append(row.get("id"))
-            for row in result.get("conflict_report") or []:
-                if isinstance(row, dict):
-                    values.append(row.get("id"))
     ids = [
         str(value).strip()
         for value in values

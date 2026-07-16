@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import shutil
@@ -30,9 +31,28 @@ from .models import PreflightReport
 MINIMUM_PYTHON = (3, 10)
 MINIMUM_FREE_BYTES = 1024 * 1024 * 1024
 WARNING_FREE_BYTES = 2 * 1024 * 1024 * 1024
-HOST_PATTERN = re.compile(
-    r"^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)$"
-)
+HOST_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
+
+
+def _config_value_detail(key: str, value: Any) -> str:
+    return f"目前值：{value!r}；位置：config.json > {key}"
+
+
+def _valid_frontend_host(host: str) -> bool:
+    if not host or len(host) > 253 or "://" in host or any(
+        character in host for character in "/: \t\r\n"
+    ):
+        return False
+    try:
+        return ipaddress.ip_address(host).version == 4
+    except ValueError:
+        pass
+    if re.fullmatch(r"[\d.]+", host):
+        return False
+    return all(
+        len(label) <= 63 and HOST_LABEL_PATTERN.fullmatch(label)
+        for label in host.split(".")
+    )
 
 
 def _check_python(report: PreflightReport) -> None:
@@ -92,10 +112,20 @@ def _check_non_negative_integer(
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        report.add("config", "error", f"{key} 必須是整數", str(value))
+        report.add(
+            "config",
+            "error",
+            f"config.json 的 {key} 必須是整數",
+            _config_value_detail(key, value),
+        )
         return
     if parsed < 0 or parsed > maximum:
-        report.add("config", "error", f"{key} 必須介於 0 與 {maximum} 之間", str(value))
+        report.add(
+            "config",
+            "error",
+            f"config.json 的 {key} 必須介於 0 與 {maximum} 之間",
+            _config_value_detail(key, value),
+        )
 
 
 def _check_positive_integer(
@@ -109,13 +139,19 @@ def _check_positive_integer(
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        report.add("config_limits", "error", f"config 的 {key} 必須是整數")
+        report.add(
+            "config_limits",
+            "error",
+            f"config.json 的 {key} 必須是整數",
+            _config_value_detail(key, value),
+        )
         return
     if parsed < 1 or parsed > maximum:
         report.add(
             "config_limits",
             "error",
-            f"config 的 {key} 必須介於 1 到 {maximum} 之間",
+            f"config.json 的 {key} 必須介於 1 到 {maximum} 之間",
+            _config_value_detail(key, value),
         )
 
 
@@ -155,18 +191,19 @@ def _check_environment(
     frontend_host = str(
         os.getenv("frontend_host") or values.get("frontend_host") or "127.0.0.1"
     ).strip()
-    if (
-        not HOST_PATTERN.fullmatch(frontend_host)
-        or "://" in frontend_host
-        or "/" in frontend_host
-    ):
+    if not _valid_frontend_host(frontend_host):
         report.add(
             "frontend_host",
             "error",
             "frontend_host 必須是主機名稱或 IP，不可包含協定、Port 或路徑",
+            f"目前值：{frontend_host!r}；位置：.env > frontend_host",
         )
     else:
-        report.add("frontend_host", "ok", "frontend_host 設定正確")
+        report.add(
+            "frontend_host",
+            "ok",
+            f"frontend_host 格式正確：{frontend_host}",
+        )
 
     raw_codes = str(
         os.getenv("activation_code") or values.get("activation_code") or ""
@@ -306,21 +343,40 @@ def _check_disk_space(report: PreflightReport, base_dir: Path) -> None:
         return
     free_mb = free // (1024 * 1024)
     if free < MINIMUM_FREE_BYTES:
-        report.add("disk_space", "error", f"磁碟可用空間僅剩 {free_mb} MB")
+        report.add(
+            "disk_space",
+            "error",
+            f"磁碟可用空間僅剩 {free_mb} MB，至少需要 1024 MB",
+        )
     elif free < WARNING_FREE_BYTES:
-        report.add("disk_space", "warning", f"磁碟可用空間僅剩 {free_mb} MB")
+        report.add(
+            "disk_space",
+            "warning",
+            f"磁碟可用空間僅剩 {free_mb} MB，建議保留 2048 MB",
+        )
     else:
         report.add("disk_space", "ok", f"磁碟可用空間為 {free_mb} MB")
 
 
 def _check_plantuml_runtime(report: PreflightReport, config: Dict[str, Any]) -> None:
-    runtime = inspect_plantuml_runtime(config)
     preparation_messages: list[str] = []
-    if runtime.mode == "download_required":
-        runtime = ensure_plantuml_runtime(
-            config,
-            status_callback=lambda _status, message: preparation_messages.append(message),
+    try:
+        runtime = inspect_plantuml_runtime(config)
+        if runtime.mode == "download_required":
+            runtime = ensure_plantuml_runtime(
+                config,
+                status_callback=lambda _status, message: preparation_messages.append(
+                    message
+                ),
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        report.add(
+            "plantuml_runtime",
+            "error",
+            "無法準備 PlantUML 執行環境",
+            str(exc),
         )
+        return
 
     if runtime.mode in {"online", "source_only"}:
         status = "warning"

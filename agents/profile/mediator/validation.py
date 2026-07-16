@@ -13,7 +13,6 @@ meeting_actions = [
     "plan_issues",
     "add_issues",
     "update_default_draft",
-    "run_general_conflict_gate",
     "update_general_draft",
     "start_issue",
     "resolve_issue",
@@ -179,7 +178,7 @@ def normalize_expected_actions(value: Any) -> Dict[str, List[str]]:
         clean = [
             str(action).strip()
             for action in actions
-            if str(action).strip()
+            if str(action).strip() and str(action).strip() != "analyze_conflicts"
         ]
         if clean:
             out[agent] = list(dict.fromkeys(clean))

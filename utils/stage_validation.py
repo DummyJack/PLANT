@@ -102,9 +102,14 @@ def validate_stage_plan(
             "enable research_domain or continue from a project with valid, non-stale feedback"
         )
 
-    if not draft_enabled and ((default_meeting and default_update) or (general_meeting and general_update)):
+    if (
+        not draft_enabled
+        and ((default_meeting and default_update) or (general_meeting and general_update))
+        and not draft_ready
+    ):
         raise ValueError(
-            "Stage dependency invalid: draft updates cannot be enabled when draft is disabled"
+            "Stage dependency invalid: draft updates require an enabled draft stage "
+            "or a valid, non-stale existing draft"
         )
 
     if general_meeting and not default_meeting and not draft_enabled and not draft_ready:

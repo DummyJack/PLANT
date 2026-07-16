@@ -43,7 +43,11 @@ _DISTRIBUTION_IMPORTS = {
 
 def _requirement_lines(requirements_path: Path) -> list[str]:
     requirements: list[str] = []
-    for raw_line in requirements_path.read_text(encoding="utf-8-sig").splitlines():
+    try:
+        contents = requirements_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"無法讀取 Python 套件清單：{requirements_path}（{exc}）") from exc
+    for raw_line in contents.splitlines():
         line = raw_line.split("#", 1)[0].strip()
         if not line:
             continue
@@ -57,7 +61,7 @@ def _requirement_lines(requirements_path: Path) -> list[str]:
 def _dependency_issues(requirements_path: Path) -> list[str]:
     requirements = _requirement_lines(requirements_path)
     try:
-        from packaging.requirements import Requirement
+        from packaging.requirements import InvalidRequirement, Requirement
         from packaging.utils import canonicalize_name
     except ImportError:
         return ["packaging 未安裝，無法驗證套件版本"]
@@ -67,7 +71,10 @@ def _dependency_issues(requirements_path: Path) -> list[str]:
     imports_to_check = []
     installed_versions = {}
     for line in requirements:
-        requirement = Requirement(line)
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement as exc:
+            raise RuntimeError(f"Python 套件需求格式錯誤：{line}（{exc}）") from exc
         if requirement.marker and not requirement.marker.evaluate():
             continue
         try:
@@ -204,14 +211,22 @@ def _dependency_install_lock(base_dir: Path) -> Iterator[None]:
             if time.monotonic() >= deadline:
                 raise RuntimeError("等待其他程序安裝 Python 套件逾時")
             time.sleep(0.25)
+        except OSError as exc:
+            raise RuntimeError(f"無法建立 Python 套件安裝鎖：{lock_path}（{exc}）") from exc
 
     try:
         yield
     finally:
+        body_failed = sys.exc_info()[0] is not None
         try:
             lock_path.unlink()
         except FileNotFoundError:
             pass
+        except OSError as exc:
+            if not body_failed:
+                raise RuntimeError(
+                    f"無法移除 Python 套件安裝鎖：{lock_path}（{exc}）"
+                ) from exc
 
 
 def _pip_is_healthy(environment: dict[str, str]) -> bool:
@@ -249,12 +264,16 @@ def _ensure_pip(environment: dict[str, str]) -> None:
     else:
         print("偵測到 pip 安裝損壞，正在自動重建…", flush=True)
 
-    result = subprocess.run(
-        [sys.executable, "-m", "ensurepip", "--upgrade"],
-        env=environment,
-        check=False,
-    )
-    if result.returncode == 0 and _pip_is_healthy(environment):
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "ensurepip", "--upgrade"],
+            env=environment,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is not None and result.returncode == 0 and _pip_is_healthy(environment):
         return
 
     # ensurepip does not overwrite a broken pip when its recorded version is
@@ -274,19 +293,23 @@ def _ensure_pip(environment: dict[str, str]) -> None:
     recovery_environment["PYTHONPATH"] = str(pip_wheel)
     if existing_pythonpath:
         recovery_environment["PYTHONPATH"] += os.pathsep + existing_pythonpath
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--no-index",
-            "--force-reinstall",
-            str(pip_wheel),
-        ],
-        env=recovery_environment,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--force-reinstall",
+                str(pip_wheel),
+            ],
+            env=recovery_environment,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"pip 已損壞且無法啟動自動重建：{exc}") from exc
     if result.returncode != 0 or not _pip_is_healthy(environment):
         raise RuntimeError("pip 已損壞且自動重建失敗")
 
@@ -353,6 +376,8 @@ def ensure_python_dependencies(base_dir: Path) -> None:
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("Python 套件自動安裝超過 15 分鐘") from exc
+        except OSError as exc:
+            raise RuntimeError(f"無法啟動 pip 安裝程序：{exc}") from exc
         if result.returncode != 0:
             raise RuntimeError("Python 套件自動安裝失敗，請檢查網路與 pip 輸出")
 

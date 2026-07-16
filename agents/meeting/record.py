@@ -151,13 +151,6 @@ class MediatorRecords:
         )
         if model_ids:
             parts.append("更新模型 " + "、".join(sorted(model_ids, key=cls.artifact_id_sort_key)))
-        conflicts = [
-            str(row.get("id") or "").strip()
-            for row in (result.get("conflict_report") or [])
-            if isinstance(row, dict) and str(row.get("id") or "").strip()
-        ]
-        if conflicts:
-            parts.append("更新衝突 " + "、".join(dict.fromkeys(conflicts)))
         if isinstance(result.get("feedback"), dict):
             feedback_count = sum(
                 len([row for row in (result["feedback"].get(key) or []) if isinstance(row, dict)])
@@ -182,7 +175,6 @@ class MediatorRecords:
         req_ids: List[str] = []
         url_ids: List[str] = []
         model_ids: List[str] = []
-        conflict_ids: List[str] = []
         feedback_count = 0
         open_questions = 0
         for c in conversation or []:
@@ -211,11 +203,6 @@ class MediatorRecords:
                         ("SM",),
                     )
                 )
-                conflict_ids.extend(
-                    str(row.get("id") or "").strip()
-                    for row in (result.get("conflict_report") or [])
-                    if isinstance(row, dict) and str(row.get("id") or "").strip()
-                )
                 if isinstance(result.get("feedback"), dict):
                     feedback_count += sum(
                         len([row for row in (result["feedback"].get(key) or []) if isinstance(row, dict)])
@@ -225,15 +212,12 @@ class MediatorRecords:
         req_ids = sorted(dict.fromkeys(req_ids), key=cls.artifact_id_sort_key)
         url_ids = sorted(dict.fromkeys(url_ids), key=cls.artifact_id_sort_key)
         model_ids = sorted(dict.fromkeys(model_ids), key=cls.artifact_id_sort_key)
-        conflict_ids = list(dict.fromkeys(conflict_ids))
         if req_ids:
             parts.append("更新需求 " + "、".join(req_ids))
         if url_ids:
             parts.append("更新使用者需求 " + "、".join(url_ids))
         if model_ids:
             parts.append("更新模型 " + "、".join(model_ids))
-        if conflict_ids:
-            parts.append("更新衝突 " + "、".join(conflict_ids))
         if feedback_count:
             parts.append(f"新增/更新 feedback {feedback_count} 筆")
         if open_questions:
@@ -900,32 +884,6 @@ class MediatorRecords:
                 )
             return "\n".join(out)
 
-        def render_conflict_report_markdown(rows: Any) -> str:
-            if not isinstance(rows, list) or not rows:
-                return ""
-            out = ["### 衝突處理", "", "| ID | 標題 | 類型 | 描述 | 解決選項 | 建議 |", "|---|---|---|---|---|---|"]
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                label = row.get("final_label") or row.get("final_type") or ""
-                recommendation = row.get("recommended_resolution") or ""
-                option_texts = []
-                for option_index, option in enumerate(row.get("resolution_options") or [], start=1):
-                    if not isinstance(option, dict):
-                        continue
-                    option_id = str(option.get("option_id") or "").strip()
-                    if option_id.isdigit():
-                        option_id = chr(ord("A") + max(0, int(option_id) - 1))
-                    if not option_id:
-                        option_id = chr(ord("A") + option_index - 1)
-                    text = str(option.get("description") or option.get("title") or "").strip()
-                    if text:
-                        option_texts.append(f"選項 {option_id}：{text}")
-                out.append(
-                    f"| {table_cell(row.get('id'))} | {table_cell(row.get('title'))} | {table_cell(label)} | {table_cell(row.get('description'))} | {table_cell('; '.join(option_texts))} | {table_cell(recommendation)} |"
-                )
-            return "\n".join(out)
-
         def render_scope_markdown(scope: Any, reason: Any = None) -> str:
             if not isinstance(scope, dict) or not any(scope.get(key) for key in scope):
                 return ""
@@ -1041,7 +999,6 @@ class MediatorRecords:
             outputs: Dict[str, Any] = {
                 "REQ": [],
                 "URL": [],
-                "conflict_report": [],
                 "system_models": [],
                 "feedback": {"findings": [], "constraints": [], "risks": [], "recommendations": [], "sources": []},
                 "scope": {},
@@ -1053,7 +1010,6 @@ class MediatorRecords:
                 artifacts = entry.get("artifacts") if isinstance(entry.get("artifacts"), dict) else {}
                 merge_table_rows(outputs["REQ"], artifacts.get("REQ"))
                 merge_table_rows(outputs["URL"], artifacts.get("URL"))
-                merge_table_rows(outputs["conflict_report"], artifacts.get("conflict_report"))
                 merge_table_rows(outputs["system_models"], artifacts.get("system_models"))
                 if isinstance(artifacts.get("feedback"), dict):
                     for key in ("findings", "constraints", "risks", "recommendations", "sources"):
@@ -1074,7 +1030,6 @@ class MediatorRecords:
                     req_rows = result.get("REQ")
                     merge_table_rows(outputs["REQ"], req_rows)
                     merge_table_rows(outputs["URL"], result.get("requirements"))
-                    merge_table_rows(outputs["conflict_report"], result.get("conflict_report"))
                     merge_table_rows(outputs["system_models"], result.get("system_models"))
                     feedback = result.get("feedback")
                     if isinstance(feedback, dict):
@@ -1095,8 +1050,6 @@ class MediatorRecords:
                 sections.append(render_requirements_markdown(outputs.get("REQ"), "; ".join(outputs.get("reasons") or [])))
             if outputs.get("URL"):
                 sections.append(render_user_requirements_markdown(outputs.get("URL")))
-            if outputs.get("conflict_report"):
-                sections.append(render_conflict_report_markdown(outputs.get("conflict_report")))
             scope = render_scope_markdown(outputs.get("scope"))
             if scope:
                 sections.append(scope)

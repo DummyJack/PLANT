@@ -49,15 +49,64 @@ MEETING_TYPE_ALIASES = {
     "define_boundary": ["define_boundary"],
     "align_model": ["align_model"],
 }
+AGENT_NAMES = ("user", "analyst", "expert", "mediator", "modeler", "documentor")
 
 
-# ========
-# Defines Flow class for this module workflow.
-# ========
+def _first_non_empty_string(*candidates: Any) -> str:
+    for candidate in candidates:
+        value = str(candidate).strip() if candidate is not None else ""
+        if value:
+            return value
+    return ""
+
+
+def _configured_temperature(
+    agent_config: Dict[str, Any],
+    default_config: Dict[str, Any],
+) -> Any:
+    for config in (agent_config, default_config):
+        if config.get("temperature") is not None:
+            return config["temperature"]
+    return None
+
+
+def _supports_gemini_3_thinking(provider: str, model: str) -> bool:
+    if str(provider or "").strip().lower() != "gemini":
+        return False
+    name = str(model or "").strip().lower()
+    if not name.startswith("gemini-"):
+        return False
+    version = name.removeprefix("gemini-").split("-", 1)[0]
+    try:
+        return float(version) >= 3.0
+    except ValueError:
+        return False
+
+
+def _configured_value(
+    key: str,
+    agent_config: Dict[str, Any],
+    default_config: Dict[str, Any],
+) -> Any:
+    value = agent_config.get(key)
+    return default_config.get(key) if value is None else value
+
+
+def _enabled_issue_types(config: Dict[str, Any]) -> Optional[list[str]]:
+    meeting_config = config.get("enable_meeting")
+    if not isinstance(meeting_config, dict):
+        return None
+    enabled_types = []
+    for key, enabled in meeting_config.items():
+        if not enabled or key in {"elicitation", "conflict_review"}:
+            continue
+        for issue_type in MEETING_TYPE_ALIASES.get(key, [key]):
+            if issue_type not in enabled_types:
+                enabled_types.append(issue_type)
+    return enabled_types or None
+
+
 class Flow:
-    # ========
-    # Defines __init__ function for this module workflow.
-    # ========
     def __init__(self, config: Dict[str, Any], store: Store, logger: Logger, collect=None):
         self.config = config
         self.store = store
@@ -72,12 +121,7 @@ class Flow:
         self.collect = collect or Collect
 
         self.agent_models = {
-            "user": self.build_agent_model("user"),
-            "analyst": self.build_agent_model("analyst"),
-            "expert": self.build_agent_model("expert"),
-            "mediator": self.build_agent_model("mediator"),
-            "modeler": self.build_agent_model("modeler"),
-            "documentor": self.build_agent_model("documentor"),
+            name: self.build_agent_model(name) for name in AGENT_NAMES
         }
 
         self.registry = AgentRegistry()
@@ -162,21 +206,10 @@ class Flow:
             human_setting(config, "enable_human_judgment", True)
         )
 
-        eat = config.get("enable_meeting")
-        if isinstance(eat, dict):
-            enabled_types = []
-            for key, enabled in eat.items():
-                if not enabled or key in {"elicitation", "conflict_review"}:
-                    continue
-                for issue_type_id in MEETING_TYPE_ALIASES.get(key, [key]):
-                    if issue_type_id not in enabled_types:
-                        enabled_types.append(issue_type_id)
-            self.mediator_agent.enabled_issue_type_ids = enabled_types or None
+        if isinstance(config.get("enable_meeting"), dict):
+            self.mediator_agent.enabled_issue_type_ids = _enabled_issue_types(config)
         self.meeting = MeetingCoordinator(self)
 
-    # ========
-    # Defines validate policy assignments function for this module workflow.
-    # ========
     def validate_policy_assignments(self) -> None:
         self.policy.validate_mapping_integrity()
         assignments = [
@@ -199,9 +232,6 @@ class Flow:
                     f"Agent policy validation failed for '{agent_name}': {e}"
                 ) from e
 
-    # ========
-    # Defines ensure artifact contract function for this module workflow.
-    # ========
     def ensure_artifact_contract(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         artifact.setdefault("URL", [])
         elicitation = artifact.setdefault("elicitation", {})
@@ -212,9 +242,6 @@ class Flow:
         artifact.setdefault("elicitation_trace", [])
         return artifact
 
-    # ========
-    # Defines touch artifact meta function for this module workflow.
-    # ========
     @staticmethod
     def touch_artifact_meta(
         artifact: Dict[str, Any],
@@ -225,136 +252,81 @@ class Flow:
         if round_num is not None:
             meta["last_round"] = round_num
 
-    # ========
-    # Defines build agent model function for this module workflow.
-    # ========
     def build_agent_model(self, agent_name: str):
         am = self.config.get("agent_models") or {}
         default_cfg = am.get("default") or {}
         per_agent = am.get(agent_name) or default_cfg
 
-        def first_str(*candidates: Any) -> str:
-            for v in candidates:
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    return s
-            return ""
-
-        provider = first_str(per_agent.get("provider"), default_cfg.get("provider"))
-        model_name = first_str(per_agent.get("model"), default_cfg.get("model"))
+        provider = _first_non_empty_string(
+            per_agent.get("provider"), default_cfg.get("provider")
+        )
+        model_name = _first_non_empty_string(
+            per_agent.get("model"), default_cfg.get("model")
+        )
         if not provider or not model_name:
             raise ValueError(
                 "agent_models 必須在 default 或各 agent 區塊設定 provider 與 model；"
                 f"目前無法建立 {agent_name!r} 的模型（缺 provider 或 model）。"
             )
 
-        def pick_temperature(a: Dict[str, Any], b: Dict[str, Any]) -> Any:
-            if "temperature" in a and a["temperature"] is not None:
-                return a["temperature"]
-            if "temperature" in b and b["temperature"] is not None:
-                return b["temperature"]
-            return None
-
-        temperature = pick_temperature(per_agent, default_cfg)
-        max_output_tokens = per_agent.get("max_output_tokens")
+        temperature = _configured_temperature(per_agent, default_cfg)
+        max_output_tokens = _configured_value(
+            "max_output_tokens", per_agent, default_cfg
+        )
         if max_output_tokens is None:
-            max_output_tokens = default_cfg.get("max_output_tokens")
-        if max_output_tokens is None:
-            max_output_tokens = per_agent.get("max_tokens")
-        if max_output_tokens is None:
-            max_output_tokens = default_cfg.get("max_tokens")
+            max_output_tokens = _configured_value("max_tokens", per_agent, default_cfg)
 
         kwargs = {"temperature": temperature}
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
 
-        def supports_gemini_3_thinking(provider_name: str, model: str) -> bool:
-            if str(provider_name or "").strip().lower() != "gemini":
-                return False
-            name = str(model or "").strip().lower()
-            if not name.startswith("gemini-"):
-                return False
-            version = name.removeprefix("gemini-").split("-", 1)[0]
-            try:
-                return float(version) >= 3.0
-            except ValueError:
-                return False
-
         passthrough_keys = ("base_url", "api_key", "json_response_format")
         for key in passthrough_keys:
-            if per_agent.get(key) is not None:
-                kwargs[key] = per_agent[key]
-            elif default_cfg.get(key) is not None:
-                kwargs[key] = default_cfg[key]
-        if supports_gemini_3_thinking(provider, model_name):
+            value = _configured_value(key, per_agent, default_cfg)
+            if value is not None:
+                kwargs[key] = value
+        if _supports_gemini_3_thinking(provider, model_name):
             for key in ("thinking_level", "thinking_budget"):
-                if per_agent.get(key) is not None:
-                    kwargs[key] = per_agent[key]
-                elif default_cfg.get(key) is not None:
-                    kwargs[key] = default_cfg[key]
+                value = _configured_value(key, per_agent, default_cfg)
+                if value is not None:
+                    kwargs[key] = value
         return create_model(provider=provider, model_name=model_name, **kwargs)
 
-    # ========
-    # Defines run function for this module workflow.
-    # ========
     def run(self, rough_idea: str) -> Dict[str, Any]:
         return run_project(self, rough_idea)
 
-    # ========
-    # Defines run continue function for this module workflow.
-    # ========
     def run_continue(self, existing_artifact: Dict[str, Any]) -> Dict[str, Any]:
         return run_continue_project(self, existing_artifact)
 
 
-    # ========
-    # Defines run init phase function for this module workflow.
-    # ========
     def run_init_phase(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         return flow_run_init_phase(self, artifact)
 
 
-    # ========
-    # Defines run meeting round function for this module workflow.
-    # ========
     def run_meeting_round(
         self, artifact: Dict[str, Any], round_num: int
     ) -> Dict[str, Any]:
         return flow_run_meeting_round(self, artifact, round_num)
 
 
-    # ========
-    # Defines finalize function for this module workflow.
-    # ========
     def finalize(
         self,
         artifact: Dict[str, Any],
     ) -> None:
         return flow_finalize(self, artifact)
 
-    # ========
-    # Defines generate DR function for this module workflow.
-    # ========
     def generate_dr(
         self,
         artifact: Dict[str, Any],
     ) -> None:
         return flow_generate_dr(self, artifact)
 
-    # ========
-    # Defines generate SRS function for this module workflow.
-    # ========
     def generate_srs(
         self,
         artifact: Dict[str, Any],
     ) -> None:
         return flow_generate_srs(self, artifact)
 
-    # ========
-    # Defines build cost summary function for this module workflow.
-    # ========
     def build_cost_summary(self) -> Optional[Dict[str, Any]]:
         cost_by_agent = {}
         for agent_name, model in self.agent_models.items():

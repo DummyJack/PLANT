@@ -213,6 +213,14 @@ class AnalystResponse:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         action = str(decision.get("action") or "").strip()
+        if action == "analyze_conflicts":
+            return {
+                "action": action,
+                "status": "failed",
+                "error": "unsupported_meeting_action",
+                "format_error": "正式會議中不執行衝突辨識；請使用會議前產生的 conflict report。",
+                "summary": "正式會議不支援 analyze_conflicts",
+            }
         artifact = kwargs.get("artifact")
         analyst_action_result = None
         if isinstance(artifact, dict):
@@ -254,11 +262,6 @@ class AnalystResponse:
                         issue=kwargs["issue"],
                         previous_responses=kwargs.get("previous_responses"),
                     )
-                elif action == "analyze_conflicts":
-                    analyst_action_result = self.analyze_conflicts(
-                        artifact=artifact,
-                        last_result=kwargs.get("last_result"),
-                    )
                 elif action == "discuss_conflict":
                     analyst_action_result = {
                         "action": action,
@@ -285,7 +288,6 @@ class AnalystResponse:
             "refine_scope",
             "update_requirement",
             "refine_requirement",
-            "analyze_conflicts",
         }:
             return {
                 "action": action,
