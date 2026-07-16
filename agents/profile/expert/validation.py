@@ -438,6 +438,53 @@ def validate_traceable_evidence(source: Dict[str, Any]) -> None:
                     raise ValueError(f"{field}[{index}] project_document source_paths invalid: {detail}")
 
 
+def discard_untraceable_evidence(source: Any) -> Dict[str, Any]:
+    """Keep only evidence rows whose declared source can be verified.
+
+    This is a final, deterministic fallback after model-assisted repair. It never
+    invents a citation or changes an evidence type.
+    """
+    if not isinstance(source, dict):
+        return {}
+
+    result = dict(source)
+    valid_web_source_ids, valid_file_paths = evidence_source_inventory(result)
+    ordered_web_source_ids = [
+        clean_text(item.get("id"))
+        for item in (result.get("sources") or [])
+        if isinstance(item, dict)
+        and clean_text(item.get("id")) in valid_web_source_ids
+    ]
+
+    for field in trace_fields:
+        valid_rows = []
+        for value in result.get(field) or []:
+            if not isinstance(value, dict):
+                continue
+            row = dict(value)
+            evidence_type = clean_text(
+                row.get("evidence_type") or row.get("source_type")
+            ).lower()
+            if evidence_type == "web":
+                source_ids = resolve_web_source_ids(
+                    requirement_refs(row.get("source_ids")),
+                    ordered_web_source_ids,
+                )
+                if not source_ids:
+                    continue
+                row["source_ids"] = source_ids
+            elif evidence_type == "project_document":
+                source_paths = requirement_refs(row.get("source_paths"))
+                if not source_paths or any(
+                    path not in valid_file_paths for path in source_paths
+                ):
+                    continue
+                row["source_paths"] = source_paths
+            valid_rows.append(row)
+        result[field] = valid_rows
+    return result
+
+
 def clean_research_result(raw: Any, *, context_source: str = "") -> Dict[str, Any]:
     _ = context_source
     source = raw.get("research_evidence") if isinstance(raw, dict) and isinstance(raw.get("research_evidence"), dict) else {}

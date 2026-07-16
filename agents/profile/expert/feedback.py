@@ -20,6 +20,7 @@ from .skill import domain_skill_subset
 from .validation import (
     clean_feedback,
     clean_research_result,
+    discard_untraceable_evidence,
     enforce_research_boundaries,
     has_research_content,
     requires_url_sources,
@@ -1404,6 +1405,8 @@ class ExpertDomainResearch(ExpertResearchPlan):
         return obs
 
     def parse_research_json(self, raw, *, action: str, source_ref: str):
+        if isinstance(raw, dict):
+            return raw
         try:
             return parse_first_json(raw)
         except Exception as e:
@@ -1427,7 +1430,18 @@ class ExpertDomainResearch(ExpertResearchPlan):
         allowed_requirement_ids=None,
     ):
         data = self.parse_research_json(raw, action=action, source_ref=source_ref)
+        wrapper = "research_evidence" if action == "research_issue" else "feedback"
+
+        def prepare_candidate(candidate):
+            if not isinstance(candidate, dict):
+                return candidate
+            payload = candidate.get(wrapper)
+            if isinstance(payload, dict):
+                self.attach_file_sources(payload, file_sources)
+            return candidate
+
         def clean_candidate(candidate):
+            candidate = prepare_candidate(candidate)
             candidate_cleaned = cleaner(candidate, context_source=source_ref)
             candidate_cleaned = enforce_research_boundaries(
                 candidate_cleaned,
@@ -1439,7 +1453,10 @@ class ExpertDomainResearch(ExpertResearchPlan):
 
         try:
             cleaned = clean_candidate(data)
-            if cleaned and not self.missing_url_sources(cleaned, file_sources=file_sources):
+            if (
+                feedback_delta_item_count(cleaned) > 0
+                and not self.missing_url_sources(cleaned, file_sources=file_sources)
+            ):
                 return cleaned
             error = "輸出缺少有效 findings / constraints / risks / recommendations"
             if cleaned:
@@ -1453,9 +1470,17 @@ class ExpertDomainResearch(ExpertResearchPlan):
             source_ref=source_ref,
         )
         repaired = self.chat_json(self.build_direct_messages(repair_task))
-        repaired_cleaned = clean_candidate(repaired)
-        if not repaired_cleaned:
-            raise ValueError("Expert repair produced no valid research or feedback rows")
+        try:
+            repaired_cleaned = clean_candidate(repaired)
+        except ValueError:
+            repaired = prepare_candidate(repaired)
+            payload = repaired.get(wrapper) if isinstance(repaired, dict) else None
+            if not isinstance(payload, dict):
+                return {}
+            repaired[wrapper] = discard_untraceable_evidence(payload)
+            repaired_cleaned = clean_candidate(repaired)
+        if feedback_delta_item_count(repaired_cleaned) == 0:
+            return {}
         if self.missing_url_sources(repaired_cleaned, file_sources=file_sources):
             raise ValueError("Expert feedback with external claims must include URL sources or referenced project files")
         return repaired_cleaned
@@ -1566,8 +1591,18 @@ class ExpertDomainResearch(ExpertResearchPlan):
     def feedback_file_sources(cls, artifact, document_evidence):
         rows = []
         seen = set()
-        for item in cls.clean_document_evidence(document_evidence):
-            source = str(item.get("source") or "").strip()
+        meta = (
+            artifact.get("meta")
+            if isinstance(artifact, dict) and isinstance(artifact.get("meta"), dict)
+            else {}
+        )
+        sources = [
+            item.get("source")
+            for item in cls.clean_document_evidence(document_evidence)
+        ]
+        sources.extend(meta.get("domain_research_referenced_files") or [])
+        for value in sources:
+            source = str(value or "").strip()
             if source and source not in seen:
                 rows.append(source)
                 seen.add(source)

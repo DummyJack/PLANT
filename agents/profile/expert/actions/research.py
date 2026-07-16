@@ -36,7 +36,8 @@ def research_issue(*, query: str, source_ref: str, value_reason: str = "") -> st
 - 每個 evidence_type=web 項目必須以 source_ids 引用至少一筆本次 sources 中的 SRC-*。
 - 每個 evidence_type=project_document 項目必須以 source_paths 引用至少一筆本次 sources 中 type=file 的完整專案文件路徑。
 - 涉及法律、法規、條例或主管機關要求的結論，至少引用一筆政府或主管機關官方來源。
-- findings、constraints、risks、recommendations 的每個 item 包含 text、related_requirement_ids、source、trace_reason 與 evidence_type。
+- findings、constraints、risks、recommendations 的每個 item 只包含 text、related_requirement_ids、source、source_ids、source_paths、trace_reason 與 evidence_type。
+- evidence_type=web 時 source_ids 必填、source_paths 不使用；evidence_type=project_document 時 source_paths 必填、source_ids 不使用。
 - evidence_type 使用 web、project_document、user_statement、artifact_context 或 model_context；使用外部 URL 證據時必須是 web，使用專案引用文件時必須是 project_document。
 - related_requirement_ids 只能引用 context.target.target_ids，或輸入 URL / REQ 中存在且與本次研究 context 相關的 URL-* / REQ-*；無法對應 target 時用空陣列。
 - trace_reason 用一句話說明為什麼此研究證據對應這些 URL-* / REQ-*；若 related_requirement_ids 為空，也要說明無法明確對應的原因。
