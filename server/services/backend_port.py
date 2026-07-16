@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import socket
 import sys
@@ -24,6 +25,10 @@ def ensure_backend_port_available(host: str, port: int) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # Match Uvicorn's bind behavior so recently closed connections in
+                # TIME_WAIT are not mistaken for an active listener.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind((host, port))
     except OSError as exc:
         command = (
@@ -31,6 +36,12 @@ def ensure_backend_port_available(host: str, port: int) -> None:
             if sys.platform == "win32"
             else f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
         )
+        if exc.errno == errno.EACCES:
+            raise RuntimeError(
+                f"沒有權限使用後端 Port {port}；請修改 .env 的 backend_port 後重試"
+            ) from exc
+        if exc.errno != errno.EADDRINUSE:
+            raise RuntimeError(f"無法檢查後端 Port {port}：{exc}") from exc
         raise RuntimeError(
             f"後端 Port {port} 已被其他程式占用；"
             f"請關閉占用程序或修改 .env 的 backend_port 後重試（可用 {command} 查詢）"
