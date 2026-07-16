@@ -1,5 +1,21 @@
 import os
+import sys
+import uuid
 from pathlib import Path
+
+from utils.preflight import ensure_python_dependencies, preflight_enabled
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+PREFLIGHT_ENABLED = preflight_enabled(BASE_DIR, "server")
+
+if PREFLIGHT_ENABLED and sys.version_info < (3, 10):
+    current = ".".join(str(part) for part in sys.version_info[:3])
+    raise RuntimeError(
+        f"PLANT requires Python 3.10 or newer; current version is Python {current}"
+    )
+
+if PREFLIGHT_ENABLED and os.getenv("PLANT_BACKEND_STARTUP_CHECKED") != "1":
+    ensure_python_dependencies(BASE_DIR)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -8,15 +24,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from model import validate_provider_api_keys
 from storage import Store
-
-from .routes import artifacts, config, documents, projects, runs, secrets
+from .routes import artifacts, config, projects, runs, secrets
 from .services.run_config import normalize_agent_models_to_valid_provider
 from .services.run_manager import RunManager
+from .services.startup import run_backend_startup_checks
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 
+if PREFLIGHT_ENABLED and os.getenv("PLANT_BACKEND_STARTUP_CHECKED") != "1":
+    run_backend_startup_checks(BASE_DIR)
 run_manager = RunManager(BASE_DIR)
 run_manager.recover_on_startup()
 
@@ -41,14 +58,10 @@ def is_browser_navigation(request: Request) -> bool:
 
 
 def is_api_navigation_allowed(path: str) -> bool:
-    if path.startswith("/api/manual/"):
-        return True
     parts = path.strip("/").split("/")
     if len(parts) < 5 or parts[0] != "api" or parts[1] != "projects":
         return False
     route = parts[3]
-    if route == "manual":
-        return True
     if route == "references" and len(parts) >= 5:
         return True
     return False
@@ -149,7 +162,6 @@ app.include_router(projects.router, prefix="/api")
 app.include_router(projects.public_router)
 app.include_router(config.router, prefix="/api")
 app.include_router(artifacts.router, prefix="/api")
-app.include_router(documents.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
 app.include_router(secrets.router, prefix="/api/secrets")
 
@@ -178,15 +190,16 @@ def health(request: Request):
         checks["status"] = "degraded"
 
     projects_dir.mkdir(parents=True, exist_ok=True)
-    probe = projects_dir / ".health_probe"
+    probe = projects_dir / f".health_probe_{uuid.uuid4().hex}"
     try:
         probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
         checks["projects_dir"]["writable"] = True
     except OSError as exc:
         checks["projects_dir"]["writable"] = False
         checks["status"] = "degraded"
         checks["projects_dir"]["error"] = str(exc)
+    finally:
+        probe.unlink(missing_ok=True)
 
     return checks
 

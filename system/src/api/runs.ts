@@ -25,10 +25,6 @@ export function createRun(body: {
   });
 }
 
-export function fetchRun(runId: string) {
-  return apiFetch<RunState>(`/api/runs/${runId}`);
-}
-
 export function cancelRun(runId: string) {
   return apiFetch<RunState>(`/api/runs/${runId}/cancel`, { method: "POST" });
 }
@@ -42,6 +38,10 @@ export function submitDecision(
     method: "POST",
     body: JSON.stringify({ payload }),
   });
+}
+
+export function decisionMutationKey(runId?: string, decisionId?: string) {
+  return ["run-decision", runId ?? "", decisionId ?? ""] as const;
 }
 
 export function runEventsUrl(runId: string, since = 0) {

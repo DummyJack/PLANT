@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import threading
 import uuid
@@ -13,10 +14,10 @@ from model import normalize_authentication_error, validate_provider_api_keys
 from storage import Store
 from utils import export_enabled
 from utils.cancel import clear_cancel_checker, register_cancel_checker
-from utils.human import Collect
 from utils.language import sync_output_language
 
 from .event_logger import EventLogger
+from storage.coordinator import FileRunCoordinator
 from .human_decisions import (
     normalize_decision_options_payload,
     parse_human_decision_response,
@@ -29,6 +30,7 @@ from .run_config import (
     apply_run_stage_overrides,
     general_formal_meeting_enabled,
     normalize_attached_reference_paths,
+    validate_stage_plan,
 )
 from .run_persistence import ACTIVE_STATUSES, RunPersistence
 from .run_checkpoint import clear_run_checkpoint, clear_run_checkpoint_for_continue, load_run_checkpoint, mark_run_checkpoint
@@ -47,6 +49,57 @@ SUPPORTED_REFERENCE_EXTS = {
     ".json",
     ".csv",
 }
+
+
+class DecisionConflictError(ValueError):
+    """The submitted decision is stale, conflicting, or no longer pending."""
+
+
+def _decision_payload_hash(payload: Dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class RunHumanInteraction:
+    """Run-scoped web human interaction adapter; never mutates global Collect."""
+
+    def __init__(self, manager: "RunManager", run_id: str):
+        self.manager = manager
+        self.run_id = run_id
+
+    def user_selection(self, proposed, max_select=5):
+        return self.manager._request_stakeholder_selection(
+            self.run_id, proposed, max_select=max_select,
+        )
+
+    def human_decision_on_issue(self, issue, options):
+        return self.manager._request_human_decision(self.run_id, issue, options)
+
+    def stakeholder_statement_review(self, stakeholders):
+        return self.manager._request_stakeholder_statement_review(self.run_id, stakeholders)
+
+    def requirements_review(self, requirements):
+        return self.manager._request_requirements_review(self.run_id, requirements)
+
+    def scope_review(self, scope):
+        return self.manager._request_scope_review(self.run_id, scope)
+
+    def domain_research_review(self, references):
+        return self.manager._request_domain_research_review(self.run_id, references)
+
+    def meeting_issue_proposal_review(self, proposals, round_num, max_issues=5):
+        return self.manager._request_meeting_issue_proposal_review(
+            self.run_id,
+            proposals,
+            round_num,
+            max_issues=max_issues,
+        )
 
 
 def _merge_unique_strings(*groups: List[str]) -> List[str]:
@@ -115,9 +168,14 @@ class RunManager:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._project_active: Dict[str, str] = {}
         self._persistence = RunPersistence(base_dir)
+        self._coordinator = FileRunCoordinator(base_dir)
+        self._coordinator.cleanup_expired_project_creations()
 
     def recover_on_startup(self) -> int:
-        return self._persistence.recover_interrupted_runs()
+        return self._persistence.recover_interrupted_runs(
+            active_claim=self._coordinator.claim_is_alive,
+            release_claim=self._coordinator.release_project,
+        )
 
     def count_interrupted_runs(self) -> int:
         return self._persistence.count_runs_by_status("interrupted")
@@ -195,6 +253,7 @@ class RunManager:
         stage_overrides: Optional[Dict[str, bool]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        run_id = f"run_{uuid.uuid4().hex[:10]}"
         project_id = str(project_id or "").strip()
         if (
             not project_id
@@ -207,6 +266,9 @@ class RunManager:
         project_dir = self.base_dir / "projects" / project_id
         if not project_dir.exists() or not project_dir.is_dir():
             raise ValueError("Project not found")
+        self.recover_on_startup()
+        if self.get_active_run(project_id):
+            raise ValueError("Project already has an active run")
         store = Store(self.base_dir, project_id)
         artifact = store.load_artifact() or {}
         project_reference_paths = _project_reference_paths(store)
@@ -226,6 +288,12 @@ class RunManager:
         resolved_config = apply_run_rounds(resolved_config, rounds)
         resolved_config = apply_run_max_issues(resolved_config, max_issues)
         resolved_config = apply_run_enable_agents(resolved_config, enable_agents)
+        validate_stage_plan(
+            resolved_config,
+            artifact,
+            store,
+            mode=mode,
+        )
         attached_paths = normalize_attached_reference_paths(
             project_id,
             attached_reference_paths,
@@ -245,7 +313,8 @@ class RunManager:
                 if active and active.get("status") in ACTIVE_STATUSES:
                     raise ValueError("Project already has an active run")
 
-            run_id = f"run_{uuid.uuid4().hex[:10]}"
+            if not self._coordinator.claim_project(project_id, run_id):
+                raise ValueError("Project already has an active run")
             state = {
                 "run_id": run_id,
                 "project_id": project_id,
@@ -268,88 +337,144 @@ class RunManager:
             }
             self._runs[run_id] = state
             self._project_active[project_id] = run_id
-            self._persist_locked(state)
+            try:
+                self._persist_locked(state)
+            except Exception:
+                self._runs.pop(run_id, None)
+                if self._project_active.get(project_id) == run_id:
+                    self._project_active.pop(project_id, None)
+                self._coordinator.release_project(project_id, run_id)
+                raise
 
         thread = threading.Thread(target=self._execute, args=(run_id,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            with self._lock:
+                run = self._runs.pop(run_id, None)
+                if self._project_active.get(project_id) == run_id:
+                    self._project_active.pop(project_id, None)
+                self._coordinator.release_project(project_id, run_id)
+                if run:
+                    run["status"] = "failed"
+                    run["error"] = "Failed to start run worker"
+                    run["finished_at"] = datetime.now().isoformat()
+                    try:
+                        self._persist_locked(run)
+                    except Exception:
+                        pass
+            raise
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_run,
+            args=(project_id, run_id, thread),
+            daemon=True,
+        )
+        heartbeat_thread.start()
         return self.get(run_id) or {}
 
+    def _heartbeat_run(
+        self,
+        project_id: str,
+        run_id: str,
+        worker_thread: threading.Thread,
+    ) -> None:
+        while worker_thread.is_alive():
+            try:
+                if not self._coordinator.heartbeat(project_id, run_id):
+                    return
+            except Exception:
+                pass
+            worker_thread.join(timeout=2.0)
+
     def cancel(self, run_id: str) -> Dict[str, Any]:
+        self._coordinator.request_cancel(run_id)
         with self._lock:
             run = self._runs.get(run_id)
             if not run:
-                raise KeyError(run_id)
-            run["cancel_requested"] = True
-            if run["status"] in {"queued", "running", "waiting_for_human"}:
-                run["status"] = "cancelling"
-            self._append_event_locked(run, {"type": "cancel_requested", "message": "Cancel requested"})
-            self._persist_locked(run)
-            return self._public_state(run)
+                run = None
+            else:
+                run["cancel_requested"] = True
+                if run["status"] in {"queued", "running", "waiting_for_human"}:
+                    run["status"] = "cancelling"
+                self._append_event_locked(run, {"type": "cancel_requested", "message": "Cancel requested"})
+                self._persist_locked(run)
+                return self._public_state(run)
+        persisted = self.get(run_id)
+        if not persisted:
+            raise KeyError(run_id)
+        return persisted
 
     def submit_decision(self, run_id: str, decision_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            run = self._runs.get(run_id)
-            if not run:
-                raise KeyError(run_id)
-            pending = run.get("pending_decision") or {}
-            if pending and pending.get("id") != decision_id:
-                raise ValueError("decision_id does not match pending decision")
-            decision_snapshot = copy.deepcopy(pending) if isinstance(pending, dict) else {}
-            if payload.get("skip_all_human_interventions") is True:
-                run["skip_all_human_interventions"] = True
-                payload = {
-                    **payload,
-                    "skipped": True,
-                }
-            run["pending_decision"] = None
-            run["_decision_response"] = payload
-            decision_event = run.get("_decision_event")
-            if decision_event:
-                decision_event.set()
-            self._append_event_locked(
-                run,
-                {
-                    "type": "human_decision_submitted",
-                    "decision_id": decision_id,
-                    "decision": decision_snapshot,
-                    "payload": payload,
-                    "message": "Human decision submitted",
-                },
+        payload_hash = _decision_payload_hash(payload)
+        existing = self._coordinator.read_decision(run_id, decision_id)
+        if existing:
+            if existing.get("payload_hash") == payload_hash:
+                return self.get(run_id) or {}
+            raise DecisionConflictError(
+                "decision has already been submitted with a different payload"
             )
-            if payload.get("skip_all_human_interventions") is True:
-                self._append_event_locked(
-                    run,
-                    {
-                        "type": "human_intervention_skip_all_enabled",
-                        "decision_id": decision_id,
-                        "message": "後續人類介入將自動跳過",
-                    },
-                )
-            if run["status"] == "waiting_for_human":
-                run["status"] = "running"
-            self._persist_locked(run)
-            return self._public_state(run)
+
+        with self._lock:
+            local_run = self._runs.get(run_id)
+            state = self._public_state(local_run) if local_run else None
+        if state is None:
+            state = self.get(run_id)
+        if not state:
+            raise KeyError(run_id)
+        if state.get("status") != "waiting_for_human":
+            raise DecisionConflictError("run is not waiting for a human decision")
+        pending = state.get("pending_decision")
+        if not isinstance(pending, dict) or not pending:
+            raise DecisionConflictError("there is no pending human decision")
+        if pending.get("id") != decision_id:
+            raise DecisionConflictError("decision_id does not match pending decision")
+        stored_payload = copy.deepcopy(payload)
+        attachments = self._coordinator.snapshot_decision_references(
+            run_id,
+            decision_id,
+            str(state.get("project_id") or ""),
+            stored_payload,
+        )
+        if attachments:
+            stored_payload["human_input_attachments"] = attachments
+        try:
+            self._coordinator.submit_decision(
+                run_id,
+                decision_id,
+                stored_payload,
+                payload_hash,
+            )
+        except FileExistsError as exc:
+            raise DecisionConflictError(str(exc)) from exc
+        with self._lock:
+            local_run = self._runs.get(run_id)
+            decision_event = local_run.get("_decision_event") if local_run else None
+            if decision_event is not None:
+                decision_event.set()
+        return self.get(run_id) or state
 
     def _execute(self, run_id: str) -> None:
-        load_dotenv(self.base_dir / ".env")
-        with self._lock:
-            run = self._runs[run_id]
-            run["status"] = "running"
-            self._append_event_locked(run, {"type": "run_started", "message": "Run started"})
-            attached_paths = list(run.get("attached_reference_paths") or [])
-            if attached_paths:
-                self._append_event_locked(
-                    run,
-                    {
-                        "type": "references_attached",
-                        "message": "Attached reference files",
-                        "attached_reference_paths": attached_paths,
-                    },
-                )
-            self._persist_locked(run)
-
         project_id = ""
+        logger = None
         try:
+            load_dotenv(self.base_dir / ".env")
+            with self._lock:
+                run = self._runs[run_id]
+                run["status"] = "running"
+                self._coordinator.promote_pending_references(str(run.get("project_id") or ""))
+                self._append_event_locked(run, {"type": "run_started", "message": "Run started"})
+                attached_paths = list(run.get("attached_reference_paths") or [])
+                if attached_paths:
+                    self._append_event_locked(
+                        run,
+                        {
+                            "type": "references_attached",
+                            "message": "Attached reference files",
+                            "attached_reference_paths": attached_paths,
+                        },
+                    )
+                self._persist_locked(run)
+
             base_store = Store(self.base_dir)
             with self._lock:
                 config = copy.deepcopy(self._runs[run_id].get("config_snapshot") or base_store.load_config())
@@ -363,7 +488,12 @@ class RunManager:
                 emit=lambda event: self._append_event(run_id, event),
                 write_file=write_file_log,
             )
-            flow = Flow(config, store, logger)
+            flow = Flow(
+                config,
+                store,
+                logger,
+                collect=RunHumanInteraction(self, run_id),
+            )
             flow.run_id = run_id
             flow.run_mode = str(self._runs[run_id].get("mode") or "")
             with self._lock:
@@ -374,43 +504,6 @@ class RunManager:
                 self._finish(run_id, "cancelled")
                 return
 
-            original_user_selection = Collect.user_selection
-            original_human_decision = Collect.human_decision_on_issue
-            original_stakeholder_statement_review = Collect.stakeholder_statement_review
-            original_requirements_review = Collect.requirements_review
-            original_scope_review = Collect.scope_review
-            original_domain_research_review = Collect.domain_research_review
-            original_meeting_issue_proposal_review = Collect.meeting_issue_proposal_review
-            Collect.user_selection = staticmethod(
-                lambda proposed, max_select=5: self._request_stakeholder_selection(
-                    run_id,
-                    proposed,
-                    max_select=max_select,
-                )
-            )
-            Collect.human_decision_on_issue = staticmethod(
-                lambda issue, options: self._request_human_decision(run_id, issue, options)
-            )
-            Collect.stakeholder_statement_review = staticmethod(
-                lambda stakeholders: self._request_stakeholder_statement_review(run_id, stakeholders)
-            )
-            Collect.requirements_review = staticmethod(
-                lambda requirements: self._request_requirements_review(run_id, requirements)
-            )
-            Collect.scope_review = staticmethod(
-                lambda scope: self._request_scope_review(run_id, scope)
-            )
-            Collect.domain_research_review = staticmethod(
-                lambda references: self._request_domain_research_review(run_id, references)
-            )
-            Collect.meeting_issue_proposal_review = staticmethod(
-                lambda proposals, round_num, max_issues=5: self._request_meeting_issue_proposal_review(
-                    run_id,
-                    proposals,
-                    round_num,
-                    max_issues=max_issues,
-                )
-            )
             output_exported_via_flow = False
             try:
                 mode = self._runs[run_id]["mode"]
@@ -438,13 +531,6 @@ class RunManager:
                     flow.run(rough_idea)
                 output_exported_via_flow = True
             finally:
-                Collect.user_selection = original_user_selection
-                Collect.human_decision_on_issue = original_human_decision
-                Collect.stakeholder_statement_review = original_stakeholder_statement_review
-                Collect.requirements_review = original_requirements_review
-                Collect.scope_review = original_scope_review
-                Collect.domain_research_review = original_domain_research_review
-                Collect.meeting_issue_proposal_review = original_meeting_issue_proposal_review
                 clear_cancel_checker(project_id)
 
             self._finish(
@@ -454,21 +540,30 @@ class RunManager:
                 output_exported_via_flow=output_exported_via_flow,
             )
         except Exception as exc:
+            if self._cancelled(run_id):
+                self._finish(run_id, "cancelled")
+                return
             error_text = _ui_error_message(exc)
             with self._lock:
-                run = self._runs[run_id]
+                run = self._runs.get(run_id)
+                if run is None:
+                    return
                 project_id = str(run.get("project_id") or "")
                 stage_id = str(run.get("current_stage") or "")
                 run["status"] = "failed"
                 run["error"] = error_text
                 run["finished_at"] = datetime.now().isoformat()
-                self._append_event_locked(
-                    run,
-                    {"type": "run_failed", "message": error_text, "error": error_text},
-                )
-                self._persist_locked(run)
-                self._release_active_locked(run)
-                run.pop("_flow", None)
+                try:
+                    self._append_event_locked(
+                        run,
+                        {"type": "run_failed", "message": error_text, "error": error_text},
+                    )
+                    self._persist_locked(run)
+                except Exception:
+                    pass
+                finally:
+                    self._release_active_locked(run)
+                    run.pop("_flow", None)
             if project_id:
                 self._record_checkpoint(
                     project_id,
@@ -479,6 +574,9 @@ class RunManager:
                 )
             if project_id:
                 clear_cancel_checker(project_id)
+        finally:
+            if logger is not None:
+                logger.close()
 
     def _finish(
         self,
@@ -488,20 +586,41 @@ class RunManager:
         flow: Optional[Flow] = None,
         output_exported_via_flow: bool = False,
     ) -> None:
-        project_id = ""
         with self._lock:
             run = self._runs[run_id]
             project_id = str(run.get("project_id") or "")
-            if flow is None:
-                flow = run.pop("_flow", None)
-            else:
-                run.pop("_flow", None)
+            active_flow = flow if flow is not None else run.get("_flow")
+
+        if status == "completed" and active_flow is not None:
+            try:
+                self._auto_export_after_finish(
+                    run_id,
+                    project_id,
+                    active_flow,
+                    output_exported_via_flow=output_exported_via_flow,
+                )
+                self._clear_consumed_force_regenerate_flags(active_flow)
+            except Exception as exc:
+                self._append_event(
+                    run_id,
+                    {
+                        "type": "auto_export_failed",
+                        "message": _ui_error_message(exc),
+                        "error": _ui_error_message(exc),
+                    },
+                )
+
+        with self._lock:
+            run = self._runs[run_id]
+            run.pop("_flow", None)
             run["status"] = status
             run["finished_at"] = datetime.now().isoformat()
             stage_id = str(run.get("current_stage") or "")
-            self._append_event_locked(run, {"type": f"run_{status}", "message": f"Run {status}"})
-            self._persist_locked(run)
-            self._release_active_locked(run)
+            try:
+                self._append_event_locked(run, {"type": f"run_{status}", "message": f"Run {status}"})
+                self._persist_locked(run)
+            finally:
+                self._release_active_locked(run)
         if project_id:
             if status == "cancelled":
                 self._record_checkpoint(
@@ -517,14 +636,6 @@ class RunManager:
                 except Exception:
                     pass
             clear_cancel_checker(project_id)
-        if status == "completed" and flow is not None:
-            self._auto_export_after_finish(
-                run_id,
-                project_id,
-                flow,
-                output_exported_via_flow=output_exported_via_flow,
-            )
-            self._clear_consumed_force_regenerate_flags(flow)
 
     def _clear_consumed_force_regenerate_flags(self, flow: Flow) -> None:
         flags = (getattr(flow, "config", {}) or {}).get("force_regenerate_outputs")
@@ -624,15 +735,13 @@ class RunManager:
                 stage_id=stage_id,
                 error=error,
             )
-            self._append_event(
-                run_id,
-                {
-                    "type": "run_checkpoint_recorded",
-                    "stage_id": stage_id,
-                    "message": "已記錄繼續時可重跑的步驟",
-                    "checkpoint": checkpoint,
-                },
-            )
+            event = {
+                "type": "run_checkpoint_recorded",
+                "stage_id": stage_id,
+                "message": "已記錄繼續時可重跑的步驟",
+                "checkpoint": checkpoint,
+            }
+            self._append_event(run_id, event)
         except Exception as exc:
             self._append_event(
                 run_id,
@@ -682,8 +791,14 @@ class RunManager:
             sync_output_language(rough_idea, artifact)
             changed = True
 
+        meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+        run_reference_paths = _merge_unique_strings(attached_reference_paths)
+        if meta.get("domain_research_referenced_files") != run_reference_paths:
+            meta["domain_research_referenced_files"] = run_reference_paths
+            artifact["meta"] = meta
+            changed = True
+
         if attached_reference_paths:
-            meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
             existing_references = [
                 str(path or "").strip()
                 for path in (meta.get("attached_references") or [])
@@ -694,7 +809,6 @@ class RunManager:
                 attached_reference_paths,
             )
             if mode == "continue":
-                meta["domain_research_referenced_files"] = _merge_unique_strings(attached_reference_paths)
                 meta.pop("research_domain_completed", None)
                 meta.pop("research_domain_coverage", None)
             artifact["meta"] = meta
@@ -706,7 +820,8 @@ class RunManager:
 
     def _cancelled(self, run_id: str) -> bool:
         with self._lock:
-            return bool(self._runs.get(run_id, {}).get("cancel_requested"))
+            local_cancelled = bool(self._runs.get(run_id, {}).get("cancel_requested"))
+        return local_cancelled or self._coordinator.cancel_requested(run_id)
 
     def _append_event(self, run_id: str, event: Dict[str, Any]) -> None:
         with self._lock:
@@ -743,6 +858,9 @@ class RunManager:
         project_id = run.get("project_id")
         if project_id and self._project_active.get(project_id) == run.get("run_id"):
             self._project_active.pop(project_id, None)
+        if project_id and run.get("run_id"):
+            self._coordinator.release_project(str(project_id), str(run.get("run_id")))
+            self._coordinator.cleanup_run(str(run.get("run_id")))
 
     def _public_state(self, run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not run:
@@ -978,6 +1096,7 @@ class RunManager:
                 self._persist_locked(run)
                 return response
             run["status"] = "waiting_for_human"
+            self._coordinator.promote_pending_references(str(run.get("project_id") or ""))
             run["pending_decision"] = payload
             run["_decision_event"] = event
             run["_decision_response"] = None
@@ -994,15 +1113,46 @@ class RunManager:
         while True:
             if self._cancelled(run_id):
                 raise RuntimeError("Run cancelled while waiting for human input")
-            if event.wait(timeout=0.5):
+            response_record = self._coordinator.read_decision(run_id, str(payload["id"]))
+            if response_record is not None:
                 break
+            event.wait(timeout=0.25)
+            event.clear()
         with self._lock:
             run = self._runs[run_id]
-            response = run.get("_decision_response") or {}
+            response = (
+                response_record.get("payload")
+                if isinstance(response_record, dict) and isinstance(response_record.get("payload"), dict)
+                else {}
+            )
+            decision_snapshot = copy.deepcopy(run.get("pending_decision") or payload)
+            if response.get("skip_all_human_interventions") is True:
+                run["skip_all_human_interventions"] = True
+                response = {**response, "skipped": True}
+            run["pending_decision"] = None
             run["_decision_event"] = None
             run["_decision_response"] = None
             if run["status"] == "waiting_for_human":
                 run["status"] = "running"
+            self._append_event_locked(
+                run,
+                {
+                    "type": "human_decision_submitted",
+                    "decision_id": payload["id"],
+                    "decision": decision_snapshot,
+                    "payload": response,
+                    "message": "Human decision submitted",
+                },
+            )
+            if response.get("skip_all_human_interventions") is True:
+                self._append_event_locked(
+                    run,
+                    {
+                        "type": "human_intervention_skip_all_enabled",
+                        "decision_id": payload["id"],
+                        "message": "後續人類介入將自動跳過",
+                    },
+                )
             self._persist_locked(run)
             return response
 

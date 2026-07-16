@@ -1,19 +1,25 @@
-export function errorMessage(error: unknown, fallback: string): string {
+export function errorMessage(
+  error: unknown,
+  fallback: string,
+  omitFallbackDuplicate = false,
+): string {
+  const finish = (message: string) =>
+    omitFallbackDuplicate && message.trim() === fallback.trim() ? "" : message;
   const direct = detailText(error);
-  if (direct) return direct;
+  if (direct) return finish(direct);
 
   if (error instanceof Error) {
     try {
       const parsed = JSON.parse(error.message) as unknown;
       const parsedDetail = detailText(parsed);
-      if (parsedDetail) return parsedDetail;
+      if (parsedDetail) return finish(parsedDetail);
     } catch {
       /* keep raw message */
     }
-    return error.message || fallback;
+    return finish(error.message || fallback);
   }
 
-  return fallback;
+  return finish(fallback);
 }
 
 function detailText(value: unknown): string {

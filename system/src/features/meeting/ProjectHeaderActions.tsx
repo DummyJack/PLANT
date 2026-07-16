@@ -3,8 +3,7 @@ import { BookOpen, Check, ChevronDown, Coins, MoreHorizontal, Plus, Trash2 } fro
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { fetchArtifacts, fetchCostSummary, manualIndexUrl } from "@/api/projects";
-import { useBootstrap } from "@/hooks/useBootstrap";
-import { useActiveRun } from "@/hooks/useActiveRun";
+import { useActiveRun, useBootstrap } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import { errorMessage } from "@/utils/errorMessage";
@@ -94,7 +93,7 @@ export function ProjectHeaderActions({
 }: ProjectHeaderActionsProps) {
   const { t } = useI18n();
   const bootstrap = useBootstrap();
-  const projectId = useUiStore((s) => s.activeProjectId);
+  const storedProjectId = useUiStore((s) => s.activeProjectId);
   const setActiveProjectId = useUiStore((s) => s.setActiveProjectId);
   const canWrite = useUiStore((s) => s.canWrite);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -107,6 +106,13 @@ export function ProjectHeaderActions({
     () => uniqueProjectsById(bootstrap.data?.projects ?? []),
     [bootstrap.data?.projects],
   );
+  const projectId =
+    storedProjectId &&
+    bootstrap.data &&
+    (projects.some((project) => project.project_id === storedProjectId) ||
+      bootstrap.data.active_runs?.[storedProjectId])
+      ? storedProjectId
+      : null;
   const hasWriteAccess = canWrite || bootstrap.data?.activated === true;
   const visibleProjects = useMemo(
     () =>

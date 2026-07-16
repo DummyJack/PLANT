@@ -5,13 +5,13 @@ import path from "path";
 const envDir = path.resolve(__dirname, "..");
 
 function isLocalFrontendHost(host: string) {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
+  return host === "127.0.0.1";
 }
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, envDir, ["frontend_"]);
   const configuredFrontendHost = env.frontend_host?.trim() || "";
-  const frontendHost = configuredFrontendHost || "localhost";
+  const frontendHost = configuredFrontendHost || "127.0.0.1";
   const serverHost =
     configuredFrontendHost && !isLocalFrontendHost(configuredFrontendHost)
       ? "0.0.0.0"
@@ -38,6 +38,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host: serverHost,
       port: 3000,
+      strictPort: true,
       allowedHosts: ["localhost", "127.0.0.1", frontendHost],
       watch: {
         ignored: [
@@ -51,6 +52,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
         "/manual": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+        },
+        "^/[^/]+/manual\\.zip$": {
           target: "http://127.0.0.1:8000",
           changeOrigin: true,
         },

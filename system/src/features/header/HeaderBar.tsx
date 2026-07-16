@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, LayoutPanelLeft, Settings } from "lucide-react";
-import { fetchConfig, updateConfig } from "@/api/config";
+import { ChevronDown, Eye, EyeOff, LayoutPanelLeft, Loader2, Settings } from "lucide-react";
+import { fetchConfig, patchConfig } from "@/api/config";
 import {
   activateCode,
   deactivateCode,
@@ -15,8 +15,7 @@ import {
   HEADER_AGENT_ORDER,
   type AgentId,
 } from "@/constants/agents";
-import { useBootstrap } from "@/hooks/useBootstrap";
-import { useActiveRun } from "@/hooks/useActiveRun";
+import { useActiveRun, useBootstrap } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
 import { useNoticeStore } from "@/stores/noticeStore";
 import { useUiStore } from "@/stores/uiStore";
@@ -400,6 +399,22 @@ function ApiKeySettingsPanel({
 }) {
   const { t } = useI18n();
   const [modelMenuOpen, setModelMenuOpen] = useState<ApiKeyProvider | null>(null);
+  const [visibleApiKeys, setVisibleApiKeys] = useState<Record<ApiKeyProvider, boolean>>({
+    openai: false,
+    gemini: false,
+    claude: false,
+  });
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const handler = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(`[data-api-model-menu="${modelMenuOpen}"]`)) {
+        setModelMenuOpen(null);
+      }
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [modelMenuOpen]);
   return (
     <div className="space-y-1.5">
       {API_KEY_PROVIDERS.map((item) => {
@@ -468,14 +483,34 @@ function ApiKeySettingsPanel({
             {expanded && (
               <div className="border-t border-gray-100 px-2.5 pb-2.5 pt-2">
                 <div className="flex items-center gap-2">
-                  <input
-                    type="password"
-                    className={API_KEY_INLINE_INPUT_CLASS}
-                    placeholder={t.providerApiKeyPlaceholder(item.label)}
-                    value={values[item.provider]}
-                    disabled={locked}
-                    onChange={(event) => onChange(item.provider, event.target.value)}
-                  />
+                  <div className="relative min-w-0 flex-1">
+                    <input
+                      type={visibleApiKeys[item.provider] ? "text" : "password"}
+                      className={cn(API_KEY_INLINE_INPUT_CLASS, "w-full pr-8")}
+                      placeholder={t.providerApiKeyPlaceholder(item.label)}
+                      value={values[item.provider]}
+                      disabled={locked}
+                      onChange={(event) => onChange(item.provider, event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-gray-100 hover:text-slate-700"
+                      aria-label={visibleApiKeys[item.provider] ? t.hideApiKey : t.showApiKey}
+                      title={visibleApiKeys[item.provider] ? t.hideApiKey : t.showApiKey}
+                      onClick={() =>
+                        setVisibleApiKeys((current) => ({
+                          ...current,
+                          [item.provider]: !current[item.provider],
+                        }))
+                      }
+                    >
+                      {visibleApiKeys[item.provider] ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     disabled={locked || !values[item.provider].trim() || saving || deleting}
@@ -501,7 +536,7 @@ function ApiKeySettingsPanel({
                 </div>
                 <div className="my-2 border-t border-gray-100" />
                 <div className="flex items-center gap-2">
-                  <div className="relative min-w-0 flex-1">
+                  <div className="relative min-w-0 flex-1" data-api-model-menu={item.provider}>
                     <input
                       className={cn(API_KEY_INLINE_INPUT_CLASS, "block w-full pr-7")}
                       value={modelValue}
@@ -600,23 +635,37 @@ function ActivationCodePanel({
   onDelete: () => void;
 }) {
   const { t } = useI18n();
+  const [showActivationCode, setShowActivationCode] = useState(false);
   return (
     <div className="border-t border-gray-100 pt-3">
       <div className="flex items-center gap-2">
-        <input
-          type="password"
-          className="min-w-0 flex-1 rounded-control border border-gray-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-slate-400 focus:outline-none"
-          placeholder={t.activationPlaceholder}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") onSubmit();
-          }}
-        />
+        <div className="relative min-w-0 flex-1">
+          <input
+            type={showActivationCode ? "text" : "password"}
+            disabled={activated || saving}
+            className="w-full rounded-control border border-gray-200 bg-white py-1.5 pl-2 pr-8 text-xs text-slate-700 focus:border-slate-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-slate-400"
+            placeholder={activated ? t.successActivated : t.activationPlaceholder}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSubmit();
+            }}
+          />
+          <button
+            type="button"
+            disabled={activated || saving}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-gray-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:text-gray-300"
+            aria-label={showActivationCode ? t.hideActivationCode : t.showActivationCode}
+            title={showActivationCode ? t.hideActivationCode : t.showActivationCode}
+            onClick={() => setShowActivationCode((visible) => !visible)}
+          >
+            {showActivationCode ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+        </div>
         <button
           type="button"
-          disabled={!value.trim() || saving}
-          className="shrink-0 rounded-control bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:bg-gray-300 disabled:text-white"
+          disabled={activated || !value.trim() || saving}
+          className="shrink-0 rounded-control bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-white"
           onClick={onSubmit}
         >
           {saving ? t.activating : t.activate}
@@ -752,7 +801,7 @@ export function HeaderBar() {
   const [activationMessage, setActivationMessage] = useState<InlineMessage | undefined>();
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [activated, setActivated] = useState(false);
-  const agentWrapRef = useRef<HTMLDivElement>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   const configQuery = useQuery({
@@ -762,7 +811,7 @@ export function HeaderBar() {
   });
 
   const saveConfigMut = useMutation({
-    mutationFn: updateConfig,
+    mutationFn: patchConfig,
     onSuccess: ({ config }) => {
       if (config.enable_agents) {
         setEnabledAgents({
@@ -811,7 +860,7 @@ export function HeaderBar() {
         [variables.provider]: "untested",
       }));
     },
-    onSuccess: (_result, variables) => {
+    onSuccess: async (_result, variables) => {
       queryClient.setQueryData(
         ["model-api-keys"],
         (current: Awaited<ReturnType<typeof fetchModelApiKeys>> | undefined) => ({
@@ -837,12 +886,19 @@ export function HeaderBar() {
       setApiKeyMessages((current) => ({
         ...current,
         [variables.provider]: {
-          tone: "success",
-          text: t.saved,
+          tone: "pending",
+          text: t.testingApiKey,
         },
       }));
-      queryClient.invalidateQueries({ queryKey: ["model-api-keys"] });
-      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["model-api-keys"] }),
+        queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
+      ]);
+      try {
+        await testKeyMut.mutateAsync({ provider: variables.provider });
+      } catch {
+        // testKeyMut reports the provider-specific validation error.
+      }
     },
     onError: (error, variables) => {
       setApiKeyMessages((current) => ({
@@ -1103,14 +1159,27 @@ export function HeaderBar() {
   useEffect(() => {
     if (!openAgent) return;
     const handler = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (agentWrapRef.current && !agentWrapRef.current.contains(target)) {
+      const target = event.target;
+      const activeAgent =
+        target instanceof Element
+          ? target.closest(`[data-agent-config="${openAgent}"]`)
+          : null;
+      if (!activeAgent) {
         setOpenAgent(null);
       }
     };
     document.addEventListener("pointerdown", handler);
     return () => document.removeEventListener("pointerdown", handler);
   }, [openAgent]);
+
+  useEffect(() => {
+    if (!layoutOpen) return;
+    const handler = (event: PointerEvent) => {
+      if (!layoutRef.current?.contains(event.target as Node)) setLayoutOpen(false);
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [layoutOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -1137,7 +1206,6 @@ export function HeaderBar() {
     }));
   }, [dirtyDefaultModels]);
 
-  const apiOk = bootstrap.data?.api_keys.valid !== false;
   const runActive = !!activeRun && ACTIVE_STATUSES.has(activeRun.status);
   const settingsLocked = !activated;
   const usableProviderMap = useMemo(
@@ -1154,6 +1222,7 @@ export function HeaderBar() {
   const currentTestingProvider = testKeyMut.isPending
     ? (testKeyMut.variables?.provider ?? null)
     : null;
+  const testingKeys = testingAllKeys || testKeyMut.isPending;
   const testConfiguredApiKeys = async () => {
     if (settingsLocked || testingAllKeys || testKeyMut.isPending) return;
     const providersToTest = configuredApiKeyProviders;
@@ -1191,19 +1260,11 @@ export function HeaderBar() {
       provider,
       model,
     } as AgentModelConfig;
-    saveConfigMut.mutate({
-      ...config,
-      agent_models,
-    });
+    saveConfigMut.mutate({ agent_models });
   };
 
   return (
     <header className="shrink-0 bg-slate-50">
-      {!apiOk && (
-        <div className="bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
-          {t.apiConfigError}：{bootstrap.data?.api_keys.error ?? t.checkEnv}
-        </div>
-      )}
       <div className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2">
         <div className="justify-self-start text-lg font-bold tracking-tight text-slate-900">
           PLANT
@@ -1211,14 +1272,13 @@ export function HeaderBar() {
 
         <div
           className="flex min-w-0 flex-wrap items-center justify-center gap-1.5 justify-self-stretch"
-          ref={agentWrapRef}
         >
 	          {HEADER_AGENT_ORDER.map((id) => {
 	            const enabled = enabledAgents[id] !== false;
 	            const ready = agentModelReady(configQuery.data, id, usableProviderMap);
 		            const locked = runActive || settingsLocked || !ready;
 	            return (
-	          <div key={id} className="relative shrink-0">
+	          <div key={id} className="relative shrink-0" data-agent-config={id}>
 	                <button
 	                  type="button"
 		                  disabled={locked}
@@ -1262,7 +1322,7 @@ export function HeaderBar() {
 	                    configuredProviders={usableProviderMap}
                     defaultModels={defaultModelValues}
                     disabled={saveConfigMut.isPending || settingsLocked}
-                    onSave={(next) => saveConfigMut.mutate(next)}
+                    onSave={(next) => saveConfigMut.mutate({ agent_models: next.agent_models })}
                   />
                 )}
               </div>
@@ -1271,13 +1331,14 @@ export function HeaderBar() {
         </div>
 
         <div className="flex items-center justify-end gap-2 justify-self-end">
-          <div className="relative">
+          <div className="relative" ref={layoutRef}>
             <button
               type="button"
               className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-gray-200 bg-white text-slate-600 hover:bg-gray-50 hover:text-slate-900"
               title={t.layout}
               onClick={() => {
                 setOpenAgent(null);
+                setSettingsOpen(false);
                 setLayoutOpen((open) => !open);
               }}
             >
@@ -1323,6 +1384,7 @@ export function HeaderBar() {
               title={t.settings}
               onClick={() => {
                 setOpenAgent(null);
+                setLayoutOpen(false);
                 setSettingsOpen((open) => {
                   if (open) setConfirmAction(null);
                   return !open;
@@ -1342,16 +1404,18 @@ export function HeaderBar() {
                       <p className="text-xs font-semibold text-slate-700">{t.apiKey}</p>
                       <button
                         type="button"
+                        aria-busy={testingKeys}
                         disabled={
                           settingsLocked ||
                           testingAllKeys ||
                           testKeyMut.isPending ||
                           configuredApiKeyProviders.length === 0
                         }
-                        className="shrink-0 rounded-control border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-gray-50 disabled:border-gray-100 disabled:text-gray-300"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-control border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-gray-50 disabled:border-gray-100 disabled:text-gray-300"
                         onClick={testConfiguredApiKeys}
                       >
-                        {testingAllKeys ? t.testing : t.test}
+                        {testingKeys && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                        {testingKeys ? t.testing : t.test}
                       </button>
                     </div>
                     {settingsLocked && (

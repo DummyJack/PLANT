@@ -1,18 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, Edit3, Loader2, Minus, MoreHorizontal, Plus } from "lucide-react";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Download, Edit3, Loader2, Minus, MoreHorizontal, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, RefObject } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchFile, manualFileUrl } from "@/api/projects";
-import { submitDecision } from "@/api/runs";
+import { decisionMutationKey, submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
 import { agentLabel } from "@/constants/agents";
 import { JsonArtifactView } from "@/features/output/JsonArtifactView";
 import { OutputFilePicker } from "@/features/output/OutputFilePicker";
-import { useActiveRun } from "@/hooks/useActiveRun";
+import { useActiveRun } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
+import { useNoticeStore } from "@/stores/noticeStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { ScopeReviewDraft } from "@/stores/uiStore";
 import {
@@ -23,6 +25,8 @@ import {
 } from "@/utils/buildOutputFiles";
 import type { FileContent, FileTreeNode } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { errorMessage } from "@/utils/errorMessage";
+import { makeZip } from "@/utils/zip";
 import { sortStakeholdersByType, stakeholderTypeLabel } from "@/utils/stakeholders";
 
 interface ResultPreviewProps {
@@ -34,6 +38,11 @@ interface TocItem {
   id: string;
   text: string;
   level: number;
+}
+
+interface TraceDetail {
+  title: string;
+  html: string;
 }
 
 interface StakeholderStatementLine {
@@ -69,6 +78,103 @@ const emptyScopeDraft: ScopeReviewDraft = {
 };
 
 const REVIEW_MENTION_DRAG_MIME = "application/x-plant-review-mention";
+
+const TRACE_ALLOWED_TAGS = new Set([
+  "a", "blockquote", "br", "code", "div", "em", "h2", "h3", "h4", "h5",
+  "img", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td",
+  "th", "thead", "tr", "ul",
+]);
+
+function decodeTraceContent(encoded: string, fallback = ""): string {
+  if (!encoded) return fallback;
+  try {
+    const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return fallback;
+  }
+}
+
+function encodeTraceContent(content: string): string {
+  const bytes = new TextEncoder().encode(content);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function escapeTraceText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function sanitizeTraceHtml(source: string, baseUrl: string): string {
+  const parsed = new DOMParser().parseFromString(source, "text/html");
+  const blockedTags = new Set(["iframe", "object", "script", "style", "template"]);
+
+  const cleanNode = (node: Node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (!(child instanceof Element)) continue;
+      const tag = child.tagName.toLowerCase();
+      if (blockedTags.has(tag)) {
+        child.remove();
+        continue;
+      }
+      if (!TRACE_ALLOWED_TAGS.has(tag)) {
+        cleanNode(child);
+        child.replaceWith(...Array.from(child.childNodes));
+        continue;
+      }
+
+      for (const attribute of Array.from(child.attributes)) {
+        const name = attribute.name.toLowerCase();
+        const allowed =
+          name === "class" ||
+          (tag === "a" && ["href", "title"].includes(name)) ||
+          (tag === "img" && ["src", "alt", "title"].includes(name)) ||
+          (["td", "th"].includes(tag) && ["colspan", "rowspan"].includes(name));
+        if (!allowed) child.removeAttribute(attribute.name);
+      }
+
+      if (tag === "a" && child.hasAttribute("href")) {
+        const rawHref = child.getAttribute("href") ?? "";
+        try {
+          const url = new URL(rawHref, baseUrl);
+          if (!["http:", "https:", "mailto:"].includes(url.protocol)) throw new Error();
+          child.setAttribute("href", url.href);
+          child.setAttribute("target", "_blank");
+          child.setAttribute("rel", "noopener noreferrer");
+        } catch {
+          child.removeAttribute("href");
+        }
+      }
+
+      if (tag === "img" && child.hasAttribute("src")) {
+        const rawSrc = child.getAttribute("src") ?? "";
+        try {
+          const url = new URL(rawSrc, baseUrl);
+          const safeDataImage = url.protocol === "data:" && /^data:image\//i.test(rawSrc);
+          const safeSameOriginImage =
+            ["http:", "https:"].includes(url.protocol) && url.origin === window.location.origin;
+          if (!safeDataImage && !safeSameOriginImage) throw new Error();
+          child.setAttribute("src", url.href);
+        } catch {
+          child.remove();
+          continue;
+        }
+      }
+      cleanNode(child);
+    }
+  };
+
+  cleanNode(parsed.body);
+  return parsed.body.innerHTML;
+}
 
 function createMentionDragLabel(id: string): HTMLDivElement {
   const label = document.createElement("div");
@@ -467,83 +573,6 @@ function fileContentForDownload(content: FileContent, path: string): FileContent
   return content;
 }
 
-function crc32(bytes: Uint8Array) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function writeUint16(bytes: number[], value: number) {
-  bytes.push(value & 0xff, (value >>> 8) & 0xff);
-}
-
-function writeUint32(bytes: number[], value: number) {
-  bytes.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
-}
-
-function appendBytes(target: number[], bytes: Uint8Array) {
-  for (const byte of bytes) target.push(byte);
-}
-
-function makeZip(entries: Array<{ path: string; bytes: Uint8Array }>) {
-  const encoder = new TextEncoder();
-  const output: number[] = [];
-  const centralDirectory: number[] = [];
-  for (const entry of entries) {
-    const nameBytes = encoder.encode(entry.path);
-    const offset = output.length;
-    const crc = crc32(entry.bytes);
-    writeUint32(output, 0x04034b50);
-    writeUint16(output, 20);
-    writeUint16(output, 0);
-    writeUint16(output, 0);
-    writeUint16(output, 0);
-    writeUint16(output, 0);
-    writeUint32(output, crc);
-    writeUint32(output, entry.bytes.length);
-    writeUint32(output, entry.bytes.length);
-    writeUint16(output, nameBytes.length);
-    writeUint16(output, 0);
-    appendBytes(output, nameBytes);
-    appendBytes(output, entry.bytes);
-
-    writeUint32(centralDirectory, 0x02014b50);
-    writeUint16(centralDirectory, 20);
-    writeUint16(centralDirectory, 20);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint32(centralDirectory, crc);
-    writeUint32(centralDirectory, entry.bytes.length);
-    writeUint32(centralDirectory, entry.bytes.length);
-    writeUint16(centralDirectory, nameBytes.length);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint16(centralDirectory, 0);
-    writeUint32(centralDirectory, 0);
-    writeUint32(centralDirectory, offset);
-    appendBytes(centralDirectory, nameBytes);
-  }
-  const centralDirectoryOffset = output.length;
-  output.push(...centralDirectory);
-  writeUint32(output, 0x06054b50);
-  writeUint16(output, 0);
-  writeUint16(output, 0);
-  writeUint16(output, entries.length);
-  writeUint16(output, entries.length);
-  writeUint32(output, centralDirectory.length);
-  writeUint32(output, centralDirectoryOffset);
-  writeUint16(output, 0);
-  return new Blob([new Uint8Array(output)], { type: "application/zip" });
-}
-
 function bytesFromFileContent(content: FileContent) {
   if (content.encoding === "base64") {
     const binary = window.atob(content.content);
@@ -584,7 +613,7 @@ function StakeholderStatementEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noEditableStatements}
@@ -619,7 +648,7 @@ function StakeholderStatementEditor({
                       </span>
                       <textarea
                         className={cn(
-                          "min-h-20 w-full resize-none thin-scrollbar rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
+                          "min-h-20 w-full resize-none rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
                           showValidation && empty
                             ? "border-red-300 focus:border-red-400 focus:ring-red-100"
                             : "border-gray-200 focus:border-slate-400 focus:ring-slate-200",
@@ -654,7 +683,7 @@ function StakeholderStatementPreview({
 }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {drafts.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noStakeholderStatements}
@@ -833,7 +862,7 @@ function ScopeReviewEditor({
                     <div className="min-w-0 flex-1">
                       <textarea
                         className={cn(
-                          "min-h-10 w-full resize-none thin-scrollbar border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0",
+                          "min-h-10 w-full resize-none border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:ring-0",
                           invalidItems[currentKey] && "text-red-700 placeholder:text-red-300",
                         )}
                         value={item}
@@ -929,7 +958,7 @@ function ScopeReviewEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       <div className="space-y-3">
         {renderSection("in_scope", t.inScope, t.noInScopeItems)}
         {renderSection("out_of_scope", t.outOfScope, t.noOutOfScopeItems)}
@@ -941,7 +970,7 @@ function ScopeReviewEditor({
 function RequirementReviewPreview({ rows }: { rows: RequirementReviewRow[] }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noUserRequirements}
@@ -1000,7 +1029,7 @@ function RequirementReviewEditor({
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noEditableRequirements}
@@ -1026,7 +1055,7 @@ function RequirementReviewEditor({
                 </div>
                 <textarea
                   className={cn(
-                    "min-h-24 w-full resize-none thin-scrollbar rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
+                    "min-h-24 w-full resize-none rounded-control border bg-white px-2.5 py-2 text-sm leading-relaxed text-slate-800 focus:outline-none focus:ring-2",
                     showValidation && empty
                       ? "border-red-300 focus:border-red-400 focus:ring-red-100"
                       : "border-gray-200 focus:border-slate-400 focus:ring-slate-200",
@@ -1052,7 +1081,7 @@ function RequirementReviewEditor({
 function AgentIssueProposalPreview({ rows }: { rows: AgentIssueProposalRow[] }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {rows.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">
           {t.noAgentIssues}
@@ -1095,16 +1124,17 @@ function ModelDualView({
   sourcePath,
   imagePath,
   title,
+  tab,
+  onTabChange,
 }: {
   projectId: string;
   sourcePath?: string;
   imagePath?: string;
   title: string;
+  tab: "diagram" | "source";
+  onTabChange: (tab: "diagram" | "source") => void;
 }) {
   const { t } = useI18n();
-  const [tab, setTab] = useState<"diagram" | "source">(
-    imagePath ? "diagram" : "source",
-  );
 
   const source = useQuery({
     queryKey: ["file", projectId, sourcePath],
@@ -1131,7 +1161,7 @@ function ModelDualView({
               ? "bg-slate-900 text-white"
               : "text-slate-600 hover:bg-gray-100",
           )}
-          onClick={() => setTab("diagram")}
+          onClick={() => onTabChange("diagram")}
         >
           {t.model}
         </button>
@@ -1143,7 +1173,7 @@ function ModelDualView({
               ? "bg-slate-900 text-white"
               : "text-slate-600 hover:bg-gray-100",
           )}
-          onClick={() => setTab("source")}
+          onClick={() => onTabChange("source")}
         >
           PlantUML
         </button>
@@ -1300,7 +1330,7 @@ function MarkdownPreview({
   };
 
   return (
-    <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto thin-scrollbar bg-slate-50/50 p-5">
+    <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-5">
       <div className="markdown-body max-w-none text-slate-800">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -1449,9 +1479,11 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const resumeOutputAutoFollow = useUiStore((s) => s.resumeOutputAutoFollow);
   const setScrollTargetMessageId = useUiStore((s) => s.setScrollTargetMessageId);
   const messages = useChatStore((s) => s.messages);
+  const pushNotice = useNoticeStore((s) => s.pushNotice);
   const { activeRun } = useActiveRun(projectId);
   const headerActionsRef = useRef<HTMLDivElement>(null);
   const headerPickerRef = useRef<HTMLDivElement>(null);
+  const tocMenuRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const panelMeasureRef = useRef<HTMLDivElement>(null);
@@ -1461,9 +1493,15 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const [controlsStacked, setControlsStacked] = useState(false);
   const [controlsNarrow, setControlsNarrow] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null);
+  const traceDetailHasFeedbackTable = Boolean(
+    traceDetail?.html.includes("dr-trace-feedback-table"),
+  );
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [downloadPending, setDownloadPending] = useState(false);
+  const [modelViewTab, setModelViewTab] = useState<"diagram" | "source">("diagram");
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [pendingHtmlHash, setPendingHtmlHash] = useState<string | null>(null);
   const [statementDrafts, setStatementDrafts] = useState<StakeholderStatementDraft[]>([]);
@@ -1523,6 +1561,10 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const isModelArtifact =
     fileMeta?.modelBase &&
     (fileMeta.kind === "plantuml" || fileMeta.kind === "image");
+  useEffect(() => {
+    if (!isModelArtifact) return;
+    setModelViewTab(modelPair.image ? "diagram" : "source");
+  }, [isModelArtifact, modelPair.image, selectedOutputPath]);
   const isHtmlArtifact = fileMeta?.kind === "html";
   const isMarkdownArtifact = fileMeta?.kind === "markdown";
   const isGeneratedDocumentArtifact =
@@ -1568,7 +1610,13 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     placeholderData: (previous) => previous,
     retry: false,
   });
+  const sharedDecisionMutationKey = decisionMutationKey(
+    activeRun?.run_id,
+    activeRun?.pending_decision?.id,
+  );
+  const decisionSubmissionsPending = useIsMutating({ mutationKey: sharedDecisionMutationKey });
   const statementEditMut = useMutation({
+    mutationKey: sharedDecisionMutationKey,
     mutationFn: (stakeholders: StakeholderStatementDraft[]) => {
       if (!activeRun?.pending_decision) throw new Error(t.noEditableHumanIntervention);
       return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
@@ -1591,8 +1639,16 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       await queryClient.invalidateQueries({ queryKey: ["artifacts", projectId] });
       await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/project.json"] });
     },
+    onError: (error) => {
+      pushNotice({
+        tone: "error",
+        title: t.directEditFailed,
+        message: errorMessage(error, t.directEditFailed),
+      });
+    },
   });
   const requirementEditMut = useMutation({
+    mutationKey: sharedDecisionMutationKey,
     mutationFn: (rows: RequirementReviewRow[]) => {
       if (!activeRun?.pending_decision) throw new Error(t.noEditableHumanIntervention);
       return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
@@ -1613,6 +1669,13 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/project.json"] });
       await queryClient.invalidateQueries({ queryKey: ["file", projectId, "artifact/requirements.json"] });
     },
+    onError: (error) => {
+      pushNotice({
+        tone: "error",
+        title: t.directEditFailed,
+        message: errorMessage(error, t.directEditFailed),
+      });
+    },
   });
 
   const fileData = file.data?.path === selectedOutputPath ? file.data : undefined;
@@ -1622,10 +1685,56 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     projectId && selectedOutputPath?.startsWith("results/")
       ? manualFileUrl(projectId, selectedOutputPath)
       : null;
+  const normalizeModelImagePathsForDownload = (html: string) => {
+    const imageFiles = files.filter(
+      (item) => item.kind === "image" && /(?:^|\/)models\//i.test(item.path),
+    );
+    if (imageFiles.length === 0) return html;
+
+    const replacements = new Map<string, string>();
+    imageFiles.forEach((item) => {
+      const fileName = filenameFromPath(item.path);
+      replacements.set(fileName, `./models/${fileName}`);
+    });
+
+    const inlineReferences = (source: string) => {
+      const reference = /(?:https?:\/\/[^"'<>\s]+)?(?:[\\/][^"'<>\s]*)?[\\/]models[\\/]([^"'<>?\\/\s]+)(?:\?[^"'<>\s]*)?|(?:\.\.[\\/]|\.[\\/])?models[\\/]([^"'<>?\\/\s]+)(?:\?[^"'<>\s]*)?/g;
+      return source.replace(reference, (original, absoluteName: string, relativeName: string) => {
+        const encodedName = absoluteName || relativeName || "";
+        let fileName = encodedName;
+        try {
+          fileName = decodeURIComponent(encodedName);
+        } catch {
+          // Keep the raw filename when it is not valid URL encoding.
+        }
+        return replacements.get(fileName) ?? original;
+      });
+    };
+
+    let standalone = inlineReferences(html);
+    standalone = standalone.replace(
+      /data-trace-content-b64="([^"]*)"/g,
+      (attribute, encoded: string) => {
+        const decoded = decodeTraceContent(encoded);
+        if (!decoded) return attribute;
+        const inlined = inlineReferences(decoded);
+        return `data-trace-content-b64="${encodeTraceContent(inlined)}"`;
+      },
+    );
+    standalone = standalone
+      .replaceAll(`/${projectId}/manual/srs`, "srs.html")
+      .replaceAll(`/${projectId}/manual/dr`, "design_rationale.html");
+    return standalone;
+  };
   const downloadArtifactPath = async (path: string, format: DownloadFormat) => {
     if (!projectId) return;
     const sourcePath = downloadPathForFormat(path, availablePaths, format);
     const data = await fetchFile(projectId, sourcePath);
+    if (format === "html" && data.encoding !== "base64" && /\.html$/i.test(sourcePath)) {
+      const offlineHtml = normalizeModelImagePathsForDownload(data.content);
+      downloadBlob({ ...data, content: offlineHtml }, filenameFromPath(sourcePath));
+      return;
+    }
     downloadBlob(fileContentForDownload(data, sourcePath), filenameFromPath(sourcePath));
   };
   const zipEntryForPath = async (path: string, format: DownloadFormat) => {
@@ -1638,11 +1747,28 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       bytes: bytesFromFileContentForDownload(data, sourcePath),
     };
   };
+  const standaloneHtmlZipEntry = async (path: string) => {
+    if (!projectId) return null;
+    const sourcePath = downloadHtmlPathForPreview(path, availablePaths);
+    if (!/\.html$/i.test(sourcePath)) return null;
+    const data = await fetchFile(projectId, sourcePath);
+    if (data.encoding === "base64") return null;
+    const standaloneHtml = normalizeModelImagePathsForDownload(data.content);
+    return {
+      path: filenameFromPath(sourcePath),
+      bytes: new TextEncoder().encode(standaloneHtml),
+    };
+  };
+  const modelImageZipEntry = async (path: string) => {
+    if (!projectId) return null;
+    const data = await fetchFile(projectId, path);
+    return {
+      path: `models/${filenameFromPath(path)}`,
+      bytes: bytesFromFileContent(data),
+    };
+  };
   const downloadTargets = useMemo(() => {
-    if (!selectedOutputPath) return [];
-    if (isModelArtifact) {
-      return [modelPair.image?.path ?? selectedOutputPath];
-    }
+    if (!selectedOutputPath || isModelArtifact) return [];
     const targets = [selectedOutputPath];
     const selectedIsSrs = /(?:^results\/srs\.html$|^output\/srs\.md$)/i.test(selectedOutputPath);
     const selectedIsDraft = /(?:^results\/drafts\/draft_v\d+\.html$|^artifact\/drafts\/draft_v\d+\.md$)/i.test(selectedOutputPath);
@@ -1660,7 +1786,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         });
     }
     return targets;
-  }, [files, isModelArtifact, modelPair.image?.path, selectedOutputPath]);
+  }, [files, isModelArtifact, selectedOutputPath]);
   const markdownDownloadPath = selectedOutputPath
     ? downloadSourcePathForPreview(selectedOutputPath, availablePaths)
     : "";
@@ -1674,11 +1800,18 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     hasMarkdownDownload &&
     hasHtmlDownload &&
     markdownDownloadPath !== htmlDownloadPath;
+  const hasDownloadChoices = canChooseDownloadFormat || !!isModelArtifact;
   const defaultDownloadFormat: DownloadFormat = "markdown";
   const downloadTargetsForFormat = (format: DownloadFormat) => {
     if (format === "html" && selectedOutputPath) {
       const htmlPath = downloadHtmlPathForPreview(selectedOutputPath, availablePaths);
-      if (/\.html$/i.test(htmlPath)) return [htmlPath];
+      if (/\.html$/i.test(htmlPath)) {
+        if (/^results\/srs\.html$/i.test(htmlPath)) {
+          const drPath = "results/design_rationale.html";
+          return availablePaths.has(drPath) ? [htmlPath, drPath] : [htmlPath];
+        }
+        return [htmlPath];
+      }
     }
     return downloadTargets;
   };
@@ -1689,16 +1822,21 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     !!projectId &&
     !runInProgress &&
     !meetingIssueProposalDecision &&
-    downloadTargets.length > 0;
+    (isModelArtifact
+      ? !!(modelPair.image?.path || modelPair.source?.path)
+      : downloadTargets.length > 0);
   const downloadSelectedOutput = async (format: DownloadFormat = defaultDownloadFormat) => {
-    if (!canDownloadOutput) return;
+    if (!canDownloadOutput || downloadPending) return;
     setDownloadError("");
+    setDownloadPending(true);
     try {
       const targets = downloadTargetsForFormat(format);
       const selectedIsSrs =
         !!selectedOutputPath && /(?:^results\/srs\.html$|^output\/srs\.md$)/i.test(selectedOutputPath);
       const selectedIsDraft =
         !!selectedOutputPath && /(?:^results\/drafts\/draft_v\d+\.html$|^artifact\/drafts\/draft_v\d+\.md$)/i.test(selectedOutputPath);
+      const selectedIsDr =
+        !!selectedOutputPath && /(?:^results\/design_rationale\.html$|^output\/design_rationale\.md$)/i.test(selectedOutputPath);
       if (format === "markdown" && (selectedIsSrs || selectedIsDraft)) {
         const entries = (await Promise.all(targets.map((path) => zipEntryForPath(path, format)))).filter(
           (entry): entry is { path: string; bytes: Uint8Array } => entry !== null,
@@ -1712,12 +1850,57 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
+      if (format === "html" && (selectedIsSrs || selectedIsDraft || selectedIsDr)) {
+        const htmlEntries = (await Promise.all(targets.map(standaloneHtmlZipEntry))).filter(
+          (entry): entry is { path: string; bytes: Uint8Array } => entry !== null,
+        );
+        const modelPaths = files
+          .filter((item) => item.kind === "image" && /(?:^|\/)models\//i.test(item.path))
+          .map((item) => item.path);
+        const imageEntries = (await Promise.all(modelPaths.map(modelImageZipEntry))).filter(
+          (entry): entry is { path: string; bytes: Uint8Array } => entry !== null,
+        );
+        const entries = [...htmlEntries, ...imageEntries];
+        if (entries.length > 0) {
+          const blob = makeZip(entries);
+          const url = URL.createObjectURL(blob);
+          const draftVersion = /^results\/drafts\/(draft_v\d+)\.html$/i.exec(selectedOutputPath ?? "")?.[1] ??
+            /^artifact\/drafts\/(draft_v\d+)\.md$/i.exec(selectedOutputPath ?? "")?.[1] ??
+            "draft";
+          triggerDownload(
+            url,
+            selectedIsSrs
+              ? "srs-html.zip"
+              : selectedIsDr
+                ? "design-rationale-html.zip"
+                : `${draftVersion}-html.zip`,
+          );
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          return;
+        }
+      }
       for (const path of targets) {
         await downloadArtifactPath(path, format);
       }
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : t.downloadFailed);
       console.error(error);
+    } finally {
+      setDownloadPending(false);
+    }
+  };
+  const downloadModelOutput = async (kind: "image" | "source") => {
+    const path = kind === "image" ? modelPair.image?.path : modelPair.source?.path;
+    if (!projectId || !path || runInProgress || downloadPending) return;
+    setDownloadError("");
+    setDownloadPending(true);
+    try {
+      const data = await fetchFile(projectId, path);
+      downloadBlob(fileContentForDownload(data, path), filenameFromPath(path));
+    } catch (error) {
+      setDownloadError(errorMessage(error, t.downloadFailed));
+    } finally {
+      setDownloadPending(false);
     }
   };
 
@@ -1727,7 +1910,28 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     setActionMenuOpen(false);
     setDownloadError("");
     setTocItems([]);
+    setTraceDetail(null);
   }, [selectedOutputPath]);
+
+  useEffect(() => {
+    if (!traceDetail) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTraceDetail(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [traceDetail]);
+
+  useEffect(() => {
+    if (!tocOpen) return;
+    const handler = (event: PointerEvent) => {
+      if (!tocMenuRef.current?.contains(event.target as Node)) {
+        setTocOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [tocOpen]);
 
   useEffect(() => {
     if (!downloadMenuOpen) return;
@@ -1948,10 +2152,83 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   const collectHtmlToc = () => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
+    if (!doc.getElementById("plant-scrollbar-style")) {
+      const style = doc.createElement("style");
+      style.id = "plant-scrollbar-style";
+      style.textContent = `
+        * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+        *::-webkit-scrollbar { width: 6px; height: 6px; }
+        *::-webkit-scrollbar-track { background: transparent; }
+        *::-webkit-scrollbar-thumb { border-radius: 999px; background: transparent; }
+        *:hover { scrollbar-color: #cbd5e1 transparent; }
+        *:hover::-webkit-scrollbar-thumb { background: #cbd5e1; }
+        *::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      `;
+      doc.head.appendChild(style);
+    }
+    if (doc.documentElement.dataset.parentOutsideClickWired !== "true") {
+      doc.documentElement.dataset.parentOutsideClickWired = "true";
+      doc.addEventListener("pointerdown", () => {
+        document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        setTocOpen(false);
+        setDownloadMenuOpen(false);
+        setActionMenuOpen(false);
+      });
+    }
+    if (doc.documentElement.dataset.parentTraceInteractionWired !== "true") {
+      doc.documentElement.dataset.parentTraceInteractionWired = "true";
+      const openTraceNode = (node: Element) => {
+        if ((node.getAttribute("data-trace-type") ?? "") === "Requirement") return;
+        const encoded = node.getAttribute("data-trace-content-b64") ?? "";
+        const fallback = node.getAttribute("data-trace-content") ?? "";
+        const content = decodeTraceContent(encoded, fallback);
+        const format = node.getAttribute("data-trace-format") ?? "text";
+        const safeSource = format === "html" ? content : `<pre>${escapeTraceText(content)}</pre>`;
+        setTraceDetail({
+          title:
+            node.getAttribute("data-trace-title") ??
+            node.getAttribute("data-trace-id") ??
+            "",
+          html: sanitizeTraceHtml(safeSource, doc.baseURI),
+        });
+      };
+      doc.addEventListener("click", (event) => {
+        const target = event.target;
+        const node =
+          target && typeof (target as Element).closest === "function"
+            ? (target as Element).closest(".dr-trace-node")
+            : null;
+        if (!node) return;
+        event.preventDefault();
+        openTraceNode(node);
+      });
+      doc.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const target = event.target;
+        const node =
+          target && typeof (target as Element).closest === "function"
+            ? (target as Element).closest(".dr-trace-node")
+            : null;
+        if (!node) return;
+        event.preventDefault();
+        openTraceNode(node);
+      });
+    }
     if (!doc.getElementById("plant-artifact-preview-background")) {
       const style = doc.createElement("style");
       style.id = "plant-artifact-preview-background";
-      style.textContent = "html, body { background: #f8fafc !important; }";
+      style.textContent = `
+        html, body { background: #f8fafc !important; }
+        .plant-floating-toc { display: none !important; }
+        body.has-floating-toc {
+          margin: 24px !important;
+          padding-bottom: 0 !important;
+        }
+        @media (max-width: 1024px) {
+          body.has-floating-toc { margin: 16px !important; }
+        }
+      `;
       doc.head.appendChild(style);
     }
     blockHtmlDocumentFileDrops();
@@ -2003,7 +2280,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   };
 
   const tocControl = showToc ? (
-    <div className="relative">
+    <div ref={tocMenuRef} className="relative">
       <button
         type="button"
         className="rounded-control border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-gray-50"
@@ -2016,7 +2293,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         {t.tableOfContents}
       </button>
       {tocOpen && (
-        <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-64 overflow-y-auto thin-scrollbar rounded-card border border-gray-200 bg-white p-2 shadow-lg">
+        <div className="absolute left-0 top-full z-30 mt-2 max-h-80 w-64 overflow-y-auto rounded-card border border-gray-200 bg-white p-2 shadow-lg">
           {isMarkdownArtifact && file.isLoading ? (
             <p className="px-2 py-3 text-xs text-slate-500">{t.tocLoading}</p>
           ) : tocItems.length === 0 ? (
@@ -2097,10 +2374,38 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   );
   const renderDownloadActions = (closeMenu: () => void) => (
     <>
-      {canChooseDownloadFormat ? (
+      {isModelArtifact ? (
         <>
           <button
             type="button"
+            disabled={!modelPair.image || downloadPending}
+            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => {
+              closeMenu();
+              void downloadModelOutput("image");
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t.downloadImage}
+          </button>
+          <button
+            type="button"
+            disabled={!modelPair.source || downloadPending}
+            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => {
+              closeMenu();
+              void downloadModelOutput("source");
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t.downloadPlantUml}
+          </button>
+        </>
+      ) : canChooseDownloadFormat ? (
+        <>
+          <button
+            type="button"
+            disabled={downloadPending}
             className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
             onClick={() => {
               closeMenu();
@@ -2112,6 +2417,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           </button>
           <button
             type="button"
+            disabled={downloadPending}
             className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
             onClick={() => {
               closeMenu();
@@ -2125,6 +2431,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       ) : (
         <button
           type="button"
+          disabled={downloadPending}
           className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
           onClick={() => {
             closeMenu();
@@ -2141,12 +2448,13 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     <div ref={downloadMenuRef} className="relative shrink-0">
       <button
         type="button"
-        disabled={!canDownloadOutput}
+        disabled={!canDownloadOutput || downloadPending}
+        aria-busy={downloadPending}
         className="inline-flex shrink-0 items-center rounded p-1 text-slate-400 hover:bg-gray-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
         aria-label={t.downloadResult}
         title={t.downloadResult}
         onClick={() => {
-          if (canChooseDownloadFormat) {
+          if (hasDownloadChoices) {
             setTocOpen(false);
             setActionMenuOpen(false);
             setDownloadMenuOpen((open) => !open);
@@ -2157,7 +2465,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       >
         <Download className="h-3.5 w-3.5" />
       </button>
-      {downloadMenuOpen && canDownloadOutput && canChooseDownloadFormat && (
+      {downloadMenuOpen && canDownloadOutput && hasDownloadChoices && (
         <div className="absolute left-0 top-full z-40 mt-2 w-44 rounded-card border border-gray-200 bg-white p-1 shadow-lg">
           {renderDownloadActions(() => setDownloadMenuOpen(false))}
         </div>
@@ -2246,19 +2554,19 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                   type="button"
                   className="inline-flex h-8 items-center gap-1.5 rounded-control bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                   disabled={
-                    statementEditMut.isPending ||
+                    decisionSubmissionsPending > 0 ||
                     statementDrafts.length === 0 ||
                     hasEmptyStatement
                   }
                   onClick={() => statementEditMut.mutate(statementDrafts)}
                 >
-                  {statementEditMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {decisionSubmissionsPending > 0 && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   {t.save}
                 </button>
                 <button
                   type="button"
                   className="h-8 rounded-control border border-gray-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={statementEditMut.isPending}
+                  disabled={decisionSubmissionsPending > 0}
                   onClick={resetDrafts}
                 >
                   {t.cancel}
@@ -2281,7 +2589,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         {statementEditing ? (
           <StakeholderStatementEditor
             drafts={statementDrafts}
-            saving={statementEditMut.isPending}
+            saving={decisionSubmissionsPending > 0}
             showValidation={hasEmptyStatement}
             onChange={setStatementDrafts}
           />
@@ -2331,19 +2639,19 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
                   type="button"
                   className="inline-flex h-8 items-center gap-1.5 rounded-control bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                   disabled={
-                    requirementEditMut.isPending ||
+                    decisionSubmissionsPending > 0 ||
                     requirementDrafts.length === 0 ||
                     hasEmptyRequirement
                   }
                   onClick={() => requirementEditMut.mutate(requirementDrafts)}
                 >
-                  {requirementEditMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {decisionSubmissionsPending > 0 && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   {t.save}
                 </button>
                 <button
                   type="button"
                   className="h-8 rounded-control border border-gray-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={requirementEditMut.isPending}
+                  disabled={decisionSubmissionsPending > 0}
                   onClick={resetRequirementDrafts}
                 >
                   {t.cancel}
@@ -2366,7 +2674,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         {requirementEditing ? (
           <RequirementReviewEditor
             rows={requirementDrafts}
-            saving={requirementEditMut.isPending}
+            saving={decisionSubmissionsPending > 0}
             showValidation={hasEmptyRequirement}
             onChange={setRequirementDrafts}
           />
@@ -2392,6 +2700,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
   }
 
   return (
+    <>
     <PanelChrome
       title={t.output}
       centerTitle
@@ -2411,8 +2720,20 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           )}
         </>
       }
-      bodyClassName="flex min-h-0 flex-col bg-slate-50/50"
+      bodyClassName="relative flex min-h-0 flex-col bg-slate-50/50"
     >
+      {downloadPending && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-white/75 backdrop-blur-[1px]"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2 rounded-control border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <span>{t.downloading}</span>
+          </div>
+        </div>
+      )}
       {downloadError && (
         <div className="shrink-0 border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-700">
           {downloadError}
@@ -2430,6 +2751,8 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         <ModelDualView
           projectId={projectId}
           title={title}
+          tab={modelViewTab}
+          onTabChange={setModelViewTab}
           sourcePath={
             modelPair.source?.path ??
             (fileMeta?.kind === "plantuml" ? fileMeta.path : undefined)
@@ -2450,7 +2773,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           ref={iframeRef}
           title={title || t.artifact}
           src={htmlPreviewUrl ?? undefined}
-          sandbox="allow-same-origin allow-scripts allow-downloads"
+          sandbox="allow-same-origin allow-downloads"
           onLoad={collectHtmlToc}
           className="min-h-0 flex-1 border-0 bg-slate-50/50"
         />
@@ -2482,12 +2805,48 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
           contentRef={markdownContentRef}
         />
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto thin-scrollbar bg-slate-50/50 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-4">
           <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-700">
             {content}
           </pre>
         </div>
       )}
     </PanelChrome>
+    {traceDetail && createPortal(
+      <div
+        className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/40 p-4"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setTraceDetail(null);
+        }}
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-label={traceDetail.title || t.artifact}
+          className={`flex max-h-[min(720px,calc(100vh-32px))] w-full flex-col overflow-hidden rounded-card border border-gray-200 bg-white shadow-2xl ${
+            traceDetailHasFeedbackTable ? "max-w-5xl" : "max-w-3xl"
+          }`}
+        >
+          <header className="flex shrink-0 items-start justify-between gap-4 border-b border-gray-100 px-5 py-4">
+            <h2 className="text-base font-semibold text-slate-900">{traceDetail.title}</h2>
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-slate-500 hover:bg-gray-100 hover:text-slate-900"
+              aria-label={t.close}
+              title={t.close}
+              onClick={() => setTraceDetail(null)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </header>
+          <div
+            className="trace-detail-content prose prose-slate min-h-0 max-w-none flex-1 overflow-auto p-5 text-sm leading-relaxed prose-img:mx-auto prose-img:max-h-[420px] prose-img:rounded-control prose-table:text-xs"
+            dangerouslySetInnerHTML={{ __html: traceDetail.html }}
+          />
+        </section>
+      </div>
+    , document.body)}
+    </>
   );
 }

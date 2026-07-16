@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Layers } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { fetchConfig, updateConfig } from "@/api/config";
+import { fetchConfig, patchConfig } from "@/api/config";
 import { useI18n } from "@/i18n";
 import { useNoticeStore } from "@/stores/noticeStore";
 import type { PlantConfig } from "@/types/api";
@@ -119,7 +119,11 @@ export function StageToggleMenu({
   });
 
   const saveMut = useMutation({
-    mutationFn: updateConfig,
+    mutationFn: (next: PlantConfig) =>
+      patchConfig({
+        stage: next.stage,
+        force_regenerate_outputs: next.force_regenerate_outputs,
+      }),
     onSuccess: ({ config }) => {
       queryClient.setQueryData(["config"], config);
       queryClient.invalidateQueries({ queryKey: ["config"] });

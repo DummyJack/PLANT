@@ -826,7 +826,8 @@ function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
     return firstExistingPath(paths, ["artifact/feedback.json"]);
   }
   if (/System Models|output:system_models/.test(value)) {
-    return firstExistingPath(paths, ["artifact/system_models.json"]);
+    return firstExistingPath(paths, ["artifact/system_models.json"]) ??
+      Array.from(paths).find((path) => /^artifact\/models\/.+\.(?:png|svg|plantuml|puml)$/i.test(path));
   }
   if (/Draft|草稿/.test(value)) {
     return firstExistingPath(paths, [
@@ -959,6 +960,7 @@ export function WorkspaceFlowIndex({
   const messages = useChatStore((s) => s.messages);
   const activeFlowMessageId = useUiStore((s) => s.activeFlowMessageId);
   const setScrollTargetMessageId = useUiStore((s) => s.setScrollTargetMessageId);
+  const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
 
   const items = useMemo(() => {
     const availablePaths = new Set(
@@ -1047,12 +1049,20 @@ export function WorkspaceFlowIndex({
       return;
     }
     setExpandedGroupId(null);
-    setScrollTargetMessageId(item.scrollTargetId ?? item.id);
+    if (item.scrollTargetId) {
+      setScrollTargetMessageId(item.scrollTargetId);
+    } else if (item.outputPath) {
+      setSelectedOutputPath(item.outputPath, "manual");
+    }
     if (!inline) setOpen(false);
   };
 
   const jumpToChild = (item: FlowItem) => {
-    setScrollTargetMessageId(item.scrollTargetId ?? item.id);
+    if (item.scrollTargetId) {
+      setScrollTargetMessageId(item.scrollTargetId);
+    } else if (item.outputPath) {
+      setSelectedOutputPath(item.outputPath, "manual");
+    }
   };
 
   const railContent = (

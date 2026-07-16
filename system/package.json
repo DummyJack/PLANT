@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "predev": "node scripts/preflight.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/preflight.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "build:swagger": "node scripts/build-swagger.mjs"

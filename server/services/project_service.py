@@ -1,15 +1,16 @@
 import json
 import shutil
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import HTTPException, UploadFile
 
 from flow.main import run_export_html_stage, run_export_manual_stage, save_cost_summary
 from flow.setup import Flow
 from storage import Store
-from utils import Logger, export_enabled
-from utils.language import sync_output_language
+from storage.coordinator import FileRunCoordinator
+from utils import export_enabled
 
 from .security import sanitize_filename, validate_project_id, write_upload_file
 
@@ -118,66 +119,26 @@ class ProjectService:
         project_id = validate_project_id(project_id)
         return self.base_dir / "doc" / project_id
 
-    def get_summary(self, project_id: str) -> Dict[str, Any]:
-        store = self.ensure_project(project_id)
-        artifact = store.load_artifact() or {}
-        results_dir = store.project_dir / "results"
-        cost_path = store.project_dir / "cost_summary.json"
-        active_run = self.run_manager.get_active_run(project_id) if self.run_manager else None
-        return {
-            "project_id": project_id,
-            "rough_idea": str(artifact.get("rough_idea") or ""),
-            "meta": artifact.get("meta", {}) if isinstance(artifact.get("meta"), dict) else {},
-            "stakeholder_count": len(artifact.get("stakeholders", []) or []),
-            "user_requirement_count": len(artifact.get("URL", []) or []),
-            "system_requirement_count": len(artifact.get("REQ", []) or []),
-            "system_model_count": len(artifact.get("system_models", []) or []),
-            "discussion_count": len(artifact.get("discussions", []) or []),
-            "has_results": results_dir.exists() and any(results_dir.rglob("*")),
-            "has_cost_summary": cost_path.exists(),
-            "active_run": active_run,
-        }
-
-    def update_project(
-        self,
-        project_id: str,
-        *,
-        rough_idea: Optional[str] = None,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        self.assert_no_active_run(project_id)
-        store = self.ensure_project(project_id)
-        artifact = store.load_artifact() or {}
-        changed = False
-        if rough_idea is not None:
-            cleaned = rough_idea.strip()
-            if not cleaned:
-                raise HTTPException(status_code=400, detail="rough_idea cannot be empty")
-            artifact["rough_idea"] = cleaned
-            sync_output_language(cleaned, artifact)
-            changed = True
-        if meta is not None:
-            if not isinstance(meta, dict):
-                raise HTTPException(status_code=400, detail="meta must be an object")
-            current_meta = artifact.get("meta")
-            if not isinstance(current_meta, dict):
-                current_meta = {}
-            current_meta.update(meta)
-            artifact["meta"] = current_meta
-            changed = True
-        if changed:
-            store.save_artifact(artifact)
-        return {"project_id": project_id, "updated": changed, "summary": self.get_summary(project_id)}
-
     def delete_project(self, project_id: str) -> Dict[str, Any]:
-        self.assert_no_active_run(project_id)
-        store = self.ensure_project(project_id)
-        project_dir = store.project_dir
-        references_dir = self.references_path(project_id)
-        shutil.rmtree(project_dir)
-        if references_dir.exists():
-            shutil.rmtree(references_dir)
-        return {"project_id": project_id, "deleted": True}
+        project_id = validate_project_id(project_id)
+        coordinator = FileRunCoordinator(self.base_dir)
+        mutation_id = f"project_delete_{uuid.uuid4().hex[:10]}"
+        if not coordinator.claim_project(project_id, mutation_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Project is running or another project operation is in progress",
+            )
+        try:
+            self.assert_no_active_run(project_id)
+            store = self.ensure_project(project_id)
+            project_dir = store.project_dir
+            references_dir = self.references_path(project_id)
+            shutil.rmtree(project_dir)
+            if references_dir.exists():
+                shutil.rmtree(references_dir)
+            return {"project_id": project_id, "deleted": True}
+        finally:
+            coordinator.release_project(project_id, mutation_id)
 
     def export_from_flow(
         self,
@@ -207,23 +168,6 @@ class ProjectService:
             "results_dir": "results",
         }
 
-    def export_project(
-        self,
-        project_id: str,
-        *,
-        html: bool = True,
-        cost: bool = False,
-        manual: bool = True,
-    ) -> Dict[str, Any]:
-        self.assert_no_active_run(project_id)
-        store = self.ensure_project(project_id)
-        config = Store(self.base_dir).load_config()
-        logger = Logger(store.log_dir, write_file=False)
-        flow = Flow(config, store, logger)
-        result = self.export_from_flow(flow, html=html, cost=cost, manual=manual)
-        result["project_id"] = project_id
-        return result
-
     def describe_export_flags(self, config: Dict[str, Any]) -> Dict[str, bool]:
         return {
             "html": bool(export_enabled(config, "html", True)),
@@ -250,7 +194,14 @@ class ProjectService:
                 rows.append({"name": path.name, "size": path.stat().st_size})
         return {"project_id": project_id, "references": rows}
 
-    async def upload_reference(self, project_id: str, file: UploadFile) -> Dict[str, Any]:
+    async def upload_reference(
+        self,
+        project_id: str,
+        file: UploadFile,
+        *,
+        allow_during_active_run: bool = False,
+        pending: bool = False,
+    ) -> Dict[str, Any]:
         self.ensure_project(project_id)
         name = sanitize_filename(file.filename or "")
         suffix = Path(name).suffix.lower()
@@ -259,18 +210,58 @@ class ProjectService:
                 status_code=400,
                 detail=f"Unsupported reference file type. Allowed: {REFERENCE_EXTS_LABEL}",
             )
-        target = self.references_dir(project_id) / name
-        size = await write_upload_file(file, target)
-        return {"project_id": project_id, "saved": True, "name": name, "size": size}
+        coordinator = FileRunCoordinator(self.base_dir)
+        mutation_id = f"reference_upload_{uuid.uuid4().hex[:10]}"
+        async def save_reference() -> Dict[str, Any]:
+            references_dir = self.references_dir(project_id)
+            pending_target = references_dir / ".pending" / name
+            target = pending_target if pending else references_dir / name
+            if (references_dir / name).exists() or pending_target.exists():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Reference already exists: {name}",
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            size = await write_upload_file(file, target)
+            return {
+                "project_id": project_id,
+                "saved": True,
+                "pending": pending,
+                "name": name,
+                "size": size,
+            }
+
+        if allow_during_active_run:
+            with coordinator.exclusive_lock(f"reference-upload-{project_id}", timeout=30.0):
+                return await save_reference()
+        if not coordinator.claim_project(project_id, mutation_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Project is running or another project operation is in progress",
+            )
+        try:
+            return await save_reference()
+        finally:
+            coordinator.release_project(project_id, mutation_id)
 
     def delete_reference(self, project_id: str, name: str) -> Dict[str, Any]:
         self.ensure_project(project_id)
         safe = sanitize_filename(name)
-        target = self.references_dir(project_id) / safe
-        if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="Reference not found")
-        target.unlink()
-        return {"project_id": project_id, "deleted": True, "name": safe}
+        coordinator = FileRunCoordinator(self.base_dir)
+        mutation_id = f"reference_delete_{uuid.uuid4().hex[:10]}"
+        if not coordinator.claim_project(project_id, mutation_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Project is running or another project operation is in progress",
+            )
+        try:
+            target = self.references_dir(project_id) / safe
+            if not target.exists() or not target.is_file():
+                raise HTTPException(status_code=404, detail="Reference not found")
+            target.unlink()
+            return {"project_id": project_id, "deleted": True, "name": safe}
+        finally:
+            coordinator.release_project(project_id, mutation_id)
 
     def reference_path(self, project_id: str, name: str) -> Path:
         self.ensure_project(project_id)

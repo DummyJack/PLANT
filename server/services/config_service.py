@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 from model import validate_provider_api_keys
-from server.services.run_config import normalize_agent_models_to_valid_provider
+from server.services.run_config import MAX_RUN_ISSUES, MAX_RUN_ROUNDS, normalize_agent_models_to_valid_provider
 
 
 def validate_config(config: Any) -> Dict[str, Any]:
@@ -12,6 +12,18 @@ def validate_config(config: Any) -> Dict[str, Any]:
     agent_models = config.get("agent_models")
     if agent_models is not None and not isinstance(agent_models, dict):
         errors.append("agent_models must be an object")
+
+    preflight = config.get("preflight")
+    if preflight is not None:
+        if not isinstance(preflight, dict):
+            errors.append("preflight must be an object")
+        else:
+            unknown = set(preflight) - {"system", "server"}
+            if unknown:
+                errors.append(f"unknown preflight option(s): {', '.join(sorted(unknown))}")
+            for name in ("system", "server"):
+                if name in preflight and not isinstance(preflight[name], bool):
+                    errors.append(f"preflight.{name} must be a boolean")
 
     stage = config.get("stage")
     if stage is not None and not isinstance(stage, dict):
@@ -30,6 +42,8 @@ def validate_config(config: Any) -> Dict[str, Any]:
         try:
             if int(rounds) < 0:
                 errors.append("rounds must be greater than or equal to 0")
+            elif int(rounds) > MAX_RUN_ROUNDS:
+                errors.append(f"rounds must be less than or equal to {MAX_RUN_ROUNDS}")
         except (TypeError, ValueError):
             errors.append("rounds must be an integer")
 
@@ -38,6 +52,8 @@ def validate_config(config: Any) -> Dict[str, Any]:
         try:
             if int(max_issues) < 1:
                 errors.append("max_issues must be greater than 0")
+            elif int(max_issues) > MAX_RUN_ISSUES:
+                errors.append(f"max_issues must be less than or equal to {MAX_RUN_ISSUES}")
         except (TypeError, ValueError):
             errors.append("max_issues must be an integer")
 

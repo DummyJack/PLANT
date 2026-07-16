@@ -2,7 +2,7 @@ import { Download, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { apiUrl } from "@/api/client";
+import { apiUrl, responseErrorMessage } from "@/api/client";
 import { UI_TEXT } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 
@@ -91,15 +91,6 @@ function downloadReferenceUrl(projectId: string, name: string) {
   return apiUrl(`/api/projects/${encodeURIComponent(projectId)}/references/${encodeURIComponent(name)}`);
 }
 
-async function previewResponseError(response: Response, fallback: string) {
-  try {
-    const body = await response.json();
-    return typeof body?.detail === "string" ? body.detail : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function renderContent(state: Extract<PreviewState, { status: "ready" }>, noContent: string) {
   const ext = extension(state.name);
   const content = state.content ?? "";
@@ -163,7 +154,7 @@ export function ReferencePreviewPage() {
     const rawUrl = apiUrl(rawReferenceUrl(target.projectId, target.name));
     const load = async () => {
       const raw = await fetch(rawUrl, { credentials: "include", signal: controller.signal });
-      if (!raw.ok) throw new Error(await previewResponseError(raw, t.readFileFailed));
+      if (!raw.ok) throw new Error(await responseErrorMessage(raw, t.readFileFailed));
       return { response: raw, url: rawUrl };
     };
     load()

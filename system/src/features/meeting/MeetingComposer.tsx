@@ -3,10 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { DragEvent } from "react";
-import { fetchConfig, updateConfig } from "@/api/config";
+import { fetchConfig, patchConfig } from "@/api/config";
 import { fetchModelApiKeys } from "@/api/secrets";
 import { AGENT_LABELS, HEADER_AGENT_ORDER } from "@/constants/agents";
-import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
+import { ReferenceFileIcon, referenceLabel } from "@/features/documents/referenceFiles";
 import { useI18n } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import { useNoticeStore } from "@/stores/noticeStore";
@@ -209,6 +209,7 @@ export function MeetingComposer({
   const composerRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
   const agentPopoverRef = useRef<HTMLDivElement>(null);
+  const mentionPopoverRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const configQuery = useQuery({
     queryKey: ["config"],
@@ -231,6 +232,7 @@ export function MeetingComposer({
     configQuery.isSuccess &&
     keyQuery.isSuccess &&
     hasUsableProvider;
+  const apiKeyUnavailable = keyQuery.isSuccess && !hasUsableProvider;
   const agentButtonDisabled = !requiredAgentsReady;
   const runSubmitDisabled = submitDisabled || !requiredAgentsReady;
   const idleSubmitLabel = submitLabel ?? (noProject ? t.execute : t.continue);
@@ -244,7 +246,7 @@ export function MeetingComposer({
   const inputDisabled =
     reviewMode || stakeholderSelectionMode || humanDecisionMode
       ? !canWrite
-      : !!disabled || continueMode;
+      : !!disabled || continueMode || (!!noProject && apiKeyUnavailable);
   const mentionTokens = normalizeMentionTokens(value.match(/@[A-Za-z0-9_-]+/g) ?? []);
   const isDomainReview = reviewMode && reviewTarget === "domain";
   const isScopeReview = reviewMode && reviewTarget === "scope";
@@ -272,6 +274,21 @@ export function MeetingComposer({
     reviewMode && mentionOpen && mentionMatch && mentionItems.length > 0;
   const composeReviewValue = (text: string, tokens = mentionTokens) =>
     [normalizeMentionTokens(tokens).join(" "), text.trimStart()].filter(Boolean).join(" ");
+
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const handler = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !textareaRef.current?.contains(target) &&
+        !mentionPopoverRef.current?.contains(target)
+      ) {
+        setMentionOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [mentionOpen]);
 
   useEffect(() => {
     if (!showAgentPopover) return;
@@ -334,11 +351,7 @@ export function MeetingComposer({
 
   const saveAgentDefaults = async (nextAgents = enabledAgents) => {
     try {
-      const { config } = await fetchConfig();
-      await updateConfig({
-        ...config,
-        enable_agents: { ...nextAgents },
-      });
+      await patchConfig({ enable_agents: { ...nextAgents } });
       pushNotice({
         tone: "success",
         title: t.saved,
@@ -355,11 +368,7 @@ export function MeetingComposer({
 
   const saveMeetingDefaults = async (patch: { rounds?: number; max_issues?: number }) => {
     try {
-      const { config } = await fetchConfig();
-      await updateConfig({
-        ...config,
-        ...patch,
-      });
+      await patchConfig(patch);
       pushNotice({
         tone: "success",
         title: t.saved,
@@ -798,6 +807,8 @@ export function MeetingComposer({
               placeholder={
                 !canWrite
                   ? t.enterActivationFirst
+                  : noProject && apiKeyUnavailable
+                  ? t.testApiKeyFirst
                   : noProject
                   ? t.initialIdea
                   : stopping
@@ -939,6 +950,7 @@ export function MeetingComposer({
 
           {showMentionPopover && (
             <div
+              ref={mentionPopoverRef}
               className={cn(
                 "absolute bottom-full left-2 z-30 mb-2 overflow-hidden rounded-control border border-gray-200 bg-white shadow-lg",
                 isDomainReview ? "w-72" : "w-52",

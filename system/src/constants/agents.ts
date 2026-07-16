@@ -1,4 +1,4 @@
-export const AGENT_ORDER = [
+const AGENT_ORDER = [
   "user",
   "analyst",
   "expert",

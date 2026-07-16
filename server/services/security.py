@@ -10,6 +10,7 @@ from fastapi import HTTPException
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._\-\u4e00-\u9fff]")
 MAX_EVENT_STRING_LENGTH = 8 * 1024
 MAX_EVENT_JSON_LENGTH = 32 * 1024
+MAX_REFERENCE_FILE_BYTES = 25 * 1024 * 1024
 ALLOWED_OUTPUT_ROOTS = {"artifact", "results", "output", "manual"}
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)\s*[:=]\s*([^\s,;]+)"),
@@ -138,13 +139,7 @@ def sanitize_workspace_event(event: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
-def ensure_extension(path: Path, allowed: Iterable[str]) -> None:
-    suffix = path.suffix.lower()
-    if suffix not in set(allowed):
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
-
-
-async def write_upload_file(upload: Any, target: Path, *, chunk_size: int = 1024 * 1024) -> int:
+async def write_upload_file(upload: Any, target: Path, *, chunk_size: int = 1024 * 1024, max_bytes: int = MAX_REFERENCE_FILE_BYTES) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{target.name}.",
@@ -161,6 +156,8 @@ async def write_upload_file(upload: Any, target: Path, *, chunk_size: int = 1024
                     break
                 handle.write(chunk)
                 total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail=f"File exceeds {max_bytes} byte limit")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, target)

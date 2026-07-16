@@ -1,12 +1,19 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from utils import stage_enabled
+from utils import (
+    formal_meeting_enabled,
+    general_formal_meeting_enabled,
+    stage_enabled,
+)
+from utils.stage_validation import validate_stage_overrides, validate_stage_plan
 
 
 KNOWN_AGENTS = frozenset(
     {"user", "analyst", "expert", "mediator", "modeler", "documentor"}
 )
+MAX_RUN_ROUNDS = 20
+MAX_RUN_ISSUES = 50
 
 PROVIDER_PRIORITY = ("openai", "gemini", "claude")
 DEFAULT_PROVIDER_MODELS = {
@@ -97,24 +104,16 @@ def required_agents_for_enabled_stages(config: Dict[str, Any]) -> set[str]:
     return required
 
 
-def formal_meeting_enabled(config: Dict[str, Any]) -> bool:
-    return stage_enabled(config, "default_formal_meeting", True) or stage_enabled(
-        config, "general_formal_meeting", True
-    )
-
-
-def general_formal_meeting_enabled(config: Dict[str, Any]) -> bool:
-    return stage_enabled(config, "general_formal_meeting", True)
-
-
 def resolve_run_rounds(
     config: Dict[str, Any],
     rounds_override: Optional[int] = None,
 ) -> int:
     if rounds_override is not None:
         rounds = int(rounds_override)
-        if rounds < 1:
-            raise ValueError("rounds must be greater than 0")
+        if rounds < 0:
+            raise ValueError("rounds must be greater than or equal to 0")
+        if rounds > MAX_RUN_ROUNDS:
+            raise ValueError(f"rounds must be less than or equal to {MAX_RUN_ROUNDS}")
         return rounds
 
     if general_formal_meeting_enabled(config):
@@ -126,6 +125,8 @@ def resolve_run_rounds(
         rounds = int(configured)
         if rounds < 1:
             raise ValueError("config rounds must be greater than 0")
+        if rounds > MAX_RUN_ROUNDS:
+            raise ValueError(f"config rounds must be less than or equal to {MAX_RUN_ROUNDS}")
         return rounds
 
     if formal_meeting_enabled(config):
@@ -149,18 +150,10 @@ def apply_run_max_issues(
     max_issues = int(value)
     if max_issues < 1:
         raise ValueError("max_issues must be greater than 0")
+    if max_issues > MAX_RUN_ISSUES:
+        raise ValueError(f"max_issues must be less than or equal to {MAX_RUN_ISSUES}")
     updated["max_issues"] = max_issues
     return updated
-
-
-def validate_stage_overrides(stage_overrides: Dict[str, Any]) -> None:
-    if not isinstance(stage_overrides, dict):
-        raise ValueError("stage_overrides must be an object")
-    for key, value in stage_overrides.items():
-        if not isinstance(key, str) or not key.strip():
-            raise ValueError("stage_overrides keys must be non-empty strings")
-        if not isinstance(value, bool):
-            raise ValueError(f"stage_overrides[{key!r}] must be a boolean")
 
 
 def apply_run_stage_overrides(

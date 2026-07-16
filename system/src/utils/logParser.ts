@@ -484,7 +484,7 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
       label,
       action: event.delta_type === "speech" ? undefined : event.step_id ?? event.action,
       stage: event.stage_id,
-      status: "running",
+      status: "done",
       text,
       timestamp: event.timestamp,
     };

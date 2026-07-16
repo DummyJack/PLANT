@@ -15,6 +15,9 @@ interface ChatState {
   resolveHumanInterventionProgress: (
     decision?: ChatMessage["decision"] | null,
   ) => void;
+  resolveStageProgress: (stage?: string) => void;
+  resolveHeartbeatProgress: () => void;
+  resolveStepProgress: (stage?: string, action?: string) => void;
   setContinueReplacementStage: (target?: ContinueTrimTarget) => void;
   trimRunStatusMessagesForContinue: (target?: ContinueTrimTarget) => void;
   clearMessages: () => void;
@@ -45,6 +48,16 @@ function isGeneratedDocumentDisplayMessage(message: ChatMessage) {
 function messageTime(message: ChatMessage) {
   const value = message.timestamp ? new Date(message.timestamp).getTime() : NaN;
   return Number.isFinite(value) ? value : null;
+}
+
+function findLastMessageIndex(
+  messages: ChatMessage[],
+  predicate: (message: ChatMessage) => boolean,
+) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (predicate(messages[index])) return index;
+  }
+  return -1;
 }
 
 function trimDocumentGenerationMessagesForContinue(messages: ChatMessage[]) {
@@ -171,14 +184,6 @@ export function trimTrailingGeneratedDocumentMessages(messages: ChatMessage[]) {
   return end === messages.length ? messages : messages.slice(0, end);
 }
 
-export function pruneRunDisplayMessages(messages: ChatMessage[]) {
-  return messages.filter(
-    (message) =>
-      !isTrailingRunStatusMessage(message) &&
-      !isTrailingGeneratedDocumentMessage(message),
-  );
-}
-
 export function trimRunDisplayMessagesFromStage(
   messages: ChatMessage[],
   target?: ContinueTrimTarget,
@@ -237,6 +242,43 @@ export const useChatStore = create<ChatState>((set) => ({
         break;
       }
       return changed ? { messages: next } : s;
+    }),
+  resolveStageProgress: (stage) =>
+    set((s) => {
+      const normalizedStage = String(stage ?? "").trim();
+      if (!normalizedStage) return s;
+      const index = findLastMessageIndex(s.messages, (message) =>
+        message.role === "system" &&
+        message.kind === "stage" &&
+        message.status === "running" &&
+        String(message.stage ?? "").trim() === normalizedStage &&
+        !message.id.startsWith("heartbeat-")
+      );
+      if (index < 0) return s;
+      const messages = [...s.messages];
+      messages[index] = { ...messages[index], status: "done" };
+      return { messages };
+    }),
+  resolveHeartbeatProgress: () =>
+    set((s) => {
+      const messages = s.messages.filter((message) => !message.id.startsWith("heartbeat-"));
+      return messages.length === s.messages.length ? s : { messages };
+    }),
+  resolveStepProgress: (stage, action) =>
+    set((s) => {
+      const normalizedStage = String(stage ?? "").trim();
+      const normalizedAction = String(action ?? "").trim();
+      if (!normalizedAction) return s;
+      const index = findLastMessageIndex(s.messages, (message) =>
+        message.kind === "action" &&
+        message.status === "running" &&
+        String(message.action ?? "").trim() === normalizedAction &&
+        (!normalizedStage || String(message.stage ?? "").trim() === normalizedStage)
+      );
+      if (index < 0) return s;
+      return {
+        messages: s.messages.filter((_, messageIndex) => messageIndex !== index),
+      };
     }),
   setContinueReplacementStage: (stageId) =>
     set({

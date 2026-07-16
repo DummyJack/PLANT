@@ -1,18 +1,16 @@
-import type { CostSummary, FileContent, FileTreeNode } from "@/types/api";
+import type { BootstrapResponse, CostSummary, FileContent, FileTreeNode } from "@/types/api";
 import { apiFetch, apiUrl } from "./client";
 
-export function fetchProjects() {
-  return apiFetch<{ projects: import("@/types/api").ProjectSummary[] }>(
-    "/api/projects",
-  );
+export function fetchBootstrap() {
+  return apiFetch<BootstrapResponse>("/api/bootstrap");
 }
 
-export function createProject(rough_idea: string) {
+export function createProject(rough_idea: string, creation_id?: string) {
   return apiFetch<{ project_id: string; rough_idea: string }>(
     "/api/projects",
     {
       method: "POST",
-      body: JSON.stringify({ rough_idea }),
+      body: JSON.stringify({ rough_idea, creation_id }),
     },
   );
 }
@@ -23,16 +21,6 @@ export function fetchProject(projectId: string) {
     project: Record<string, unknown>;
     path: string;
   }>(`/api/projects/${projectId}`);
-}
-
-export function updateProject(
-  projectId: string,
-  body: { rough_idea?: string; meta?: Record<string, unknown> },
-) {
-  return apiFetch(`/api/projects/${projectId}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
 }
 
 export function deleteProject(projectId: string) {
@@ -111,21 +99,4 @@ export function fetchFile(projectId: string, path: string) {
   return apiFetch<FileContent>(
     `/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`,
   );
-}
-
-export function writeFile(projectId: string, path: string, content: string) {
-  return apiFetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`, {
-    method: "PUT",
-    body: JSON.stringify({ content }),
-  });
-}
-
-export function exportProject(
-  projectId: string,
-  opts: { html?: boolean; cost?: boolean; manual?: boolean } = {},
-) {
-  return apiFetch(`/api/projects/${projectId}/export`, {
-    method: "POST",
-    body: JSON.stringify({ html: true, cost: false, manual: true, ...opts }),
-  });
 }

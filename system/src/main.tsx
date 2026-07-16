@@ -9,15 +9,19 @@ import { isReferencePreviewPath, ReferencePreviewPage } from "@/features/upload/
 import App from "./App";
 import "./index.css";
 
-const FRONTEND_HOST = (import.meta.env.frontend_host ?? "localhost").trim();
+const FRONTEND_HOST = (import.meta.env.frontend_host ?? "127.0.0.1").trim();
+const CANONICAL_LOCAL_HOST = "127.0.0.1";
+
+function redirectToCanonicalLocalHost(): boolean {
+  if (!["localhost", "::1"].includes(window.location.hostname)) return false;
+  const target = new URL(window.location.href);
+  target.hostname = CANONICAL_LOCAL_HOST;
+  window.location.replace(target.toString());
+  return true;
+}
 
 function isLocalFrontendHost(hostname: string): boolean {
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname.endsWith(".localhost")
-  );
+  return hostname === "127.0.0.1";
 }
 
 function isAllowedFrontendHost(): boolean {
@@ -96,18 +100,20 @@ const queryClient = new QueryClient({
   },
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    {!isAllowedFrontendHost() ? (
-      <ForbiddenFrontendMode />
-    ) : isKnownFrontendPath() ? (
-      <QueryClientProvider client={queryClient}>
-        <ErrorBoundary>
-          {isReferencePreviewPath() ? <ReferencePreviewPage /> : <App />}
-        </ErrorBoundary>
-      </QueryClientProvider>
-    ) : (
-      <NotFoundPage />
-    )}
-  </StrictMode>,
-);
+if (!redirectToCanonicalLocalHost()) {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      {!isAllowedFrontendHost() ? (
+        <ForbiddenFrontendMode />
+      ) : isKnownFrontendPath() ? (
+        <QueryClientProvider client={queryClient}>
+          <ErrorBoundary>
+            {isReferencePreviewPath() ? <ReferencePreviewPage /> : <App />}
+          </ErrorBoundary>
+        </QueryClientProvider>
+      ) : (
+        <NotFoundPage />
+      )}
+    </StrictMode>,
+  );
+}

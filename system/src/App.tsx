@@ -11,8 +11,7 @@ import { MeetingPanel } from "@/features/meeting/MeetingPanel";
 import { ResultPreview } from "@/features/output/ResultPreview";
 import { ReferencePanel } from "@/features/upload/ReferencePanel";
 import { NoticeStack } from "@/components/NoticeStack";
-import { useProjectData } from "@/hooks/useProjectData";
-import { useBootstrap } from "@/hooks/useBootstrap";
+import { useBootstrap, useProjectData } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
 import { useChatStore } from "@/stores/chatStore";
 import { useUiStore } from "@/stores/uiStore";
@@ -80,7 +79,7 @@ export default function App() {
   const darkMode = useUiStore((s) => s.darkMode);
   const { t } = useI18n();
   const layoutMode = useLayoutMode();
-  const bootstrap = useBootstrap();
+  const bootstrap = useBootstrap(true);
   const configQuery = useQuery({
     queryKey: ["config"],
     queryFn: async () => (await fetchConfig()).config,
@@ -90,12 +89,14 @@ export default function App() {
     () => bootstrap.data?.projects.find((project) => project.project_id === projectId),
     [bootstrap.data?.projects, projectId],
   );
+  const hasActiveRun = !!(projectId && bootstrap.data?.active_runs?.[projectId]);
   const hasWriteAccess = canWrite || bootstrap.data?.activated === true;
   const readableProjectId = useMemo(() => {
-    if (!projectId) return null;
+    if (!projectId || !bootstrap.data) return null;
+    if (!currentProject && !hasActiveRun) return null;
     if (hasWriteAccess) return projectId;
     return isPublicReadableProject(currentProject) ? projectId : null;
-  }, [currentProject, hasWriteAccess, projectId]);
+  }, [bootstrap.data, currentProject, hasActiveRun, hasWriteAccess, projectId]);
   const { artifacts } = useProjectData(readableProjectId);
 
   useEffect(() => {

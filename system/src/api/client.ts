@@ -14,6 +14,19 @@ export function apiUrl(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
+export async function responseErrorMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    const message = detailText(body);
+    return message || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function apiErrorMessage(detail: unknown): string {
   if (typeof detail === "string") return detail;
   const fromDetail = detailText(detail);

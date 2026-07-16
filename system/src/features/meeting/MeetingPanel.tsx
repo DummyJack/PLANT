@@ -1,14 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { createProject, deleteProject, uploadReference } from "@/api/projects";
-import { fetchBootstrap } from "@/api/bootstrap";
+import { fetchBootstrap } from "@/api/projects";
 import { fetchConfig } from "@/api/config";
-import { cancelRun, createRun, submitDecision } from "@/api/runs";
+import { cancelRun, createRun, decisionMutationKey, submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
-import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
-import { useProjectData } from "@/hooks/useProjectData";
-import { useActiveRun } from "@/hooks/useActiveRun";
+import { buildReferenceRows } from "@/features/documents/referenceFiles";
+import { useActiveRun, useProjectData } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
 import { useProjectChatHydration } from "@/hooks/useProjectChatHydration";
 import { useRunEvents } from "@/hooks/useRunEvents";
@@ -258,15 +257,6 @@ function forceRegenerateFlags(config: Record<string, unknown> | undefined) {
     : {};
 }
 
-function positiveInteger(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
-}
-
-function elicitationTurnLimit(config: Record<string, unknown> | undefined) {
-  return positiveInteger(config?.elicitation_max_turns) ?? positiveInteger(config?.max_turns);
-}
-
 function stageOverridesWithForce(
   overrides: Record<string, boolean> | undefined,
   config: Record<string, unknown> | undefined,
@@ -347,6 +337,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const roughIdea =
     (project.data?.project?.rough_idea as string | undefined) ?? "";
   const [input, setInput] = useState("");
+  const projectCreationRef = useRef<{ idea: string; id: string } | null>(null);
   const [reviewSuggestions, setReviewSuggestions] = useState<ReviewSuggestion[]>([]);
   const [pendingReviewReferences, setPendingReviewReferences] = useState<ReviewReference[]>([]);
   const [reviewDockDragOver, setReviewDockDragOver] = useState(false);
@@ -632,8 +623,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     [configQuery.data, docsComplete, hasContinueReferenceTargets, stageOverrides],
   );
   const agentStageOverrides = projectId ? effectiveStageOverrides : INITIAL_AGENT_STAGE_OVERRIDES;
-  const hideElicitationMessages = elicitationTurnLimit(configQuery.data) === 1;
-  const { loading: historyLoading } = useProjectChatHydration(
+  const { loading: historyLoading, error: historyError } = useProjectChatHydration(
     projectId,
     artifactItems,
     roughIdea,
@@ -646,7 +636,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
     queryClient.invalidateQueries({ queryKey: ["artifacts", projectId] });
   }, [projectId, queryClient]);
 
-  useRunEvents(activeRun, roughIdea, onComplete);
+  const { connectionError } = useRunEvents(activeRun, roughIdea, onComplete);
 
   const runActive =
     !!activeRun &&
@@ -665,15 +655,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   const startMut = useMutation({
     mutationFn: async () => {
       const replacementStage = projectId ? rawRunCheckpoint : null;
-      setContinueReplacementStage(replacementStage);
-      if (projectId) {
-        trimRunStatusMessagesForContinue("document_generation");
-        trimRunStatusMessagesForContinue(replacementStage);
-      } else {
-        clearMessages();
-      }
       const trimmed = projectId ? "" : input.trim();
       const runIdea = projectId ? "" : (trimmed || roughIdea);
+      if (!projectId && projectCreationRef.current?.idea !== runIdea) {
+        projectCreationRef.current = { idea: runIdea, id: crypto.randomUUID() };
+      }
       if (!canWrite) throw new Error(t.activationRequiredAction);
       if (!projectId && !runIdea) throw new Error(t.enterInitialIdeaFirst);
       const runConfig = projectId
@@ -691,7 +677,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         runIdea,
       );
       const targetProjectId =
-        projectId ?? existingProject?.project_id ?? (await createProject(runIdea)).project_id;
+        projectId ?? existingProject?.project_id ?? (
+          await createProject(runIdea, projectCreationRef.current?.id)
+        ).project_id;
       const continuingExistingProject = !!projectId || !!existingProject;
       if (!projectId && stagedReferenceFiles.length) {
         for (const file of stagedReferenceFiles) {
@@ -731,9 +719,17 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         enable_agents: enabledAgents,
         stage_overrides: stageOverridesForRun,
       });
-      return { run, initialIdea: runIdea };
+      return { run, initialIdea: runIdea, replacementStage };
     },
-    onSuccess: async ({ run, initialIdea }) => {
+    onSuccess: async ({ run, initialIdea, replacementStage }) => {
+      projectCreationRef.current = null;
+      setContinueReplacementStage(replacementStage);
+      if (run.mode === "continue") {
+        trimRunStatusMessagesForContinue("document_generation");
+        trimRunStatusMessagesForContinue(replacementStage);
+      } else {
+        clearMessages();
+      }
       setInput("");
       if (initialIdea) {
         setMessages(mergeChatMessages([buildInitialUserMessage(initialIdea)]));
@@ -821,6 +817,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
   });
 
   const skipAllHumanInterventionsMut = useMutation({
+    mutationKey: decisionMutationKey(activeRun?.run_id, activeRun?.pending_decision?.id),
     mutationFn: () => {
       if (!activeRun?.pending_decision) throw new Error(t.noHumanInterventionToSkip);
       return submitDecision(activeRun.run_id, activeRun.pending_decision.id, {
@@ -842,6 +839,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         message: errorMessage(e, t.unableSkipHumanIntervention),
       });
     },
+  });
+  const decisionSubmissionsPending = useIsMutating({
+    mutationKey: decisionMutationKey(activeRun?.run_id, activeRun?.pending_decision?.id),
   });
 
   const deleteProjectMut = useMutation({
@@ -939,6 +939,11 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
         onDrop={handleReviewDockDrop}
       >
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-50/50">
+          {(historyError || connectionError) && (
+            <div className="mx-2 mt-2 shrink-0 rounded-control border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {connectionError ? t.liveConnectionLost : t.historyLoadFailed}
+            </div>
+          )}
           <WorkspaceFlowIndex
             inline
             runCheckpoint={runCheckpoint}
@@ -952,7 +957,6 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               artifactItems={artifactItems ?? []}
               historyLoading={historyLoading}
               activeRun={activeRun}
-              hideElicitationMessages={hideElicitationMessages}
             />
           </div>
           {activeRun?.status === "waiting_for_human" && activeRun.pending_decision && (
@@ -1009,7 +1013,7 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
               dismissRunCheckpoint(projectId, rawRunCheckpointKey);
             }
           }}
-          submitLabel={projectId && docsComplete ? t.execute : undefined}
+          submitLabel={runCheckpoint ? t.continue : projectId && docsComplete ? t.execute : undefined}
           submitDisabled={false}
           reviewMode={reviewMode}
           humanDecisionMode={activeRun?.pending_decision?.kind === "human_decision"}
@@ -1035,7 +1039,9 @@ export function MeetingPanel({ projectId }: MeetingPanelProps) {
           }}
           onConfirmHumanDecision={() => humanDecisionConfirmRef.current?.()}
           onSkipAllHumanInterventions={() => skipAllHumanInterventionsMut.mutate()}
-          skipAllHumanInterventionsLoading={skipAllHumanInterventionsMut.isPending}
+          skipAllHumanInterventionsLoading={
+            skipAllHumanInterventionsMut.isPending || decisionSubmissionsPending > 0
+          }
           onSubmit={() => startMut.mutate()}
           onStop={() => cancelMut.mutate()}
         />

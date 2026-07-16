@@ -1,13 +1,15 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Edit3, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { DragEvent } from "react";
-import { submitDecision } from "@/api/runs";
-import { ReferenceFileIcon, referenceLabel } from "@/features/documents/ReferenceFileIcon";
+import { decisionMutationKey, submitDecision } from "@/api/runs";
+import { ReferenceFileIcon, referenceLabel } from "@/features/documents/referenceFiles";
 import { useI18n } from "@/i18n";
+import { useNoticeStore } from "@/stores/noticeStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { RunState } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { errorMessage } from "@/utils/errorMessage";
 import { sortStakeholdersByType } from "@/utils/stakeholders";
 
 interface DecisionDockProps {
@@ -169,6 +171,7 @@ export function DecisionDock({
   onReviewDrop,
 }: DecisionDockProps) {
   const { t } = useI18n();
+  const pushNotice = useNoticeStore((state) => state.pushNotice);
   const decision = run.pending_decision;
   const queryClient = useQueryClient();
   const canWrite = useUiStore((s) => s.canWrite);
@@ -185,6 +188,8 @@ export function DecisionDock({
     return init;
   });
   const [stakeholderError, setStakeholderError] = useState("");
+  const sharedDecisionMutationKey = decisionMutationKey(run.run_id, decision?.id);
+  const decisionSubmissionsPending = useIsMutating({ mutationKey: sharedDecisionMutationKey });
 
   useEffect(() => {
     if (decision?.kind !== "stakeholder_selection") return;
@@ -202,18 +207,32 @@ export function DecisionDock({
   }, [decision?.id, decision?.kind]);
 
   const submitMut = useMutation({
+    mutationKey: sharedDecisionMutationKey,
     mutationFn: (payload: Record<string, unknown>) =>
       submitDecision(run.run_id, decision!.id, payload),
     onSuccess: () => {
+      onClearReviewSuggestions?.();
+      onClearCustomStakeholders?.();
+      onClearCustomDecisionText?.();
+      if (decision?.id) clearScopeReviewDraft(decision.id);
       queryClient.invalidateQueries({ queryKey: ["runs"] });
       queryClient.invalidateQueries({ queryKey: ["run"] });
       queryClient.invalidateQueries({ queryKey: ["artifacts", run.project_id] });
       queryClient.invalidateQueries({ queryKey: ["file", run.project_id, "artifact/project.json"] });
     },
+    onError: (error) => {
+      pushNotice({
+        tone: "error",
+        title: t.saveFailed,
+        message: errorMessage(error, t.directEditFailed),
+      });
+      queryClient.invalidateQueries({ queryKey: ["runs", run.project_id] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
   });
 
   if (!decision || run.status !== "waiting_for_human") return null;
-  const waitingForResume = submitMut.isPending;
+  const waitingForResume = submitMut.isPending || decisionSubmissionsPending > 0;
   const actionDisabled = waitingForResume || !canWrite;
 
   if (
@@ -290,8 +309,6 @@ export function DecisionDock({
             scope: editedScopeDraft,
             ...(structuredSuggestions.length ? { suggestions: structuredSuggestions } : {}),
           });
-          onClearReviewSuggestions?.();
-          clearScopeReviewDraft(decision.id);
           return;
         }
         if (structuredSuggestions.length) {
@@ -299,12 +316,9 @@ export function DecisionDock({
             action: "submit_suggestions",
             suggestions: structuredSuggestions,
           });
-          onClearReviewSuggestions?.();
-          clearScopeReviewDraft(decision.id);
           return;
         }
         submitMut.mutate({ action: "approve" });
-        clearScopeReviewDraft(decision.id);
         return;
       }
       if (!suggestions.length) {
@@ -316,7 +330,6 @@ export function DecisionDock({
           action: "human_issues",
           custom_issues: suggestions.map((item) => ({ title: item.text })),
         });
-        onClearReviewSuggestions?.();
         return;
       }
       if (isDomainReview) {
@@ -324,18 +337,16 @@ export function DecisionDock({
           action: "submit_suggestions",
           suggestions: suggestionPayloads(suggestions),
         });
-        onClearReviewSuggestions?.();
         return;
       }
       submitMut.mutate({
         action: "submit_suggestions",
         suggestions: suggestionPayloads(suggestions),
       });
-      onClearReviewSuggestions?.();
     };
     return (
       <div
-        className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-3 py-2.5"
+        className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-3 py-2.5"
         onDragOver={onReviewDragOver}
         onDragLeave={onReviewDragLeave}
         onDrop={onReviewDrop}
@@ -460,11 +471,10 @@ export function DecisionDock({
         return;
       }
       submitMut.mutate({ stakeholders: payloadRows });
-      onClearCustomStakeholders?.();
     };
 
     return (
-      <div className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-2.5 py-2">
+      <div className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-2.5 py-2">
         <div className="bg-white">
           <div className="mb-2 flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -486,7 +496,7 @@ export function DecisionDock({
             </button>
           </div>
 
-        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto thin-scrollbar min-[640px]:grid-cols-2">
+        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto min-[640px]:grid-cols-2">
           {proposedDisplayRows.map(({ row: p, originalIndex }, displayIndex) => (
             <button
               key={p.name}
@@ -650,7 +660,6 @@ export function DecisionDock({
         choices: [0],
         custom_decision: customDecisionText.trim(),
       });
-      onClearCustomDecisionText?.();
     } else if (selected.size) {
       submitMut.mutate({ choices: Array.from(selected) });
     }
@@ -662,7 +671,7 @@ export function DecisionDock({
   }, [onRegisterHumanDecisionConfirm, submitHumanDecision]);
 
   return (
-    <div className="max-h-[46vh] shrink-0 overflow-y-auto thin-scrollbar border-t border-gray-100 bg-white px-2.5 py-2">
+    <div className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white px-2.5 py-2">
       <div className="bg-white">
         <div className="mb-2 flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -694,7 +703,7 @@ export function DecisionDock({
           </div>
         </div>
 
-        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto thin-scrollbar min-[640px]:grid-cols-2">
+        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto min-[640px]:grid-cols-2">
           {best.map((opt, i) => {
             const optionValue = String(opt.option_id ?? opt.id ?? OPTION_LETTERS[i] ?? String(i + 1)).trim();
             const active = selected.has(optionValue);

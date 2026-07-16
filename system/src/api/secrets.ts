@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 
-export interface ModelApiKeyStatus {
+interface ModelApiKeyStatus {
   provider: string;
   env_key: string;
   configured: boolean;
@@ -10,7 +10,7 @@ export interface ModelApiKeyStatus {
   tested_at?: string | null;
 }
 
-export interface ModelApiKeyTestResult extends ModelApiKeyStatus {
+interface ModelApiKeyTestResult extends ModelApiKeyStatus {
   valid: boolean;
   error?: string | null;
 }

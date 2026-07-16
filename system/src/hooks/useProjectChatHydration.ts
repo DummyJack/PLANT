@@ -6,7 +6,7 @@ import {
   trimTrailingRunDisplayMessages,
   useChatStore,
 } from "@/stores/chatStore";
-import type { ChatMessage, RunCheckpoint, RunState } from "@/types/api";
+import type { ChatMessage, FileTreeNode, RunCheckpoint, RunState } from "@/types/api";
 import {
   buildInitialUserMessage,
   logEventToChat,
@@ -187,7 +187,6 @@ async function loadRunEvents(runId: string): Promise<unknown[]> {
 }
 
 async function loadRunLogMessages(projectId: string, activeRunId?: string | null): Promise<ChatMessage[]> {
-  try {
     const { runs } = await fetchRuns(projectId);
     const historyRuns = runs
       .filter((r) =>
@@ -208,14 +207,55 @@ async function loadRunLogMessages(projectId: string, activeRunId?: string | null
     }
     if (!rows.length) return [];
     return rows;
-  } catch {
-    return [];
+}
+
+function systemModelArtifactFallback(
+  artifactItems: FileTreeNode[] | undefined,
+  messages: ChatMessage[],
+): ChatMessage[] {
+  const hasSystemModels = (artifactItems ?? []).some(
+    (item) => item.kind === "file" && item.path === "artifact/system_models.json",
+  );
+  const hasSystemModelMessage = messages.some(
+    (message) => message.outputPath === "artifact/system_models.json",
+  );
+  if (!hasSystemModels || hasSystemModelMessage) return [];
+  return [
+    {
+      id: "artifact-fallback-system-models",
+      role: "agent",
+      kind: "output",
+      speaker: "modeler",
+      label: "Modeler",
+      action: "system_model.modeling",
+      stage: "system_model",
+      status: "done",
+      text: "系統模型產生",
+      outputPath: "artifact/system_models.json",
+    },
+  ];
+}
+
+function insertArtifactFallbackMessages(
+  messages: ChatMessage[],
+  fallbackMessages: ChatMessage[],
+): ChatMessage[] {
+  if (!fallbackMessages.length) return messages;
+  const next = [...messages];
+  for (const fallback of fallbackMessages) {
+    const insertAt = next.findIndex((message) =>
+      ["draft", "formal_meeting", "document_generation"].includes(
+        String(message.stage ?? "").trim(),
+      ),
+    );
+    next.splice(insertAt < 0 ? next.length : insertAt, 0, fallback);
   }
+  return next;
 }
 
 export function useProjectChatHydration(
   projectId: string | null,
-  _artifactItems: unknown,
+  artifactItems: FileTreeNode[] | undefined,
   roughIdea: string,
   activeRun: RunState | null,
   artifactsReady: boolean,
@@ -224,19 +264,19 @@ export function useProjectChatHydration(
   const continueReplacementStage = useChatStore((s) => s.continueReplacementStage);
   const hydratedKeyRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [hasHistory, setHasHistory] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     hydratedKeyRef.current = null;
     setMessages([]);
-    setHasHistory(false);
+    setError(null);
     setLoading(!!projectId);
   }, [projectId, setMessages]);
 
   useEffect(() => {
     if (!projectId) {
       setLoading(false);
-      setHasHistory(false);
+      setError(null);
       return;
     }
 
@@ -244,7 +284,6 @@ export function useProjectChatHydration(
     const hydrationKey = `${projectId}:${active ? activeRun?.run_id : "history"}`;
     if (active && hydratedKeyRef.current === hydrationKey) {
       setLoading(false);
-      setHasHistory(true);
       return;
     }
 
@@ -255,6 +294,7 @@ export function useProjectChatHydration(
 
     let cancelled = false;
     setLoading(true);
+    setError(null);
 
     const hydrate = async () => {
       const logMsgs = await loadRunLogMessages(projectId, active ? activeRun?.run_id : null);
@@ -264,32 +304,35 @@ export function useProjectChatHydration(
       const seed = roughIdea.trim()
         ? [buildInitialUserMessage(roughIdea.trim())]
         : [];
+      const fallbackMessages = systemModelArtifactFallback(artifactItems, logMsgs);
+      const restoredLogMessages = insertArtifactFallbackMessages(logMsgs, fallbackMessages);
 
       const currentMessages = useChatStore.getState().messages;
 
       if (!logMsgs.length) {
-        if (seed.length) {
+        if (seed.length || fallbackMessages.length) {
           setMessages(
             mergeChatMessages(
               uniqueChatMessages(
                 active && currentMessages.length
-                  ? [...seed, ...currentMessages]
-                  : seed,
+                  ? [...seed, ...fallbackMessages, ...currentMessages]
+                  : [...seed, ...fallbackMessages],
               ),
             ),
           );
-          setHasHistory(true);
           hydratedKeyRef.current = hydrationKey;
           setLoading(false);
           return;
         }
-        setHasHistory(false);
         hydratedKeyRef.current = hydrationKey;
         setLoading(false);
         return;
       }
 
-      const mergedHistoryMessages = mergeChatMessages([...seed, ...logMsgs]);
+      const mergedHistoryMessages = mergeChatMessages([
+        ...seed,
+        ...restoredLogMessages,
+      ]);
       const removeDocumentGeneration = active && activeRun?.mode === "continue";
       const trimStage = removeDocumentGeneration
         ? "document_generation"
@@ -309,12 +352,15 @@ export function useProjectChatHydration(
           ),
         ),
       );
-      setHasHistory(true);
       hydratedKeyRef.current = hydrationKey;
       setLoading(false);
     };
 
-    void hydrate();
+    void hydrate().catch((reason) => {
+      if (cancelled) return;
+      setError(reason instanceof Error ? reason.message : "Unable to load chat history");
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -323,10 +369,11 @@ export function useProjectChatHydration(
     roughIdea,
     activeRun?.run_id,
     activeRun?.status,
+    artifactItems,
     continueReplacementStage,
     artifactsReady,
     setMessages,
   ]);
 
-  return { loading, hasHistory };
+  return { loading, error };
 }

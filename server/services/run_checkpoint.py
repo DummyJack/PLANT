@@ -12,6 +12,8 @@ from storage.atomic import atomic_write_text
 
 
 CHECKPOINT_META_KEY = "run_checkpoint"
+MEETING_PARENT_STAGES = {"formal_meeting", "meeting_issue_proposal_review"}
+MEETING_NESTED_STAGES = {"research_domain", "system_model"}
 
 
 def checkpoint_path(store: Store) -> Path:
@@ -224,13 +226,32 @@ def record_run_checkpoint(
 ) -> Dict[str, Any]:
     artifact = store.load_artifact() or {}
     meta = artifact.setdefault("meta", {})
+    existing_checkpoint = _load_checkpoint(store, artifact)
+    requested_stage_id = str(stage_id or "").strip()
+    if (
+        existing_checkpoint
+        and str(existing_checkpoint.get("run_id") or "").strip() == str(run_id or "").strip()
+        and str(existing_checkpoint.get("stage_id") or "").strip() in MEETING_PARENT_STAGES
+        and requested_stage_id in MEETING_NESTED_STAGES
+    ):
+        # Formal meetings can invoke researcher/modeler actions internally. Those
+        # child actions must not replace the outer meeting resume point.
+        existing_checkpoint["status"] = status
+        if error:
+            existing_checkpoint["error"] = error
+        existing_checkpoint = _normalize_checkpoint(existing_checkpoint)
+        _save_checkpoint(store, existing_checkpoint)
+        meta[CHECKPOINT_META_KEY] = existing_checkpoint
+        artifact["meta"] = meta
+        store.save_artifact(artifact)
+        return existing_checkpoint
     try:
         last_round = int(meta.get("last_round") or artifact.get("last_round") or 0)
     except (TypeError, ValueError):
         last_round = 0
     step_id = str(step_id or stage_id or "").strip()
     resolved_round = round_num if round_num is not None else last_round
-    if str(stage_id or "").strip() in {"formal_meeting", "meeting_issue_proposal_review"}:
+    if requested_stage_id in MEETING_PARENT_STAGES:
         paths = _mom_paths_for_round(store, resolved_round)
         try:
             last_round = max(0, int(resolved_round or 0) - 1)

@@ -358,12 +358,18 @@ function externalDocumentSources(projectData: Record<string, unknown>): Array<Re
 
 function FeedbackView({ projectId, data }: { projectId: string | null; data: Record<string, unknown> }) {
   const { t } = useI18n();
-  const sections: Array<[string, unknown[]]> = [
+  const feedbackSections: Array<[string, unknown[]]> = [
     [t.findings, list(data.findings)],
     [t.constraints, list(data.constraints)],
     [t.risks, list(data.risks)],
     [t.suggestions, list(data.recommendations)],
   ];
+  const sections = feedbackSections
+    .map(([title, rows]) => [
+      title,
+      rows.filter((row) => text(isRecord(row) ? row.text : row)),
+    ] as [string, unknown[]])
+    .filter(([, rows]) => rows.length > 0);
   const project = useQuery({
     queryKey: ["file", projectId, "artifact/project.json"],
     queryFn: () => fetchFile(projectId!, "artifact/project.json"),
@@ -421,7 +427,7 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
           )}
         </Section>
       ))}
-      <Section title={t.source}>
+      {uniqueSources.length > 0 && <Section title={t.source}>
         {uniqueSources.length === 0 ? (
           <p className="text-sm text-slate-500">{t.noSources}</p>
         ) : (
@@ -451,7 +457,7 @@ function FeedbackView({ projectId, data }: { projectId: string | null; data: Rec
             })}
           </div>
         )}
-      </Section>
+      </Section>}
     </div>
   );
 }

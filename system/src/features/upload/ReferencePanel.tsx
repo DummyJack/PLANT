@@ -11,15 +11,15 @@ import {
   referencePreviewUrl,
   uploadReference,
 } from "@/api/projects";
+import { responseErrorMessage } from "@/api/client";
 import { PanelChrome } from "@/components/PanelChrome";
-import { buildReferenceRows } from "@/features/documents/buildLibraryRows";
-import { ReferenceFileIcon } from "@/features/documents/ReferenceFileIcon";
-import { useActiveRun } from "@/hooks/useActiveRun";
+import { buildReferenceRows, ReferenceFileIcon, referenceExt, referenceIconMeta } from "@/features/documents/referenceFiles";
 import { useI18n } from "@/i18n";
-import { useProjectData } from "@/hooks/useProjectData";
+import { useActiveRun, useProjectData } from "@/hooks/useProjectQueries";
 import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
 import { errorMessage } from "@/utils/errorMessage";
+import { makeZip } from "@/utils/zip";
 
 interface ReferencePanelProps {
   projectId: string | null;
@@ -88,24 +88,6 @@ function extensionLabel(name: string): string {
 function basename(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;
-}
-
-function referenceExt(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
-}
-
-function referenceIconMeta(name: string): { label: string; fill: string; fold: string } {
-  const ext = referenceExt(name);
-  if (ext === ".pdf") return { label: "PDF", fill: "#ef4444", fold: "#fecaca" };
-  if (ext === ".pptx") return { label: "PPT", fill: "#f97316", fold: "#fed7aa" };
-  if (ext === ".xlsx" || ext === ".csv")
-    return { label: ext === ".csv" ? "CSV" : "XLS", fill: "#16a34a", fold: "#bbf7d0" };
-  if (ext === ".doc" || ext === ".docx") return { label: "DOC", fill: "#2563eb", fold: "#bfdbfe" };
-  if (ext === ".md") return { label: "MD", fill: "#475569", fold: "#cbd5e1" };
-  if (ext === ".txt") return { label: "TXT", fill: "#64748b", fold: "#cbd5e1" };
-  if (ext === ".json") return { label: "JSN", fill: "#7c3aed", fold: "#ddd6fe" };
-  return { label: "FILE", fill: "#64748b", fold: "#cbd5e1" };
 }
 
 function createReferenceDragIcon(name: string): SVGSVGElement {
@@ -272,20 +254,12 @@ function triggerDownload(url: string, filename: string) {
   link.remove();
 }
 
-async function previewResponseError(response: Response, fallback: string) {
-  try {
-    const body = await response.json();
-    return typeof body?.detail === "string" ? body.detail : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const { t } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const panelMeasureRef = useRef<HTMLDivElement>(null);
+  const [downloadPending, setDownloadPending] = useState(false);
   const queryClient = useQueryClient();
   const { references } = useProjectData(projectId);
   const { activeRun } = useActiveRun(projectId);
@@ -294,6 +268,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
   const [formatError, setFormatError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
   const [menuName, setMenuName] = useState<string | null>(null);
   const [preview, setPreview] = useState<ReferencePreview | null>(null);
   const [dragRejected, setDragRejected] = useState(false);
@@ -315,14 +290,40 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     if (!keyword) return rows;
     return rows.filter((row) => row.name.toLowerCase().includes(keyword));
   }, [query, rows]);
+  const updateFileSelection = (name: string, checked: boolean, shiftKey: boolean) => {
+    const anchorName = selectionAnchorRef.current;
+    setSelectedNames((current) => {
+      const next = new Set(current);
+      const anchorIndex = anchorName
+        ? filteredRows.findIndex((row) => row.name === anchorName)
+        : -1;
+      const targetIndex = filteredRows.findIndex((row) => row.name === name);
+      if (shiftKey && anchorIndex >= 0 && targetIndex >= 0) {
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        filteredRows.slice(start, end + 1).forEach((row) => {
+          if (checked) next.add(row.name);
+          else next.delete(row.name);
+        });
+      } else if (checked) {
+        next.add(name);
+      } else {
+        next.delete(name);
+      }
+      return next;
+    });
+    selectionAnchorRef.current = name;
+  };
   const selectedVisibleNames = filteredRows
     .map((row) => row.name)
     .filter((name) => selectedNames.has(name));
   const allVisibleSelected =
     filteredRows.length > 0 && selectedVisibleNames.length === filteredRows.length;
   const someVisibleSelected = selectedVisibleNames.length > 0;
-  const uploadDisabled = !canWrite;
-  const writeDisabled = !canWrite;
+  useEffect(() => {
+    if (activeRun?.status !== "waiting_for_human") return;
+    queryClient.invalidateQueries({ queryKey: ["references", projectId] });
+  }, [activeRun?.status, projectId, queryClient]);
 
   useEffect(() => {
     const blockExternalFileDropOutsideLibrary = (event: globalThis.DragEvent) => {
@@ -422,13 +423,16 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       }
       return files;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["references", projectId] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["references", projectId] });
     },
     onError: (e: Error) => {
       setFormatError(errorMessage(e, t.referenceSupportedOnly(REFERENCE_EXTS_LABEL)));
     },
   });
+  const uploadPending = uploadMut.isPending;
+  const uploadDisabled = !canWrite || uploadPending;
+  const writeDisabled = !canWrite || uploadPending;
 
   const deleteMut = useMutation({
     mutationFn: async (names: string[]) => {
@@ -441,13 +445,13 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
       }
       return names;
     },
-    onSuccess: (names) => {
+    onSuccess: async (names) => {
       setSelectedNames((current) => {
         const next = new Set(current);
         names.forEach((name) => next.delete(name));
         return next;
       });
-      queryClient.invalidateQueries({ queryKey: ["references", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["references", projectId] });
     },
     onError: (e: Error) => {
       setFormatError(errorMessage(e, t.deleteFailed));
@@ -494,19 +498,55 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
     setDragRejected(!supported);
   };
 
-  const downloadNames = (names: string[]) => {
-    names.forEach((name) => {
-      if (projectId) {
-        triggerDownload(referenceDownloadUrl(projectId, name), name);
+  const downloadNames = async (names: string[]) => {
+    if (downloadPending || !names.length) return;
+    setDownloadPending(true);
+    setMenuName(null);
+    try {
+      if (names.length > 1) {
+        const entries: Array<{ path: string; bytes: Uint8Array }> = [];
+        for (const name of names) {
+          if (projectId) {
+            const response = await fetch(referenceDownloadUrl(projectId, name), {
+              credentials: "include",
+            });
+            if (!response.ok) throw new Error(`${t.downloadFailed} (${response.status})`);
+            entries.push({ path: name, bytes: new Uint8Array(await response.arrayBuffer()) });
+            continue;
+          }
+          const file = stagedReferenceFiles.find((item) => item.name === name);
+          if (file) {
+            entries.push({ path: name, bytes: new Uint8Array(await file.arrayBuffer()) });
+          }
+        }
+        if (!entries.length) throw new Error(t.downloadFailed);
+        const url = URL.createObjectURL(makeZip(entries));
+        triggerDownload(url, "reference.zip");
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
-      const file = stagedReferenceFiles.find((item) => item.name === name);
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      triggerDownload(url, name);
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-    setMenuName(null);
+      for (const name of names) {
+        if (projectId) {
+          const response = await fetch(referenceDownloadUrl(projectId, name), {
+            credentials: "include",
+          });
+          if (!response.ok) throw new Error(`${t.downloadFailed} (${response.status})`);
+          const url = URL.createObjectURL(await response.blob());
+          triggerDownload(url, name);
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          continue;
+        }
+        const file = stagedReferenceFiles.find((item) => item.name === name);
+        if (!file) continue;
+        const url = URL.createObjectURL(file);
+        triggerDownload(url, name);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch (error) {
+      setFormatError(errorMessage(error as Error, t.downloadFailed));
+    } finally {
+      setDownloadPending(false);
+    }
   };
 
   const confirmDelete = () => {
@@ -545,7 +585,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
         const url = referencePreviewUrl(projectId, name);
         if (kind === "text") {
           const response = await fetch(url);
-          if (!response.ok) throw new Error(await previewResponseError(response, t.readFileFailed));
+          if (!response.ok) throw new Error(await responseErrorMessage(response, t.readFileFailed));
           setPreview({ name, kind, loading: false, content: await response.text() });
           return;
         }
@@ -749,6 +789,27 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
           handleFiles(await filesFromDataTransfer(e.dataTransfer));
         }}
       >
+        {(uploadPending || deleteMut.isPending || downloadPending) && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center bg-white/75 backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-2 rounded-control border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm">
+              <span
+                aria-hidden="true"
+                className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"
+              />
+              <span>
+                {uploadPending
+                  ? t.uploading
+                  : deleteMut.isPending
+                    ? t.deleting
+                    : t.downloading}
+              </span>
+            </div>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {rows.length === 0 ? (
             <div
@@ -758,16 +819,18 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                 dragRejected && "cursor-not-allowed",
               )}
             >
-              <FileUp className="mb-3 h-6 w-6 text-slate-400" />
-              <p className="text-sm font-semibold text-slate-600">
-                {!canWrite
-                  ? t.noReferenceFiles
-                  : dragOver
-                    ? t.releaseToUpload
-                    : dragRejected
-                      ? t.unsupportedFormat
-                    : t.dragFilesToUpload}
-              </p>
+              {!uploadPending && <FileUp className="mb-3 h-6 w-6 text-slate-400" />}
+              {!uploadPending && (
+                <p className="text-sm font-semibold text-slate-600">
+                  {!canWrite
+                    ? t.noReferenceFiles
+                    : dragOver
+                      ? t.releaseToUpload
+                      : dragRejected
+                        ? t.unsupportedFormat
+                        : t.dragFilesToUpload}
+                </p>
+              )}
             </div>
           ) : (
             <div ref={menuRef} className="w-full min-w-0">
@@ -791,6 +854,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected;
                   }}
                   onChange={(event) => {
+                    selectionAnchorRef.current = null;
                     setSelectedNames((current) => {
                       const next = new Set(current);
                       filteredRows.forEach((row) => {
@@ -809,6 +873,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                       <button
                         type="button"
                         title={t.downloadSelectedFiles}
+                        disabled={downloadPending || deleteMut.isPending}
                         className="rounded p-1 text-slate-500 hover:bg-gray-50 hover:text-slate-900"
                         onClick={() => downloadNames(selectedVisibleNames)}
                       >
@@ -862,17 +927,16 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                           )}
                           checked={selected}
                           onChange={(event) => {
-                            setSelectedNames((current) => {
-                              const next = new Set(current);
-                              if (event.target.checked) next.add(row.name);
-                              else next.delete(row.name);
-                              return next;
-                            });
+                            updateFileSelection(
+                              row.name,
+                              event.target.checked,
+                              (event.nativeEvent as MouseEvent).shiftKey,
+                            );
                           }}
                         />
                         <button
                           type="button"
-                          className="flex min-w-0 items-center gap-2 text-left font-medium text-slate-700 hover:text-slate-950 hover:underline"
+                          className="reference-file-name flex min-w-0 items-center gap-2 text-left font-medium text-slate-700 hover:text-slate-950 hover:underline"
                           title={row.name}
                           onClick={() => void openReferencePreview(row.name)}
                         >
@@ -902,6 +966,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                             <div className="absolute right-0 top-full z-20 mt-1 w-24 rounded-control border border-gray-200 bg-white py-1 shadow-lg">
                               <button
                                 type="button"
+                                disabled={downloadPending || deleteMut.isPending}
                                 className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-gray-50"
                                 onClick={() => downloadNames([row.name])}
                               >
@@ -1028,6 +1093,7 @@ export function ReferencePanel({ projectId }: ReferencePanelProps) {
                     <p className="text-sm leading-6 text-slate-500">{preview.error}</p>
                     <button
                       type="button"
+                      disabled={downloadPending || deleteMut.isPending}
                       className="inline-flex items-center gap-1 rounded-control border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-gray-50"
                       onClick={() => downloadNames([preview.name])}
                     >

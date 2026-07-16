@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export type NoticeTone = "error" | "success" | "info";
 
-export interface Notice {
+interface Notice {
   id: string;
   tone: NoticeTone;
   title: string;

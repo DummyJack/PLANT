@@ -7,14 +7,25 @@ from pydantic import BaseModel
 from storage import Store
 
 from server.services.config_service import validate_config
+from storage.coordinator import FileRunCoordinator
 from .auth import require_write_access
 
 
 router = APIRouter()
 
 
-class ConfigUpdate(BaseModel):
-    config: Dict[str, Any]
+class ConfigPatch(BaseModel):
+    patch: Dict[str, Any]
+
+
+def deep_merge(current: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(current)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def base_dir(request: Request) -> Path:
@@ -26,16 +37,15 @@ def get_config(request: Request):
     return {"config": Store(base_dir(request)).load_config()}
 
 
-@router.post("/config/validate")
-def validate_config_endpoint(payload: ConfigUpdate, request: Request):
-    return validate_config(payload.config)
-
-
-@router.put("/config")
-def put_config(payload: ConfigUpdate, request: Request):
+@router.patch("/config")
+def patch_config(payload: ConfigPatch, request: Request):
     require_write_access(request)
-    result = validate_config(payload.config)
-    if not result["valid"]:
-        raise HTTPException(status_code=400, detail={"errors": result["errors"]})
-    Store(base_dir(request)).save_config(payload.config)
-    return {"saved": True, "config": payload.config}
+    coordinator = FileRunCoordinator(base_dir(request))
+    with coordinator.exclusive_lock("config"):
+        store = Store(base_dir(request))
+        updated = deep_merge(store.load_config(), payload.patch)
+        result = validate_config(updated)
+        if not result["valid"]:
+            raise HTTPException(status_code=400, detail={"errors": result["errors"]})
+        store.save_config(updated)
+    return {"saved": True, "config": updated}

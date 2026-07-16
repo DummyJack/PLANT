@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Dict, Optional
@@ -7,6 +9,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from storage import Store
+from storage.atomic import atomic_write_text
+from storage.coordinator import FileRunCoordinator
+from ..services.activation_rate_limit import verify_activation_attempt
+from ..services.api_key_validation import MODEL_API_KEY_ENV, test_provider_api_key
 from .auth import (
     _valid_codes,
     clear_activation_cookie,
@@ -17,13 +23,6 @@ from .auth import (
 
 
 router = APIRouter()
-
-MODEL_API_KEY_ENV: Dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "claude": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-}
-
 
 class ModelApiKeyUpdate(BaseModel):
     provider: str
@@ -68,7 +67,7 @@ def write_env_value(path: Path, key: str, value: str) -> None:
             out.append(line)
     if not updated:
         out.append(f"{key}={value}")
-    path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(out).rstrip() + "\n", encoding="utf-8")
 
 
 def remove_env_value(path: Path, key: str) -> bool:
@@ -82,7 +81,11 @@ def remove_env_value(path: Path, key: str) -> bool:
             removed = True
             continue
         out.append(line)
-    path.write_text("\n".join(out).rstrip() + ("\n" if out else ""), encoding="utf-8")
+    atomic_write_text(
+        path,
+        "\n".join(out).rstrip() + ("\n" if out else ""),
+        encoding="utf-8",
+    )
     return removed
 
 
@@ -108,13 +111,15 @@ def set_api_key_test_state(
     status: str,
     error: Optional[str] = None,
 ) -> Dict[str, Optional[str] | bool]:
-    store = Store(request.app.state.base_dir)
-    config = store.load_config()
-    state = config.get("api_state") if isinstance(config.get("api_state"), dict) else {}
-    normalized_status = status if status in API_KEY_TEST_STATUSES else "untested"
-    state[provider] = normalized_status
-    config["api_state"] = state
-    store.save_config(config)
+    coordinator = FileRunCoordinator(request.app.state.base_dir)
+    with coordinator.exclusive_lock("config"):
+        store = Store(request.app.state.base_dir)
+        config = store.load_config()
+        state = dict(config.get("api_state") or {}) if isinstance(config.get("api_state"), dict) else {}
+        normalized_status = status if status in API_KEY_TEST_STATUSES else "untested"
+        state[provider] = normalized_status
+        config["api_state"] = state
+        store.save_config(config)
     return {
         "status": normalized_status,
         "valid": normalized_status == "valid",
@@ -132,38 +137,10 @@ def normalized_provider(provider: str) -> str:
 def api_key_for_provider(request: Request, provider: str) -> tuple[str, str]:
     env_key = MODEL_API_KEY_ENV[provider]
     file_values = read_env(env_path(request))
-    api_key = (file_values.get(env_key) or os.getenv(env_key) or "").strip()
+    api_key = (os.getenv(env_key) or file_values.get(env_key) or "").strip()
     if not api_key:
         raise HTTPException(status_code=400, detail="API Key is not configured")
     return env_key, api_key
-
-
-def test_provider_api_key(provider: str, api_key: str) -> Optional[str]:
-    try:
-        if provider == "openai":
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            page = client.models.list()
-            next(iter(getattr(page, "data", []) or []), None)
-        elif provider == "claude":
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=api_key)
-            page = client.models.list(limit=1)
-            next(iter(getattr(page, "data", []) or []), None)
-        elif provider == "gemini":
-            from google import genai
-
-            client = genai.Client(api_key=api_key)
-            iterator = client.models.list()
-            next(iter(iterator), None)
-        else:
-            raise ValueError("Unsupported provider")
-    except Exception as exc:
-        message = str(getattr(exc, "message", "") or exc).strip()
-        return message or exc.__class__.__name__
-    return None
 
 
 @router.get("/model-api-keys")
@@ -172,7 +149,9 @@ def get_model_api_keys(request: Request):
     test_state = read_api_key_test_state(request)
     providers = []
     for provider, env_key in MODEL_API_KEY_ENV.items():
-        value = file_values.get(env_key) or ""
+        file_value = (file_values.get(env_key) or "").strip()
+        environment_value = (os.getenv(env_key) or "").strip()
+        value = environment_value or file_value
         configured = bool(value)
         status = test_state.get(provider, "untested") if configured else "untested"
         valid = status == "valid"
@@ -198,11 +177,15 @@ def put_model_api_key(payload: ModelApiKeyUpdate, request: Request):
     api_key = payload.api_key.strip()
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key cannot be empty")
+    if any(character in api_key for character in ("\r", "\n", "\x00")):
+        raise HTTPException(status_code=400, detail="api_key must be a single line")
     path = env_path(request)
-    write_env_value(path, env_key, api_key)
-    os.environ[env_key] = api_key
-    load_dotenv(path, override=True)
-    set_api_key_test_state(request, provider, status="untested")
+    coordinator = FileRunCoordinator(request.app.state.base_dir)
+    with coordinator.exclusive_lock("secrets", timeout=30.0):
+        write_env_value(path, env_key, api_key)
+        os.environ[env_key] = api_key
+        load_dotenv(path, override=True)
+        set_api_key_test_state(request, provider, status="untested")
     return {
         "saved": True,
         "provider": provider,
@@ -219,10 +202,12 @@ def put_model_api_key(payload: ModelApiKeyUpdate, request: Request):
 def test_model_api_key(payload: ModelApiKeyTest, request: Request):
     require_write_access(request)
     provider = normalized_provider(payload.provider)
-    env_key, api_key = api_key_for_provider(request, provider)
-    error = test_provider_api_key(provider, api_key)
-    status = "valid" if error is None else "invalid"
-    state = set_api_key_test_state(request, provider, status=status, error=error)
+    coordinator = FileRunCoordinator(request.app.state.base_dir)
+    with coordinator.exclusive_lock("secrets", timeout=30.0):
+        env_key, api_key = api_key_for_provider(request, provider)
+        error = test_provider_api_key(provider, api_key)
+        status = "valid" if error is None else "invalid"
+        state = set_api_key_test_state(request, provider, status=status, error=error)
     valid = bool(state["valid"])
     return {
         "provider": provider,
@@ -241,10 +226,12 @@ def delete_model_api_key(provider: str, request: Request):
     normalized = normalized_provider(provider)
     env_key = MODEL_API_KEY_ENV[normalized]
     path = env_path(request)
-    removed = remove_env_value(path, env_key)
-    os.environ.pop(env_key, None)
-    load_dotenv(path, override=True)
-    set_api_key_test_state(request, normalized, status="untested")
+    coordinator = FileRunCoordinator(request.app.state.base_dir)
+    with coordinator.exclusive_lock("secrets", timeout=30.0):
+        removed = remove_env_value(path, env_key)
+        os.environ.pop(env_key, None)
+        load_dotenv(path, override=True)
+        set_api_key_test_state(request, normalized, status="untested")
     return {
         "deleted": True,
         "provider": normalized,
@@ -269,7 +256,20 @@ def activate_code(payload: ActivationCodePayload, request: Request, response: Re
     if not code:
         raise HTTPException(status_code=400, detail="啟動碼不能為空")
     valid_codes = _valid_codes(request.app.state.base_dir)
-    if code not in valid_codes:
+    client_id = request.client.host if request.client else "unknown"
+    valid, retry_after = verify_activation_attempt(
+        request.app.state.base_dir,
+        client_id,
+        code,
+        valid_codes,
+    )
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="啟動碼嘗試次數過多，請稍後再試",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if not valid:
         raise HTTPException(status_code=400, detail="無效的啟動碼")
     set_activation_cookie(response, request, code)
     return {"activated": True}

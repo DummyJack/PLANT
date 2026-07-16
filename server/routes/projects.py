@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+import re
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -11,6 +12,7 @@ from utils import format_loaded_models_summary
 from utils.language import sync_output_language
 
 from server.services.project_service import ProjectService
+from storage.coordinator import FileRunCoordinator
 from server.services.run_config import general_formal_meeting_enabled
 from .auth import can_read_project, is_activated, require_project_read_access, require_write_access
 
@@ -21,17 +23,7 @@ public_router = APIRouter()
 
 class ProjectCreate(BaseModel):
     rough_idea: str
-
-
-class ProjectUpdate(BaseModel):
-    rough_idea: Optional[str] = None
-    meta: Optional[Dict[str, Any]] = None
-
-
-class ProjectExport(BaseModel):
-    html: bool = True
-    cost: bool = False
-    manual: bool = True
+    creation_id: Optional[str] = None
 
 
 def base_dir(request: Request) -> Path:
@@ -50,7 +42,6 @@ def bootstrap(request: Request):
     store = Store(base_dir(request))
     config_status: Dict[str, Any] = {"loaded": False, "error": None}
     model_summary = ""
-    key_status = {"valid": True, "error": None}
     config: Optional[Dict[str, Any]] = None
     try:
         config = store.load_config()
@@ -61,7 +52,6 @@ def bootstrap(request: Request):
     return {
         "config": config_status,
         "model_summary": model_summary,
-        "api_keys": key_status,
         "activated": activated,
         "projects": readable_projects(request, service.list_projects_enriched()),
         "active_runs": service.active_runs_map() if activated else {},
@@ -75,14 +65,6 @@ def bootstrap(request: Request):
         ),
         "requires_rounds_input": bool(config and general_formal_meeting_enabled(config)),
     }
-
-
-@router.get("/projects")
-def list_projects(request: Request, enriched: bool = True):
-    service = project_service(request)
-    if enriched:
-        return {"projects": readable_projects(request, service.list_projects_enriched())}
-    return {"projects": readable_projects(request, Store(base_dir(request)).list_projects())}
 
 
 def readable_projects(request: Request, rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -101,57 +83,45 @@ def create_project(payload: ProjectCreate, request: Request):
     rough_idea = payload.rough_idea.strip()
     if not rough_idea:
         raise HTTPException(status_code=400, detail="rough_idea is required")
-    store = Store(base_dir(request))
-    project_id = store.create_project()
-    project_root = base_dir(request) / "projects" / project_id
-    try:
-        project_store = Store(base_dir(request), project_id)
-        artifact = {
-            "rough_idea": rough_idea,
-            "stakeholders": [],
-            "scope": {"in_scope": [], "out_of_scope": []},
-            "URL": [],
-            "feedback": {},
-            "system_models": [],
-            "meta": {"last_round": 0},
-        }
-        sync_output_language(rough_idea, artifact)
-        project_store.save_artifact(artifact)
-    except Exception:
-        shutil.rmtree(project_root, ignore_errors=True)
-        raise
+    creation_id = str(payload.creation_id or "").strip()
+    if creation_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", creation_id):
+        raise HTTPException(status_code=400, detail="creation_id is invalid")
+    coordinator = FileRunCoordinator(base_dir(request))
+    lock_name = f"project-create-{creation_id}" if creation_id else "project-create"
+    with coordinator.exclusive_lock(lock_name):
+        existing = coordinator.project_creation(creation_id) if creation_id else None
+        if existing:
+            existing_project_id = str(existing.get("project_id") or "")
+            if (base_dir(request) / "projects" / existing_project_id).is_dir():
+                return {"project_id": existing_project_id, "rough_idea": existing.get("rough_idea") or rough_idea}
+        store = Store(base_dir(request))
+        project_id = store.create_project()
+        project_root = base_dir(request) / "projects" / project_id
+        try:
+            project_store = Store(base_dir(request), project_id)
+            artifact = {
+                "rough_idea": rough_idea,
+                "stakeholders": [],
+                "scope": {"in_scope": [], "out_of_scope": []},
+                "URL": [],
+                "feedback": {},
+                "system_models": [],
+                "meta": {"last_round": 0},
+            }
+            sync_output_language(rough_idea, artifact)
+            project_store.save_artifact(artifact)
+            if creation_id:
+                coordinator.record_project_creation(creation_id, project_id, rough_idea)
+        except Exception:
+            shutil.rmtree(project_root, ignore_errors=True)
+            raise
     return {"project_id": project_id, "rough_idea": rough_idea}
-
-
-@router.get("/projects/{project_id}/summary")
-def get_project_summary(project_id: str, request: Request):
-    require_project_read_access(request, project_id)
-    return project_service(request).get_summary(project_id)
-
-
-@router.get("/projects/{project_id}/active-run")
-def get_active_run(project_id: str, request: Request):
-    require_project_read_access(request, project_id)
-    project_service(request).ensure_project(project_id)
-    active_run = request.app.state.run_manager.get_active_run(project_id)
-    return {"project_id": project_id, "active_run": active_run}
 
 
 @router.get("/projects/{project_id}/cost-summary")
 def get_cost_summary(project_id: str, request: Request):
     require_project_read_access(request, project_id)
     return project_service(request).get_cost_summary(project_id)
-
-
-@router.post("/projects/{project_id}/export")
-def export_project(project_id: str, payload: ProjectExport, request: Request):
-    require_write_access(request)
-    return project_service(request).export_project(
-        project_id,
-        html=payload.html,
-        cost=payload.cost,
-        manual=payload.manual,
-    )
 
 
 @router.get("/projects/{project_id}/references")
@@ -187,25 +157,28 @@ async def upload_reference(
     file: UploadFile = File(...),
 ):
     require_write_access(request)
-    return await project_service(request).upload_reference(project_id, file)
+    active_statuses = {"queued", "running", "waiting_for_human", "cancelling"}
+    active_run = next(
+        (
+            run
+            for run in request.app.state.run_manager.list_runs(project_id=project_id)
+            if run.get("status") in active_statuses
+        ),
+        None,
+    )
+    waiting_for_human = active_run is not None and active_run.get("status") == "waiting_for_human"
+    return await project_service(request).upload_reference(
+        project_id,
+        file,
+        allow_during_active_run=active_run is not None,
+        pending=active_run is not None and not waiting_for_human,
+    )
 
 
 @router.delete("/projects/{project_id}/references/{name}")
 def delete_reference(project_id: str, name: str, request: Request):
     require_write_access(request)
     return project_service(request).delete_reference(project_id, name)
-
-
-@router.patch("/projects/{project_id}")
-def update_project(project_id: str, payload: ProjectUpdate, request: Request):
-    require_write_access(request)
-    if payload.rough_idea is None and payload.meta is None:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    return project_service(request).update_project(
-        project_id,
-        rough_idea=payload.rough_idea,
-        meta=payload.meta,
-    )
 
 
 @router.delete("/projects/{project_id}")

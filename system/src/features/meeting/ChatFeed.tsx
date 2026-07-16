@@ -721,6 +721,13 @@ function isFormalMeetingArtifactPath(path?: string) {
   return !!path && /^artifact\/meeting\/formal_meeting_r\d+\.json$/i.test(path);
 }
 
+function conflictReportVersionFromPath(path?: string) {
+  const version = /(?:results\/report\/|artifact\/report\/)conflict_report_v(\d+)\.(?:html|md|json)$/i.exec(
+    path ?? "",
+  )?.[1];
+  return version === undefined ? null : Number(version);
+}
+
 function isFormalMeetingDisplayMessage(msg: ChatMessage) {
   return msg.stage === "formal_meeting" || isMomPath(msg.outputPath) || isFormalMeetingArtifactPath(msg.outputPath);
 }
@@ -785,7 +792,18 @@ function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
   const matchingDraftEntries = rest
     .map((message, index) => ({ message, index }))
     .filter((entry) => isDraftPath(entry.message.outputPath) && draftVersionFromPath(entry.message.outputPath) === roundNumber);
-  if (matchingMomEntries.length === 0 && matchingDraftEntries.length === 0) return segment;
+  const matchingConflictReportEntries = rest
+    .map((message, index) => ({
+      message,
+      index,
+      version: conflictReportVersionFromPath(message.outputPath),
+    }))
+    .filter((entry): entry is { message: ChatMessage; index: number; version: number } => entry.version !== null);
+  if (
+    matchingMomEntries.length === 0 &&
+    matchingDraftEntries.length === 0 &&
+    matchingConflictReportEntries.length === 0
+  ) return segment;
 
   const consumed = new Set<string>();
   const arranged: ChatMessage[] = [segment[0]];
@@ -820,6 +838,16 @@ function arrangeMeetingPlanMomSegment(segment: ChatMessage[]) {
     matchingMomEntries.forEach(({ message }) => {
       if (consumed.has(message.id)) return;
       if (taskNumberFromMeetingPath(message.outputPath) !== taskNumber) return;
+      arranged.push(message);
+      consumed.add(message.id);
+    });
+
+    matchingConflictReportEntries.forEach(({ message, version }) => {
+      if (consumed.has(message.id)) return;
+      // Report v1 is produced after R1-M2, Report v2 after R1-M3, etc.
+      // Keep each re-check result beside the meeting that triggered it and
+      // before the next conflict meeting or updated draft.
+      if (version + 1 !== taskNumber) return;
       arranged.push(message);
       consumed.add(message.id);
     });
@@ -1893,7 +1921,21 @@ function DraftUpdateBubbles({
 
   return (
     <>
-      {links.map((item) => (
+      {links.map((item) => {
+        const bubbleContent = (
+          <DraftUpdateBubbleContent
+            projectId={projectId}
+            item={item}
+            modelImages={modelImages}
+            outputFiles={outputFiles}
+          />
+        );
+        const bubbleClassName = cn(
+          "block rounded-control border px-3.5 py-2.5 text-left text-sm leading-relaxed",
+          ROLE_STYLES.agent.bubble,
+          item.path !== "artifact/system_models.json" && "cursor-pointer hover:border-slate-300 hover:shadow",
+        );
+        return (
         <div key={item.label} className="mb-4 flex w-full min-w-0 gap-2.5 justify-start">
           <div className="flex w-14 shrink-0 flex-col items-center gap-1 sm:w-20">
             <div className="w-full whitespace-nowrap text-center text-xs font-semibold leading-tight text-slate-600">
@@ -1904,25 +1946,21 @@ function DraftUpdateBubbles({
             </div>
           </div>
           <div className="min-w-0 max-w-[calc(100%-4.125rem)] pt-6 sm:max-w-[85%]">
-            <button
-              type="button"
-              className={cn(
-                "block rounded-control border px-3.5 py-2.5 text-left text-sm leading-relaxed",
-                ROLE_STYLES.agent.bubble,
-                "cursor-pointer hover:border-slate-300 hover:shadow",
-              )}
-              onClick={() => setSelectedOutputPath(item.path, "manual", item.anchor)}
-            >
-              <DraftUpdateBubbleContent
-                projectId={projectId}
-                item={item}
-                modelImages={modelImages}
-                outputFiles={outputFiles}
-              />
-            </button>
+            {item.path === "artifact/system_models.json" ? (
+              <div className={bubbleClassName}>{bubbleContent}</div>
+            ) : (
+              <button
+                type="button"
+                className={bubbleClassName}
+                onClick={() => setSelectedOutputPath(item.path, "manual", item.anchor)}
+              >
+                {bubbleContent}
+              </button>
+            )}
           </div>
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -3375,8 +3413,8 @@ export function ChatFeed({
               {projectId
                 ? "已選擇此專案，按「執行」可以繼續討論"
                 : language === "en"
-                  ? "Enter an initial idea below and press Run. The Agent team will help you produce the Specification."
-                  : "請在下方輸入初步想法並按「執行」，Agent 團隊將協助您進行規格化"}
+                  ? "Enter an initial idea below and press Run. The Agent team will help you with requirements development."
+                  : "請在下方輸入初步想法並按「執行」，Agent 團隊將協助您進行需求開發"}
             </p>
           </div>
         )}

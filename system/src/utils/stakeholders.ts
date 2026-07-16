@@ -4,7 +4,7 @@ const STAKEHOLDER_TYPE_ORDER: Record<string, number> = {
   external_party: 2,
 };
 
-export function stakeholderTypeOrder(value: unknown) {
+function stakeholderTypeOrder(value: unknown) {
   const key = String(value ?? "").trim();
   return STAKEHOLDER_TYPE_ORDER[key] ?? 99;
 }

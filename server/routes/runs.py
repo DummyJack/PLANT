@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from storage import Store
-from server.services.run_manager import sse_done, sse_format, sse_heartbeat
+from server.services.run_manager import DecisionConflictError, sse_done, sse_format, sse_heartbeat
 from server.services.run_config import normalize_agent_models_to_valid_provider
 from .auth import can_read_project, is_activated, require_project_read_access, require_write_access
 
@@ -73,15 +73,6 @@ def create_run(payload: RunCreate, request: Request):
         raise HTTPException(status_code=status_code, detail=message) from exc
 
 
-@router.get("/runs/{run_id}")
-def get_run(run_id: str, request: Request):
-    run = manager(request).get(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    require_project_read_access(request, str(run.get("project_id") or ""))
-    return run
-
-
 @router.get("/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request, since: int = 0):
     run = manager(request).get(run_id)
@@ -125,6 +116,8 @@ def submit_decision(run_id: str, decision_id: str, payload: DecisionSubmit, requ
         return manager(request).submit_decision(run_id, decision_id, payload.payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+    except DecisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

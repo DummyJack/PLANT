@@ -97,7 +97,7 @@ class RunPersistence:
     def count_runs_by_status(self, status: str) -> int:
         return sum(1 for run in self.list_runs() if str(run.get("status") or "") == status)
 
-    def recover_interrupted_runs(self) -> int:
+    def recover_interrupted_runs(self, *, active_claim=None, release_claim=None) -> int:
         recovered = 0
         for run in self.list_runs():
             status = str(run.get("status") or "")
@@ -106,6 +106,8 @@ class RunPersistence:
             project_id = str(run.get("project_id") or "")
             run_id = str(run.get("run_id") or "")
             if not project_id or not run_id:
+                continue
+            if active_claim and active_claim(project_id, run_id):
                 continue
             run["status"] = "interrupted"
             run["finished_at"] = datetime.now().isoformat()
@@ -121,5 +123,7 @@ class RunPersistence:
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+            if release_claim:
+                release_claim(project_id, run_id)
             recovered += 1
         return recovered

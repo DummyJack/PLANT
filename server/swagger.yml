@@ -114,7 +114,12 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: 專案正在執行 Run，或有附件、刪除等專案操作正在進行，無法刪除
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                detail: Project is running or another project operation is in progress
 
   /api/projects/{project_id}/cost-summary:
     get:
@@ -189,6 +194,27 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: 同名附件已存在、專案正在執行 Run，或有其他專案操作正在進行
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              examples:
+                duplicateReference:
+                  summary: 同名附件已存在
+                  value:
+                    detail: "Reference already exists: 規定.docx"
+                projectBusy:
+                  summary: 專案正在執行或有其他操作
+                  value:
+                    detail: Project is running or another project operation is in progress
+        "413":
+          description: 附件超過 25 MiB 上限
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                detail: File exceeds 26214400 byte limit
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -229,6 +255,13 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: 專案正在執行 Run，或有其他專案操作正在進行，無法刪除附件
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                detail: Project is running or another project operation is in progress
 
   /{project_id}/references/{name}:
     get:
@@ -468,10 +501,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConfigResponse"
-    put:
+    patch:
       tags: [Configuration]
-      summary: 更新系統設定
-      operationId: updateConfig
+      summary: 部分更新系統設定
+      operationId: patchConfig
       security:
         - ActivationCookie: []
       requestBody:
@@ -479,7 +512,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ConfigUpdate"
+              $ref: "#/components/schemas/ConfigPatch"
       responses:
         "200":
           description: 設定更新成功
@@ -636,6 +669,8 @@ paths:
                 $ref: "#/components/schemas/ActivationStatus"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "422":
           $ref: "#/components/responses/ValidationError"
     delete:
@@ -702,11 +737,33 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/projects/{project_id}/manual.zip:
+    get:
+      tags: [Artifacts]
+      summary: 透過 API 下載專案離線 Manual
+      operationId: downloadProjectManualZipApi
+      security: [{ ActivationCookie: [] }, {}]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200": { $ref: "#/components/responses/ZipFile" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /manual.zip:
     get:
       tags: [Public Manual]
       summary: 下載共用離線 Manual
       operationId: downloadSharedManualZip
+      responses:
+        "200": { $ref: "#/components/responses/ZipFile" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/manual.zip:
+    get:
+      tags: [Artifacts]
+      summary: 透過 API 下載共用離線 Manual
+      operationId: downloadSharedManualZipApi
       responses:
         "200": { $ref: "#/components/responses/ZipFile" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -916,6 +973,15 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
+    TooManyRequests:
+      description: 啟動碼嘗試次數過多，請依 Retry-After 稍後重試
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+          description: 可再次嘗試前需等待的秒數
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     ValidationError:
       description: FastAPI/Pydantic 請求格式驗證失敗
       content:
@@ -1016,7 +1082,6 @@ components:
       required:
         - config
         - model_summary
-        - api_keys
         - projects
         - active_runs
         - interrupted_run_count
@@ -1026,8 +1091,6 @@ components:
         config:
           $ref: "#/components/schemas/LoadStatus"
         model_summary: { type: string }
-        api_keys:
-          $ref: "#/components/schemas/ApiKeySummary"
         activated: { type: boolean }
         projects:
           type: array
@@ -1045,13 +1108,6 @@ components:
       required: [loaded]
       properties:
         loaded: { type: boolean }
-        error: { type: [string, "null"] }
-
-    ApiKeySummary:
-      type: object
-      required: [valid]
-      properties:
-        valid: { type: boolean }
         error: { type: [string, "null"] }
 
     ReferenceInfo:
@@ -1149,8 +1205,8 @@ components:
       properties:
         project_id: { type: string }
         mode: { type: string, enum: [new, continue], default: continue }
-        rounds: { type: [integer, "null"], minimum: 1 }
-        max_issues: { type: [integer, "null"], minimum: 1 }
+        rounds: { type: [integer, "null"], minimum: 0, maximum: 20 }
+        max_issues: { type: [integer, "null"], minimum: 1, maximum: 50 }
         rough_idea: { type: [string, "null"] }
         attached_reference_paths:
           type: [array, "null"]
@@ -1298,8 +1354,8 @@ components:
     PlantConfig:
       type: object
       properties:
-        rounds: { type: integer, minimum: 1 }
-        max_issues: { type: integer, minimum: 1 }
+        rounds: { type: integer, minimum: 0, maximum: 20 }
+        max_issues: { type: integer, minimum: 1, maximum: 50 }
         stage:
           type: object
           additionalProperties: { type: boolean }
@@ -1335,11 +1391,13 @@ components:
       properties:
         config: { $ref: "#/components/schemas/PlantConfig" }
 
-    ConfigUpdate:
+    ConfigPatch:
       type: object
-      required: [config]
+      required: [patch]
       properties:
-        config: { $ref: "#/components/schemas/PlantConfig" }
+        patch:
+          type: object
+          additionalProperties: true
 
     Provider:
       type: string

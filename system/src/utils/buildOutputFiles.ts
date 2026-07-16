@@ -153,6 +153,7 @@ export function buildOutputFiles(items: FileTreeNode[], labels?: DocumentLabels)
   for (const item of items) {
     if (item.kind !== "file") continue;
     if (/^manual\//i.test(item.path)) continue;
+    if (/^artifact\/workflow_state\.json$/i.test(item.path)) continue;
     if (/^artifact\/meeting\/issues\.json$/i.test(item.path)) continue;
     if (/^results\/report\/conflict_report\.html$/i.test(item.path)) continue;
     if (/^artifact\/report\/conflict_report_v\d+\.json$/i.test(item.path)) continue;

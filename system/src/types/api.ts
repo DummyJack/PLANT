@@ -1,4 +1,4 @@
-export type RunStatus =
+type RunStatus =
   | "queued"
   | "running"
   | "waiting_for_human"
@@ -26,7 +26,6 @@ export interface ProjectSummary {
 export interface BootstrapResponse {
   config: { loaded: boolean; error: string | null };
   model_summary: string;
-  api_keys: { valid: boolean; error: string | null };
   activated?: boolean;
   projects: ProjectSummary[];
   active_runs: Record<string, { run_id: string; status: RunStatus }>;
@@ -72,7 +71,7 @@ export interface RunCheckpoint {
   created_at?: string;
 }
 
-export interface PendingDecision {
+interface PendingDecision {
   id: string;
   kind:
     | "stakeholder_selection"
@@ -178,16 +177,6 @@ export interface ChatMessage {
   decisionPayload?: Record<string, unknown>;
 }
 
-export interface SystemModel {
-  id: string;
-  name: string;
-  type: string;
-  plantuml?: string;
-  image_path?: string;
-}
-
-export type SpecKind = "draft" | "srs" | "dr";
-export type ModelLayout = "dual" | "code" | "diagram";
 export type DiscussionMode = "sequential" | "simultaneous";
 
 export interface AgentModelConfig {
