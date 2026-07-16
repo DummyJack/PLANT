@@ -603,6 +603,18 @@ textarea:disabled {
   background: var(--border-strong);
 }
 
+.scrollbar-hidden,
+.scrollbar-hidden:hover {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 .trace-detail-content .dr-trace-feedback-table {
   width: 100%;
   min-width: 760px;
