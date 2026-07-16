@@ -170,6 +170,8 @@ class ExperimentStore:
         self.project_dir = self.output_dir
         self.artifact_dir = self.project_dir / "artifact"
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.doc_dir = self.project_dir / "doc"
+        self.doc_dir.mkdir(parents=True, exist_ok=True)
 
     # ========
     # Defines save artifact function for this experiment module.

@@ -177,6 +177,7 @@ class ExperimentStore:
         self.output_dir = results_dir
         self.project_dir = results_dir
         self.artifact_dir = self.project_dir / "artifact"
+        self.doc_dir = self.project_dir / "doc"
 
     # ========
     # Defines save artifact function for this experiment module.
@@ -277,6 +278,11 @@ def assert_models_have_pricing(flow_cfg: Dict[str, Any], exp_cfg: Dict[str, Any]
 # Defines build flow function for this experiment module.
 # ========
 def build_flow(flow_cfg: Dict[str, Any], *, verbose: bool, results_dir: Path) -> Flow:
+    flow_cfg = dict(flow_cfg)
+    flow_cfg["enable_tools"] = {
+        **(flow_cfg.get("enable_tools") or {}),
+        "read_file": False,
+    }
     flow = Flow(
         config=flow_cfg,
         store=ExperimentStore(results_dir),
