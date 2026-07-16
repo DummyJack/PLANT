@@ -1,8 +1,23 @@
 # Handles atomic file writes for project storage.
 import os
 import tempfile
+import time
 
 from pathlib import Path
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Replace a file atomically, tolerating short-lived Windows read locks."""
+    delay = 0.01
+    for attempt in range(8):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 7:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.1)
 
 
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
@@ -20,7 +35,7 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, target)
+        _replace_with_retry(tmp_path, target)
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -40,7 +55,7 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, target)
+        _replace_with_retry(tmp_path, target)
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise

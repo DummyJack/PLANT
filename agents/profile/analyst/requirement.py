@@ -11,7 +11,7 @@ from storage.requirements import (
 )
 
 from .actions.reqt.refine import refine_requirement
-from .actions.reqt.update import update_requirement
+from .actions.reqt.update import update_requirement, update_requirement_coverage
 from .repair import requirement_repair_prompt
 
 
@@ -21,9 +21,183 @@ REQUIREMENT_COVERAGE_BATCH_SIZE = 5
 REQUIREMENT_COVERAGE_BATCH_LIMIT = 8
 
 
-# Defines AnalystRequirementFlow class for this module workflow.
 class AnalystRequirementFlow:
-    # Defines execute update requirement function for this module workflow.
+    @staticmethod
+    def requirement_match_terms(value: Any) -> set[str]:
+        text = str(value or "").lower()
+        terms = set(re.findall(r"[a-z0-9_]{2,}", text))
+        for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+            terms.update(chunk[index:index + 2] for index in range(len(chunk) - 1))
+        return terms
+
+    @staticmethod
+    def requirement_context_refs(value: Any) -> set[str]:
+        refs: set[str] = set()
+        if isinstance(value, dict):
+            for item in value.values():
+                refs.update(AnalystRequirementFlow.requirement_context_refs(item))
+        elif isinstance(value, list):
+            for item in value:
+                refs.update(AnalystRequirementFlow.requirement_context_refs(item))
+        else:
+            refs.update(
+                re.findall(
+                    r"\b(?:(?:URL|REQ|SM|CR|FB)-\d+|R\d+-M\d+)\b",
+                    str(value or ""),
+                )
+            )
+        return refs
+
+    @classmethod
+    def relevant_feedback_context(
+        cls,
+        feedback: Dict[str, List[Dict[str, Any]]],
+        urls: List[Dict[str, Any]],
+        requirements: List[Dict[str, Any]],
+        issue: Dict[str, Any],
+        *,
+        per_section_limit: int = 5,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        target_refs = cls.requirement_context_refs(urls)
+        target_refs.update(cls.requirement_context_refs(requirements))
+        target_refs.update(cls.requirement_context_refs(issue.get("trace", {})))
+        target_terms = cls.requirement_match_terms(
+            " ".join(
+                str(row.get(key) or "")
+                for row in urls + requirements
+                if isinstance(row, dict)
+                for key in ("text", "title", "description", "rationale")
+            )
+        )
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for section, rows in feedback.items():
+            ranked = []
+            for index, row in enumerate(rows or []):
+                if not isinstance(row, dict):
+                    continue
+                direct = bool(cls.requirement_context_refs(row) & target_refs)
+                score = len(
+                    target_terms
+                    & cls.requirement_match_terms(
+                        " ".join(str(row.get(key) or "") for key in ("text", "status"))
+                    )
+                )
+                if direct or score >= 2:
+                    ranked.append((int(direct), score, index, row))
+            ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+            selected = [item[3] for item in ranked[:per_section_limit]]
+            if selected:
+                out[section] = selected
+        return out
+
+    @classmethod
+    def relevant_system_model_context(
+        cls,
+        models: List[Dict[str, Any]],
+        urls: List[Dict[str, Any]],
+        requirements: List[Dict[str, Any]],
+        issue: Dict[str, Any],
+        *,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        target_refs = cls.requirement_context_refs(urls)
+        target_refs.update(cls.requirement_context_refs(requirements))
+        target_refs.update(cls.requirement_context_refs(issue.get("trace", {})))
+        target_terms = cls.requirement_match_terms(
+            " ".join(
+                str(row.get(key) or "")
+                for row in urls + requirements
+                if isinstance(row, dict)
+                for key in ("text", "title", "description")
+            )
+        )
+        ranked = []
+        for index, row in enumerate(models or []):
+            if not isinstance(row, dict):
+                continue
+            direct = bool(cls.requirement_context_refs(row) & target_refs)
+            score = len(
+                target_terms
+                & cls.requirement_match_terms(
+                    " ".join(
+                        str(row.get(key) or "")
+                        for key in ("name", "type", "description")
+                    )
+                )
+            )
+            if direct or score >= 2:
+                ranked.append((int(direct), score, index, row))
+        ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        return [item[3] for item in ranked[:limit]]
+
+    @classmethod
+    def relevant_requirement_context(
+        cls,
+        requirements: List[Dict[str, Any]],
+        urls: List[Dict[str, Any]],
+        issue: Dict[str, Any],
+        *,
+        candidate_limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Select the existing REQs most relevant to the active URL batch."""
+        trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
+        traced_req_ids = {
+            str(item).strip()
+            for item in (trace.get("artifact_ids") or [])
+            if str(item).strip().startswith("REQ-")
+        }
+        if not urls:
+            if not traced_req_ids:
+                return requirements
+            return [
+                row
+                for row in requirements
+                if isinstance(row, dict)
+                and str(row.get("id") or "").strip() in traced_req_ids
+            ]
+        url_ids = {
+            str(row.get("id") or "").strip()
+            for row in urls
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+        url_terms = set()
+        for row in urls:
+            if isinstance(row, dict):
+                url_terms.update(cls.requirement_match_terms(row.get("text")))
+        selected: List[Dict[str, Any]] = []
+        selected_ids = set()
+        candidates = []
+        for index, row in enumerate(requirements):
+            if not isinstance(row, dict):
+                continue
+            req_id = str(row.get("id") or "").strip()
+            sources = {
+                str(item).strip()
+                for item in (row.get("source") or [])
+                if str(item).strip()
+            }
+            if sources & url_ids or req_id in traced_req_ids:
+                selected.append(row)
+                selected_ids.add(req_id or f"index:{index}")
+                continue
+            req_terms = cls.requirement_match_terms(
+                " ".join(
+                    str(row.get(key) or "")
+                    for key in ("title", "description", "rationale")
+                )
+            )
+            score = len(url_terms & req_terms)
+            if score >= 2:
+                candidates.append((score, index, row, req_id))
+
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        for _, index, row, req_id in candidates[:candidate_limit]:
+            marker = req_id or f"index:{index}"
+            if marker not in selected_ids:
+                selected.append(row)
+                selected_ids.add(marker)
+        return selected
+
     def execute_update_requirement(
         self,
         *,
@@ -37,7 +211,6 @@ class AnalystRequirementFlow:
             previous_responses=previous_responses,
         )
 
-    # Defines execute refine requirement function for this module workflow.
     def execute_refine_requirement(
         self,
         *,
@@ -51,7 +224,6 @@ class AnalystRequirementFlow:
             previous_responses=previous_responses,
         )
 
-    # Defines requirement action context function for this module workflow.
     def requirement_action_context(
         self,
         *,
@@ -87,7 +259,6 @@ class AnalystRequirementFlow:
             "cleanup_issues": cleanup_issues or [],
         }
 
-    # Defines apply requirement action output function for this module workflow.
     def apply_requirement_action_output(
         self,
         *,
@@ -96,6 +267,12 @@ class AnalystRequirementFlow:
         action_name: str,
         source_id: str,
     ) -> List[Dict[str, Any]]:
+        self.validate_requirement_action_references(
+            artifact=artifact,
+            data=data,
+            action_name=action_name,
+            source_id=source_id,
+        )
         generated = self.clean_requirement_records(
             data.get("REQ"),
             existing=artifact.get("REQ", []),
@@ -123,18 +300,124 @@ class AnalystRequirementFlow:
                 meta["requirements_changed_reason"] = action_name
         return generated
 
+    def validate_requirement_action_references(
+        self,
+        *,
+        artifact: Dict[str, Any],
+        data: Dict[str, Any],
+        action_name: str,
+        source_id: str,
+    ) -> None:
+        existing_rows = [
+            row for row in (artifact.get("REQ") or []) if isinstance(row, dict)
+        ]
+        existing_req_ids = {
+            str(row.get("id") or "").strip()
+            for row in existing_rows
+            if str(row.get("id") or "").strip()
+        }
+        valid_sources = self.requirement_context_refs(artifact)
+        valid_sources.discard("")
+        for row in existing_rows:
+            valid_sources.update(self.requirement_sources(row))
+        if source_id:
+            valid_sources.add(source_id)
+
+        generated_ids = set()
+        for index, row in enumerate(data.get("REQ") or []):
+            if not isinstance(row, dict):
+                continue
+            req_id = str(row.get("id") or "").strip()
+            if req_id:
+                if req_id not in existing_req_ids:
+                    raise ValueError(
+                        f"{action_name} REQ[{index}] references unknown id: {req_id}"
+                    )
+                generated_ids.add(req_id)
+            sources = self.requirement_sources(row)
+            if not sources:
+                raise ValueError(
+                    f"{action_name} REQ[{index}] must reference at least one source"
+                )
+            unknown_sources = sorted(
+                source for source in sources if source not in valid_sources
+            )
+            if unknown_sources:
+                raise ValueError(
+                    f"{action_name} REQ[{index}] references unknown source: "
+                    + ", ".join(unknown_sources)
+                )
+
+        remove_rows = data.get("remove_REQ") or []
+        if not isinstance(remove_rows, list):
+            raise ValueError(f"{action_name} remove_REQ must be a list")
+        remove_ids = [str(item or "").strip() for item in remove_rows if str(item or "").strip()]
+        unknown_remove_ids = sorted(set(remove_ids) - existing_req_ids)
+        if unknown_remove_ids:
+            raise ValueError(
+                f"{action_name} remove_REQ references unknown id: "
+                + ", ".join(unknown_remove_ids)
+            )
+        conflicting_ids = sorted(set(remove_ids) & generated_ids)
+        if conflicting_ids:
+            raise ValueError(
+                f"{action_name} cannot update and remove the same REQ: "
+                + ", ".join(conflicting_ids)
+            )
+
     @staticmethod
-    # Defines requirement update payload function for this module workflow.
-    def requirement_update_payload(data: Any, *, action_name: str) -> Dict[str, Any]:
-        if not isinstance(data, dict) or not isinstance(data.get("requirement_update"), dict):
-            raise ValueError(f"{action_name} output must contain requirement_update object")
-        payload = data["requirement_update"]
+    def validate_coverage_references(
+        artifact: Dict[str, Any],
+        rows: Any,
+        *,
+        removed_req_ids: Optional[List[str]] = None,
+    ) -> None:
+        if not isinstance(rows, list):
+            raise ValueError("coverage must be a list")
+        url_ids = {
+            str(row.get("id") or "").strip()
+            for row in (artifact.get("URL") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+        req_ids = {
+            str(row.get("id") or "").strip()
+            for row in (artifact.get("REQ") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+        removed = {str(item or "").strip() for item in (removed_req_ids or []) if str(item or "").strip()}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError(f"coverage[{index}] must be an object")
+            source_id = str(row.get("source_id") or "").strip()
+            if source_id not in url_ids:
+                raise ValueError(f"coverage[{index}] references unknown URL: {source_id or '<empty>'}")
+            covered_by = row.get("covered_by") or []
+            if not isinstance(covered_by, list):
+                raise ValueError(f"coverage[{index}].covered_by must be a list")
+            refs = {str(item or "").strip() for item in covered_by if str(item or "").strip()}
+            unknown_req_ids = sorted(refs - req_ids)
+            if unknown_req_ids:
+                raise ValueError(
+                    f"coverage[{index}] references unknown REQ: "
+                    + ", ".join(unknown_req_ids)
+                )
+            removed_refs = sorted(refs & removed)
+            if removed_refs:
+                raise ValueError(
+                    f"coverage[{index}] references removed REQ: "
+                    + ", ".join(removed_refs)
+                )
+
+    @staticmethod
+    def requirement_payload(data: Any, *, action_name: str) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError(f"{action_name} output must be an object")
+        payload = data
         for key in ("REQ", "coverage"):
             if key in payload and not isinstance(payload.get(key), list):
-                raise ValueError(f"{action_name} requirement_update.{key} must be a list")
+                raise ValueError(f"{action_name} {key} must be a list")
         return payload
 
-    # Defines update requirement function for this module workflow.
     def update_requirement(
         self,
         *,
@@ -152,6 +435,7 @@ class AnalystRequirementFlow:
             [],
         )
         reasons: List[str] = []
+        coverage_decisions: Dict[str, Dict[str, Any]] = {}
         coverage_gaps: List[Dict[str, Any]] = self.coverage_gaps(
             final_coverage,
             current_URL,
@@ -172,15 +456,33 @@ class AnalystRequirementFlow:
                 else []
             )
             context_URL = active_gaps if active_gaps else current_URL
+            context_REQ = (
+                self.relevant_requirement_context(current_REQ, context_URL, issue)
+                if active_gaps
+                else current_REQ
+            )
             context = self.requirement_action_context(
                 artifact=working_artifact,
                 issue=issue,
                 previous_responses=previous_responses,
                 current_URL=context_URL,
-                current_REQ=current_REQ,
+                current_REQ=context_REQ,
                 coverage_gaps=active_gaps,
                 requirement_mode=requirement_mode,
             )
+            if active_gaps:
+                context["feedback"] = self.relevant_feedback_context(
+                    context.get("feedback") or {},
+                    context_URL,
+                    context_REQ,
+                    issue,
+                )
+                context["system_models"] = self.relevant_system_model_context(
+                    context.get("system_models") or [],
+                    context_URL,
+                    context_REQ,
+                    issue,
+                )
             context["pass"] = pass_index + 1
             task = self.update_requirement_task(
                 requirement_mode=requirement_mode,
@@ -192,7 +494,7 @@ class AnalystRequirementFlow:
                 context,
                 mode="update_requirement",
             )
-            data = self.requirement_update_payload(
+            data = self.requirement_payload(
                 data,
                 action_name="update_requirement",
             )
@@ -211,10 +513,51 @@ class AnalystRequirementFlow:
             reason = str((data or {}).get("reason") or "").strip()
             if reason:
                 reasons.append(reason)
-            final_coverage = self.requirement_coverage_records(
-                working_artifact,
-                data.get("coverage") if isinstance(data, dict) else [],
-            )
+            final_coverage = self.requirement_coverage_records(working_artifact, [])
+            active_coverage_gaps = self.coverage_gaps(final_coverage, context_URL)
+            if active_coverage_gaps:
+                coverage_REQ = self.relevant_requirement_context(
+                    self.requirement_context(working_artifact),
+                    active_coverage_gaps,
+                    issue,
+                )
+                coverage_context = self.requirement_action_context(
+                    artifact=working_artifact,
+                    issue=issue,
+                    previous_responses=previous_responses,
+                    current_URL=active_coverage_gaps,
+                    current_REQ=coverage_REQ,
+                    coverage_gaps=active_coverage_gaps,
+                    requirement_mode="coverage",
+                )
+                coverage_data = self.invoke_requirements_analyst_object_json(
+                    self.update_requirement_coverage_task(),
+                    coverage_context,
+                    mode="update_requirement_coverage",
+                )
+                coverage_rows = coverage_data.get("coverage")
+                coverage_issues = self.requirement_coverage_batch_issues(
+                    coverage_rows,
+                    active_coverage_gaps,
+                )
+                if coverage_issues:
+                    raise RuntimeError(
+                        "update_requirement coverage output invalid: "
+                        + "; ".join(coverage_issues)
+                    )
+                self.validate_coverage_references(
+                    working_artifact,
+                    coverage_rows,
+                    removed_req_ids=data.get("remove_REQ") or [],
+                )
+                for row in coverage_rows:
+                    source_id = str(row.get("source_id") or "").strip()
+                    if source_id:
+                        coverage_decisions[source_id] = copy.deepcopy(row)
+                final_coverage = self.requirement_coverage_records(
+                    working_artifact,
+                    list(coverage_decisions.values()),
+                )
             coverage_gaps = self.coverage_gaps(final_coverage, current_URL)
             if not coverage_gaps:
                 break
@@ -238,12 +581,18 @@ class AnalystRequirementFlow:
             include_type_issues=False,
         )
         generated_all.extend(cleanup_result.get("REQ", []))
-        final_coverage = self.requirement_coverage_records(working_artifact, [])
+        final_coverage = self.requirement_coverage_records(
+            working_artifact,
+            list(coverage_decisions.values()),
+        )
         renumber_mapping = renumber_system_requirement_ids(working_artifact)
         if renumber_mapping:
             generated_all = replace_system_requirement_refs(generated_all, renumber_mapping)
             cleanup_result = replace_system_requirement_refs(cleanup_result, renumber_mapping)
-            final_coverage = self.requirement_coverage_records(working_artifact, [])
+            final_coverage = self.requirement_coverage_records(
+                working_artifact,
+                list(coverage_decisions.values()),
+            )
         artifact["REQ"] = copy.deepcopy(working_artifact.get("REQ", []))
         artifact["coverage"] = final_coverage
         artifact_meta = artifact.setdefault("meta", {})
@@ -262,7 +611,6 @@ class AnalystRequirementFlow:
             "source_id": source_id,
         }
 
-    # Defines requirement granularity cleanup function for this module workflow.
     def cleanup_requirement_granularity(
         self,
         *,
@@ -298,7 +646,7 @@ class AnalystRequirementFlow:
                 context,
                 mode="refine_requirement",
             )
-            data = self.requirement_update_payload(
+            data = self.requirement_payload(
                 data,
                 action_name="refine_requirement",
             )
@@ -335,7 +683,6 @@ class AnalystRequirementFlow:
             "reason": "；".join(reasons),
         }
 
-    # Defines refine requirement function for this module workflow.
     def refine_requirement(
         self,
         *,
@@ -343,6 +690,7 @@ class AnalystRequirementFlow:
         issue: Dict[str, Any],
         previous_responses: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        working_artifact = copy.deepcopy(artifact)
         trace = issue.get("trace") if isinstance(issue.get("trace"), dict) else {}
         issue_source_ids = [
             str(item).strip()
@@ -352,26 +700,43 @@ class AnalystRequirementFlow:
         allowed_sources = set(issue_source_ids)
         current_URL = [
             row
-            for row in self.scope_requirement_context(artifact)
+            for row in self.scope_requirement_context(working_artifact)
             if str(row.get("id") or "").strip() in allowed_sources
         ]
-        current_REQ = self.requirement_context(artifact)
+        current_REQ = self.requirement_context(working_artifact)
+        context_REQ = self.relevant_requirement_context(current_REQ, current_URL, issue)
         source_id = str(issue.get("meeting_id") or issue.get("id") or "").strip()
         context = self.requirement_action_context(
-            artifact=artifact,
+            artifact=working_artifact,
             issue=issue,
             previous_responses=previous_responses,
             current_URL=current_URL,
-            current_REQ=current_REQ,
+            current_REQ=context_REQ,
             requirement_mode="refine",
         )
+        feedback = context.get("feedback")
+        if isinstance(feedback, dict):
+            context["feedback"] = self.relevant_feedback_context(
+                feedback,
+                current_URL,
+                context_REQ,
+                issue,
+            )
+        system_models = context.get("system_models")
+        if isinstance(system_models, list):
+            context["system_models"] = self.relevant_system_model_context(
+                system_models,
+                current_URL,
+                context_REQ,
+                issue,
+            )
         task = self.refine_requirement_task(source_id=source_id)
         data = self.invoke_requirements_analyst_object_json(
             task,
             context,
             mode="refine_requirement",
         )
-        data = self.requirement_update_payload(
+        data = self.requirement_payload(
             data,
             action_name="refine_requirement",
         )
@@ -381,18 +746,32 @@ class AnalystRequirementFlow:
             action_name="refine_requirement",
         )
         generated = self.apply_requirement_action_output(
-            artifact=artifact,
+            artifact=working_artifact,
             data=data,
             action_name="refine_requirement",
             source_id=source_id,
         )
-        renumber_mapping = renumber_system_requirement_ids(artifact)
+        self.validate_coverage_references(
+            working_artifact,
+            data.get("coverage") if isinstance(data, dict) else [],
+            removed_req_ids=data.get("remove_REQ") if isinstance(data, dict) else [],
+        )
+        renumber_mapping = renumber_system_requirement_ids(working_artifact)
         if renumber_mapping:
             generated = replace_system_requirement_refs(generated, renumber_mapping)
         final_coverage = self.requirement_coverage_records(
-            artifact,
+            working_artifact,
             data.get("coverage") if isinstance(data, dict) else [],
         )
+        artifact["REQ"] = copy.deepcopy(working_artifact.get("REQ", []))
+        artifact["coverage"] = copy.deepcopy(final_coverage)
+        artifact_meta = artifact.setdefault("meta", {})
+        working_meta = (
+            working_artifact.get("meta")
+            if isinstance(working_artifact.get("meta"), dict)
+            else {}
+        )
+        artifact_meta.update(working_meta)
         return {
             "action": "refine_requirement",
             "REQ": generated,
@@ -404,7 +783,126 @@ class AnalystRequirementFlow:
             "source_id": source_id,
         }
 
-    # Defines repair requirement output function for this module workflow.
+    @staticmethod
+    def requirement_repair_target_indexes(
+        rows: List[Dict[str, Any]], issues: List[str]
+    ) -> List[int]:
+        selected = set()
+        ids = {
+            str(row.get("id") or "").strip(): index
+            for index, row in enumerate(rows)
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+        for issue in issues:
+            text = str(issue or "")
+            for req_id, index in ids.items():
+                if re.search(rf"(?<![\w-]){re.escape(req_id)}(?![\w-])", text):
+                    selected.add(index)
+            row_match = re.search(r"\brow-(\d+)\b", text, re.IGNORECASE)
+            if row_match:
+                index = int(row_match.group(1)) - 1
+                if 0 <= index < len(rows):
+                    selected.add(index)
+            req_match = re.search(r"\bREQ\[(\d+)\]", text, re.IGNORECASE)
+            if req_match:
+                index = int(req_match.group(1))
+                if 0 <= index < len(rows):
+                    selected.add(index)
+        return sorted(selected) if selected else list(range(len(rows)))
+
+    @classmethod
+    def requirement_repair_subset(
+        cls, data: Dict[str, Any], issues: List[str]
+    ) -> tuple[Dict[str, Any], List[int]]:
+        rows = data.get("REQ") if isinstance(data.get("REQ"), list) else []
+        indexes = cls.requirement_repair_target_indexes(rows, issues)
+        subset = copy.deepcopy(data)
+        subset["REQ"] = [copy.deepcopy(rows[index]) for index in indexes]
+        return subset, indexes
+
+    @staticmethod
+    def merge_requirement_repair(
+        original: Dict[str, Any], repaired: Dict[str, Any], indexes: List[int]
+    ) -> Dict[str, Any]:
+        original_rows = original.get("REQ") if isinstance(original.get("REQ"), list) else []
+        repaired_rows = repaired.get("REQ") if isinstance(repaired.get("REQ"), list) else []
+        if not indexes or not repaired_rows:
+            return original
+        targets = set(indexes)
+        first = min(targets)
+        merged_rows = []
+        for index, row in enumerate(original_rows):
+            if index == first:
+                merged_rows.extend(copy.deepcopy(repaired_rows))
+            if index not in targets:
+                merged_rows.append(row)
+        merged = copy.deepcopy(original)
+        merged["REQ"] = merged_rows
+        return merged
+
+    def compact_requirement_repair_context(
+        self, context: Dict[str, Any], subset: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        compact = copy.deepcopy(context)
+        rows = subset.get("REQ") if isinstance(subset.get("REQ"), list) else []
+        source_ids = {
+            str(source).strip()
+            for row in rows
+            if isinstance(row, dict)
+            for source in (row.get("source") or [])
+            if str(source).strip()
+        }
+        urls = context.get("current_URL") if isinstance(context.get("current_URL"), list) else []
+        compact_urls = [
+            row
+            for row in urls
+            if isinstance(row, dict)
+            and str(row.get("id") or "").strip() in source_ids
+        ]
+        compact["current_URL"] = compact_urls
+        compact["current_REQ"] = copy.deepcopy(rows)
+        issue = context.get("issue") if isinstance(context.get("issue"), dict) else {}
+        feedback = context.get("feedback")
+        if isinstance(feedback, dict):
+            compact["feedback"] = self.relevant_feedback_context(
+                feedback, compact_urls, rows, issue
+            )
+        models = context.get("system_models")
+        if isinstance(models, list):
+            compact["system_models"] = self.relevant_system_model_context(
+                models, compact_urls, rows, issue
+            )
+        return compact
+
+    def invoke_targeted_requirement_repair(
+        self,
+        *,
+        data: Dict[str, Any],
+        context: Dict[str, Any],
+        issues: List[str],
+        repair_kind: str,
+        action_name: str,
+    ) -> Dict[str, Any]:
+        subset, indexes = self.requirement_repair_subset(data, issues)
+        issue_keys = {
+            "title_repair": "title_issues",
+            "nfr_repair": "nfr_issues",
+            "type_repair": "mixed_issues",
+            "targeted_repair": "mixed_issues",
+        }
+        repair_task = requirement_repair_prompt(
+            repair_kind,
+            **{issue_keys[repair_kind]: issues},
+            output=subset,
+        )
+        repaired = self.invoke_requirements_analyst_object_json(
+            repair_task,
+            self.compact_requirement_repair_context(context, subset),
+            mode="repair_requirement",
+        )
+        repaired = self.requirement_payload(repaired, action_name=action_name)
+        return self.merge_requirement_repair(data, repaired, indexes)
+
     def repair_requirement_output(
         self,
         *,
@@ -412,32 +910,58 @@ class AnalystRequirementFlow:
         context: Dict[str, Any],
         action_name: str,
     ) -> Dict[str, Any]:
+        allowed_coverage_sources = {
+            str(row.get("id") or "").strip()
+            for row in (context.get("current_URL") or [])
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
         coverage_issues = self.requirement_coverage_issues(
-            data.get("coverage") if isinstance(data, dict) else []
+            data.get("coverage") if isinstance(data, dict) else [],
+            allowed_source_ids=allowed_coverage_sources,
         )
         if coverage_issues:
+            coverage_input = {
+                "REQ": [],
+                "remove_REQ": [],
+                "coverage": copy.deepcopy(data.get("coverage", [])),
+                "reason": str(data.get("reason") or ""),
+            }
             repair_task = requirement_repair_prompt(
                 "coverage_repair",
                 coverage_issues=coverage_issues,
-                output=data,
+                output=coverage_input,
             )
-            data = self.invoke_requirements_analyst_object_json(
+            repaired = self.invoke_requirements_analyst_object_json(
                 repair_task,
                 context,
                 mode="repair_requirement",
             )
-            data = self.requirement_update_payload(
-                data,
+            repaired = self.requirement_payload(
+                repaired,
                 action_name=f"{action_name} coverage repair",
             )
+            data = copy.deepcopy(data)
+            data["coverage"] = copy.deepcopy(repaired.get("coverage", []))
             coverage_issues = self.requirement_coverage_issues(
-                data.get("coverage") if isinstance(data, dict) else []
+                data.get("coverage") if isinstance(data, dict) else [],
+                allowed_source_ids=allowed_coverage_sources,
             )
             if coverage_issues:
-                raise RuntimeError(
-                    f"{action_name} coverage repair failed: "
-                    + "; ".join(coverage_issues)
+                data["coverage"] = [
+                    copy.deepcopy(row)
+                    for row in (data.get("coverage") or [])
+                    if isinstance(row, dict)
+                    and str(row.get("source_id") or "").strip() in allowed_coverage_sources
+                ]
+                coverage_issues = self.requirement_coverage_issues(
+                    data["coverage"],
+                    allowed_source_ids=allowed_coverage_sources,
                 )
+                if coverage_issues:
+                    raise RuntimeError(
+                        f"{action_name} coverage repair failed: "
+                        + "; ".join(coverage_issues)
+                    )
 
         data = self.normalize_requirement_titles(
             data,
@@ -448,18 +972,11 @@ class AnalystRequirementFlow:
             stakeholder_names=self.requirement_title_stakeholders(context),
         )
         if title_issues:
-            repair_task = requirement_repair_prompt(
-                "title_repair",
-                title_issues=title_issues,
-                output=data,
-            )
-            data = self.invoke_requirements_analyst_object_json(
-                repair_task,
-                context,
-                mode="repair_requirement",
-            )
-            data = self.requirement_update_payload(
-                data,
+            data = self.invoke_targeted_requirement_repair(
+                data=data,
+                context=context,
+                issues=title_issues,
+                repair_kind="title_repair",
                 action_name=f"{action_name} title repair",
             )
             data = self.normalize_requirement_titles(
@@ -480,18 +997,11 @@ class AnalystRequirementFlow:
             data.get("REQ") if isinstance(data, dict) else []
         )
         if nfr_issues:
-            repair_task = requirement_repair_prompt(
-                "nfr_repair",
-                nfr_issues=nfr_issues,
-                output=data,
-            )
-            data = self.invoke_requirements_analyst_object_json(
-                repair_task,
-                context,
-                mode="repair_requirement",
-            )
-            data = self.requirement_update_payload(
-                data,
+            data = self.invoke_targeted_requirement_repair(
+                data=data,
+                context=context,
+                issues=nfr_issues,
+                repair_kind="nfr_repair",
                 action_name=f"{action_name} non-functional repair",
             )
             nfr_issues = self.nfr_issues(
@@ -520,18 +1030,11 @@ class AnalystRequirementFlow:
                 )
             return data
         if mixed_issues:
-            repair_task = requirement_repair_prompt(
-                "type_repair",
-                mixed_issues=mixed_issues,
-                output=data,
-            )
-            data = self.invoke_requirements_analyst_object_json(
-                repair_task,
-                context,
-                mode="repair_requirement",
-            )
-            data = self.requirement_update_payload(
-                data,
+            data = self.invoke_targeted_requirement_repair(
+                data=data,
+                context=context,
+                issues=mixed_issues,
+                repair_kind="type_repair",
                 action_name=f"{action_name} type repair",
             )
             if isinstance(data, dict):
@@ -540,18 +1043,11 @@ class AnalystRequirementFlow:
                 )
             mixed_issues = self.type_issues(data.get("REQ") if isinstance(data, dict) else [])
             if mixed_issues:
-                repair_task = requirement_repair_prompt(
-                    "targeted_repair",
-                    mixed_issues=mixed_issues,
-                    output=data,
-                )
-                data = self.invoke_requirements_analyst_object_json(
-                    repair_task,
-                    context,
-                    mode="repair_requirement",
-                )
-                data = self.requirement_update_payload(
-                    data,
+                data = self.invoke_targeted_requirement_repair(
+                    data=data,
+                    context=context,
+                    issues=mixed_issues,
+                    repair_kind="targeted_repair",
                     action_name=f"{action_name} targeted repair",
                 )
                 if isinstance(data, dict):
@@ -574,7 +1070,6 @@ class AnalystRequirementFlow:
                         )
         return data
 
-    # Defines update requirement task function for this module workflow.
     def update_requirement_task(
         self,
         *,
@@ -588,7 +1083,10 @@ class AnalystRequirementFlow:
             coverage_gaps=coverage_gaps,
         )
 
-    # Defines refine requirement task function for this module workflow.
+    @staticmethod
+    def update_requirement_coverage_task() -> str:
+        return update_requirement_coverage()
+
     def refine_requirement_task(
         self,
         *,
@@ -597,7 +1095,6 @@ class AnalystRequirementFlow:
         return refine_requirement(source_id=source_id)
 
     @staticmethod
-    # Defines scope requirement context function for this module workflow.
     def scope_requirement_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows = artifact.get("URL") if isinstance(artifact.get("URL"), list) else []
         out: List[Dict[str, Any]] = []
@@ -621,7 +1118,6 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines scope discussion context function for this module workflow.
     def scope_discussion_context(previous_responses: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
         rows: List[Dict[str, str]] = []
         for row in previous_responses or []:
@@ -638,7 +1134,6 @@ class AnalystRequirementFlow:
         return rows
 
     @staticmethod
-    # Defines feedback context function for this module workflow.
     def feedback_context(feedback: Any) -> Dict[str, List[Dict[str, Any]]]:
         if not isinstance(feedback, dict):
             return {}
@@ -660,7 +1155,6 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines system model context function for this module workflow.
     def system_model_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows = artifact.get("system_models") if isinstance(artifact.get("system_models"), list) else []
         out: List[Dict[str, Any]] = []
@@ -680,7 +1174,6 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines requirement context function for this module workflow.
     def requirement_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows = artifact.get("REQ") if isinstance(artifact.get("REQ"), list) else []
         return [
@@ -690,7 +1183,6 @@ class AnalystRequirementFlow:
         ]
 
     @staticmethod
-    # Defines requirement source index function for this module workflow.
     def requirement_source_index(rows: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         index: Dict[str, List[str]] = {}
         if not isinstance(rows, list):
@@ -711,7 +1203,6 @@ class AnalystRequirementFlow:
         return index
 
     @staticmethod
-    # Defines next requirement id function for this module workflow.
     def next_requirement_id(rows: List[Dict[str, Any]]) -> str:
         prefix = "REQ"
         max_num = 0
@@ -726,14 +1217,12 @@ class AnalystRequirementFlow:
         return f"{prefix}-{max_num + 1}"
 
     @staticmethod
-    # Defines requirement key function for this module workflow.
     def requirement_key(row: Dict[str, Any]) -> str:
         description = str(row.get("description") or "").strip()
         sources = ",".join(AnalystRequirementFlow.requirement_sources(row))
         return requirement_dedupe_key(f"{description}|{sources}")
 
     @staticmethod
-    # Defines dedupe candidate requirement rows function for this module workflow.
     def dedupe_candidate_requirement_rows(rows: Any) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         seen_keys: set[str] = set()
@@ -781,7 +1270,6 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines normalize generated requirement ids function for this module workflow.
     def normalize_generated_requirement_ids(rows: Any) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for row in rows or []:
@@ -795,7 +1283,6 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines coerce mixed requirement rows function for this module workflow.
     def coerce_mixed_requirement_rows(rows: Any) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for row in rows or []:
@@ -805,8 +1292,11 @@ class AnalystRequirementFlow:
         return out
 
     @staticmethod
-    # Defines requirement coverage issues function for this module workflow.
-    def requirement_coverage_issues(rows: Any) -> List[str]:
+    def requirement_coverage_issues(
+        rows: Any,
+        *,
+        allowed_source_ids: Optional[set[str]] = None,
+    ) -> List[str]:
         if not isinstance(rows, list):
             return []
         valid_statuses = {"covered", "needs_clarification", "assumption", "risk", "excluded"}
@@ -819,13 +1309,45 @@ class AnalystRequirementFlow:
             status = str(row.get("status") or "").strip()
             if not source_id:
                 issues.append(f"coverage[{idx}] 缺少 source_id")
+            elif allowed_source_ids is not None and source_id not in allowed_source_ids:
+                issues.append(f"coverage[{idx}] references unavailable URL: {source_id}")
             if status not in valid_statuses:
                 issues.append(f"{source_id or f'coverage[{idx}]'}: status 不合法「{status or '<empty>'}」")
         return issues
 
+    @classmethod
+    def requirement_coverage_batch_issues(
+        cls,
+        rows: Any,
+        current_URL: List[Dict[str, Any]],
+    ) -> List[str]:
+        if not isinstance(rows, list):
+            return ["coverage 必須是 array"]
+        issues = cls.requirement_coverage_issues(rows)
+        expected = {
+            str(row.get("id") or row.get("source_id") or "").strip()
+            for row in current_URL or []
+            if isinstance(row, dict)
+            and str(row.get("id") or row.get("source_id") or "").strip()
+        }
+        actual: List[str] = [
+            str(row.get("source_id") or "").strip()
+            for row in rows
+            if isinstance(row, dict) and str(row.get("source_id") or "").strip()
+        ]
+        duplicates = sorted({source_id for source_id in actual if actual.count(source_id) > 1})
+        missing = sorted(expected - set(actual))
+        unknown = sorted(set(actual) - expected)
+        if duplicates:
+            issues.append("coverage source_id 重複: " + ", ".join(duplicates))
+        if missing:
+            issues.append("coverage 缺少 source_id: " + ", ".join(missing))
+        if unknown:
+            issues.append("coverage 包含非本批 source_id: " + ", ".join(unknown))
+        return issues
+
 
     @staticmethod
-    # Defines requirement title stakeholders function for this module workflow.
     def requirement_title_stakeholders(context: Any) -> List[str]:
         if not isinstance(context, dict):
             return []
@@ -845,7 +1367,6 @@ class AnalystRequirementFlow:
         return list(dict.fromkeys(names))
 
     @staticmethod
-    # Defines normalize requirement titles function for this module workflow.
     def normalize_requirement_titles(
         data: Dict[str, Any],
         *,
@@ -879,7 +1400,6 @@ class AnalystRequirementFlow:
         return data
 
     @staticmethod
-    # Defines requirement title issues function for this module workflow.
     def requirement_title_issues(rows: Any, *, stakeholder_names: Optional[List[str]] = None) -> List[str]:
         if not isinstance(rows, list):
             return []
@@ -911,7 +1431,6 @@ class AnalystRequirementFlow:
 
 
     @staticmethod
-    # Defines type issues function for this module workflow.
     def type_issues(rows: Any) -> List[str]:
         multi_intent_markers = ("且", "並且", "以及", "同時", "；", ";")
         issues: List[str] = []
@@ -956,7 +1475,6 @@ class AnalystRequirementFlow:
         return issues
 
     @staticmethod
-    # Defines requirement granularity issues function for this module workflow.
     def granularity_issues(rows: Any, current_URL: Any) -> List[str]:
         if not isinstance(rows, list) or not isinstance(current_URL, list):
             return []
@@ -983,7 +1501,6 @@ class AnalystRequirementFlow:
         return issues
 
     @classmethod
-    # Defines requirement cleanup issues function for this module workflow.
     def requirement_cleanup_issues(
         cls,
         artifact: Dict[str, Any],
@@ -999,7 +1516,6 @@ class AnalystRequirementFlow:
         return issues
 
     @staticmethod
-    # Defines nfr issues function for this module workflow.
     def nfr_issues(rows: Any) -> List[str]:
         issues: List[str] = []
         for idx, row in enumerate(rows or [], 1):
@@ -1021,7 +1537,6 @@ class AnalystRequirementFlow:
         return issues
 
     @staticmethod
-    # Defines requirement sources function for this module workflow.
     def requirement_sources(row: Dict[str, Any]) -> List[str]:
         source_rows: List[str] = []
         value = row.get("source") if isinstance(row, dict) else None
@@ -1034,7 +1549,6 @@ class AnalystRequirementFlow:
         return list(dict.fromkeys(source_rows))
 
     @staticmethod
-    # Defines requirement record function for this module workflow.
     def requirement_record(row: Dict[str, Any]) -> Dict[str, Any]:
         source = row if isinstance(row, dict) else {}
         out: Dict[str, Any] = {}
@@ -1095,7 +1609,6 @@ class AnalystRequirementFlow:
             out[key] = list(dict.fromkeys(rows))
         return out
 
-    # Defines clean requirement records function for this module workflow.
     def clean_requirement_records(
         self,
         rows: Any,
@@ -1136,7 +1649,6 @@ class AnalystRequirementFlow:
             seen.add(marker)
         return out
 
-    # Defines merge requirement records function for this module workflow.
     def merge_requirement_records(
         self,
         existing: Any,
@@ -1168,7 +1680,6 @@ class AnalystRequirementFlow:
                 seen.add(marker)
         return rows
 
-    # Defines remove merged requirement records function for this module workflow.
     def remove_merged_requirement_records(
         self,
         artifact: Dict[str, Any],
@@ -1238,7 +1749,6 @@ class AnalystRequirementFlow:
             artifact["REQ"] = remaining
         return removed
 
-    # Defines requirement coverage records function for this module workflow.
     def requirement_coverage_records(
         self,
         artifact: Dict[str, Any],
@@ -1309,7 +1819,6 @@ class AnalystRequirementFlow:
         return coverage
 
     @staticmethod
-    # Defines requirement coverage summary function for this module workflow.
     def requirement_coverage_summary(coverage: List[Dict[str, Any]]) -> Dict[str, int]:
         summary = {
             "total": 0,
@@ -1333,7 +1842,6 @@ class AnalystRequirementFlow:
         return summary
 
     @staticmethod
-    # Defines coverage gaps function for this module workflow.
     def coverage_gaps(
         coverage: List[Dict[str, Any]],
         current_URL: List[Dict[str, Any]],
@@ -1366,7 +1874,6 @@ class AnalystRequirementFlow:
             )
         return gaps
 
-    # Defines merge meeting requirements function for this module workflow.
     def merge_meeting_requirements(
         self,
         artifact: Dict[str, Any],
@@ -1439,7 +1946,6 @@ class AnalystRequirementFlow:
         elif isinstance(output, list):
             output[:] = added_rows
 
-    # Defines analyze conflicts function for this module workflow.
     def analyze_conflicts(
         self,
         *,
@@ -1566,12 +2072,10 @@ class AnalystRequirementFlow:
         }
 
     @staticmethod
-    # Defines has requirement candidates function for this module workflow.
     def has_requirement_candidates(output: Any) -> bool:
         return bool(AnalystRequirementFlow.requirement_candidate_rows(output))
 
     @staticmethod
-    # Defines requirement candidate rows function for this module workflow.
     def requirement_candidate_rows(output: Any) -> List[Dict[str, Any]]:
         if isinstance(output, list):
             return [row for row in output if isinstance(row, dict)]
@@ -1581,7 +2085,6 @@ class AnalystRequirementFlow:
                 return [row for row in rows if isinstance(row, dict)]
         return []
 
-    # Defines meeting requirement sources function for this module workflow.
     def meeting_requirement_sources(
         self,
         previous_responses: Optional[List[Dict[str, Any]]],

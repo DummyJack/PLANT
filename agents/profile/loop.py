@@ -2,12 +2,10 @@
 from typing import Any, Callable, Dict, List, Optional
 
 
-# Defines AgentLoop class for this module workflow.
 class AgentLoop:
     action_loop_limit = 3
     max_action_loop_steps = 12
 
-    # Defines action plan payload function for this module workflow.
     def action_plan_payload(self, raw_plan: Any) -> Dict[str, Any]:
         if not isinstance(raw_plan, dict):
             return {"goal": "", "steps": []}
@@ -28,7 +26,6 @@ class AgentLoop:
             "steps": steps,
         }
 
-    # Defines pending plan steps function for this module workflow.
     def pending_plan_steps(self, action_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [
             step
@@ -36,7 +33,6 @@ class AgentLoop:
             if step.get("status") in {"pending", "format_invalid"}
         ]
 
-    # Defines mark plan step result function for this module workflow.
     def mark_plan_step_result(
         self,
         step: Dict[str, Any],
@@ -52,7 +48,6 @@ class AgentLoop:
             return
         step["status"] = "completed"
 
-    # Defines summarize opa observation function for this module workflow.
     def summarize_opa_observation(
         self, observation: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -84,7 +79,6 @@ class AgentLoop:
             summary["keys"] = sorted(observation.keys())
         return summary
 
-    # Defines make opa trace entry function for this module workflow.
     def make_opa_trace_entry(
         self,
         *,
@@ -103,7 +97,6 @@ class AgentLoop:
             "result": dict(result or {}),
         }
 
-    # Defines run action loop function for this module workflow.
     def run_action_loop(
         self,
         *,

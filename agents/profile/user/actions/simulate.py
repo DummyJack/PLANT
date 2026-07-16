@@ -1,9 +1,6 @@
 # Defines action prompts and output contracts.
 
 
-# ========
-# Defines suggest candidates function for this module workflow.
-# ========
 def suggest_stakeholders(*, scenario_context: str) -> str:
     return f"""# 任務
 根據以下初始產品描述，建議真正會影響需求分析的利害關係人，並依 type 分類。
@@ -40,9 +37,6 @@ def suggest_stakeholders(*, scenario_context: str) -> str:
 }}"""
 
 
-# ========
-# Defines write stakeholder text function for this module workflow.
-# ========
 def write_stakeholder_text(
     *,
     stakeholder_list: str,

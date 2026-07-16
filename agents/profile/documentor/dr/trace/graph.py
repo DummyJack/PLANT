@@ -328,6 +328,25 @@ class DocumentorDrTraceGraphMixin:
                 continue
             add_visible_edge(source_id, target_node_id, event)
 
+        # URL source declarations are canonical trace evidence.  Older trace_req
+        # snapshots may contain the URL node without repeating every stakeholder
+        # statement edge, which leaves a visible URL branch disconnected.
+        for row in requirement.get("user_requirements") or []:
+            if not isinstance(row, dict):
+                continue
+            url_id = resolve_node_id(row.get("id"))
+            source_ids = []
+            source_id = resolve_node_id(row.get("source_id"))
+            if source_id:
+                source_ids.append(source_id)
+            source_ids.extend(
+                resolve_node_id(item)
+                for item in (row.get("related_statement_ids") or [])
+                if resolve_node_id(item)
+            )
+            for statement_id in dict.fromkeys(source_ids):
+                add_visible_edge(statement_id, url_id, {"edge_label": "分析"})
+
         for row in requirement.get("conflicts") or []:
             if not isinstance(row, dict):
                 continue

@@ -14,11 +14,9 @@ stakeholder_types = {
 }
 
 
-# ========
-# Defines parse selection function for this module workflow.
-# ========
 def parse_selection(selected: List[Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
+    seen_names = set()
     for item in selected or []:
         if not isinstance(item, dict):
             continue
@@ -28,6 +26,9 @@ def parse_selection(selected: List[Any]) -> List[Dict[str, Any]]:
             continue
         if stakeholder_type not in stakeholder_types:
             raise ValueError(f"利害關係人 type 不合法: {name} -> {stakeholder_type or '<empty>'}")
+        if name in seen_names:
+            raise ValueError(f"利害關係人名稱重複: {name}")
+        seen_names.add(name)
         records.append({"name": name, "type": stakeholder_type})
     return records
 
@@ -77,9 +78,6 @@ def normalize_stakeholder_text(stakeholders: List[Dict[str, Any]]) -> List[Dict[
     return normalized
 
 
-# ========
-# Defines merge stakeholder text function for this module workflow.
-# ========
 def merge_stakeholder_text(
     selected_records: List[Dict[str, Any]],
     generated_rows: List[Dict[str, Any]],
@@ -99,16 +97,15 @@ def merge_stakeholder_text(
     return normalize_stakeholder_text(merged)
 
 
-# ========
-# Defines UserStakeholder class for this module workflow.
-# ========
 class UserStakeholder:
     @staticmethod
-    # Defines scenario json function for this module workflow.
     def scenario_json(value: Any) -> str:
-        return json.dumps(str(value or "").strip(), ensure_ascii=False, indent=2)
+        return json.dumps(
+            str(value or "").strip(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
-    # Defines suggest stakeholders function for this module workflow.
     def suggest_stakeholders(self, rough_idea: Any) -> List[Dict]:
         opa = self.run_action_loop(
             name="stakeholder_setup",
@@ -126,7 +123,6 @@ class UserStakeholder:
             raise RuntimeError(result.get("error"))
         return result.get("output", [])
 
-    # Defines write stakeholder text function for this module workflow.
     def write_stakeholder_text(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
@@ -184,7 +180,9 @@ class UserStakeholder:
             return current
 
         user_prompt = revise_stakeholder_text_prompt(
-            current_stakeholders_text=json.dumps(current, ensure_ascii=False, indent=2),
+            current_stakeholders_text=json.dumps(
+                current, ensure_ascii=False, separators=(",", ":")
+            ),
             feedback_text=feedback_text,
             scenario_context=self.scenario_json(rough_idea),
         )
@@ -212,7 +210,6 @@ class UserStakeholder:
         except Exception as e:
             raise RuntimeError(f"User 修正利害關係人發言失敗: {e}")
 
-    # Defines obs setup function for this module workflow.
     def obs_setup(self, **kwargs: Any) -> Dict[str, Any]:
         selected = kwargs.get("selected_stakeholders") or []
         return {
@@ -223,7 +220,6 @@ class UserStakeholder:
             "selected_stakeholder_count": len(selected),
         }
 
-    # Defines run setup action function for this module workflow.
     def run_setup_action(
         self,
         *,
@@ -255,7 +251,6 @@ class UserStakeholder:
             "summary": f"完成 stakeholder elicitation: {action}",
         }
 
-    # Defines generate candidates function for this module workflow.
     def generate_candidates(self, rough_idea: Any) -> List[Dict]:
         scenario_context = self.scenario_json(rough_idea)
         user_prompt = suggest_stakeholders(scenario_context=scenario_context)
@@ -272,6 +267,7 @@ class UserStakeholder:
             "external_party",
         ]
         counts = {category: 0 for category in categories}
+        seen_names = set()
         for row in proposed:
             if not isinstance(row, dict):
                 raise ValueError("each proposed stakeholder must be an object")
@@ -284,6 +280,9 @@ class UserStakeholder:
                 )
             if stakeholder_type not in counts:
                 raise ValueError(f"invalid stakeholder type: {stakeholder_type}")
+            if name in seen_names:
+                raise ValueError(f"duplicate stakeholder name: {name}")
+            seen_names.add(name)
             counts[stakeholder_type] += 1
 
         if len(proposed) < 2:
@@ -293,19 +292,23 @@ class UserStakeholder:
             key=lambda row: categories.index(str(row.get("type") or "").strip()),
         )
 
-    # Defines generate needs function for this module workflow.
     def generate_needs(
         self, rough_idea: Any, selected_stakeholders: List
     ) -> List[Dict]:
         scenario_context = self.scenario_json(rough_idea)
         stakeholder_rows = []
+        selected_records = []
         for i, sh in enumerate(selected_stakeholders, 1):
             if isinstance(sh, dict):
                 name = str(sh.get("name") or "").strip()
+                base = dict(sh)
             else:
                 name = str(sh).strip()
+                base = {"name": name, "type": ""}
             if not name:
                 continue
+            base["name"] = name
+            selected_records.append(base)
             stakeholder_rows.append(f"{i}. {name}")
         stakeholder_list = "\n".join(stakeholder_rows)
 
@@ -315,10 +318,25 @@ class UserStakeholder:
             messages = self.build_direct_messages(user_prompt)
             response = self.chat_json(messages, temperature=1)
             stakeholders = response.get("stakeholders", [])
-
+            if not isinstance(stakeholders, list):
+                raise ValueError("stakeholders must be a list")
+            selected_names = {
+                str(row.get("name") or "").strip()
+                for row in selected_records
+                if str(row.get("name") or "").strip()
+            }
+            generated_names = []
             for sh in stakeholders:
+                if not isinstance(sh, dict):
+                    raise ValueError("each stakeholder must be an object")
                 if not all(key in sh for key in ["name", "text"]):
                     raise ValueError(f"利害關係人格式錯誤: {sh}")
+                name = str(sh.get("name") or "").strip()
+                if not name or name not in selected_names:
+                    raise ValueError(f"輸出包含未選取的利害關係人: {name or '<empty>'}")
+                if name in generated_names:
+                    raise ValueError(f"輸出包含重複利害關係人: {name}")
+                generated_names.append(name)
                 if isinstance(sh["text"], str):
                     sh["text"] = [
                         s.strip() for s in sh["text"].split("\n") if s.strip()
@@ -327,7 +345,12 @@ class UserStakeholder:
                     self.logger.warning(
                         f"{sh['name']} 只有 {len(sh['text'])} 條需求，不足 3 條"
                     )
-
-            return stakeholders
+            missing_names = selected_names - set(generated_names)
+            if missing_names:
+                raise ValueError(
+                    "輸出缺少已選取的利害關係人: "
+                    + ", ".join(sorted(missing_names))
+                )
+            return merge_stakeholder_text(selected_records, stakeholders)
         except Exception as e:
             raise RuntimeError(f"User 生成失敗: {e}")

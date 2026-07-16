@@ -111,6 +111,8 @@ def conflict_report_markdown_from_rows(rows: List[Dict[str, Any]]) -> str:
         description = text(row.get("description"))
         if description:
             blocks.extend(["", "### 衝突描述", description])
+        else:
+            raise RuntimeError(f"conflict report {conflict_id} 缺少衝突描述")
 
         options = []
         for option_index, option in enumerate(row.get("resolution_options") or [], start=1):
@@ -149,9 +151,16 @@ def ensure_conflict_report_titles(rows: List[Dict[str, Any]], *, stage: str) -> 
         )
 
 
-# ========
-# Defines requirement ids function for this module workflow.
-# ========
+def normalize_detected_conflict_descriptions(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("description") or "").strip():
+            continue
+        description = str(row.get("initial_reason") or row.get("reason") or "").strip()
+        if description:
+            row["description"] = description
+    return rows
+
+
 def requirement_ids(row: Dict[str, Any]) -> List[str]:
     ids = [
         str(item).strip()
@@ -169,9 +178,6 @@ def requirement_ids(row: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(ids))
 
 
-# ========
-# Defines is multiple conflict function for this module workflow.
-# ========
 def is_multiple_conflict(row: Dict[str, Any]) -> bool:
     row_id = str(row.get("id") or "").strip()
     if row_id.startswith("MULTIPLE-"):
@@ -189,9 +195,6 @@ def is_multiple_conflict(row: Dict[str, Any]) -> bool:
     return len(requirement_ids(row)) >= 3
 
 
-# ========
-# Defines conflict state function for this module workflow.
-# ========
 def conflict_state(artifact: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     state = artifact.get("conflict")
     if isinstance(state, dict):
@@ -202,9 +205,6 @@ def conflict_state(artifact: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
     return {"pairs": [], "multiple": []}
 
 
-# ========
-# Defines split conflict rows function for this module workflow.
-# ========
 def split_conflict_rows(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     pairs: List[Dict[str, Any]] = []
     multiple: List[Dict[str, Any]] = []
@@ -217,25 +217,16 @@ def split_conflict_rows(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
     return {"pairs": pairs, "multiple": multiple}
 
 
-# ========
-# Defines all conflict rows function for this module workflow.
-# ========
 def all_conflict_rows(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     state = conflict_state(artifact)
     return list(state.get("pairs") or []) + list(state.get("multiple") or [])
 
 
-# ========
-# Defines normalize conflict state function for this module workflow.
-# ========
 def normalize_conflict_state(artifact: Dict[str, Any]) -> Dict[str, Any]:
     artifact["conflict"] = conflict_state(artifact)
     return artifact
 
 
-# ========
-# Defines set pair conflicts function for this module workflow.
-# ========
 def set_pair_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = conflict_state(artifact)
     next_rows: List[Dict[str, Any]] = []
@@ -248,9 +239,6 @@ def set_pair_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> 
     return artifact
 
 
-# ========
-# Defines set multiple conflicts function for this module workflow.
-# ========
 def set_multiple_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = conflict_state(artifact)
     next_rows: List[Dict[str, Any]] = []
@@ -263,25 +251,16 @@ def set_multiple_conflicts(artifact: Dict[str, Any], rows: List[Dict[str, Any]])
     return artifact
 
 
-# ========
-# Defines set conflict entries function for this module workflow.
-# ========
 def set_conflict_entries(artifact: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = split_conflict_rows([dict(row) for row in rows if isinstance(row, dict)])
     artifact["conflict"] = state
     return artifact
 
 
-# ========
-# Defines conflict entries count function for this module workflow.
-# ========
 def conflict_entries_count(artifact: Dict[str, Any]) -> int:
     return len(all_conflict_rows(artifact))
 
 
-# ========
-# Defines conflict type guidance from skill function for this module workflow.
-# ========
 def conflict_type_guidance_from_skill() -> str:
     skill = get_skill("conflict-analyzer")
     skill_dir = skill["path"].parent
@@ -308,9 +287,6 @@ def conflict_type_guidance_from_skill() -> str:
     return "\n".join(rows)
 
 
-# ========
-# Defines normalize conflict type function for this module workflow.
-# ========
 def normalize_conflict_type(
     value: Any,
     *,
@@ -326,15 +302,11 @@ def normalize_conflict_type(
     return conflict_type
 
 
-# ========
-# Defines AnalystConflicts class for this module workflow.
-# ========
 class AnalystConflicts:
     @staticmethod
     def ensure_conflict_report_titles(rows: List[Dict[str, Any]], *, stage: str) -> None:
         ensure_conflict_report_titles(rows, stage=stage)
 
-    # Defines invoke conflict skill function for this module workflow.
     def invoke_conflict_skill(
         self,
         task: str,
@@ -346,7 +318,6 @@ class AnalystConflicts:
         messages = self.build_skill_messages(skill, "conflict-analyzer", task, context=context)
         return self.run_skill_messages("conflict-analyzer", messages)
 
-    # Defines run conflict analysis loop function for this module workflow.
     def run_conflict_analysis_loop(self, action: str, **context: Any) -> Any:
         opa = self.run_action_loop(
             name="conflict_analysis",
@@ -364,7 +335,6 @@ class AnalystConflicts:
             raise RuntimeError(result.get("error"))
         return result.get("output")
 
-    # Defines obs conflict analysis function for this module workflow.
     def obs_conflict_analysis(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs.get("artifact") or {}
         return {
@@ -377,7 +347,6 @@ class AnalystConflicts:
             "proposal_count": len(kwargs.get("proposal_list") or []),
         }
 
-    # Defines decide conflict analysis action function for this module workflow.
     def decide_conflict_analysis_action(
         self,
         *,
@@ -398,7 +367,6 @@ class AnalystConflicts:
             "reasoning": f"執行 Analyst conflict analysis 任務：{action}。",
         }
 
-    # Defines execute conflict analysis action function for this module workflow.
     def execute_conflict_analysis_action(
         self,
         *,
@@ -448,21 +416,18 @@ class AnalystConflicts:
             "summary": f"完成 conflict analysis: {action}",
         }
 
-    # Defines detect pair conflicts function for this module workflow.
     def detect_pair_conflicts(self, artifact: Dict) -> Dict:
         return self.run_conflict_analysis_loop(
             "detect_pair_conflicts",
             artifact=artifact,
         )
 
-    # Defines detect group conflicts function for this module workflow.
     def detect_group_conflicts(self, artifact: Dict) -> Dict:
         return self.run_conflict_analysis_loop(
             "detect_group_conflicts",
             artifact=artifact,
         )
 
-    # Defines review conflicts function for this module workflow.
     def review_conflicts(
         self,
         proposal_list: List[Dict[str, Any]],
@@ -476,7 +441,6 @@ class AnalystConflicts:
             extracted_pair_reviews=extracted_pair_reviews,
         )
 
-    # Defines generate conflict report function for this module workflow.
     def generate_conflict_report(
         self,
         artifact: Dict[str, Any],
@@ -490,7 +454,6 @@ class AnalystConflicts:
             recent_decisions_limit=recent_decisions_limit,
         )
 
-    # Defines run pair conflict detection function for this module workflow.
     def run_pair_conflict_detection(
         self,
         *,
@@ -572,7 +535,6 @@ class AnalystConflicts:
                 f"{error_label}修復後仍缺少必要 pair 結果: {repair_parse_error}"
             ) from repair_parse_error
 
-    # Defines conflict detection requirements function for this module workflow.
     def conflict_detection_requirements(self, artifact: Dict) -> List[Dict[str, Any]]:
         return [
             req for req in (artifact.get("URL") or [])
@@ -581,7 +543,6 @@ class AnalystConflicts:
             and str(req.get("text") or "").strip()
         ]
 
-    # Defines conflict detection context function for this module workflow.
     def conflict_detection_context(
         self,
         artifact: Dict,
@@ -612,7 +573,6 @@ class AnalystConflicts:
         context["requirements"] = context_requirements
         return context
 
-    # Defines execute pairwise conflict detection function for this module workflow.
     def execute_pairwise_conflict_detection(self, artifact: Dict) -> Dict:
         requirements = self.conflict_detection_requirements(artifact)
         if len(requirements) < 2:
@@ -722,26 +682,42 @@ class AnalystConflicts:
             if still_missing:
                 raise RuntimeError(f"兩兩 Conflict 分析仍缺少 pair_index: {still_missing}")
 
-        return set_pair_conflicts({**artifact}, pair_conflicts)
+        return set_pair_conflicts(
+            {**artifact},
+            normalize_detected_conflict_descriptions(pair_conflicts),
+        )
 
-    # Defines execute group conflict detection function for this module workflow.
     def execute_group_conflict_detection(self, artifact: Dict) -> Dict:
         requirements = self.conflict_detection_requirements(artifact)
-        if len(requirements) < 2:
+        if len(requirements) < 3:
             self.logger.info("整體衝突判斷 0 組（Conflict: 0）")
-            return artifact
+            return set_multiple_conflicts({**artifact}, [])
         context = self.conflict_detection_context(artifact, requirements)
-        pair_conflicts = [
+        evaluated_pairs = [
             {
                 "id": row.get("id"),
                 "requirement_ids": row.get("requirement_ids"),
+                "final_label": row.get("final_label"),
                 "final_type": row.get("final_type"),
                 "reason": row.get("initial_reason"),
             }
             for row in ((artifact.get("conflict") or {}).get("pairs") or [])
-            if isinstance(row, dict) and row.get("final_label") == "Conflict"
+            if isinstance(row, dict)
         ]
+        pair_conflicts = [
+            row for row in evaluated_pairs
+            if row.get("final_label") == "Conflict"
+        ]
+        context["pairwise_evaluated_pairs"] = evaluated_pairs
         context["pairwise_conflicts"] = pair_conflicts
+        evaluated_requirement_sets = {
+            frozenset(
+                str(requirement_id).strip()
+                for requirement_id in row.get("requirement_ids") or []
+                if str(requirement_id).strip()
+            )
+            for row in evaluated_pairs
+        }
         base_task = conflict_detection_base_task()
         holistic_task = group_detection(base_task=base_task)
         try:
@@ -762,11 +738,26 @@ class AnalystConflicts:
                     f"整體 Conflict 分析輸出格式不合格: {first_error}; "
                     f"修復失敗: {repair_error}; raw_preview={raw_preview}"
                 ) from repair_error
-        holistic_conflicts = [
-            row for row in conflict_records(holistic_data.get("conflicts", []))
-            if row.get("final_label") == "Conflict"
-            and len(row.get("requirement_ids") or []) >= 2
-        ]
+        holistic_conflicts = []
+        for row in conflict_records(holistic_data.get("conflicts", [])):
+            if row.get("final_label") != "Conflict":
+                continue
+            requirement_ids = list(
+                dict.fromkeys(
+                    str(requirement_id).strip()
+                    for requirement_id in row.get("requirement_ids") or []
+                    if str(requirement_id).strip()
+                )
+            )
+            requirement_set = frozenset(requirement_ids)
+            if len(requirement_ids) < 2:
+                continue
+            if len(requirement_ids) == 2 and requirement_set in evaluated_requirement_sets:
+                continue
+            normalized_row = dict(row)
+            normalized_row["requirement_ids"] = requirement_ids
+            holistic_conflicts.append(normalized_row)
+        normalize_detected_conflict_descriptions(holistic_conflicts)
         self.logger.info(
             "整體衝突判斷 %s 組（Conflict: %s）",
             len(holistic_conflicts),
@@ -780,7 +771,6 @@ class AnalystConflicts:
             multiple_rows.append(item)
         return set_multiple_conflicts({**artifact}, multiple_rows)
 
-    # Defines execute review conflicts function for this module workflow.
     def execute_review_conflicts(
         self,
         proposal_list: List[Dict[str, Any]],
@@ -805,12 +795,12 @@ class AnalystConflicts:
                 proposal_list=proposal_list,
                 raw=raw,
             )
-            repaired = self.model.chat(
+            repaired = self.chat_json(
                 self.build_direct_messages(repair_prompt),
                 action="conflict_recheck_signoff_repair",
-            ) or ""
+            )
             try:
-                payload = self.conflict_signoff_payload(self.parse_issue_response_json(repaired))
+                payload = self.conflict_signoff_payload(repaired)
                 data = payload.get("decisions", [])
             except Exception as repair_error:
                 raw_preview = raw.strip().replace("\n", "\\n")[:500]
@@ -821,7 +811,6 @@ class AnalystConflicts:
         return signoff_decisions(data), raw
 
     @staticmethod
-    # Defines conflict signoff payload function for this module workflow.
     def conflict_signoff_payload(data: Any) -> Dict[str, Any]:
         if not isinstance(data, dict) or not isinstance(data.get("conflict_signoff"), dict):
             raise ValueError("conflict signoff output must contain conflict_signoff object")
@@ -830,7 +819,6 @@ class AnalystConflicts:
             raise ValueError("conflict_signoff.decisions must be a list")
         return payload
 
-    # Defines finalize review function for this module workflow.
     def finalize_review(
         self,
         decision_list: List[Dict[str, Any]],
@@ -844,7 +832,6 @@ class AnalystConflicts:
             extracted_pair_reviews=extracted_pair_reviews,
         )
 
-    # Defines execute finalize review function for this module workflow.
     def execute_finalize_review(
         self,
         decision_list: List[Dict[str, Any]],
@@ -870,12 +857,12 @@ class AnalystConflicts:
                 decision_list=decision_list,
                 raw=raw,
             )
-            repaired = self.model.chat(
+            repaired = self.chat_json(
                 self.build_direct_messages(repair_prompt),
                 action="reason_repair",
-            ) or ""
+            )
             try:
-                payload = self.conflict_finalization_payload(self.parse_issue_response_json(repaired))
+                payload = self.conflict_finalization_payload(repaired)
                 data = payload.get("reasons", [])
             except Exception as repair_error:
                 raw_preview = raw.strip().replace("\n", "\\n")[:500]
@@ -918,7 +905,6 @@ class AnalystConflicts:
         return out, raw
 
     @staticmethod
-    # Defines conflict finalization payload function for this module workflow.
     def conflict_finalization_payload(data: Any) -> Dict[str, Any]:
         if not isinstance(data, dict) or not isinstance(data.get("conflict_finalization"), dict):
             raise ValueError("conflict finalization output must contain conflict_finalization object")
@@ -927,7 +913,6 @@ class AnalystConflicts:
             raise ValueError("conflict_finalization.reasons must be a list")
         return payload
 
-    # Defines build conflict analysis report function for this module workflow.
     def build_conflict_analysis_report(
         self,
         artifact: Dict[str, Any],
@@ -949,7 +934,6 @@ class AnalystConflicts:
             raise RuntimeError("conflict report 無內容")
         return out
 
-    # Defines resolve conflicts function for this module workflow.
     def resolve_conflicts(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
         conflict_payload = artifact.get("conflict", {}) or {}
         report_rows = (
@@ -1040,11 +1024,10 @@ class AnalystConflicts:
                     raw=raw,
                 )
                 try:
-                    repaired = self.model.chat(
+                    repaired_data = self.chat_json(
                         self.build_direct_messages(repair_prompt),
                         action=self.usage_action("conflict.repair_resolution_json"),
-                    ) or ""
-                    repaired_data = self.parse_issue_response_json(repaired)
+                    )
                     by_id[conflict_id] = normalize_resolution_data(repaired_data, conflict_id)
                 except Exception as repair_error:
                     raw_preview = str(raw or "").strip().replace("\n", "\\n")[:500]
@@ -1069,7 +1052,6 @@ class AnalystConflicts:
         return updated
 
     @staticmethod
-    # Defines conflict resolution payload function for this module workflow.
     def conflict_resolution_payload(data: Any) -> Dict[str, Any]:
         if not isinstance(data, dict) or not isinstance(data.get("conflict_resolution"), dict):
             raise ValueError("conflict resolution output must contain conflict_resolution object")

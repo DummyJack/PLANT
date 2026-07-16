@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from storage import compact_markdown_context
 from storage.artifact import conflict_payload, latest_conflict_report_payload
-from utils import Collect, stage_enabled
+from utils import stage_enabled
 from agents.profile.mediator import category_labels
 from agents.meeting.main import MeetingRunner
 from agents.profile.mediator.validation import (
@@ -168,7 +168,13 @@ def conflict_report_row_ids(rows: List[Dict[str, Any]]) -> List[str]:
 # ========
 def stakeholder_names(artifact: Dict[str, Any]) -> List[str]:
     names: List[str] = []
-    for row in (artifact.get("stakeholders") or []):
+    project = artifact.get("project") if isinstance(artifact.get("project"), dict) else {}
+    stakeholder_rows = list(artifact.get("stakeholders") or []) + list(project.get("stakeholders") or [])
+    for url in artifact.get("URL") or []:
+        if not isinstance(url, dict) or not url.get("stakeholder"):
+            continue
+        stakeholder_rows.append(url.get("stakeholder"))
+    for row in stakeholder_rows:
         if isinstance(row, dict):
             name = str(row.get("name") or "").strip()
         else:
@@ -201,7 +207,9 @@ def target_stakeholders(
     artifact_ids: List[str],
 ) -> List[str]:
     artifact_id_set = set(artifact_ids)
-    for row in artifact.get("conflict_report", []) or []:
+    conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
+    conflict_rows = list(artifact.get("conflict_report", []) or []) + list(conflict_state.get("report", []) or [])
+    for row in conflict_rows:
         if not isinstance(row, dict):
             continue
         if str(row.get("id") or "").strip() not in artifact_id_set:
@@ -357,6 +365,20 @@ def default_issues(
 
 
 # ========
+def positive_config_int(config: Dict[str, Any], key: str, default: int) -> int:
+    try:
+        return max(1, int(config.get(key, default) or default))
+    except (AttributeError, TypeError, ValueError):
+        return default
+
+
+def issue_backlog_row(issue: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(issue)
+    row["issue_id"] = clean_text(row.pop("id", ""))
+    row.pop("round", None)
+    return row
+
+
 # Defines default meeting issues function for this module workflow.
 # ========
 def default_meeting_issues(
@@ -1197,11 +1219,13 @@ def collect_issue_proposals(
             ):
                 append_proposal(row)
             meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
-            config = getattr(coordinator.flow, "config", {}) or {}
+            end_round_value = meta.get("meeting_end_round")
+            if end_round_value is None:
+                raise RuntimeError("artifact.meta 缺少 meeting_end_round")
             try:
-                end_round = int(meta.get("meeting_end_round") or config.get("rounds", 1) or 1)
+                end_round = int(end_round_value)
             except (TypeError, ValueError):
-                end_round = 1
+                raise RuntimeError("artifact.meta.meeting_end_round 必須是整數")
             if int(round_num or 0) >= end_round:
                 for row in final_verification_proposals(
                     artifact,
@@ -1383,11 +1407,11 @@ def run_meeting_round_block(
             coordinator, meeting_artifact, round_num=round_num,
         )
         current_round_proposals, _ = renumber_issue_proposals(current_round_proposals)
-        max_issues = max(1, int(getattr(coordinator.flow.config, "get", lambda *_: 5)("max_issues", 5) or 5))
+        max_issues = positive_config_int(coordinator.flow.config, "max_issues", 5)
         if current_round_proposals:
             current_round_proposals = apply_human_issue_proposals(
                 current_round_proposals,
-                Collect.meeting_issue_proposal_review(
+                coordinator.flow.collect.meeting_issue_proposal_review(
                     current_round_proposals,
                     round_num,
                     max_issues=max_issues,
@@ -1438,7 +1462,7 @@ def run_meeting_round_block(
         round_num,
         coordinator.flow.config,
         coordinator.flow.store,
-        Collect,
+        coordinator.flow.collect,
         coordinator.flow.logger,
         output_artifact=artifact,
     )

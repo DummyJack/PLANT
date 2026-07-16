@@ -2,9 +2,6 @@
 import re
 
 
-# ========
-# Defines markdown section function for this module workflow.
-# ========
 def markdown_section(content: str, heading: str) -> str:
     pattern = re.compile(
         rf"(^|\n)({re.escape(heading)}\n.*?)(?=\n### |\n## |\Z)",
@@ -14,9 +11,6 @@ def markdown_section(content: str, heading: str) -> str:
     return match.group(2).strip() if match else ""
 
 
-# ========
-# Defines markdown between function for this module workflow.
-# ========
 def markdown_between(content: str, start: str, end: str) -> str:
     source = content or ""
     start_index = source.find(start)
@@ -28,9 +22,6 @@ def markdown_between(content: str, start: str, end: str) -> str:
     return source[start_index:end_index].strip()
 
 
-# ========
-# Defines markdown from heading until function for this module workflow.
-# ========
 def markdown_from_heading_until(content: str, starts: list[str], stops: list[str]) -> str:
     source = content or ""
     start_index = -1
@@ -48,9 +39,6 @@ def markdown_from_heading_until(content: str, starts: list[str], stops: list[str
     return source[start_index:end_index].strip()
 
 
-# ========
-# Defines requirements skill guidance function for this module workflow.
-# ========
 def requirements_skill_guidance(content: str, mode: str) -> str:
     mode_name = str(mode or "").strip()
     if mode_name == "analysis":
@@ -92,9 +80,6 @@ def requirements_skill_guidance(content: str, mode: str) -> str:
     return ""
 
 
-# ========
-# Defines requirements skill prompt function for this module workflow.
-# ========
 def requirements_skill_prompt(*, selected_guidance: str, task: str) -> str:
     return (
         "# Skill: requirements-analyst\n\n"
@@ -121,9 +106,6 @@ resolution_strategies = {
 }
 
 
-# ========
-# Defines resolution reference guidance function for this module workflow.
-# ========
 def resolution_reference_guidance(content: str, conflict_type: str) -> str:
     conflict_type = str(conflict_type or "").strip().lower()
     if conflict_type == "other":
@@ -143,9 +125,6 @@ def resolution_reference_guidance(content: str, conflict_type: str) -> str:
     return "\n\n".join(section for section in selected if section)
 
 
-# ========
-# Defines conflict skill guidance function for this module workflow.
-# ========
 def conflict_skill_guidance(content: str, mode: str) -> str:
     mode_name = str(mode or "").strip()
     base_mode, _, mode_detail = mode_name.partition(":")
@@ -183,9 +162,6 @@ def conflict_skill_guidance(content: str, mode: str) -> str:
     return "\n\n".join(section for section in selected if section)
 
 
-# ========
-# Defines conflict skill subset function for this module workflow.
-# ========
 def conflict_skill_subset(skill: dict, mode: str) -> dict:
     mode_name = str(mode or "").strip()
     base_mode, _, mode_detail = mode_name.partition(":")

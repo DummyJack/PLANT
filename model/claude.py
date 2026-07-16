@@ -132,14 +132,70 @@ class ClaudeModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
+        schema: Optional[Dict] = None,
     ) -> Dict:
-        text = self.chat(
-            messages,
-            temperature,
-            max_tokens,
-            max_output_tokens,
-            action=action,
-        )
+        text = ""
+        if schema is None:
+            text = self.chat(
+                messages,
+                temperature,
+                max_tokens,
+                max_output_tokens,
+                action=action,
+            )
+        else:
+            system, msgs = claude_split_messages(messages)
+            max_out = self.effective_max_tokens(temperature, max_tokens, max_output_tokens)
+            kw = self.build_kwargs(temperature, max_tokens, max_output_tokens)
+            create_kw = {
+                "model": self.model_name,
+                "messages": msgs,
+                "max_tokens": max_out,
+                "output_config": {
+                    "format": {
+                        "type": "json_schema",
+                        "schema": self.strict_json_schema(schema),
+                    }
+                },
+            }
+            if system:
+                create_kw["system"] = system
+            if kw.get("temperature") is not None:
+                create_kw["temperature"] = kw["temperature"]
+            self.costTracker.start()
+            response = None
+            try:
+                response = self.client.messages.create(**create_kw)
+            except Exception as exc:
+                if not self.structured_output_unsupported(exc):
+                    raise normalize_authentication_error(exc) from exc
+            finally:
+                run_s = self.costTracker.end_segment()
+            if response is None:
+                text = self.chat(
+                    messages,
+                    temperature,
+                    max_tokens,
+                    max_output_tokens,
+                    action=action,
+                )
+            else:
+                usage = getattr(response, "usage", None)
+                if usage:
+                    self.add_usage(
+                        {
+                            "prompt_tokens": getattr(usage, "input_tokens", 0),
+                            "completion_tokens": getattr(usage, "output_tokens", 0),
+                            "total_tokens": getattr(usage, "input_tokens", 0)
+                            + getattr(usage, "output_tokens", 0),
+                        },
+                        action=action,
+                        run_time_s=run_s,
+                    )
+                text = "".join(
+                    str(getattr(block, "text", "") or "")
+                    for block in (response.content or [])
+                )
         text = text.strip()
         try:
             return json.loads(text)

@@ -2,7 +2,7 @@
 import json
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .atomic import atomic_write_text
 from .artifact import (
@@ -40,6 +40,7 @@ class Store:
     def __init__(self, base_dir: str = ".", project_id: Optional[str] = None):
         self.base_dir = Path(base_dir)
         self.project_id = project_id
+        self.runtime_log_callback: Optional[Callable[[str, str], None]] = None
 
         self.projects_dir = self.base_dir / "projects"
         self.doc_dir = self.base_dir / "doc"
@@ -105,8 +106,18 @@ class Store:
     # ========
     # Defines save artifact function for this module workflow.
     # ========
-    def save_artifact(self, data: Dict[str, Any]):
-        artifact_save_artifact(self.base_dir, self.artifact_dir, data)
+    def save_artifact(
+        self,
+        data: Dict[str, Any],
+        *,
+        commit_conflict_version: bool = False,
+    ):
+        artifact_save_artifact(
+            self.base_dir,
+            self.artifact_dir,
+            data,
+            commit_conflict_version=commit_conflict_version,
+        )
 
     # ========
     # Defines save draft function for this module workflow.
@@ -183,4 +194,8 @@ class Store:
     # Defines save plantuml files function for this module workflow.
     # ========
     def save_plantuml_files(self, model_data: Dict[str, Any]):
-        plantuml_save_plantuml_files(self.artifact_dir, model_data)
+        plantuml_save_plantuml_files(
+            self.artifact_dir,
+            model_data,
+            status_callback=self.runtime_log_callback,
+        )

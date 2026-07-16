@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 
 from agents.profile.base import action_plan_prompt, action_plan_repair_prompt
 from agents.profile.base import render_repair_prompt
+from agents.json_schema import ACTION_PLAN_OUTPUT_SCHEMA
 
 
-# Defines IssueResponseSupport class for this module workflow.
 class IssueResponseSupport:
     # Checks whether the issue response should allow artifact query tool access.
     def should_use_artifact_query(
@@ -39,14 +39,12 @@ class IssueResponseSupport:
             return True
         return has_artifact_reference(context)
 
-    # Defines clean text function for this module workflow.
     def clean_text(self, text: Any) -> str:
         text = str(text or "").strip()
         if text in {"{}", "[]", "null", '""'}:
             return ""
         return text
 
-    # Defines issue response payload function for this module workflow.
     def issue_response_payload(
         self,
         payload: Any,
@@ -120,7 +118,6 @@ class IssueResponseSupport:
             normalized["format_error"] = "; ".join(format_errors)
         return normalized
 
-    # Defines chat for issue response function for this module workflow.
     def chat_for_issue_response(
         self,
         messages: List[Dict],
@@ -160,8 +157,7 @@ class IssueResponseSupport:
                                 raw=raw,
                             )
                             repair_messages = self.build_direct_messages(repair_task)
-                            repaired = self.model.chat(repair_messages)
-                            parsed = self.parse_issue_response_json(repaired)
+                            parsed = self.chat_json(repair_messages)
                         except Exception:
                             return {
                                 "text": "",
@@ -192,7 +188,6 @@ class IssueResponseSupport:
                 "format_error": str(e),
             }
 
-    # Defines format previous responses function for this module workflow.
     def format_previous_responses(
         self,
         previous_responses: Optional[List[Dict[str, Any]]],
@@ -214,7 +209,6 @@ class IssueResponseSupport:
             parts.append(f"【{agent_name}{role_hint}】\n{text}")
         return f"\n# {title}\n" + "\n\n".join(parts)
 
-    # Defines issue response observation function for this module workflow.
     def issue_response_observation(
         self,
         **kwargs: Any,
@@ -294,7 +288,6 @@ class IssueResponseSupport:
         )
         return any(marker in error for marker in local_repair_failures)
 
-    # Defines issue response decision function for this module workflow.
     def issue_response_decision(
         self,
         observation: Dict[str, Any],
@@ -505,11 +498,13 @@ class IssueResponseSupport:
             actions_text=actions_text,
             default_action=default_action,
         )
-        # Defines parse decision function for this module workflow.
         def parse_decision(prompt_text: str) -> Optional[Dict[str, Any]]:
-            decision = self.chat_json(self.build_direct_messages(prompt_text), action=f"{role}.issue.decide_action")
-            action_plan = decision.get("action_plan") if isinstance(decision.get("action_plan"), dict) else {}
-            raw_steps = action_plan.get("steps") if isinstance(action_plan.get("steps"), list) else []
+            decision = self.chat_json(
+                self.build_direct_messages(prompt_text),
+                action=f"{role}.issue.decide_action",
+                schema=ACTION_PLAN_OUTPUT_SCHEMA,
+            )
+            raw_steps = decision.get("steps") if isinstance(decision.get("steps"), list) else []
             steps = []
             for raw_step in raw_steps:
                 if not isinstance(raw_step, dict):
@@ -544,7 +539,7 @@ class IssueResponseSupport:
                     "params": {},
                     "reasoning": reasoning,
                     "action_plan": {
-                        "goal": str(action_plan.get("goal") or "本次正式會議發言").strip(),
+                        "goal": str(decision.get("goal") or "本次正式會議發言").strip(),
                         "steps": steps,
                     },
                 }

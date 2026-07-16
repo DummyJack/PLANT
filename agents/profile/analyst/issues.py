@@ -5,11 +5,7 @@ from typing import Any, Dict, List, Optional
 from agents.profile.base import proposal_prompt
 from .actions.response import issue_response
 
-# ========
-# Defines AnalystIssues class for this module workflow.
-# ========
 class AnalystIssues:
-    # Defines propose issues function for this module workflow.
     def propose_issues(
         self,
         artifact: Dict[str, Any],
@@ -34,7 +30,6 @@ class AnalystIssues:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
-    # Defines obs issue function for this module workflow.
     def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
         return {
@@ -46,7 +41,6 @@ class AnalystIssues:
             "artifact_slices": artifact.get("artifact_slices") if isinstance(artifact.get("artifact_slices"), dict) else {},
         }
 
-    # Defines decide analyst issue action function for this module workflow.
     def decide_analyst_issue_action(
         self,
         *,
@@ -66,7 +60,6 @@ class AnalystIssues:
             "reasoning": "根據需求品質、需求範圍、可驗收性、可追蹤性與未決缺口提出需要會議處理的議題。",
         }
 
-    # Defines execute analyst issue action function for this module workflow.
     def execute_analyst_issue_action(
         self,
         *,
@@ -123,7 +116,6 @@ class AnalystIssues:
             "summary": f"Analyst 提出 {len(proposals)} 筆 issue proposal",
         }
 
-    # Defines analyst issue proposals payload function for this module workflow.
     def analyst_issue_proposals_payload(
         self,
         data: Dict[str, Any],
@@ -169,7 +161,9 @@ class AnalystIssues:
                 raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
             issue_level = str(row.get("issue_level") or "").strip().lower()
             if issue_level not in {"blocking", "improvement"}:
-                issue_level = "blocking" if importance == "high" else "improvement"
+                raise ValueError(
+                    f"issues[{idx}] issue_level must be blocking or improvement"
+                )
 
             key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:
@@ -193,7 +187,6 @@ class AnalystIssues:
                 break
         return proposals
 
-    # Defines build response function for this module workflow.
     def build_response(
         self,
         *,
@@ -209,15 +202,10 @@ class AnalystIssues:
 
 
 
-# ========
-# Defines AnalystResponse class for this module workflow.
-# ========
 class AnalystResponse:
-    # Defines obs response function for this module workflow.
     def obs_response(self, **kwargs: Any) -> Dict[str, Any]:
         return self.issue_response_observation(**kwargs)
 
-    # Defines execute action function for this module workflow.
     def execute_action(
         self,
         *,

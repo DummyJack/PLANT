@@ -411,7 +411,20 @@ class DocumentorDrTraceValidationMixin:
         if target_id:
             node_ids.add(target_id)
         target_requirement_id = str(proposal.get("target_requirement_id") or "").strip()
-        if target_requirement_id and target_requirement_id not in cls.trace_target_aliases(requirement):
+        if not target_requirement_id:
+            errors = ["target_requirement_id is required"]
+            return {
+                "accepted": False,
+                "errors": errors,
+                "normalized": {
+                    "from": "",
+                    "to": "",
+                    "relation": "",
+                    "repair_type": str(proposal.get("repair_type") or "").strip(),
+                    "status": "rejected",
+                },
+            }
+        if target_requirement_id not in cls.trace_target_aliases(requirement):
             errors = [f"target_requirement_id does not match requirement: {target_requirement_id}"]
             return {
                 "accepted": False,
@@ -433,6 +446,16 @@ class DocumentorDrTraceValidationMixin:
         candidate_to = str(proposal.get("candidate_to") or proposal.get("to") or "").strip()
         repair_type = str(proposal.get("repair_type") or "").strip()
         edge_label = str(proposal.get("edge_label") or "").strip()
+        task_id = str(proposal.get("task_id") or "").strip()
+        matching_task = next(
+            (
+                task
+                for task in (requirement.get("trace_repair_tasks") or [])
+                if isinstance(task, dict)
+                and str(task.get("task_id") or "").strip() == task_id
+            ),
+            None,
+        )
         allowed_labels_by_type = {
             "connect_statement_to_url": {"分析"},
             "connect_feedback_to_formalize_meeting": {""},
@@ -444,8 +467,38 @@ class DocumentorDrTraceValidationMixin:
             "identify_formalization_meeting": {""},
         }
         errors: List[str] = []
+        if not task_id:
+            errors.append("task_id is required")
+        elif not matching_task:
+            errors.append(f"task_id does not exist for requirement: {task_id}")
+        if matching_task:
+            task_repair_type = str(matching_task.get("repair_type") or "").strip()
+            if repair_type != task_repair_type:
+                errors.append(
+                    f"repair_type does not match task {task_id}: {repair_type}"
+                )
+            for field, candidate in (
+                ("candidate_from", candidate_from),
+                ("candidate_to", candidate_to),
+            ):
+                fixed = str(matching_task.get(field) or "").strip()
+                if fixed and candidate != fixed:
+                    errors.append(
+                        f"{field} does not match task {task_id}: {candidate or '<empty>'}"
+                    )
+            fixed_label = str(matching_task.get("edge_label") or "").strip()
+            if edge_label != fixed_label:
+                errors.append(
+                    f"edge_label does not match task {task_id}: {edge_label or '<empty>'}"
+                )
         if repair_type not in allowed_labels_by_type:
             errors.append(f"unsupported repair_type: {repair_type or '<empty>'}")
+        if not candidate_from:
+            errors.append("candidate_from is required")
+        if not candidate_to:
+            errors.append("candidate_to is required")
+        if str(proposal.get("confidence") or "").strip().lower() == "low":
+            errors.append("low confidence proposals require human review")
         if candidate_from and candidate_from not in node_ids:
             errors.append(f"candidate_from does not exist in trace_graph: {candidate_from}")
         if candidate_to and candidate_to not in node_ids:

@@ -61,6 +61,16 @@ def save_conflict_report(
     *,
     round_num: int,
 ) -> bool:
+    def save_empty_report() -> None:
+        artifact["conflict_report"] = []
+        conflict_state = artifact.get("conflict")
+        if isinstance(conflict_state, dict):
+            conflict_state["report"] = []
+        report_path = coordinator.flow.store.artifact_dir / "report" / f"conflict_report_v{round_num}.json"
+        save_json_path(coordinator.flow.store.base_dir, [], report_path)
+        report_path.with_suffix(".md").unlink(missing_ok=True)
+        coordinator.flow.store.save_artifact(artifact)
+
     coordinator.flow.store.save_artifact(artifact)
     if coordinator.flow.config.get("enable_conflict_report", True) is False:
         return False
@@ -71,6 +81,7 @@ def save_conflict_report(
     ]
     conflict_rows = unresolved_conflict_report_rows(conflict_rows)
     if not conflict_rows:
+        save_empty_report()
         return False
     report_artifact = {
         **artifact,
@@ -88,6 +99,7 @@ def save_conflict_report(
     report_payload = unresolved_conflict_report_rows(report_payload)
     report_payload = reindex_conflict_report_rows(report_payload)
     if not report_payload:
+        save_empty_report()
         return False
     coordinator.flow.logger.step_started(
         "conflict_detection",

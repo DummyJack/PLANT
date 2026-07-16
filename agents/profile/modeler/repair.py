@@ -6,6 +6,29 @@ from agents.profile.base import render_template
 
 
 repair_prompts: dict[str, tuple[bool, str]] = {
+    'single_model_output_repair': (True, '''# 任務
+修正單一 Modeler system model 的 JSON 輸出格式。
+
+# 預期模型類型
+{expected_type}
+
+# 錯誤
+{error_msg}
+
+# 原始輸出
+{raw}
+
+# Repair Rules
+- 輸出必須是單一 JSON object，不可使用 array 或額外 wrapper。
+- 只修正缺失欄位、欄位型別與 JSON 結構，不得改變 PlantUML 的需求語意。
+- type 必須維持為 {expected_type}。
+- diagram model 必須包含 name、type、plantuml、description。
+- use_case_text 必須包含 type=use_case_text 與 text array。
+- related_requirement_ids 只能保留原輸出已有的需求 ID，不得新增。
+- 不得新增其他模型。
+
+# Output JSON
+{output_schema}'''),
     'model_plan_repair': (True, '''# 任務
 修正 Modeler plan_models 的 JSON 輸出格式。
 
@@ -21,7 +44,9 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - model_plan.model_targets 可以是空陣列；沒有 high-value model target 時輸出空陣列。
 - 每個 model target 必須是 object，且 operation 只能是 create 或 update。
 - 每個 model target 必須包含 type、name、related_requirement_ids、reason、value_reason。
+- related_requirement_ids 只能使用錯誤訊息 allowed IDs 中存在的需求 ID；未知 ID 必須移除。
 - update 必須有 target_model_id，或至少有 type + name。
+- target_model_id 只能使用錯誤訊息 allowed IDs 中存在的 model ID；未知 ID 必須移除並改用 type + name 定位，或移除該 target。
 - create 必須有 name。
 - value_reason 必須說明此模型能釐清的高價值需求問題；不可空白。
 - 最多保留 4 個 model target；超過時保留最有需求釐清價值者。

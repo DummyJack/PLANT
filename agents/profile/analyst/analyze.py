@@ -21,11 +21,7 @@ from .repair import render_repair_prompt
 from .skill import requirements_skill_guidance, requirements_skill_prompt
 
 
-# ========
-# Defines AnalystRequirements class for this module workflow.
-# ========
 class AnalystRequirements:
-    # Defines run requirements analyst function for this module workflow.
     def run_requirements_analyst(
         self,
         action: str,
@@ -71,7 +67,6 @@ class AnalystRequirements:
             raise RuntimeError(result.get("error"))
         return result.get("output")
 
-    # Defines obs requirements analysis function for this module workflow.
     def obs_requirements_analysis(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs.get("artifact") or {}
         stakeholders = kwargs.get("stakeholders") or []
@@ -85,7 +80,6 @@ class AnalystRequirements:
             "has_scope": bool(artifact.get("scope")),
         }
 
-    # Defines decide requirements analysis action function for this module workflow.
     def decide_requirements_analysis_action(
         self,
         *,
@@ -106,7 +100,6 @@ class AnalystRequirements:
             "reasoning": f"執行 Analyst requirements analysis 任務：{action}。",
         }
 
-    # Defines execute requirements analysis action function for this module workflow.
     def execute_requirements_analysis_action(
         self,
         *,
@@ -160,18 +153,15 @@ class AnalystRequirements:
         }
 
     @staticmethod
-    # Defines requirement text function for this module workflow.
     def requirement_text(text: str) -> str:
         return analyst_requirement_text(text)
 
     @staticmethod
-    # Defines requirement record function for this module workflow.
     def requirement_record(
         req: Dict[str, Any],
     ) -> Dict[str, Any]:
         return analyst_requirement_record(req)
 
-    # Defines analyze scenario function for this module workflow.
     def analyze_scenario(self, rough_idea: str) -> str:
         context = {"rough_idea": rough_idea}
         task = name_scenario()
@@ -213,7 +203,6 @@ class AnalystRequirements:
             out.append(row)
         return out
 
-    # Defines analyze requirements function for this module workflow.
     def analyze_requirements(
         self,
         stakeholders: List[Dict],
@@ -335,7 +324,6 @@ class AnalystRequirements:
         return all_requirements
 
     @staticmethod
-    # Defines requirement candidates payload function for this module workflow.
     def requirement_candidates_payload(data: Any, *, action_name: str) -> List[Dict[str, Any]]:
         if not isinstance(data, dict) or not isinstance(data.get("requirement_candidates"), list):
             raise ValueError(f"{action_name} output must contain requirement_candidates list")
@@ -348,7 +336,6 @@ class AnalystRequirements:
                 rows.append({"text": text})
         return rows
 
-    # Defines invoke requirements analyst text function for this module workflow.
     def invoke_requirements_analyst_text(
         self,
         task: str,
@@ -370,11 +357,28 @@ class AnalystRequirements:
             return self.chat_with_tools(messages, active_skill="requirements-analyst")
         return self.model.chat(messages, action=self.usage_action("skill.requirements-analyst"))
 
-    # Defines invoke requirements analyst object json function for this module workflow.
     def invoke_requirements_analyst_object_json(
         self, task: str, context: Dict[str, Any], *, mode: str = "analysis"
     ) -> Dict[str, Any]:
-        use_tools = "artifact_query" in getattr(self, "tools", {})
+        use_tools = (
+            not mode.startswith(
+                ("update_requirement", "refine_requirement", "repair_requirement")
+            )
+            and "artifact_query" in getattr(self, "tools", {})
+        )
+        if not use_tools:
+            self.validate_skill_usage("requirements-analyst")
+            skill = get_skill("requirements-analyst")
+            skill_content = str(skill.get("content") or "")
+            selected_guidance = requirements_skill_guidance(skill_content, mode)
+            prompt = requirements_skill_prompt(
+                selected_guidance=selected_guidance,
+                task=task,
+            )
+            return self.chat_json(
+                self.build_direct_messages(prompt, context=context),
+                action=self.usage_action("skill.requirements-analyst"),
+            )
         raw = self.invoke_requirements_analyst_text(
             task,
             context,
@@ -383,25 +387,19 @@ class AnalystRequirements:
         )
         return parse_json_object(raw)
 
-    # Defines invoke direct requirements text function for this module workflow.
     def invoke_direct_requirements_text(
         self, task: str, context: Dict[str, Any], *, action: str
     ) -> str:
         messages = self.build_direct_messages(task, context=context)
         return self.model.chat(messages, action=self.usage_action(action))
 
-    # Defines invoke direct requirements object json function for this module workflow.
     def invoke_direct_requirements_object_json(
         self, task: str, context: Dict[str, Any], *, action: str
     ) -> Dict[str, Any]:
-        raw = self.invoke_direct_requirements_text(task, context, action=action)
-        return parse_json_object(raw)
+        messages = self.build_direct_messages(task, context=context)
+        return self.chat_json(messages, action=self.usage_action(action))
 
-# ========
-# Defines AnalystElicitation class for this module workflow.
-# ========
 class AnalystElicitation:
-    # Defines extract elicited reqts function for this module workflow.
     def extract_elicited_reqts(
         self,
         stakeholders: List[Dict[str, str]],
@@ -434,7 +432,6 @@ class AnalystElicitation:
             raise RuntimeError("elicited requirement extraction output must be requirement_candidates list")
         return output
 
-    # Defines obs elicitation function for this module workflow.
     def obs_elicitation(self, **kwargs: Any) -> Dict[str, Any]:
         return {
             "action": kwargs.get("elicitation_action", ""),
@@ -445,7 +442,6 @@ class AnalystElicitation:
             "mode": kwargs.get("mode", "oracle"),
         }
 
-    # Defines decide elicitation action function for this module workflow.
     def decide_elicitation_action(
         self,
         *,
@@ -465,7 +461,6 @@ class AnalystElicitation:
             "reasoning": "從 requirement elicitation 討論中抽取可追蹤、可驗收的需求候選。",
         }
 
-    # Defines execute elicitation action function for this module workflow.
     def execute_elicitation_action(
         self,
         *,
@@ -496,7 +491,6 @@ class AnalystElicitation:
             "summary": "完成 elicitation extraction",
         }
 
-    # Defines parse elicited reqts function for this module workflow.
     def parse_elicited_reqts(
         self,
         stakeholders: List[Dict[str, str]],
@@ -556,13 +550,13 @@ class AnalystElicitation:
                 )
             except ValueError as first_error:
                 repair_prompt = render_repair_prompt('extract_repair', raw_text=raw_text)
-                repaired = self.model.chat(
+                repaired = self.chat_json(
                     self.build_direct_messages(repair_prompt),
                     action="extract_repair",
-                ) or ""
+                )
                 try:
                     raw = self.requirement_candidates_payload(
-                        parse_json_object(repaired),
+                        repaired,
                         action_name="extract_elicited_reqts repair",
                     )
                 except ValueError as repair_error:

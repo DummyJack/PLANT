@@ -29,7 +29,6 @@ documentor_system = """你是一位專業 SRS 撰寫者。
 - 不改變需求原本的決策狀態。"""
 
 
-# Defines DocumentorAgent class for this module workflow.
 class DocumentorAgent(
     DocumentorSrs,
     DocumentorDr,
@@ -39,7 +38,6 @@ class DocumentorAgent(
 
     system_prompt = documentor_system
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -57,6 +55,5 @@ class DocumentorAgent(
         )
         self.store = store
 
-    # Defines generate srs function for this module workflow.
     def generate_srs(self) -> str:
         return self.generate_latest_srs()

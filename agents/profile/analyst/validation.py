@@ -16,16 +16,10 @@ conflict_types = {
 }
 
 
-# ========
-# Defines clean text function for this module workflow.
-# ========
 def clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-# ========
-# Defines clean list function for this module workflow.
-# ========
 def clean_list(value: Any) -> List[str]:
     if isinstance(value, list):
         return [clean_text(x) for x in value if clean_text(x)]
@@ -33,9 +27,6 @@ def clean_list(value: Any) -> List[str]:
     return [text] if text else []
 
 
-# ========
-# Defines requirement text function for this module workflow.
-# ========
 def requirement_text(text: Any) -> str:
     value = clean_text(text)
     if not value:
@@ -51,9 +42,6 @@ def requirement_text(text: Any) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-# ========
-# Defines requirement record function for this module workflow.
-# ========
 def requirement_record(
     req: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -75,9 +63,6 @@ def requirement_record(
     return out
 
 
-# ========
-# Defines requirement records function for this module workflow.
-# ========
 def requirement_records(
     rows: Any,
 ) -> List[Dict[str, Any]]:
@@ -91,9 +76,6 @@ def requirement_records(
     return normalized
 
 
-# ========
-# Defines scope payload function for this module workflow.
-# ========
 def scope_payload(scope: Any) -> Dict[str, Any]:
     if not isinstance(scope, dict):
         return {"in_scope": [], "out_of_scope": []}
@@ -103,9 +85,6 @@ def scope_payload(scope: Any) -> Dict[str, Any]:
     }
 
 
-# ========
-# Defines validate elicited reqts function for this module workflow.
-# ========
 def validate_elicited_reqts(
     rows: Any,
     *,
@@ -133,9 +112,6 @@ def validate_elicited_reqts(
     return candidates
 
 
-# ========
-# Defines conflict records function for this module workflow.
-# ========
 def conflict_records(
     rows: Any,
     *,
@@ -224,9 +200,6 @@ def conflict_records(
     return conflicts
 
 
-# ========
-# Defines signoff decisions function for this module workflow.
-# ========
 def signoff_decisions(rows: Any) -> List[Dict[str, Any]]:
     raw_rows = rows.get("decisions") if isinstance(rows, dict) else rows
     if not isinstance(raw_rows, list):

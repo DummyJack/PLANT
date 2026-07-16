@@ -1,9 +1,10 @@
 # Handles init flow logic for project flow orchestration and stage execution.
+import hashlib
+import json
 import re
 from typing import Any, Dict, List, Optional
 
 from utils import (
-    Collect,
     artifact_path_non_empty,
     force_regenerate_output,
     has_draft_payload,
@@ -55,6 +56,26 @@ INIT_RESUME_STAGE_ORDER = [
 ]
 
 
+def upstream_requirements_signature(artifact: Dict[str, Any]) -> str:
+    """Return a stable signature for inputs consumed by downstream stages."""
+    payload = {
+        "rough_idea": artifact.get("rough_idea") or "",
+        "scenario": artifact.get("scenario") or "",
+        "stakeholders": artifact.get("stakeholders") or [],
+        "URL": artifact.get("URL") or [],
+        "requirements": artifact.get("requirements") or [],
+        "scope": artifact.get("scope") or {"in_scope": [], "out_of_scope": []},
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def merge_reference_paths(*groups: List[str]) -> List[str]:
     rows: List[str] = []
     seen: set[str] = set()
@@ -66,6 +87,23 @@ def merge_reference_paths(*groups: List[str]) -> List[str]:
             rows.append(text)
             seen.add(text)
     return rows
+
+
+def resolve_domain_research_review(
+    review: Dict[str, Any],
+    run_referenced_files: List[str],
+    project_id: str,
+) -> tuple[str, List[str]]:
+    action = str((review or {}).get("action") or "approve").strip()
+    if action == "approve":
+        return "", merge_reference_paths(run_referenced_files)
+    return (
+        domain_research_review_feedback(review),
+        merge_reference_paths(
+            run_referenced_files,
+            domain_research_review_references(review, project_id),
+        ),
+    )
 
 
 def init_resume_stage(artifact: Dict[str, Any]) -> str:
@@ -425,6 +463,13 @@ def domain_research_review_feedback(review: Dict[str, Any]) -> str:
 def domain_research_review_references(review: Dict[str, Any], project_id: str) -> list[str]:
     if not isinstance(review, dict):
         return []
+    attachment_paths = {
+        str(item.get("name") or "").strip(): str(item.get("path") or "").strip()
+        for item in (review.get("human_input_attachments") or [])
+        if isinstance(item, dict)
+        and str(item.get("name") or "").strip()
+        and str(item.get("path") or "").strip()
+    }
     rows: list[Dict[str, Any]] = []
     suggestions = review.get("suggestions")
     if isinstance(suggestions, list):
@@ -446,7 +491,7 @@ def domain_research_review_references(review: Dict[str, Any], project_id: str) -
         if not name or name in seen:
             continue
         seen.add(name)
-        out.append(f"{project_id}/{name}" if project_id else name)
+        out.append(attachment_paths.get(name) or (f"{project_id}/{name}" if project_id else name))
     return out
 
 
@@ -564,7 +609,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             proposed = flow.user_agent.suggest_stakeholders(rough_idea)
 
             max_sh = flow.config.get("max_stakeholders", 5)
-            selected = Collect.user_selection(proposed, max_select=max_sh)
+            selected = flow.collect.user_selection(proposed, max_select=max_sh)
             stakeholders = parse_selection(selected)
             stakeholders = normalize_stakeholder_text(stakeholders)
             if not stakeholders:
@@ -595,13 +640,24 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
                 [row["name"] for row in stakeholders],
             )
             stakeholders = merge_stakeholder_text(stakeholders, generated_stakeholders)
+            artifact["stakeholders"] = stakeholders
+            flow.user_agent.stakeholders = stakeholders
+            flow.store.save_artifact(artifact)
+            flow.logger.step_completed(
+                "init",
+                "init.write_stakeholder_text",
+                "整理利害關係人需求",
+                agent="user",
+                message=f"{len(stakeholders)} 位利害關係人提出需求",
+                output_path="artifact/project.json",
+            )
         stakeholder_review_output_title = ""
         while True:
             artifact["stakeholders"] = stakeholders
             flow.user_agent.stakeholders = stakeholders
             flow.store.save_artifact(artifact)
 
-            review = Collect.stakeholder_statement_review(stakeholders)
+            review = flow.collect.stakeholder_statement_review(stakeholders)
             action = str((review or {}).get("action") or "approve").strip()
             artifact.setdefault("stakeholder_statement_reviews", []).append(review)
             artifact["stakeholder_statement_review"] = review
@@ -655,13 +711,6 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         flow.logger.info(f"✓ {len(stakeholders)} 位利害關係人提出需求")
-        flow.logger.step_completed(
-            "init",
-            "init.write_stakeholder_text",
-            "整理利害關係人需求",
-            agent="user",
-            message=f"{len(stakeholders)} 位利害關係人提出需求",
-        )
 
         if not any(row.get("text") for row in stakeholders if isinstance(row, dict)):
             raise RuntimeError("stakeholders 缺少 text；無法進行初始需求分析")
@@ -722,7 +771,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             "artifact/requirements.json",
         )
 
-        review = Collect.requirements_review(list(initial_candidates))
+        review = flow.collect.requirements_review(list(initial_candidates))
         action = str((review or {}).get("action") or "approve").strip()
         artifact.setdefault("requirements_reviews", []).append(review)
         artifact["requirements_review"] = review
@@ -822,7 +871,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             "artifact/scope.json",
         )
 
-        review = Collect.scope_review(artifact.get("scope", {}))
+        review = flow.collect.scope_review(artifact.get("scope", {}))
         action = str((review or {}).get("action") or "approve").strip()
         artifact.setdefault("scope_reviews", []).append(review)
         artifact["scope_review"] = review
@@ -978,7 +1027,33 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
     flow.logger.stage_started("conflict_detection", "需求衝突辨識")
     flow.logger.info("=== 需求衝突辨識 ===")
     meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+    continue_signature_before = str(
+        getattr(flow, "_continue_upstream_signature", "") or ""
+    )
+    continue_signature_after = upstream_requirements_signature(artifact)
+    continue_upstream_changed = bool(
+        continue_signature_before
+        and continue_signature_before != continue_signature_after
+    )
+    if continue_upstream_changed:
+        meta["requirements_changed"] = True
+        meta["requirements_changed_by"] = "continue_init"
+        meta["requirements_changed_reason"] = "continue_upstream_inputs_changed"
+        meta["models_stale"] = True
+        meta["models_stale_by"] = "continue_init"
+        meta["models_stale_reason"] = "requirements_changed"
+        meta["draft_stale"] = True
+        meta["draft_stale_by"] = "continue_init"
+        meta["draft_stale_reason"] = "requirements_changed"
+        meta["specification_stale"] = True
+        meta["export_stale"] = True
+        meta["continue_upstream_changed_this_run"] = True
+        flow.logger.info(
+            "Continue 初始化內容已變更；將重新產生衝突、系統模型、草稿與規格輸出"
+        )
+    meta["upstream_requirements_signature"] = continue_signature_after
     requirements_changed = bool(meta.get("requirements_changed"))
+    conflict_detection_ran = False
     if skip_before_resume_stage(artifact, "conflict_detection"):
         flow.logger.info("依 checkpoint 略過需求衝突辨識")
         require_stage_inputs(flow, artifact, "conflict_detection")
@@ -1021,16 +1096,17 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         artifact.setdefault("meta", {})["requirements_changed"] = False
         artifact.setdefault("meta", {})["conflict_refresh_by"] = "init_conflict_detection"
         artifact.setdefault("meta", {})["conflict_refresh_round"] = 0
-        save_conflict_report(flow.meeting, artifact, round_num=0)
+        conflict_detection_ran = True
     conflict_state = artifact.get("conflict") if isinstance(artifact.get("conflict"), dict) else {}
     conflict_items = list(conflict_state.get("pairs") or []) + list(conflict_state.get("multiple") or [])
-    if (
+    should_run_conflict_review = (
         not skip_before_resume_stage(artifact, "conflict_detection")
         and
-        conflict_items
+        bool(conflict_items)
         and meeting_setting(flow.config, "conflict_review", True)
         and stage_enabled(flow.config, "conflict_detection")
-    ):
+    )
+    if should_run_conflict_review:
         flow.logger.stage_started("conflict_review", "衝突審查")
         flow.logger.step_started(
             "conflict_review",
@@ -1046,7 +1122,9 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             agent="mediator",
         )
         flow.logger.stage_completed("conflict_review", "衝突審查")
-    flow.store.save_artifact(artifact)
+    elif conflict_detection_ran:
+        save_conflict_report(flow.meeting, artifact, round_num=0)
+    flow.store.save_artifact(artifact, commit_conflict_version=True)
     flow.logger.stage_completed("conflict_detection", "需求衝突辨識")
 
     flow.logger.stage_started("research_domain", "領域研究")
@@ -1076,43 +1154,40 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             agent="expert",
             action="review_domain_research_inputs",
         )
-        review = Collect.domain_research_review(references)
-        action = str((review or {}).get("action") or "approve").strip()
+        meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
+        run_referenced_files = merge_reference_paths(
+            meta.get("domain_research_referenced_files") or []
+        )
+        review = flow.collect.domain_research_review(references)
         artifact.setdefault("domain_research_reviews", []).append(review)
         artifact["domain_research_review"] = review
-        if action == "approve":
-            feedback = ""
-            referenced_files = []
-        else:
-            feedback = domain_research_review_feedback(review)
-            referenced_files = domain_research_review_references(
-                review,
-                project_id,
+        feedback, referenced_files = resolve_domain_research_review(
+            review,
+            run_referenced_files,
+            project_id,
+        )
+        meta["domain_research_referenced_files"] = referenced_files
+        if feedback:
+            meta["domain_research_user_guidance"] = feedback
+            append_review_considerations(
+                artifact,
+                normalize_review_considerations(
+                    review,
+                    stage="domain_research_review",
+                ),
             )
-        if feedback or referenced_files:
-            meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
-            if feedback:
-                meta["domain_research_user_guidance"] = feedback
-                append_review_considerations(
-                    artifact,
-                    normalize_review_considerations(
-                        review,
-                        stage="domain_research_review",
-                    ),
-                )
-            if referenced_files:
-                meta["attached_references"] = merge_reference_paths(
-                    meta.get("attached_references") or [],
-                    referenced_files,
-                )
-                meta["domain_research_referenced_files"] = merge_reference_paths(referenced_files)
-            artifact["meta"] = meta
-            flow.store.save_artifact(artifact)
+        else:
+            meta.pop("domain_research_user_guidance", None)
+        if referenced_files:
+            meta["attached_references"] = merge_reference_paths(
+                meta.get("attached_references") or [],
+                referenced_files,
+            )
         if feedback or referenced_files:
             meta.pop("research_domain_completed", None)
             meta.pop("research_domain_coverage", None)
-            artifact["meta"] = meta
-            flow.store.save_artifact(artifact)
+        artifact["meta"] = meta
+        flow.store.save_artifact(artifact)
         require_stage_inputs(flow, artifact, "research_domain")
         if not reused_research_domain:
             flow.logger.step_started(
@@ -1128,6 +1203,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             ran_research_domain = True
             if has_feedback_payload(artifact) or has_domain_research_completion_marker(artifact):
                 artifact.setdefault("meta", {})["research_domain_completed"] = True
+            else:
+                raise RuntimeError(
+                    "領域研究流程已結束，但沒有產生 feedback 或合法的無適用結果標記"
+                )
     flow.store.save_artifact(artifact)
     dr = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     if ran_research_domain and not has_feedback_payload(artifact):
@@ -1136,19 +1215,9 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             artifact.setdefault("meta", {})["research_domain_completed"] = True
             flow.store.save_artifact(artifact)
         else:
-            artifact["feedback"] = {
-                "findings": [],
-                "sources": [],
-                "constraints": [],
-                "risks": [],
-                "recommendations": [],
-                "status": "no_applicable_feedback",
-                "reason": "domain research completed without valid feedback rows",
-            }
-            artifact.setdefault("meta", {})["research_domain_completed"] = True
-            flow.store.save_artifact(artifact)
-            flow.logger.info("Expert domain research：未產生有效 feedback rows，已記錄為完成狀態")
-            dr = artifact["feedback"]
+            raise RuntimeError(
+                "領域研究沒有有效 feedback，且 Expert 未提供合法的無適用結果標記"
+            )
     if (ran_research_domain or reused_research_domain) and dr and isinstance(dr, dict) and dr:
         flow.logger.step_completed(
             "research_domain",
@@ -1181,6 +1250,7 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         has_system_models_payload(artifact)
         and artifact_path_non_empty(flow, "system_models.json")
         and not force_system_model
+        and not bool(artifact.setdefault("meta", {}).get("models_stale"))
     ):
         model_data = artifact.get("system_models", [])
         reused_system_models = True
@@ -1199,6 +1269,10 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         )
         artifact["system_models"] = model_data
         generated_system_models = True
+        model_meta = artifact.setdefault("meta", {})
+        model_meta.pop("models_stale", None)
+        model_meta.pop("models_stale_by", None)
+        model_meta.pop("models_stale_reason", None)
         flow.store.save_artifact(artifact)
         emit_model_deltas(flow, model_data)
     model_names = [
@@ -1241,7 +1315,11 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         require_stage_inputs(flow, artifact, "draft")
     elif not stage_enabled(flow.config, "draft"):
         flow.logger.info("跳過草稿化")
-    elif has_draft_payload(flow) and not force_draft:
+    elif (
+        has_draft_payload(flow)
+        and not force_draft
+        and not bool(artifact.setdefault("meta", {}).get("draft_stale"))
+    ):
         flow.logger.info("✓ 需求草稿已存在，跳過重新生成")
     else:
         require_stage_inputs(flow, artifact, "draft")
@@ -1259,13 +1337,24 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
             agent="analyst",
             message="生成中 ...",
         )
+        draft_meta = artifact.setdefault("meta", {})
+        draft_stale = bool(draft_meta.get("draft_stale"))
+        draft_version = (
+            max(0, flow.store.get_draft_version() + 1)
+            if draft_stale
+            else 0
+        )
         draft_md = flow.analyst_agent.run_requirements_analyst(
             "create_draft",
             artifact=artifact,
-            draft_version=0,
+            draft_version=draft_version,
             artifact_dir=getattr(flow.store, "artifact_dir", None),
         )
-        flow.store.save_draft(draft_md, version=0)
+        flow.store.save_draft(draft_md, version=draft_version)
+        draft_meta.pop("draft_stale", None)
+        draft_meta.pop("draft_stale_by", None)
+        draft_meta.pop("draft_stale_reason", None)
+        draft_meta["continue_regenerated_draft_version"] = draft_version
         emit_markdown_section_deltas(
             flow,
             "draft",
@@ -1276,15 +1365,15 @@ def run_init_phase(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
         flow.logger.step_completed(
             "draft",
             "draft.create_draft",
-            "Draft v0",
+            f"Draft v{draft_version}",
             agent="analyst",
-            output_path="artifact/drafts/draft_v0.md",
+            output_path=f"artifact/drafts/draft_v{draft_version}.md",
         )
         flow.logger.artifact_created(
             "draft",
             "draft.create_draft",
-            "Draft v0 已產生",
-            "artifact/drafts/draft_v0.md",
+            f"Draft v{draft_version} 已產生",
+            f"artifact/drafts/draft_v{draft_version}.md",
         )
     flow.logger.stage_completed("draft", "草稿化")
 

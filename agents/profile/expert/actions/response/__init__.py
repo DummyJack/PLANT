@@ -1,6 +1,8 @@
 # Routes expert response prompts by meeting issue type.
 from typing import Any, Dict, List, Optional
 
+from agents.profile.base import response_prompt_kind
+
 from . import answer, conflict, elicitation, issue as issue_prompt, resolution
 
 
@@ -10,23 +12,13 @@ def issue_response(
     previous_responses: Optional[List[Dict[str, Any]]],
     related_context: Optional[Dict[str, Any]],
 ) -> str:
-    issue_id = str(issue.get("id") or "").strip()
-    category = str(issue.get("category") or "").strip()
-    contract = issue.get("conflict_review_contract") if isinstance(issue.get("conflict_review_contract"), dict) else {}
-    is_pair_review = (
-        category == "resolve_conflict"
-        and str(contract.get("type") or "").strip() == "pair_reviews"
-    )
-    if issue_id == "OQ":
-        target = answer
-    elif issue_id.startswith("ELICIT-"):
-        target = elicitation
-    elif is_pair_review:
-        target = conflict
-    elif category == "resolve_conflict":
-        target = resolution
-    else:
-        target = issue_prompt
+    target = {
+        "answer": answer,
+        "conflict": conflict,
+        "elicitation": elicitation,
+        "issue": issue_prompt,
+        "resolution": resolution,
+    }[response_prompt_kind(issue)]
     return target.issue_response(
         issue=issue,
         previous_responses=previous_responses,

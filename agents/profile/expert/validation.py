@@ -99,9 +99,6 @@ trusted_company_path_terms = (
 )
 
 
-# ========
-# Defines usable source URL function for this module workflow.
-# ========
 def usable_source_url(url: str) -> bool:
     parsed = urlparse(clean_text(url))
     host = parsed.netloc.lower()
@@ -113,9 +110,6 @@ def usable_source_url(url: str) -> bool:
     return bool(parsed.scheme in {"http", "https"} and parsed.netloc)
 
 
-# ========
-# Defines credible source URL function for this module workflow.
-# ========
 def credible_source_url(url: str) -> bool:
     if not usable_source_url(url):
         return False
@@ -130,18 +124,12 @@ def credible_source_url(url: str) -> bool:
     return any(term in path for term in trusted_company_path_terms)
 
 
-# ========
-# Defines clean text function for this module workflow.
-# ========
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
 
 
-# ========
-# Defines clean source text function for this module workflow.
-# ========
 def clean_source_text(value: Any) -> str:
     text = clean_text(value)
     if not text:
@@ -155,9 +143,6 @@ def clean_source_text(value: Any) -> str:
     return text.strip()
 
 
-# ========
-# Defines source urls function for this module workflow.
-# ========
 def source_urls(values: Any) -> List[str]:
     if values is None:
         return []
@@ -178,9 +163,6 @@ def source_urls(values: Any) -> List[str]:
     return urls
 
 
-# ========
-# Defines source title from URL function for this module workflow.
-# ========
 def source_title_from_url(url: str) -> str:
     text = clean_text(url)
     parsed = urlparse(text)
@@ -193,9 +175,6 @@ def source_title_from_url(url: str) -> str:
     return host or text
 
 
-# ========
-# Defines source records function for this module workflow.
-# ========
 def source_records(values: Any) -> List[Dict[str, str]]:
     if values is None:
         return []
@@ -234,14 +213,19 @@ def source_records(values: Any) -> List[Dict[str, str]]:
         key = url
         if key in seen:
             continue
-        rows.append({"title": title, "url": url})
+        row = {
+            "title": title,
+            "url": url,
+            "type": "web",
+        }
+        source_id = clean_source_text(value.get("id"))
+        if source_id:
+            row["id"] = source_id
+        rows.append(row)
         seen.add(key)
     return rows
 
 
-# ========
-# Defines requires URL sources function for this module workflow.
-# ========
 def requires_url_sources(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -260,16 +244,35 @@ def requires_url_sources(payload: Any) -> bool:
     return False
 
 
-# ========
-# Defines has research content function for this module workflow.
-# ========
 def has_research_content(payload: Dict[str, Any]) -> bool:
     return any(bool(payload.get(field)) for field in research_fields)
 
 
-# ========
-# Defines compact list function for this module workflow.
-# ========
+def enforce_research_boundaries(
+    payload: Dict[str, Any],
+    *,
+    allowed_requirement_ids: set[str] | None = None,
+    context_source: str = "",
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    source_ref = clean_source_text(context_source)
+    for field in trace_fields:
+        rows = payload.get(field)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            refs = requirement_refs(row.get("related_requirement_ids"))
+            if allowed_requirement_ids is not None:
+                refs = [ref for ref in refs if ref in allowed_requirement_ids]
+            row["related_requirement_ids"] = refs
+            if source_ref:
+                row["source"] = source_ref
+    return payload
+
+
 def compact_list(values: Any) -> List[Any]:
     if values is None:
         return []
@@ -298,9 +301,6 @@ def compact_list(values: Any) -> List[Any]:
     return rows
 
 
-# ========
-# Defines requirement refs function for this module workflow.
-# ========
 def requirement_refs(values: Any) -> List[str]:
     if values is None:
         return []
@@ -320,9 +320,6 @@ def requirement_refs(values: Any) -> List[str]:
     return refs
 
 
-# ========
-# Defines research items function for this module workflow.
-# ========
 def research_items(values: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -342,6 +339,9 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
         source_ids = requirement_refs(value.get("source_ids"))
         if source_ids:
             row["source_ids"] = source_ids
+        source_paths = requirement_refs(value.get("source_paths"))
+        if source_paths:
+            row["source_paths"] = source_paths
         trace_reason = clean_text(value.get("trace_reason"))
         if trace_reason:
             row["trace_reason"] = trace_reason
@@ -356,36 +356,110 @@ def research_items(values: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-# ========
-# Defines clean research result function for this module workflow.
-# ========
+def resolve_web_source_ids(values: Any, valid_source_ids: list[str]) -> List[str]:
+    """Resolve only IDs that can be proven from the current source inventory."""
+    valid_ids = list(
+        dict.fromkeys(
+            clean_text(value)
+            for value in valid_source_ids
+            if clean_text(value)
+        )
+    )
+    requested = requirement_refs(values)
+    if not requested:
+        return valid_ids if len(valid_ids) == 1 else []
+
+    resolved: List[str] = []
+    for source_id in requested:
+        if source_id in valid_ids:
+            resolved.append(source_id)
+            continue
+        match = re.fullmatch(r"SRC-(\d+)", source_id, flags=re.IGNORECASE)
+        if match:
+            index = int(match.group(1)) - 1
+            if 0 <= index < len(valid_ids):
+                resolved.append(valid_ids[index])
+                continue
+        return []
+    return list(dict.fromkeys(resolved))
+
+
+def evidence_source_inventory(source: Dict[str, Any]) -> tuple[set[str], set[str]]:
+    raw_sources = source.get("sources") if isinstance(source.get("sources"), list) else []
+    valid_web_source_ids = {
+        clean_text(item.get("id"))
+        for item in raw_sources
+        if isinstance(item, dict)
+        and clean_text(item.get("id"))
+        and credible_source_url(clean_text(item.get("url")))
+    }
+    valid_file_paths = {
+        clean_text(item.get("url"))
+        for item in raw_sources
+        if isinstance(item, dict)
+        and clean_text(item.get("type")).lower() == "file"
+        and clean_text(item.get("url"))
+    }
+    return valid_web_source_ids, valid_file_paths
+
+
+def validate_traceable_evidence(source: Dict[str, Any]) -> None:
+    valid_web_source_ids, valid_file_paths = evidence_source_inventory(source)
+    ordered_web_source_ids = [
+        clean_text(item.get("id"))
+        for item in (source.get("sources") or [])
+        if isinstance(item, dict)
+        and clean_text(item.get("id")) in valid_web_source_ids
+    ]
+    for field in trace_fields:
+        for index, row in enumerate(source.get(field) or [], 1):
+            if not isinstance(row, dict):
+                continue
+            evidence_type = clean_text(row.get("evidence_type") or row.get("source_type")).lower()
+            if evidence_type == "web":
+                source_ids = requirement_refs(row.get("source_ids"))
+                resolved_ids = resolve_web_source_ids(source_ids, ordered_web_source_ids)
+                if not resolved_ids:
+                    invalid_ids = [
+                        source_id
+                        for source_id in source_ids
+                        if source_id not in valid_web_source_ids
+                    ]
+                    detail = ", ".join(invalid_ids) if invalid_ids else "<empty>"
+                    raise ValueError(
+                        f"{field}[{index}] web source_ids invalid: {detail}"
+                    )
+                row["source_ids"] = resolved_ids
+            elif evidence_type == "project_document":
+                source_paths = requirement_refs(row.get("source_paths"))
+                invalid_paths = [path for path in source_paths if path not in valid_file_paths]
+                if not source_paths or invalid_paths:
+                    detail = ", ".join(invalid_paths) if invalid_paths else "<empty>"
+                    raise ValueError(f"{field}[{index}] project_document source_paths invalid: {detail}")
+
+
 def clean_research_result(raw: Any, *, context_source: str = "") -> Dict[str, Any]:
     _ = context_source
     source = raw.get("research_evidence") if isinstance(raw, dict) and isinstance(raw.get("research_evidence"), dict) else {}
-    result: Dict[str, Any] = {}
-
-    result["findings"] = research_items(source.get("findings"))
-    result["sources"] = source_records(source.get("sources"))
-    result["constraints"] = research_items(source.get("constraints"))
-    result["risks"] = research_items(source.get("risks"))
-    result["recommendations"] = research_items(source.get("recommendations"))
-    return result if has_research_content(result) else {}
+    return clean_research_payload(source)
 
 
-# ========
-# Defines clean feedback function for this module workflow.
-# ========
 def clean_feedback(raw: Any, *, context_source: str = "") -> Dict[str, Any]:
     _ = context_source
     if not isinstance(raw, dict) or not isinstance(raw.get("feedback"), dict):
         return {}
-    source = raw.get("feedback") or {}
-    result = {}
+    return clean_research_payload(raw.get("feedback") or {})
 
-    for field in research_fields:
-        if field in trace_fields:
-            result[field] = research_items(source.get(field))
-        else:
-            result[field] = source_records(source.get(field))
+
+def clean_research_payload(source: Dict[str, Any]) -> Dict[str, Any]:
+    validate_traceable_evidence(source)
+    result = {
+        field: (
+            research_items(source.get(field))
+            if field in trace_fields
+            else source_records(source.get(field))
+        )
+        for field in research_fields
+    }
 
     return result if has_research_content(result) else {}

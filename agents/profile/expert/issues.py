@@ -7,9 +7,7 @@ from agents.profile.base import proposal_prompt
 from .actions.response import issue_response
 
 
-# Defines ExpertIssues class for this module workflow.
 class ExpertIssues:
-    # Defines propose issues function for this module workflow.
     def propose_issues(
         self,
         artifact: Dict[str, Any],
@@ -34,7 +32,6 @@ class ExpertIssues:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
-    # Defines obs issue function for this module workflow.
     def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
         return {
@@ -46,7 +43,6 @@ class ExpertIssues:
             "artifact_slices": artifact.get("artifact_slices") if isinstance(artifact.get("artifact_slices"), dict) else {},
         }
 
-    # Defines decide issue function for this module workflow.
     def decide_issue(
         self,
         *,
@@ -66,7 +62,6 @@ class ExpertIssues:
             "reasoning": "從外部義務、domain risk 與 evidence gap 角度提出需要會議處理的議題。",
         }
 
-    # Defines run issue action function for this module workflow.
     def run_issue_action(
         self,
         *,
@@ -123,7 +118,6 @@ class ExpertIssues:
             "summary": f"Expert 提出 {len(proposals)} 筆 issue proposal",
         }
 
-    # Defines issue payload function for this module workflow.
     def issue_payload(
         self,
         data: Dict[str, Any],
@@ -169,7 +163,9 @@ class ExpertIssues:
                 raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
             issue_level = str(row.get("issue_level") or "").strip().lower()
             if issue_level not in {"blocking", "improvement"}:
-                issue_level = "blocking" if importance == "high" else "improvement"
+                raise ValueError(
+                    f"issues[{idx}] issue_level must be blocking or improvement"
+                )
 
             key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:
@@ -193,7 +189,6 @@ class ExpertIssues:
                 break
         return proposals
 
-    # Defines build response function for this module workflow.
     def build_response(
         self,
         *,

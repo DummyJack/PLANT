@@ -38,7 +38,6 @@ analyst_system = """你是一位專業需求分析師。
 - 不把未確認內容寫成正式需求。"""
 
 
-# Defines AnalystAgent class for this module workflow.
 class AnalystAgent(
     AnalystIssues,
     AnalystPlan,
@@ -55,7 +54,6 @@ class AnalystAgent(
 
     system_prompt = ""
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -72,6 +70,5 @@ class AnalystAgent(
         )
         self.system_prompt = analyst_system
 
-    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return analyst_tool_usage_policy()

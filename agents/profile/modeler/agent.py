@@ -32,7 +32,6 @@ modeler_system = """你是一位專業系統建模者。
 - 不替人類裁定需求取捨。"""
 
 
-# Defines ModelerAgent class for this module workflow.
 class ModelerAgent(
     ModelerResponse,
     ModelerModeling,
@@ -44,7 +43,6 @@ class ModelerAgent(
 
     system_prompt = modeler_system
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -60,6 +58,5 @@ class ModelerAgent(
             project_config=project_config,
         )
 
-    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return modeler_tool_usage_policy()

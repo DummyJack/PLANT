@@ -5,9 +5,6 @@ from typing import Any, Dict, List, Optional
 from utils.language import output_language_directive
 
 
-# ========
-# Defines judge options function for this module workflow.
-# ========
 def judge_options(
     *,
     issue: Dict[str, Any],
@@ -77,9 +74,6 @@ def judge_options(
 }}"""
 
 
-# ========
-# Defines closure vote function for this module workflow.
-# ========
 def closure_vote(
     *,
     role: str,

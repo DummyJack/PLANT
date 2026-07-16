@@ -15,9 +15,7 @@ from .rules import (
 )
 
 
-# Defines UserResponse class for this module workflow.
 class UserResponse:
-    # Defines build stakeholder contract function for this module workflow.
     def build_stakeholder_contract(
         self,
         related_context: Optional[Dict[str, Any]],
@@ -27,7 +25,6 @@ class UserResponse:
             stakeholders=self.stakeholders or [],
         )
 
-    # Defines build response function for this module workflow.
     def build_response(
         self,
         *,
@@ -92,7 +89,14 @@ class UserResponse:
 
         context_text = ""
         if related_context:
-            context_text = f"\n# 當前專案資料（供參考）\n{json.dumps(related_context, ensure_ascii=False, indent=2)}"
+            context_text = (
+                "\n# 當前專案資料（供參考）\n"
+                + json.dumps(
+                    related_context,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         is_elicitation = str(issue.get("id") or "").startswith("ELICIT-")
         is_answer_question = str(issue.get("id") or "") == "OQ"
 
@@ -145,7 +149,6 @@ class UserResponse:
             target_stakeholders=target_stakeholders,
         )
 
-    # Defines retry response format function for this module workflow.
     def retry_response_format(
         self,
         *,
@@ -173,21 +176,41 @@ class UserResponse:
             need_speaking_as=len(self.stakeholders or []) > 1,
             names_list_text=names_list_text,
             target_stakeholders=target_stakeholders,
+            invalid_response=response,
         )
-        return self.chat_for_issue_response(
+        repaired = self.chat_for_issue_response(
             self.build_direct_messages(retry_prompt),
             temperature=1,
             include_stance=include_stance,
             allow_pair_reviews=allow_pair_reviews,
         )
+        error_text = str(format_error or "").lower()
+        if "text" not in error_text and str(response.get("text") or "").strip():
+            repaired["text"] = response["text"]
+        if "open_questions" not in error_text and isinstance(response.get("open_questions"), list):
+            repaired["open_questions"] = response["open_questions"]
+        stance = response.get("stance")
+        if (
+            include_stance
+            and "stance" not in error_text
+            and isinstance(stance, dict)
+            and str(stance.get("state") or "").strip()
+            in {"ready_to_close", "needs_more_discussion"}
+        ):
+            repaired["stance"] = stance
+        if (
+            allow_pair_reviews
+            and "pair_review" not in error_text
+            and isinstance(response.get("pair_reviews"), list)
+        ):
+            repaired["pair_reviews"] = response["pair_reviews"]
+        return repaired
 
-    # Defines obs response function for this module workflow.
     def obs_response(self, **kwargs: Any) -> Dict[str, Any]:
         observation = self.issue_response_observation(**kwargs)
         observation["stakeholder_count"] = len(self.stakeholders or [])
         return observation
 
-    # Defines execute action function for this module workflow.
     def execute_action(
         self,
         *,
@@ -286,7 +309,6 @@ class UserResponse:
             "summary": "完成 user issue_response",
         }
 
-    # Defines resolve speaking as function for this module workflow.
     def resolve_speaking_as(
         self,
         issue: Dict[str, Any],
@@ -316,7 +338,11 @@ class UserResponse:
             raw = response.get("speaking_as")
             if isinstance(raw, str):
                 raw = [raw]
-            valid_names = {sh.get("name", "") for sh in self.stakeholders}
+            valid_names = {
+                str(sh.get("name") or "").strip()
+                for sh in self.stakeholders
+                if str(sh.get("name") or "").strip()
+            }
             speaking_as = [n for n in (raw or []) if n and n in valid_names]
             if target_set:
                 speaking_as = [name for name in speaking_as if name in target_set]
@@ -326,8 +352,6 @@ class UserResponse:
                     for sh in speaking_as_list
                     if str(sh.get("name") or "").strip()
                 ]
-            if not speaking_as and target_stakeholders:
-                speaking_as = list(target_stakeholders)
             if not speaking_as:
                 raise ValueError(
                     "user issue_response must include speaking_as with at least one valid assigned stakeholder name"

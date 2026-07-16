@@ -30,7 +30,6 @@ DEFAULT_SKILL_TOOL_ALLOWLIST: Dict[str, List[str]] = {
 
 
 @dataclass
-# Defines AgentSkillToolPolicy class for this module workflow.
 class AgentSkillToolPolicy:
 
     agent_skill_mapping: Dict[str, List[str]] = field(
@@ -43,29 +42,23 @@ class AgentSkillToolPolicy:
         default_factory=lambda: dict(DEFAULT_SKILL_TOOL_ALLOWLIST)
     )
 
-    # Defines allowed skills for agent function for this module workflow.
     def allowed_skills_for_agent(self, agent_name: str) -> List[str]:
         return list(self.agent_skill_mapping.get(agent_name, []))
 
-    # Defines allowed tools for agent function for this module workflow.
     def allowed_tools_for_agent(self, agent_name: str) -> List[str]:
         return list(self.agent_tool_mapping.get(agent_name, []))
 
-    # Defines can agent use skill function for this module workflow.
     def can_agent_use_skill(self, agent_name: str, skill_name: str) -> bool:
         return skill_name in set(self.agent_skill_mapping.get(agent_name, []))
 
-    # Defines can agent use tool function for this module workflow.
     def can_agent_use_tool(self, agent_name: str, tool_name: str) -> bool:
         return tool_name in set(self.agent_tool_mapping.get(agent_name, []))
 
-    # Defines can skill use tool function for this module workflow.
     def can_skill_use_tool(self, skill_name: str, tool_name: str) -> bool:
         if skill_name not in self.skill_tool_allowlist:
             return False
         return tool_name in set(self.skill_tool_allowlist.get(skill_name, []))
 
-    # Defines check tool access function for this module workflow.
     def check_tool_access(
         self,
         agent_name: str,
@@ -78,7 +71,6 @@ class AgentSkillToolPolicy:
             return False, f"Policy 禁止在 skill '{active_skill}' 使用工具 '{tool_name}'"
         return True, ""
 
-    # Defines validate agent assignment function for this module workflow.
     def validate_agent_assignment(
         self,
         agent_name: str,
@@ -97,7 +89,6 @@ class AgentSkillToolPolicy:
                 f"allowed_skills={sorted(allowed_skills)}, allowed_tools={sorted(allowed_tools)}"
             )
 
-    # Defines validate mapping integrity function for this module workflow.
     def validate_mapping_integrity(self) -> None:
         mapped_skills: Set[str] = set()
         for skill_list in self.agent_skill_mapping.values():

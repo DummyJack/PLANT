@@ -7,9 +7,6 @@ from agents.profile.base import (
     review_contract,
 )
 
-# ========
-# Defines tool usage policy function for this module workflow.
-# ========
 def tool_usage_policy(enabled_tools: set[str]) -> str:
     lines = []
     if "artifact_query" in enabled_tools:
@@ -71,15 +68,9 @@ expert_elicitation = f"""{elicitation_context}
 - 若沒有會改變決策的限制缺口，提出收束。
 - 不要把會議帶成一般技術選型或工程審查。"""
 
-# ========
-# Defines elicitation task function for this module workflow.
-# ========
 def elicitation_task(stop_phrase: str) -> str:
     return elicitation_action_task(stop_phrase)
 
-# ========
-# Defines elicitation rules function for this module workflow.
-# ========
 def elicitation_rules(stop_phrase: str) -> str:
     return f"""{elicitation_action_rules(stop_phrase)}
 - target_stakeholders 優先選擇能說明外部限制、營運限制、資料可信度、結果可接受性、品質邊界或風險底線的 stakeholder。

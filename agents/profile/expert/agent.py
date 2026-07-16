@@ -35,7 +35,6 @@ expert_system = """你是一位專業領域研究員。
 - 不把一般建議直接升格成需求。"""
 
 
-# Defines ExpertAgent class for this module workflow.
 class ExpertAgent(
     ExpertResponse,
     ExpertDomainResearch,
@@ -47,7 +46,6 @@ class ExpertAgent(
 
     system_prompt = expert_system
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -57,7 +55,6 @@ class ExpertAgent(
         project_config=None,
     ):
         self.doc_dir = Path(doc_dir)
-        self.doc_dir.mkdir(parents=True, exist_ok=True)
         super().__init__(
             model,
             tools=tools or [],
@@ -66,6 +63,5 @@ class ExpertAgent(
             project_config=project_config,
         )
 
-    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return expert_tool_usage_policy(set(self.tools))

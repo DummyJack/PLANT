@@ -14,9 +14,9 @@ def refine_requirement(*, source_id: str) -> str:
 
 # Action Boundary
 - action=refine_requirement
-- 本 action 將本議題的 meeting resolution 轉成 requirement_update JSON。
-- requirement_update 只描述受本議題影響的正式 REQ 修正、合併、移除與 coverage。
-- runtime 會驗證 requirement_update 後寫入 artifact.REQ / artifact.coverage。
+- 本 action 將本議題的 meeting resolution 轉成包含 REQ、remove_REQ、coverage 與 reason 的 JSON。
+- 輸出只描述受本議題影響的正式 REQ 修正、合併、移除與 coverage。
+- runtime 會驗證輸出後寫入 artifact.REQ / artifact.coverage。
 - current_REQ 是修正基底；只更新本議題影響到的 REQ。
 - current_URL 只作為本議題 trace 或來源查核，不是全量整理清單。
 - 若 context.mode=refine_granularity_cleanup 或 context.cleanup_issues 有值，本次只處理 cleanup_issues 點名的 REQ 粒度、類型或合併問題，不做其他需求精修。

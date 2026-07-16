@@ -2,9 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-# Defines UserPlan class for this module workflow.
 class UserPlan:
-    # Defines plan stakeholder function for this module workflow.
     def plan_stakeholder(
         self,
         *,
@@ -25,7 +23,6 @@ class UserPlan:
             "reasoning": f"以 User agent 情境利害關係人視角執行：{action}。",
         }
 
-    # Defines plan issue function for this module workflow.
     def plan_issue(
         self,
         *,

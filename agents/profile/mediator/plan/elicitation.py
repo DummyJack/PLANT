@@ -7,9 +7,6 @@ from storage.requirements import requirement_discussion_pool
 from ..validation import elicitation_plan
 
 
-# ========
-# Defines build elicitation plan function for this module workflow.
-# ========
 def build_elicitation_plan(
     *,
     turn: int,
@@ -97,11 +94,7 @@ meeting_phase 只用來標示本輪狀態：
 }}"""
 
 
-# ========
-# Defines ElicitationPlan class for this module workflow.
-# ========
 class ElicitationPlan:
-    # Defines run elicitation planning function for this module workflow.
     def run_elicitation_planning(
         self,
         *,

@@ -58,11 +58,8 @@ def modeling_phase_policy(phase: str) -> Dict[str, Any]:
     return dict(modeling_phase_policies.get(key) or modeling_phase_policies["align_model_issue"])
 
 
-# ========
-# Defines target prompt function for this module workflow.
-# ========
-def target_prompt(*, context: dict) -> str:
-    ctx_text = json.dumps(context, ensure_ascii=False, indent=2)
+def target_prompt(*, context: Dict[str, Any]) -> str:
+    ctx_text = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
     return f"""# 任務
 分析需求輸入與現有模型，決定本輪 system_modeling 是否需要建立或更新 high-value system model。
 
@@ -152,11 +149,7 @@ def target_prompt(*, context: dict) -> str:
 {json_only_rules()}"""
 
 
-# ========
-# Defines ModelPlan class for this module workflow.
-# ========
 class ModelPlan:
-    # Defines plan model function for this module workflow.
     def plan_model(self, state, last_observation=None):
         if not state.get("actions_taken"):
             return {
@@ -174,7 +167,6 @@ class ModelPlan:
         }
 
     @staticmethod
-    # Defines plan targets function for this module workflow.
     def plan_targets(last_observation: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not isinstance(last_observation, dict):
             return {}

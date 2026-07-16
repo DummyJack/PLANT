@@ -1,16 +1,18 @@
 # Handles main logic for project flow orchestration and stage execution.
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
 import json
-import os
 import re
 import shutil
 from pathlib import Path
 
 from utils import stage_enabled, export_enabled, force_regenerate_output
 from utils.cancel import raise_if_cancelled
+from utils.language import current_output_language, set_output_language
 from storage import markdown as markdown_storage
 from storage.export import export_project_manual, should_export_html, should_export_manual
-from flow.init_flow import emit_markdown_section_deltas
+from flow.init_flow import emit_markdown_section_deltas, upstream_requirements_signature
 from server.services.run_checkpoint import record_run_checkpoint
 
 
@@ -72,12 +74,12 @@ def _checkpoint_step(
 def sync_project_output_language(artifact: Dict[str, Any]) -> None:
     meta = artifact.setdefault("meta", {})
     explicit_lang = meta.get("output_language")
-    lang = str(explicit_lang or os.environ.get("PLANT_OUTPUT_LANGUAGE") or "zh-Hant").strip() or "zh-Hant"
-    if lang not in {"en", "zh-Hant"}:
+    lang = explicit_lang or current_output_language()
+    try:
+        set_output_language(lang, artifact)
+    except ValueError as exc:
         source = "artifact.meta.output_language" if explicit_lang else "PLANT_OUTPUT_LANGUAGE"
-        raise ValueError(f"{source} 不合法: {lang}")
-    os.environ["PLANT_OUTPUT_LANGUAGE"] = lang
-    meta["output_language"] = lang
+        raise ValueError(f"{source} 不合法: {lang}") from exc
 
 
 # ========
@@ -191,7 +193,10 @@ def formal_meeting_stage_enabled(config: Dict[str, Any]) -> bool:
 def formal_meeting_end_round(config: Dict[str, Any], *, start_round: int = 1) -> int:
     if not formal_meeting_stage_enabled(config):
         return 0
-    general_rounds = int(config.get("rounds", 1) or 1)
+    try:
+        general_rounds = max(0, int(config.get("rounds", 1)))
+    except (TypeError, ValueError):
+        general_rounds = 1
     default_enabled = stage_enabled(config, "default_formal_meeting", True)
     general_enabled = stage_enabled(config, "general_formal_meeting", True)
     if int(start_round) > 1 and general_enabled:
@@ -520,6 +525,9 @@ def run_specification_stage(
 # Defines run update drafts without meeting function for this module workflow.
 # ========
 def run_update_drafts_without_meeting(flow, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    if not stage_enabled(flow.config, "draft", True):
+        flow.logger.info("草稿化已關閉，不執行無會議草稿更新")
+        return artifact
     if not stage_enabled(flow.config, "default_update_draft", True):
         default_enabled = False
     else:
@@ -827,6 +835,12 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
     end_round = formal_meeting_end_round(flow.config) if run_formal else 0
     ran_general_meeting_this_run = False
     draft_version_before_formal = flow.store.get_draft_version()
+    prepared_artifact = flow.store.load_artifact() or {}
+    prepared_meta = (
+        prepared_artifact.get("meta")
+        if isinstance(prepared_artifact.get("meta"), dict)
+        else {}
+    )
     artifact = {
         "rough_idea": rough_idea,
         "stakeholders": [],
@@ -836,6 +850,10 @@ def run_project(flow, rough_idea: str) -> Dict[str, Any]:
         "system_models": [],
         "meta": {
             "last_round": 0,
+            "attached_references": list(prepared_meta.get("attached_references") or []),
+            "domain_research_referenced_files": list(
+                prepared_meta.get("domain_research_referenced_files") or []
+            ),
         },
     }
     artifact = flow.ensure_artifact_contract(artifact)
@@ -930,7 +948,12 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
         flow.logger.stage_started("init", "初始階段")
         flow.logger.info("=== 初始階段 ===")
         _check_flow_cancelled(flow)
-        artifact = flow.run_init_phase(artifact)
+        flow._continue_upstream_signature = upstream_requirements_signature(artifact)
+        try:
+            artifact = flow.run_init_phase(artifact)
+        finally:
+            if hasattr(flow, "_continue_upstream_signature"):
+                delattr(flow, "_continue_upstream_signature")
         flow.store.save_artifact(artifact)
         flow.logger.stage_completed("init", "初始階段")
 
@@ -980,14 +1003,22 @@ def run_continue_project(flow, existing_artifact: Dict[str, Any]) -> Dict[str, A
     _check_flow_cancelled(flow)
     draft_version_after_formal = flow.store.get_draft_version()
     generated_new_draft_this_run = draft_version_after_formal > draft_version_before_formal
+    continue_upstream_changed = bool(
+        artifact.setdefault("meta", {}).pop("continue_upstream_changed_this_run", False)
+    )
     if ran_general_meeting_this_run and generated_new_draft_this_run:
         artifact.setdefault("meta", {})["general_meeting_ran_this_run"] = True
         flow.store.save_artifact(artifact)
     run_specification_stage(
         flow,
         artifact,
-        force_regenerate=generated_new_draft_this_run,
+        force_regenerate=(generated_new_draft_this_run or continue_upstream_changed),
     )
+    if continue_upstream_changed:
+        stale_meta = artifact.setdefault("meta", {})
+        stale_meta.pop("specification_stale", None)
+        stale_meta.pop("export_stale", None)
+        flow.store.save_artifact(artifact)
     _check_flow_cancelled(flow)
     run_output_stage(flow)
     flow.logger.info("流程完成！")

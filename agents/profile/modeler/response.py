@@ -2,13 +2,10 @@
 from typing import Any, Dict, Optional
 
 
-# Defines ModelerResponse class for this module workflow.
 class ModelerResponse:
-    # Defines obs response function for this module workflow.
     def obs_response(self, **kwargs: Any) -> Dict[str, Any]:
         return self.issue_response_observation(**kwargs)
 
-    # Defines plan actions function for this module workflow.
     def plan_actions(
         self,
         *,
@@ -29,7 +26,6 @@ class ModelerResponse:
             last_result=last_result,
         )
 
-    # Defines execute action function for this module workflow.
     def execute_action(
         self,
         *,

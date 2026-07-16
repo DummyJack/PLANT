@@ -6,13 +6,10 @@ from .feedback import research_source
 from .plan import external_research_required
 
 
-# Defines ExpertResponse class for this module workflow.
 class ExpertResponse:
-    # Defines obs response function for this module workflow.
     def obs_response(self, **kwargs: Any) -> Dict[str, Any]:
         return self.issue_response_observation(**kwargs)
 
-    # Defines plan actions function for this module workflow.
     def plan_actions(
         self,
         *,
@@ -51,7 +48,7 @@ class ExpertResponse:
                                 "id": "research_domain",
                                 "action": "research_domain",
                                 "params": {},
-                            "reasoning": "外部查證訊號需要先取得或更新 feedback，再產生會議發言。",
+                                "reasoning": "外部查證訊號需要先取得或更新 feedback，再產生會議發言。",
                             }
                         ],
                     },
@@ -69,7 +66,6 @@ class ExpertResponse:
             last_result=last_result,
         )
 
-    # Defines execute action function for this module workflow.
     def execute_action(
         self,
         *,
@@ -122,7 +118,6 @@ class ExpertResponse:
         return expert_action_result or {"action": action, "summary": f"完成 expert action: {action}"}
 
     @staticmethod
-    # Defines apply research context function for this module workflow.
     def apply_research_context(
         artifact: Dict[str, Any],
         *,
@@ -162,7 +157,6 @@ class ExpertResponse:
         }
 
     @staticmethod
-    # Defines feedback for source function for this module workflow.
     def feedback_for_source(feedback: Any, source_ref: str) -> Dict[str, Any]:
         if not isinstance(feedback, dict) or not str(source_ref or "").strip():
             return {}

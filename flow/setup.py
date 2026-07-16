@@ -1,4 +1,5 @@
 # Handles setup logic for project flow orchestration and stage execution.
+import logging
 from typing import Dict, Any, Optional
 from agents.base import AgentRegistry
 from agents.tools.policy import AgentSkillToolPolicy
@@ -26,7 +27,7 @@ from .finalize_flow import (
     generate_srs as flow_generate_srs,
 )
 from storage import Store
-from utils import Logger, human_setting
+from utils import Collect, Logger, human_setting
 from agents.tools import ToolRegistry
 
 
@@ -57,10 +58,18 @@ class Flow:
     # ========
     # Defines __init__ function for this module workflow.
     # ========
-    def __init__(self, config: Dict[str, Any], store: Store, logger: Logger):
+    def __init__(self, config: Dict[str, Any], store: Store, logger: Logger, collect=None):
         self.config = config
         self.store = store
         self.logger = logger
+
+        def report_runtime_log(status: str, message: str) -> None:
+            runtime_logger = logging.getLogger("Plant.PlantUMLRuntime")
+            log_method = runtime_logger.error if status == "failed" else runtime_logger.info
+            log_method(message)
+
+        self.store.runtime_log_callback = report_runtime_log
+        self.collect = collect or Collect
 
         self.agent_models = {
             "user": self.build_agent_model("user"),
@@ -75,13 +84,15 @@ class Flow:
         enable_agents = config.get("enable_agents") or {}
         self.policy = AgentSkillToolPolicy()
         artifact_path = None
+        doc_path = getattr(self.store, "doc_dir", "doc")
         if getattr(self.store, "project_id", None) and hasattr(self.store, "artifact_dir"):
             artifact_path = str(self.store.artifact_dir)
+            doc_path = self.store.doc_dir / str(self.store.project_id)
         self.tool_registry = ToolRegistry(
             config=self.config,
             policy=self.policy,
             artifact_path=artifact_path,
-            doc_dir=str(getattr(self.store, "doc_dir", "doc")),
+            doc_dir=str(doc_path),
         )
 
         analyst_tools = self.tool_registry.build_tools_for_agent("analyst")
@@ -107,7 +118,7 @@ class Flow:
             self.agent_models["expert"],
             tools=expert_tools,
             registry=self.registry,
-            doc_dir="doc",
+            doc_dir=str(doc_path),
             project_config=self.config,
         )
         self.mediator_agent = MediatorAgent(

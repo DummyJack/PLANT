@@ -7,9 +7,6 @@ from agents.profile.base import (
     review_contract,
 )
 
-# ========
-# Defines tool usage policy function for this module workflow.
-# ========
 def tool_usage_policy() -> str:
     return """- artifact_query 用於查詢需求、scope、feedback、open_questions 與既有 models。
 - 若議題、trace、source 或前文出現 URL-*、REQ-*、SM-*、CR-*，優先用 artifact_query mode=related_context, item_id=<id>, compact=true 取得關聯脈絡；需要整體模型清單時才用 get_section。
@@ -19,9 +16,6 @@ def tool_usage_policy() -> str:
 - 資訊不足時不要硬畫未確認元素，不可用圖反推新增需求。"""
 
 
-# ========
-# Defines use case text output rules function for this module workflow.
-# ========
 def use_case_text_rules() -> str:
     return """- 只能整理圖中已出現的 actor 與 use case；不要補入圖中沒有的 use case。
 - related_requirement_ids 只能引用輸入中存在的 REQ-* 或 URL-*。
@@ -32,9 +26,6 @@ def use_case_text_rules() -> str:
 - 若需求、圖或補充背景沒有足夠線索可判斷具體頁面或介面，interface 填「待補充」，不要依領域常識自行推測。"""
 
 
-# ========
-# Defines model input boundary rules function for this module workflow.
-# ========
 def model_input_boundary_rules() -> str:
     return """# Project Boundary
 - 只根據輸入中的需求與已接受脈絡建模。
@@ -43,9 +34,6 @@ def model_input_boundary_rules() -> str:
 - PlantUML 語法、diagram type 與 JSON key 維持英文；不要把語法關鍵字翻成中文。"""
 
 
-# ========
-# Defines model language rules function for this module workflow.
-# ========
 def model_language_rules() -> str:
     return """# Diagram Language Rules
 - 圖中業務元素、狀態、關聯標籤使用目前輸出語系；若需求文件是繁體中文，圖中業務文字使用繁體中文。
@@ -54,18 +42,12 @@ def model_language_rules() -> str:
 - PlantUML 語法關鍵字與型別標註仍維持 PlantUML 可解析格式；不要把 class、enum、String、DateTime、Boolean 等語法或型別關鍵字翻成中文。"""
 
 
-# ========
-# Defines model create rules function for this module workflow.
-# ========
 def model_create_rules() -> str:
     return """# Create Model Rules
 - 根據需求輸入建立新的需求層級模型。
 - 資訊不足時保留抽象元素，不要臆測補入未被需求支持的 actor、class、state、message 或流程。"""
 
 
-# ========
-# Defines model update rules function for this module workflow.
-# ========
 def model_update_rules() -> str:
     return """# Update Model Rules
 - 以上一版 PlantUML 為基礎，只修改受本次需求輸入或修訂脈絡影響的元素。
@@ -73,17 +55,11 @@ def model_update_rules() -> str:
 - 不要因格式整理而改變原圖需求語意。"""
 
 
-# ========
-# Defines model output schema function for this module workflow.
-# ========
 def model_output_schema(*, diagram_type: str, description_field: str) -> str:
     return f"""# Output JSON
 {{"name": "簡短直觀的模型名稱", "type": "{diagram_type}", "plantuml": "@startuml\\n...\\n@enduml", "related_requirement_ids": ["REQ-1"]{description_field}}}"""
 
 
-# ========
-# Defines model layout hint function for this module workflow.
-# ========
 def model_layout_hint(diagram_type: str) -> str:
     hints = {
         "context_diagram": """
@@ -128,9 +104,6 @@ state_machine 只描述一個業務物件的生命週期；不要把一般流程
     return hints.get(str(diagram_type or "").strip(), "")
 
 
-# ========
-# Defines model description contract function for this module workflow.
-# ========
 def model_description_contract(diagram_type: str) -> tuple[str, str]:
     diagram_type = str(diagram_type or "").strip()
     if diagram_type == "context_diagram":
@@ -212,15 +185,9 @@ modeler_elicitation = f"""{elicitation_context}
 - 若需要提問，只提出最會影響流程、參與者互動、輸入/輸出、狀態或例外邊界的那一個問題。
 - 若目前流程、操作與例外理解已足夠，提出收束，不要為了模型細節硬問。"""
 
-# ========
-# Defines elicitation task function for this module workflow.
-# ========
 def elicitation_task(stop_phrase: str) -> str:
     return elicitation_action_task(stop_phrase)
 
-# ========
-# Defines elicitation rules function for this module workflow.
-# ========
 def elicitation_rules(stop_phrase: str) -> str:
     return f"""{elicitation_action_rules(stop_phrase)}
 - target_stakeholders 優先選擇最清楚實際操作流程、交接、例外處理、狀態判斷或人工介入的 stakeholder。

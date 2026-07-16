@@ -33,9 +33,6 @@ create_draft_sections = {
 update_draft_sections = set(draft_section_order)
 
 
-# ========
-# Defines draft stakeholders function for this module workflow.
-# ========
 def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for stakeholder in artifact.get("stakeholders", []) or []:
@@ -63,9 +60,6 @@ def draft_stakeholders(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-# ========
-# Defines draft open questions function for this module workflow.
-# ========
 def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
@@ -84,9 +78,6 @@ def draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-# ========
-# Defines draft resolution open questions function for this module workflow.
-# ========
 def draft_resolution_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for discussion in artifact.get("discussions", []) or []:
@@ -127,14 +118,10 @@ def draft_resolution_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, 
     return rows
 
 
-# ========
-# Defines consolidated draft open questions function for this module workflow.
-# ========
 def consolidated_draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen: set[str] = set()
 
-    # Defines add function for this module workflow.
     def add(row: Dict[str, Any], *, default_source: str = "") -> None:
         text = str(row.get("question") or "").strip()
         if not text:
@@ -167,9 +154,6 @@ def consolidated_draft_open_questions(artifact: Dict[str, Any]) -> List[Dict[str
     return rows
 
 
-# ========
-# Defines compact draft action result function for this module workflow.
-# ========
 def compact_draft_action_result(result: Dict[str, Any]) -> Dict[str, Any]:
     action = str(result.get("action") or "").strip()
     compact: Dict[str, Any] = {}
@@ -221,9 +205,6 @@ def compact_draft_action_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return compact
 
 
-# ========
-# Defines draft feedback function for this module workflow.
-# ========
 def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
     feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
     out: Dict[str, Any] = {}
@@ -262,9 +243,6 @@ def draft_feedback(artifact: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-# ========
-# Defines draft meeting context function for this module workflow.
-# ========
 def draft_meeting_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for discussion in artifact.get("discussions", []) or []:
@@ -318,9 +296,6 @@ def draft_meeting_context(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-# ========
-# Defines draft system models function for this module workflow.
-# ========
 def draft_system_models(
     artifact: Dict[str, Any],
     artifact_dir: Optional[Any] = None,
@@ -380,9 +355,6 @@ def draft_system_models(
     return rows
 
 
-# ========
-# Defines draft requirement id issues function for this module workflow.
-# ========
 def draft_requirement_id_issues(md: str, expected_ids: set[str]) -> tuple[List[str], List[str]]:
     draft_req_ids = set(re.findall(r"\bURL-\d+\b", md or ""))
     unknown_ids = sorted(draft_req_ids - expected_ids)
@@ -390,9 +362,6 @@ def draft_requirement_id_issues(md: str, expected_ids: set[str]) -> tuple[List[s
     return unknown_ids, missing_ids
 
 
-# ========
-# Defines draft contract issues function for this module workflow.
-# ========
 def draft_contract_issues(
     md: str,
     req_rows: List[Dict[str, Any]],
@@ -468,18 +437,12 @@ def draft_contract_issues(
     return issues
 
 
-# ========
-# Defines markdown list function for this module workflow.
-# ========
 def markdown_list(items: Any, *, indent: str = "  - ") -> List[str]:
     if not isinstance(items, list):
         return []
     return [f"{indent}{str(item).strip()}" for item in items if str(item).strip()]
 
 
-# ========
-# Defines req source text function for this module workflow.
-# ========
 def req_source_text(value: Any) -> str:
     if isinstance(value, str):
         text = value.strip()
@@ -496,9 +459,6 @@ def req_source_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-# ========
-# Defines markdown table cell function for this module workflow.
-# ========
 def markdown_table_cell(value: Any) -> str:
     if isinstance(value, list):
         text = "、".join(str(item).strip() for item in value if str(item).strip())
@@ -520,9 +480,6 @@ def markdown_table_cell(value: Any) -> str:
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
-# ========
-# Defines markdown source link function for this module workflow.
-# ========
 def markdown_source_link(source: Any, index: int) -> str:
     title = ""
     url = ""
@@ -538,9 +495,6 @@ def markdown_source_link(source: Any, index: int) -> str:
     return title if title == url else f"{title} ({url})"
 
 
-# ========
-# Defines source label function for this module workflow.
-# ========
 def source_label(row: Dict[str, Any]) -> str:
     source = req_source_text(row.get("source"))
     if source:
@@ -548,9 +502,6 @@ def source_label(row: Dict[str, Any]) -> str:
     return "initial"
 
 
-# ========
-# Defines stakeholder label function for this module workflow.
-# ========
 def stakeholder_label(row: Dict[str, Any]) -> str:
     stakeholder = row.get("stakeholder")
     if isinstance(stakeholder, dict):
@@ -560,17 +511,11 @@ def stakeholder_label(row: Dict[str, Any]) -> str:
     return ""
 
 
-# ========
-# Defines render draft title function for this module workflow.
-# ========
 def render_draft_title(context: Dict[str, Any]) -> str:
     _ = context
     return "# Draft"
 
 
-# ========
-# Defines render scope section function for this module workflow.
-# ========
 def render_scope_section(scope: Dict[str, Any]) -> str:
     if not isinstance(scope, dict):
         return ""
@@ -599,9 +544,6 @@ def render_scope_section(scope: Dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-# ========
-# Defines render user requirements section function for this module workflow.
-# ========
 def render_user_requirements_section(url_rows: List[Dict[str, Any]]) -> str:
     rows = [row for row in (url_rows or []) if isinstance(row, dict)]
     if not rows:
@@ -631,9 +573,6 @@ def render_user_requirements_section(url_rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n" if len(lines) > 3 else ""
 
 
-# ========
-# Defines render feedback section function for this module workflow.
-# ========
 def render_feedback_section(feedback: Dict[str, Any]) -> str:
     if not isinstance(feedback, dict):
         return ""
@@ -679,9 +618,6 @@ def render_feedback_section(feedback: Dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n" if has_content else ""
 
 
-# ========
-# Defines render open questions section function for this module workflow.
-# ========
 def render_open_questions_section(open_questions: List[Dict[str, Any]]) -> str:
     rows = [row for row in (open_questions or []) if isinstance(row, dict)]
     if not rows:
@@ -709,9 +645,6 @@ def render_open_questions_section(open_questions: List[Dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n" if len(lines) > 3 else ""
 
 
-# ========
-# Defines render system models section function for this module workflow.
-# ========
 def render_system_models_section(
     system_models: List[Dict[str, Any]],
     valid_req_ids: Optional[set[str]] = None,
@@ -781,9 +714,6 @@ def render_system_models_section(
     return "\n".join(lines).rstrip() + "\n"
 
 
-# ========
-# Defines render system requirement section function for this module workflow.
-# ========
 def render_system_requirement_section(req_rows: List[Dict[str, Any]]) -> str:
     lines = ["## System Requirement", ""]
     for row in req_rows or []:
@@ -827,9 +757,6 @@ def render_system_requirement_section(req_rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-# ========
-# Defines render complete draft function for this module workflow.
-# ========
 def render_complete_draft(
     context: Dict[str, Any],
     *,
@@ -885,9 +812,7 @@ def render_complete_draft(
     return normalize_model_image_markdown("\n\n".join(sections).strip() + "\n")
 
 
-# ========
 # Defines draft plan helpers for this module workflow.
-# ========
 def context_has_draft_section(context: Dict[str, Any], section_id: str) -> bool:
     if section_id == "scope":
         scope = context.get("scope") if isinstance(context.get("scope"), dict) else {}
@@ -983,11 +908,7 @@ def parse_draft_plan(raw: str, context: Dict[str, Any], *, mode: str) -> Dict[st
 
 
 
-# ========
-# Defines AnalystDraft class for this module workflow.
-# ========
 class AnalystDraft:
-    # Defines create draft function for this module workflow.
     def create_draft(
         self,
         artifact: Dict[str, Any],
@@ -1064,7 +985,6 @@ class AnalystDraft:
 
         return normalize_model_image_markdown(md)
 
-    # Defines update draft function for this module workflow.
     def update_draft(
         self,
         artifact: Dict[str, Any],

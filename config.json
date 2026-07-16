@@ -1,6 +1,7 @@
 {
   "rounds": 2,
   "max_issues": 2,
+  "max_conflict_attempts": 2,
   "max_stakeholders": 7,
   "elicitation_max_turns": 4,
   "human_skip_judge": false,
@@ -85,6 +86,10 @@
   "api_state": {
     "openai": "valid",
     "gemini": "untested",
-    "claude": "untested"
+    "claude": "invalid"
+  },
+  "preflight": {
+    "system": false,
+    "server": false
   }
 }

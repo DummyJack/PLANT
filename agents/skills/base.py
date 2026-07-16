@@ -9,9 +9,6 @@ SKILLS_ROOT = Path(__file__).resolve().parent
 skill_cache: Dict[str, Dict[str, Any]] = {}
 
 
-# ========
-# Defines parse frontmatter function for this module workflow.
-# ========
 def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
     if not match:
@@ -28,9 +25,6 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
     return attrs, body.strip()
 
 
-# ========
-# Defines get skill function for this module workflow.
-# ========
 def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
     if use_cache and skill_name in skill_cache:
         return skill_cache[skill_name]
@@ -115,11 +109,7 @@ def get_skill(skill_name: str, use_cache: bool = True) -> Dict[str, Any]:
     return result
 
 
-# ========
-# Defines SkillSupport class for this module workflow.
-# ========
 class SkillSupport:
-    # Defines validate skill usage function for this module workflow.
     def validate_skill_usage(self, skill_name: str) -> None:
         if skill_name not in self.skill_names:
             raise ValueError(
@@ -128,7 +118,6 @@ class SkillSupport:
         if self.policy and not self.policy.can_agent_use_skill(self.name, skill_name):
             raise ValueError(f"Policy 禁止 Agent '{self.name}' 使用 skill '{skill_name}'")
 
-    # Defines build skill messages function for this module workflow.
     def build_skill_messages(
         self,
         skill: Dict[str, Any],
@@ -157,7 +146,7 @@ class SkillSupport:
         if context is not None:
             user_parts.append(
                 "# Context\n"
-                f"{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
+                f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'))}\n\n"
             )
         if task.lstrip().startswith("# 任務"):
             user_parts.append(task)
@@ -181,13 +170,14 @@ class SkillSupport:
             {"role": "user", "content": "\n".join(user_parts)},
         ]
 
-    # Defines run skill messages function for this module workflow.
     def run_skill_messages(
         self,
         skill_name: str,
         messages: List[Dict[str, str]],
+        *,
+        use_tools: bool = False,
     ) -> str:
-        if self.tools:
+        if use_tools and self.tools:
             return self.chat_with_tools(
                 messages,
                 active_skill=skill_name,

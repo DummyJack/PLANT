@@ -1,6 +1,7 @@
 # Handles Design Rationale generation for documentor workflow.
 from __future__ import annotations
 
+import copy
 import re
 import json
 from typing import Any, Dict, List
@@ -98,6 +99,7 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             "{\n"
             '  "proposals": [\n'
             "    {\n"
+            '      "task_id": "existing TR-* task id",\n'
             '      "target_requirement_id": "FR-* | NFR-* | CON-*",\n'
             '      "repair_type": "connect_statement_to_url | connect_feedback_to_formalize_meeting | connect_model_to_formalize_meeting | connect_resolve_to_formalize_meeting | connect_formalize_to_refine_meeting | identify_url_source | identify_conflict_resolution_meeting | identify_formalization_meeting",\n'
             '      "candidate_from": "existing evidence id or empty",\n'
@@ -109,13 +111,16 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
             "  ]\n"
             "}\n\n"
             "# Runtime Context\n"
-            f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
+            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
             "# Previous Validation Errors\n"
-            f"{json.dumps(previous_errors or [], ensure_ascii=False, indent=2)}"
+            f"{json.dumps(previous_errors or [], ensure_ascii=False, separators=(',', ':'))}"
         )
 
     @staticmethod
     def parse_trace_repair_proposals(raw: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw, dict):
+            proposals = raw.get("proposals")
+            return [proposal for proposal in proposals or [] if isinstance(proposal, dict)]
         text = str(raw or "").strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -131,57 +136,91 @@ class DocumentorDr(DocumentorDrContext, DocumentorDrNormalize):
         return [proposal for proposal in proposals or [] if isinstance(proposal, dict)]
 
     def repair_trace_contexts(self, requirements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        repaired = [dict(req) for req in requirements]
+        repaired = copy.deepcopy(requirements)
         previous_warning_count = sum(len(req.get("trace_warnings") or []) for req in repaired)
-        validation_errors: List[str] = []
+        validation_errors_by_target: Dict[str, List[str]] = {}
         for _round in range(self.TRACE_AGENT_REPAIR_MAX_ROUNDS):
-            repairable = []
+            next_repaired: List[Dict[str, Any]] = []
+            has_repairable = False
+            applied_any = False
             for req in repaired:
                 agent_tasks, human_tasks = self.split_agent_repair_tasks(req)
                 req["trace_repair_tasks"] = agent_tasks
                 if human_tasks:
-                    req["trace_human_review_tasks"] = human_tasks
-                if agent_tasks:
-                    repairable.append(req)
-            if not repairable:
-                break
-            raw = self.model.chat(
-                self.build_direct_messages(self.trace_repair_prompt(repairable, validation_errors)),
-                action=self.usage_action("documentor.trace_repair"),
-            )
-            proposals = self.parse_trace_repair_proposals(raw)
-            if not proposals:
-                break
-            validation_errors = []
-            proposals_by_target: Dict[str, List[Dict[str, Any]]] = {}
-            for proposal in proposals:
-                target = str(proposal.get("target_requirement_id") or "").strip()
-                if target:
-                    proposals_by_target.setdefault(target, []).append(proposal)
-            next_repaired: List[Dict[str, Any]] = []
-            applied_any = False
-            for req in repaired:
+                    req["trace_human_review_tasks"] = self.dedupe_trace_review_tasks(
+                        human_tasks
+                    )
+                if not agent_tasks:
+                    next_repaired.append(req)
+                    continue
+                has_repairable = True
                 target = str(req.get("srs_id") or "").strip()
-                req_proposals: List[Dict[str, Any]] = []
-                for alias in self.trace_target_aliases(req):
-                    req_proposals.extend(proposals_by_target.get(alias, []))
+                raw = self.chat_json(
+                    self.build_direct_messages(
+                        self.trace_repair_prompt(
+                            [req],
+                            validation_errors_by_target.get(target, []),
+                        )
+                    ),
+                    action=self.usage_action("documentor.trace_repair"),
+                )
+                proposals = self.parse_trace_repair_proposals(raw)
+                aliases = set(self.trace_target_aliases(req))
+                req_proposals = [
+                    proposal
+                    for proposal in proposals
+                    if str(proposal.get("target_requirement_id") or "").strip()
+                    in aliases
+                ]
+                accepted: List[Dict[str, Any]] = []
+                validation_errors: List[str] = []
                 for proposal in req_proposals:
                     validation = self.validate_trace_repair_proposal(req, proposal)
-                    if not validation.get("accepted"):
-                        validation_errors.extend(str(error) for error in validation.get("errors") or [])
-                        rejected = dict(proposal)
-                        rejected["status"] = "needs_human_review"
-                        rejected["validation_errors"] = validation.get("errors") or []
-                        req.setdefault("trace_human_review_tasks", []).append(rejected)
-                updated = self.apply_trace_repair_proposals(req, req_proposals)
+                    if validation.get("accepted"):
+                        accepted.append(proposal)
+                        continue
+                    validation_errors.extend(
+                        str(error) for error in validation.get("errors") or []
+                    )
+                    rejected = dict(proposal)
+                    rejected["status"] = "needs_human_review"
+                    rejected["validation_errors"] = validation.get("errors") or []
+                    req.setdefault("trace_human_review_tasks", []).append(rejected)
+                req["trace_human_review_tasks"] = self.dedupe_trace_review_tasks(
+                    req.get("trace_human_review_tasks") or []
+                )
+                validation_errors_by_target[target] = validation_errors
+                updated = self.apply_trace_repair_proposals(req, accepted)
                 applied_any = applied_any or bool(updated.get("trace_repair_applied") != req.get("trace_repair_applied"))
                 next_repaired.append(updated)
             repaired = next_repaired
+            if not has_repairable:
+                break
             warning_count = sum(len(req.get("trace_warnings") or []) for req in repaired)
             if not applied_any or warning_count >= previous_warning_count:
                 break
             previous_warning_count = warning_count
         return repaired
+
+    @staticmethod
+    def dedupe_trace_review_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows = []
+        seen = set()
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            marker = (
+                str(task.get("task_id") or "").strip(),
+                str(task.get("target_requirement_id") or "").strip(),
+                str(task.get("repair_type") or "").strip(),
+                str(task.get("candidate_from") or task.get("from") or "").strip(),
+                str(task.get("candidate_to") or task.get("to") or "").strip(),
+            )
+            if marker in seen:
+                continue
+            seen.add(marker)
+            rows.append(task)
+        return rows
 
     def generate_dr(self, artifact: Dict[str, Any]) -> str:
         artifact_for_dr = dict(artifact or {})

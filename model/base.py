@@ -191,6 +191,36 @@ class BaseLLM(ABC):
     # ========
     # Defines chat json function for this module workflow.
     # ========
+    @staticmethod
+    def strict_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        def normalize(value: Any) -> Any:
+            if isinstance(value, dict):
+                result = {key: normalize(item) for key, item in value.items()}
+                if result.get("type") == "object":
+                    result.setdefault("additionalProperties", False)
+                return result
+            if isinstance(value, list):
+                return [normalize(item) for item in value]
+            return value
+
+        return normalize(schema)
+
+    @staticmethod
+    def structured_output_unsupported(exc: Exception) -> bool:
+        message = str(exc or "").lower()
+        return any(
+            marker in message
+            for marker in (
+                "json_schema",
+                "response_format",
+                "output_config",
+                "structured output",
+                "structured outputs",
+                "not supported",
+                "unsupported",
+            )
+        )
+
     @abstractmethod
     def chat_json(
         self,
@@ -199,6 +229,7 @@ class BaseLLM(ABC):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
+        schema: Optional[Dict[str, Any]] = None,
     ) -> Dict: ...
 
     # ========

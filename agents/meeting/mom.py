@@ -161,6 +161,8 @@ def build_conflict_rows(
                 }
             )
     if not rows:
+        resolution_titles = resolution.get("conflict_titles")
+        resolution_titles = resolution_titles if isinstance(resolution_titles, dict) else {}
         title_by_id = {
             str(option.get("conflict_id") or option.get("id") or "").strip(): conflict_title(option)
             for option in conflict_options or []
@@ -173,7 +175,11 @@ def build_conflict_rows(
             if str(value).strip().startswith("CR-")
         ]
         rows = [
-            {"id": conflict_id, "title": title_by_id.get(conflict_id, "")}
+            {
+                "id": conflict_id,
+                "title": title_by_id.get(conflict_id, "")
+                or clean_repeated_text(resolution_titles.get(conflict_id, "")),
+            }
             for conflict_id in affected_ids
         ]
     return rows
@@ -281,6 +287,30 @@ def sanitize_conflict_discussion_groups(
     return groups
 
 
+def meeting_speaker_label(entry: Dict[str, Any], issue: Dict[str, Any] | None = None) -> str:
+    agent = str((entry or {}).get("agent") or "").strip()
+    if agent != "user":
+        return agent or "?"
+    response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+    names: List[str] = []
+    for source in (entry, response, issue or {}):
+        for key in ("speaking_as", "target_stakeholders"):
+            values = source.get(key) if isinstance(source, dict) else []
+            if isinstance(values, (str, dict)):
+                values = [values]
+            for value in values or []:
+                name = (
+                    str(value.get("name") or "").strip()
+                    if isinstance(value, dict)
+                    else str(value or "").strip()
+                )
+                if name and name != "user" and name not in names:
+                    names.append(name)
+        if names:
+            break
+    return "、".join(names) if names else "user"
+
+
 def render_discussion_groups(groups: List[Dict[str, Any]]) -> str:
     blocks: List[str] = []
     for group in groups:
@@ -326,7 +356,7 @@ def write_conflict_discussion_groups(
     for entry in conversation or []:
         if not isinstance(entry, dict) or entry.get("is_reply"):
             continue
-        agent = str(entry.get("agent") or "").strip()
+        agent = meeting_speaker_label(entry, issue)
         resp = entry.get("response") if isinstance(entry.get("response"), dict) else {}
         text = clean_repeated_text(resp.get("text", ""))[:1600].rstrip()
         if agent and text:

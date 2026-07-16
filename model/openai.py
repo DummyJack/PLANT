@@ -79,18 +79,39 @@ class OpenAIModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
+        schema: Optional[Dict] = None,
     ) -> Dict:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
+        response_format = {"type": "json_object"}
+        if schema is not None:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "agent_output",
+                    "strict": True,
+                    "schema": self.strict_json_schema(schema),
+                },
+            }
 
         self.costTracker.start()
         response = None
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                response_format={"type": "json_object"},
-                **kwargs,
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    response_format=response_format,
+                    **kwargs,
+                )
+            except Exception as exc:
+                if schema is None or not self.structured_output_unsupported(exc):
+                    raise
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    **kwargs,
+                )
         except Exception as exc:
             raise normalize_authentication_error(exc) from exc
         finally:

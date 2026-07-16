@@ -12,9 +12,6 @@ logger = logging.getLogger("Plant.WebSearchTool")
 MAX_TAVILY_QUERY_CHARS = 400
 
 
-# ========
-# Defines token set function for this module workflow.
-# ========
 def token_set(text: str, min_len: int = 2) -> Set[str]:
     if not text:
         return set()
@@ -25,9 +22,6 @@ def token_set(text: str, min_len: int = 2) -> Set[str]:
     }
 
 
-# ========
-# Defines jaccard function for this module workflow.
-# ========
 def jaccard(a: Set[str], b: Set[str]) -> float:
     if not a and not b:
         return 1.0
@@ -36,9 +30,6 @@ def jaccard(a: Set[str], b: Set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-# ========
-# Defines netloc function for this module workflow.
-# ========
 def netloc(url: str) -> str:
     try:
         return (urlparse(url).netloc or "").lower().lstrip("www.")
@@ -46,9 +37,6 @@ def netloc(url: str) -> str:
         return ""
 
 
-# ========
-# Defines credible source URL function for this module workflow.
-# ========
 def credible_source_url(url: str) -> bool:
     try:
         from agents.profile.expert.validation import credible_source_url as is_credible
@@ -85,9 +73,6 @@ def compact_search_query(query: str, *, max_chars: int = MAX_TAVILY_QUERY_CHARS)
     return text[:max_chars].strip()
 
 
-# ========
-# Defines WebSearchTool class for this module workflow.
-# ========
 class WebSearchTool(BaseTool):
     name = "web_search"
     description = (
@@ -114,7 +99,6 @@ class WebSearchTool(BaseTool):
         },
     }
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -132,7 +116,6 @@ class WebSearchTool(BaseTool):
         self.min_domain_tokens = int(cfg.get("min_domain_tokens", 8))
         self.reset_session()
 
-    # Defines reset session function for this module workflow.
     def reset_session(self) -> None:
         self.halted = False
         self.halt_messages: List[str] = []
@@ -141,8 +124,19 @@ class WebSearchTool(BaseTool):
         self.cumulative_tokens: Set[str] = set()
         self.domain_tokens: Dict[str, Set[str]] = {}
         self.user_question: Optional[str] = None
+        self.last_results: List[Dict[str, Any]] = []
 
-    # Defines get client function for this module workflow.
+    def get_last_sources(self) -> List[Dict[str, str]]:
+        return [
+            {
+                "title": str(item.get("title") or item.get("url") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "type": "web",
+            }
+            for item in self.last_results
+            if str(item.get("url") or "").strip()
+        ]
+
     def get_client(self):
         if self.client is None:
             api_key = self.api_key
@@ -159,13 +153,11 @@ class WebSearchTool(BaseTool):
             self.client = TavilyClient(api_key=api_key)
         return self.client
 
-    # Defines maybe set user question function for this module workflow.
     def maybe_set_user_question(self, kwargs: Dict[str, Any]) -> None:
         uq = kwargs.get("user_question")
         if isinstance(uq, str) and uq.strip() and self.user_question is None:
             self.user_question = uq.strip()
 
-    # Defines query redundant function for this module workflow.
     def query_redundant(self, query: str) -> bool:
         q_tokens = token_set(query)
         if len(q_tokens) < 2:
@@ -175,7 +167,6 @@ class WebSearchTool(BaseTool):
                 return True
         return False
 
-    # Defines two consistent sources function for this module workflow.
     def two_consistent_sources(self) -> bool:
         hosts = [
             h
@@ -193,7 +184,6 @@ class WebSearchTool(BaseTool):
                     return True
         return False
 
-    # Defines can answer user question function for this module workflow.
     def can_answer_user_question(self) -> bool:
         if not self.user_question:
             return False
@@ -203,7 +193,6 @@ class WebSearchTool(BaseTool):
         hits = sum(1 for t in g if t in self.cumulative_tokens)
         return hits / len(g) >= self.thr_user_coverage
 
-    # Defines merge result batch function for this module workflow.
     def merge_result_batch(self, items: List[Dict[str, Any]]) -> Tuple[int, float]:
         pre = set(self.cumulative_tokens)
         new_urls = 0
@@ -227,7 +216,6 @@ class WebSearchTool(BaseTool):
         self.cumulative_tokens |= batch_tokens
         return new_urls, ratio
 
-    # Defines evaluate stop after batch function for this module workflow.
     def evaluate_stop_after_batch(
         self, new_urls: int, novel_ratio: float, items: List[Dict[str, Any]]
     ) -> List[str]:
@@ -246,7 +234,6 @@ class WebSearchTool(BaseTool):
             )
         return reasons
 
-    # Defines footer stop function for this module workflow.
     def footer_stop(self, reasons: List[str]) -> str:
         if not reasons:
             return ""
@@ -258,7 +245,6 @@ class WebSearchTool(BaseTool):
             f"{lines}\n"
         )
 
-    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         query = kwargs.get("query", "")
         if not isinstance(query, str):
@@ -317,6 +303,7 @@ class WebSearchTool(BaseTool):
             item for item in raw_items
             if credible_source_url(str(item.get("url") or ""))
         ][:max_results]
+        self.last_results = [dict(item) for item in items]
         if not items:
             body = "未找到符合可信來源條件的相關結果。"
         else:
@@ -329,7 +316,6 @@ class WebSearchTool(BaseTool):
         footer = self.footer_stop(reasons)
         return body + footer
 
-    # Defines format results function for this module workflow.
     def format_results(self, results: Dict[str, Any]) -> str:
         items = results.get("results", [])
         if not items:

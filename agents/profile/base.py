@@ -1,4 +1,5 @@
 # Handles shared agent profile prompts and helper behavior.
+import ast
 import json
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -34,11 +35,78 @@ def render_template(template: str, context: dict[str, Any]) -> str:
             continue
         expr = template[i + 1 : end].strip()
         try:
-            out.append(str(eval(expr, {}, dict(context))))
-        except Exception:
-            out.append("{" + template[i + 1 : end] + "}")
+            out.append(str(_evaluate_template_expression(expr, context)))
+        except (KeyError, TypeError, ValueError, SyntaxError) as exc:
+            raise ValueError(f"Invalid prompt template expression: {expr}") from exc
         i = end + 1
     return "".join(out)
+
+
+_SAFE_TEMPLATE_BUILTINS = {
+    "bool": bool,
+    "int": int,
+    "len": len,
+    "str": str,
+}
+_SAFE_TEMPLATE_METHODS = {
+    "get",
+    "join",
+    "lower",
+    "replace",
+    "rstrip",
+    "strip",
+    "upper",
+}
+
+
+def _evaluate_template_expression(expression: str, context: dict[str, Any]) -> Any:
+    node = ast.parse(expression, mode="eval").body
+
+    def evaluate(item: ast.AST) -> Any:
+        if isinstance(item, ast.Constant):
+            return item.value
+        if isinstance(item, ast.Name):
+            if item.id in context:
+                return context[item.id]
+            if item.id in _SAFE_TEMPLATE_BUILTINS:
+                return _SAFE_TEMPLATE_BUILTINS[item.id]
+            raise KeyError(item.id)
+        if isinstance(item, ast.List):
+            return [evaluate(value) for value in item.elts]
+        if isinstance(item, ast.Tuple):
+            return tuple(evaluate(value) for value in item.elts)
+        if isinstance(item, ast.Dict):
+            return {evaluate(key): evaluate(value) for key, value in zip(item.keys, item.values)}
+        if isinstance(item, ast.Subscript):
+            return evaluate(item.value)[evaluate(item.slice)]
+        if isinstance(item, ast.Attribute):
+            if item.attr.startswith("_"):
+                raise ValueError("private attributes are not allowed")
+            owner = evaluate(item.value)
+            if owner is json and item.attr == "dumps":
+                return json.dumps
+            if item.attr in _SAFE_TEMPLATE_METHODS:
+                return getattr(owner, item.attr)
+            raise ValueError(f"attribute is not allowed: {item.attr}")
+        if isinstance(item, ast.Call):
+            function = evaluate(item.func)
+            allowed_context_callables = {
+                value for value in context.values() if callable(value)
+            }
+            if function not in set(_SAFE_TEMPLATE_BUILTINS.values()) | {json.dumps} | allowed_context_callables:
+                if not (hasattr(function, "__self__") and getattr(function, "__name__", "") in _SAFE_TEMPLATE_METHODS):
+                    raise ValueError("function call is not allowed")
+            return function(
+                *(evaluate(arg) for arg in item.args),
+                **{keyword.arg: evaluate(keyword.value) for keyword in item.keywords if keyword.arg},
+            )
+        if isinstance(item, ast.BinOp) and isinstance(item.op, ast.Add):
+            return evaluate(item.left) + evaluate(item.right)
+        if isinstance(item, ast.UnaryOp) and isinstance(item.op, ast.USub):
+            return -evaluate(item.operand)
+        raise ValueError(f"expression node is not allowed: {type(item).__name__}")
+
+    return evaluate(node)
 
 
 def find_expr_end(text: str, start: int) -> int:
@@ -111,9 +179,6 @@ def prompt_section(header: str, body: str) -> str:
     return f"{header}\n{text}\n\n"
 
 
-# ========
-# Defines proposal prompt function for this module workflow.
-# ========
 def proposal_prompt(
     *,
     agent_label: str,
@@ -225,9 +290,6 @@ conflict_updates = """# resolve_conflict 額外規則
 - 不要把多筆 URL 串成一筆巨大需求；語意整合應反映在後續 REQ，不在 URL 層合併。"""
 
 
-# ========
-# Defines response context function for this module workflow.
-# ========
 def response_context(
     *,
     issue: Dict[str, Any],
@@ -255,7 +317,7 @@ def response_context(
 
     context_text = ""
     if related_context:
-        context_text = json.dumps(related_context, ensure_ascii=False, indent=2)
+        context_text = json.dumps(related_context, ensure_ascii=False, separators=(",", ":"))
 
     recent_ask_history_text = ""
     recent_ask_history = issue.get("recent_ask_history") or []
@@ -263,7 +325,7 @@ def response_context(
         recent_ask_history_text = json.dumps(
             recent_ask_history,
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":"),
         )
 
     return {
@@ -277,13 +339,10 @@ def response_context(
     }
 
 
-# ========
-# Defines action strategy prompt function for this module workflow.
-# ========
 def action_strategy_prompt(*, default_action: str) -> str:
     return f"""# action 選擇策略
 - 只使用「可用 action」中列出的 action。
-- action_plan.steps 必須至少有 1 筆合法 action。
+- steps 必須至少有 1 筆合法 action。
 - steps 可包含 1 到 3 個 action；只在本次發言前確實需要連續工作時使用多個 step。
 - 若只是根據既有資料表達立場，選最小必要 action，通常是 {default_action}。
 - 若沒有其他必要 action，也必須輸出 1 筆 {default_action} step；不要輸出空 steps。
@@ -294,9 +353,6 @@ def action_strategy_prompt(*, default_action: str) -> str:
 - 每個 step.reasoning 用一句話說明此 action 為何必要。"""
 
 
-# ========
-# Defines response output prompt function for this module workflow.
-# ========
 def response_output_prompt(*, issue_category: str) -> str:
     conflict_rules = (
         f"\n\n{conflict_updates}"
@@ -309,9 +365,6 @@ def response_output_prompt(*, issue_category: str) -> str:
 {conflict_rules}"""
 
 
-# ========
-# Defines target stakeholder response rule function for this module workflow.
-# ========
 def response_target_stakeholder_rule(target_stakeholders: list, issue_id: str) -> str:
     if not target_stakeholders or issue_id == "OQ":
         return ""
@@ -324,9 +377,6 @@ def response_target_stakeholder_rule(target_stakeholders: list, issue_id: str) -
     )
 
 
-# ========
-# Defines response stance rules function for this module workflow.
-# ========
 def response_stance_rules(*, issue_id: str, category: str, proposal_subject: str) -> str:
     if issue_id == "OQ" or issue_id.startswith("ELICIT-") or category == "resolve_conflict":
         return ""
@@ -339,9 +389,6 @@ def response_stance_rules(*, issue_id: str, category: str, proposal_subject: str
 - needs_more_discussion 必須同時提供最小可行 proposal，說明目前建議如何處理，以及仍缺哪個關鍵答案。"""
 
 
-# ========
-# Defines pair review response contract function for this module workflow.
-# ========
 def pair_review_response_contract(*, known_pair_ids: list, include_reason_evidence: bool = False) -> str:
     known_pair_ids_text = json.dumps(
         [str(pair_id).strip() for pair_id in known_pair_ids if str(pair_id).strip()],
@@ -358,12 +405,19 @@ def pair_review_response_contract(*, known_pair_ids: list, include_reason_eviden
 - 本輪必須涵蓋的 pair id：{known_pair_ids_text}"""
 
 
-# ========
-# Defines response output fields function for this module workflow.
-# ========
+def conflict_stance_output_field(*, state: str) -> str:
+    return (
+        f'"stance": {{"state": "{state}", "needs_human_decision": false, "proposal": {{'
+        '"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"], '
+        '"url_updates": [{"action": "keep | revise | remove", "ids": ["URL-1"], '
+        '"text": "revise 時必填的完整需求文字", "reason": "此修改如何解決衝突"}]}}'
+    )
+
+
 def response_output_fields(
     *,
     issue_id: str,
+    issue_category: str,
     is_pair_review: bool,
     text_hint: str,
 ) -> str:
@@ -376,6 +430,12 @@ def response_output_fields(
             f"    {text_hint},\n"
             '    "target_stakeholders": ["要詢問的 stakeholder 名稱，可一位或多位"]'
         )
+    if issue_category == "resolve_conflict":
+        return (
+            f"    {text_hint},\n"
+            '    "open_questions": [],\n'
+            f'    {conflict_stance_output_field(state="ready_to_close | needs_more_discussion")}'
+        )
     return (
         f"    {text_hint},\n"
         '    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "會影響本議題結論的具體問題", "reason": "此答案會如何影響本議題結論"}]'
@@ -383,9 +443,42 @@ def response_output_fields(
     )
 
 
-# ========
-# Defines action plan prompt function for this module workflow.
-# ========
+def response_prompt_kind(issue: Dict[str, Any]) -> str:
+    issue_id = str(issue.get("id") or "").strip()
+    category = str(issue.get("category") or "").strip()
+    contract = issue.get("conflict_review_contract")
+    contract_type = str(contract.get("type") or "").strip() if isinstance(contract, dict) else ""
+    if issue_id == "OQ":
+        return "answer"
+    if issue_id.startswith("ELICIT-"):
+        return "elicitation"
+    if category == "resolve_conflict" and contract_type == "pair_reviews":
+        return "conflict"
+    if category == "resolve_conflict":
+        return "resolution"
+    return "issue"
+
+
+def conflict_review_pair_ids(issue: Dict[str, Any]) -> List[str]:
+    contract = issue.get("conflict_review_contract")
+    if not isinstance(contract, dict):
+        return []
+    return [
+        pair_id
+        for value in (contract.get("known_pair_ids") or [])
+        for pair_id in [str(value).strip()]
+        if pair_id
+    ]
+
+
+def elicitation_stop_phrase() -> str:
+    return (
+        "I have gathered enough information"
+        if current_output_language() == "en"
+        else "我已蒐集足夠資訊"
+    )
+
+
 def action_plan_prompt(
     *,
     role: str,
@@ -413,7 +506,7 @@ def action_plan_prompt(
 請根據 observation 規劃本次正式會議發言前要執行的 action plan。
 
 # Observation
-{json.dumps(observation, ensure_ascii=False, indent=2)}
+{json.dumps(observation, ensure_ascii=False, separators=(",", ":"))}
 
 {actions_text}
 
@@ -428,18 +521,13 @@ def action_plan_prompt(
   "action": "done",
   "params": {{}},
   "reasoning": "...",
-  "action_plan": {{
-    "goal": "本次正式會議發言目標",
-    "steps": [
-      {{"id": "{default_action}", "action": "{default_action}", "params": {{}}, "reasoning": "..."}}
-    ]
-  }}
+  "goal": "本次正式會議發言目標",
+  "steps": [
+    {{"id": "{default_action}", "action": "{default_action}", "params": {{}}, "reasoning": "..."}}
+  ]
 }}"""
 
 
-# ========
-# Defines action plan repair prompt function for this module workflow.
-# ========
 def action_plan_repair_prompt(
     *,
     original_prompt: str,
@@ -453,7 +541,7 @@ def action_plan_repair_prompt(
 
 請只重新輸出合法 JSON。
 - action 必須是 done。
-- action_plan.steps 必須至少有 1 筆。
+- steps 必須至少有 1 筆。
 - 每筆 step.action 必須來自「可用 action」。
 - 如果沒有其他必要 action，輸出 1 筆 {default_action} step。
 - 不要輸出空 steps，不要輸出解釋文字。"""
@@ -467,9 +555,6 @@ elicitation_context = """# Requirement Elicitation Interview
 - 若目前理解已足夠，可以提出收束；停止句只代表提議收束，系統會再進入收束投票流程決定是否真的結束。"""
 
 
-# ========
-# Defines elicitation action task function for this module workflow.
-# ========
 def elicitation_action_task(stop_phrase: str) -> str:
     return (
         "依本輪 action 發言。若 action 是 ask_user 或 supplement_question，"
@@ -479,9 +564,6 @@ def elicitation_action_task(stop_phrase: str) -> str:
     )
 
 
-# ========
-# Defines elicitation action rules function for this module workflow.
-# ========
 def elicitation_action_rules(stop_phrase: str) -> str:
     return f"""- 輸出停止句不是單方結束會議，只是進入三方收束投票。
 - 若本輪 action 是 propose_finish，text 必須只輸出停止句：{stop_phrase}
@@ -514,9 +596,6 @@ reason_rules = """- proposed_label 可以和其他審查者相同，但 reason �
 - reason 必須根據需求原文或會議中可追溯的證據，不可臆測不存在的需求、設計方案或外部情境。"""
 
 
-# ========
-# Defines conflict review text hint function for this module workflow.
-# ========
 def conflict_review_text_hint() -> str:
     return (
         '"text": "{\\"pair_reviews\\":[{\\"id\\":\\"PAIR-1 或 MULTIPLE-1\\",'
@@ -530,9 +609,6 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 }
 
 
-# ========
-# Defines render repair prompt function for this module workflow.
-# ========
 def render_repair_prompt(key: str, **context: Any) -> str:
     is_f, template = repair_prompts[key]
     if not is_f:
@@ -540,9 +616,6 @@ def render_repair_prompt(key: str, **context: Any) -> str:
     return render_template(template, {"json": json, **context})
 
 
-# ========
-# Defines retry response function for this module workflow.
-# ========
 def retry_response(
     *,
     issue: Dict[str, Any],
@@ -551,6 +624,7 @@ def retry_response(
     is_answer_question: bool,
 ) -> str:
     is_elicitation = str((issue or {}).get("id") or "").startswith("ELICIT-")
+    is_conflict_resolution = str((issue or {}).get("category") or "").strip() == "resolve_conflict"
     if is_answer_question:
         output_contract = '{\n  "text": "直接回答問題",\n  "open_questions": []\n}'
         stance_rule = ""
@@ -570,6 +644,21 @@ def retry_response(
             "- text 不可只是摘要、分析、會議發言或說明目前沒有更新 artifact。\n"
             "- target_stakeholders 必須使用議題中已指定的利害關係人。\n"
         )
+    elif is_conflict_resolution:
+        output_contract = (
+            '{\n'
+            '  "text": "說明採用方案與其如何解決衝突",\n'
+            '  "open_questions": [],\n'
+            f'  {conflict_stance_output_field(state="ready_to_close")}\n'
+            '}'
+        )
+        stance_rule = (
+            "- stance.state 必須輸出，且只能是 ready_to_close 或 needs_more_discussion。\n"
+            "- stance.proposal.url_updates 必須至少有一筆可執行更新。\n"
+            "- 每筆 url_updates 必須有 action、ids、reason；action=revise 時必須提供完整 text。\n"
+        )
+        task_line = "重新產生一次可執行的衝突解決發言。"
+        text_rule = "- text 必須說明採用方案及其對應的 URL 修改。\n"
     else:
         output_contract = '{\n  "text": "根據本輪 action 結果提出自然語言會議發言",\n  "open_questions": [],\n  "stance": {"state": "ready_to_close", "needs_human_decision": false}\n}'
         stance_rule = "- stance.state 必須輸出，且只能是 ready_to_close 或 needs_more_discussion。\n"
@@ -587,11 +676,11 @@ def retry_response(
         "- 若 action 產生或更新模型、需求、feedback 或分析結果，text 要說明這些結果如何支持本議題判斷。\n"
         "- open_questions 只放本議題仍需要對方回答的關鍵問題；沒有就輸出空陣列。\n\n"
         "# 議題\n"
-        f"{json.dumps(issue, ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(issue, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "# 前文\n"
-        f"{json.dumps(previous_responses or [], ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(previous_responses or [], ensure_ascii=False, separators=(',', ':'))}\n\n"
         "# 本輪 action 結果\n"
-        f"{json.dumps(action_results, ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(action_results, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "# 輸出 JSON\n"
         f"{output_contract}"
     )

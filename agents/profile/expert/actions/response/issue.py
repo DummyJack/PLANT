@@ -33,6 +33,7 @@ def render_response_prompt(
     )
     output_fields = response_output_fields(
         issue_id=sections["issue_id"],
+        issue_category=str(issue.get("category") or "").strip(),
         is_pair_review=is_pair_review,
         text_hint=text_hint,
     )

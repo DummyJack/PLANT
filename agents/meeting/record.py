@@ -14,25 +14,20 @@ except ImportError:  # pragma: no cover - supports direct file loading in small 
     mom = importlib.util.module_from_spec(_mom_spec)
     _mom_spec.loader.exec_module(mom)
 
-# Defines MediatorRecords class for this module workflow.
 class MediatorRecords:
     @staticmethod
-    # Defines clean repeated text function for this module workflow.
     def clean_repeated_text(value: Any) -> str:
         return mom.clean_repeated_text(value)
 
     @staticmethod
-    # Defines valid mom artifact id function for this module workflow.
     def valid_mom_artifact_id(value: Any, prefixes: tuple[str, ...]) -> bool:
         return mom.valid_artifact_id(value, prefixes)
 
     @classmethod
-    # Defines clean id list function for this module workflow.
     def clean_id_list(cls, values: Any, prefixes: tuple[str, ...]) -> List[str]:
         return mom.clean_id_list(values, prefixes)
 
     @classmethod
-    # Defines clean mom question function for this module workflow.
     def clean_mom_question(cls, value: Any) -> str:
         text = cls.clean_repeated_text(value)
         if not text:
@@ -45,12 +40,10 @@ class MediatorRecords:
         return mom.artifact_id_sort_key(value)
 
     @staticmethod
-    # Defines option display label function for this module workflow.
     def option_display_label(value: Any, index: int = 0) -> str:
         return mom.option_display_label(value, index)
 
     @classmethod
-    # Defines normalized issue title function for this module workflow.
     def normalized_issue_title(
         cls,
         issue: Dict[str, Any],
@@ -125,14 +118,12 @@ class MediatorRecords:
         return prefix[:80].rstrip()
 
     @staticmethod
-    # Defines clean mom title function for this module workflow.
     def clean_mom_title(value: Any) -> str:
         title = str(value or "").strip() or "正式會議議題"
         title = re.sub(r"\s*[（(][^（）()]*[）)]\s*$", "", title).strip()
         return title or "正式會議議題"
 
     @classmethod
-    # Defines action result summary function for this module workflow.
     def action_result_summary(cls, result: Dict[str, Any]) -> str:
         if not isinstance(result, dict):
             return ""
@@ -183,7 +174,6 @@ class MediatorRecords:
         return f"{action}：" + "；".join(parts) if parts else action
 
     @classmethod
-    # Defines meeting outcome function for this module workflow.
     def meeting_outcome(
         cls,
         conversation: List[Dict[str, Any]],
@@ -258,12 +248,10 @@ class MediatorRecords:
         return "；".join(parts) if parts else "本次會議未產生 artifact 更新"
 
     @classmethod
-    # Defines unclear mom header text function for this module workflow.
     def unclear_mom_header_text(cls, value: Any, *, allow_empty: bool = False) -> bool:
         return mom.unclear_header_text(value, allow_empty=allow_empty)
 
     @classmethod
-    # Defines mom referenced ids function for this module workflow.
     def mom_referenced_ids(
         cls,
         issue: Dict[str, Any],
@@ -272,7 +260,6 @@ class MediatorRecords:
     ) -> List[str]:
         return mom.referenced_ids(issue, conversation, resolution)
 
-    # Defines write meeting note header function for this module workflow.
     def write_meeting_note_header(
         self,
         *,
@@ -404,7 +391,6 @@ class MediatorRecords:
                 polished["evidence"] = "；".join(evidence_rows[:5])[:500].rstrip()
         return polished
 
-    # Defines write conflict discussion groups function for this module workflow.
     def write_conflict_discussion_groups(
         self,
         *,
@@ -423,7 +409,6 @@ class MediatorRecords:
         )
 
 
-    # Defines write meeting note function for this module workflow.
     def write_meeting_note(
         self,
         issue: Dict,
@@ -441,7 +426,7 @@ class MediatorRecords:
         for item in conversation or []:
             if not isinstance(item, dict):
                 continue
-            agent_name = str(item.get("agent") or "").strip()
+            agent_name = mom.meeting_speaker_label(item, issue)
             if agent_name:
                 participants.append(agent_name)
         if not participants:
@@ -777,7 +762,6 @@ class MediatorRecords:
             md += "\n"
         md += "\n"
 
-        # Defines clean for mom function for this module workflow.
         def clean_for_mom(text: str) -> str:
             value = str(text or "").strip()
             if not value:
@@ -789,7 +773,6 @@ class MediatorRecords:
             except Exception:
                 return value
 
-            # Defines list lines function for this module workflow.
             def list_lines(items: Any) -> str:
                 rows = [str(item).strip() for item in (items or []) if str(item).strip()]
                 return "\n".join(f"- {item}" for item in rows)
@@ -832,7 +815,6 @@ class MediatorRecords:
                 return list_lines(parsed)
             return value
 
-        # Defines table cell function for this module workflow.
         def table_cell(value: Any) -> str:
             if isinstance(value, list):
                 text = ", ".join(str(item).strip() for item in value if str(item).strip())
@@ -840,7 +822,6 @@ class MediatorRecords:
                 text = str(value or "").strip()
             return text.replace("|", "\\|").replace("\n", "<br>")
 
-        # Defines as text list function for this module workflow.
         def as_text_list(value: Any) -> List[str]:
             if isinstance(value, list):
                 return [str(item).strip() for item in value if str(item).strip()]
@@ -848,7 +829,6 @@ class MediatorRecords:
                 return [value.strip()]
             return []
 
-        # Defines reason lines function for this module workflow.
         def reason_lines(value: Any) -> List[str]:
             text = str(value or "").strip()
             if not text:
@@ -860,7 +840,6 @@ class MediatorRecords:
             ]
             return list(dict.fromkeys(part for part in (parts or [self.clean_repeated_text(text)]) if part))
 
-        # Defines render requirements markdown function for this module workflow.
         def render_requirements_markdown(rows: Any, reason: Any = None) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
@@ -909,7 +888,6 @@ class MediatorRecords:
                 out.extend(f"- {line}" for line in lines)
             return "\n".join(out).strip()
 
-        # Defines render user requirements markdown function for this module workflow.
         def render_user_requirements_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
@@ -922,7 +900,6 @@ class MediatorRecords:
                 )
             return "\n".join(out)
 
-        # Defines render conflict report markdown function for this module workflow.
         def render_conflict_report_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
@@ -949,7 +926,6 @@ class MediatorRecords:
                 )
             return "\n".join(out)
 
-        # Defines render scope markdown function for this module workflow.
         def render_scope_markdown(scope: Any, reason: Any = None) -> str:
             if not isinstance(scope, dict) or not any(scope.get(key) for key in scope):
                 return ""
@@ -969,7 +945,6 @@ class MediatorRecords:
                 out.extend(["", f"**理由**: {reason_text}"])
             return "\n".join(out)
 
-        # Defines render feedback markdown function for this module workflow.
         def render_feedback_markdown(feedback: Any) -> str:
             if not isinstance(feedback, dict) or not feedback:
                 return ""
@@ -1009,7 +984,6 @@ class MediatorRecords:
                 return ""
             return "### 領域回饋\n\n" + "\n\n".join(parts)
 
-        # Defines render system models markdown function for this module workflow.
         def render_system_models_markdown(rows: Any) -> str:
             if not isinstance(rows, list) or not rows:
                 return ""
@@ -1051,7 +1025,6 @@ class MediatorRecords:
                 )
             return "\n".join(out)
 
-        # Defines merge table rows function for this module workflow.
         def merge_table_rows(current: List[Dict[str, Any]], rows: Any) -> None:
             if not isinstance(rows, list):
                 return
@@ -1064,7 +1037,6 @@ class MediatorRecords:
                     current.append(row)
                     seen.add(key)
 
-        # Defines collect meeting outputs function for this module workflow.
         def collect_meeting_outputs(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             outputs: Dict[str, Any] = {
                 "REQ": [],
@@ -1116,7 +1088,6 @@ class MediatorRecords:
             outputs["reasons"] = list(dict.fromkeys(reason for reason in outputs["reasons"] if reason))
             return outputs
 
-        # Defines render meeting outputs function for this module workflow.
         def render_meeting_outputs(records: List[Dict[str, Any]]) -> str:
             outputs = collect_meeting_outputs(records)
             sections = []
@@ -1138,7 +1109,6 @@ class MediatorRecords:
                 return ""
             return "\n\n".join(sections)
 
-        # Defines nested markdown headings function for this module workflow.
         def nested_markdown_headings(text: str) -> str:
             return re.sub(r"(?m)^(#{1,5})(\s+)", r"#\1\2", str(text or "").strip())
 
@@ -1151,12 +1121,33 @@ class MediatorRecords:
             conflict_options=options if isinstance(options, list) else [],
         )
         if conflict_discussion_groups:
+            saved_conflict_titles = resolution.get("conflict_titles")
+            saved_conflict_titles = (
+                saved_conflict_titles if isinstance(saved_conflict_titles, dict) else {}
+            )
+            latest_title_by_conflict_id = {
+                str(row.get("id") or "").strip(): mom.conflict_title(row)
+                for row in latest_conflict_report_rows()
+                if isinstance(row, dict)
+                and str(row.get("id") or "").strip()
+                and mom.conflict_title(row)
+            }
+            conflict_discussion_groups = [
+                {
+                    **group,
+                    "title": str(group.get("title") or "").strip()
+                    or str(saved_conflict_titles.get(str(group.get("conflict_id") or "").strip(), "")).strip()
+                    or latest_title_by_conflict_id.get(str(group.get("conflict_id") or "").strip(), ""),
+                }
+                for group in conflict_discussion_groups
+            ]
+        if conflict_discussion_groups:
             md += mom.render_discussion_groups(conflict_discussion_groups) + "\n\n"
         elif not main_records:
             md += "（本議題無人發言）\n\n"
         else:
             for c in main_records:
-                agent = c.get("agent", "?")
+                agent = mom.meeting_speaker_label(c, issue)
                 resp = c.get("response", {})
                 text = clean_for_mom(resp.get("text", ""))
                 md += f"### {agent}\n\n"
@@ -1168,7 +1159,6 @@ class MediatorRecords:
         question_pairs: List[Dict[str, Any]] = []
         question_index: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
-        # Defines labeled answers function for this module workflow.
         def labeled_answers(text: Any) -> Dict[str, str]:
             source = str(text or "").strip()
             if not source or "【" not in source:
@@ -1187,7 +1177,6 @@ class MediatorRecords:
                     parts[name] = body
             return parts
 
-        # Defines answer lines function for this module workflow.
         def answer_lines(pair: Dict[str, Any]) -> List[tuple[str, str]]:
             answer = str(pair.get("answer") or "").strip()
             if not answer:
@@ -1263,7 +1252,7 @@ class MediatorRecords:
                     "answer": "",
                 }
                 question_pairs.append(matched)
-            matched["answer_agent"] = answer_agent
+            matched["answer_agent"] = mom.meeting_speaker_label(c, issue)
             matched["answer"] = answer
         if question_pairs:
             md += "## 開放問題\n\n"

@@ -5,9 +5,18 @@ from typing import Any, Dict, List
 from agents.profile.base import proposal_prompt
 
 
-# Defines UserIssue class for this module workflow.
 class UserIssue:
-    # Defines propose issues function for this module workflow.
+    issue_source_artifacts = {
+        "URL",
+        "REQ",
+        "conflict_report",
+        "conversation",
+        "system_models",
+        "open_questions",
+        "scope",
+        "feedback",
+    }
+
     def propose_issues(
         self,
         artifact: Dict[str, Any],
@@ -32,7 +41,6 @@ class UserIssue:
             raise RuntimeError(result.get("format_error") or result.get("error"))
         return result.get("proposals", [])[: max(1, max_items)]
 
-    # Defines obs issue function for this module workflow.
     def obs_issue(self, **kwargs: Any) -> Dict[str, Any]:
         artifact = kwargs["artifact"]
         return {
@@ -44,7 +52,6 @@ class UserIssue:
             "artifact_slices": artifact.get("artifact_slices") if isinstance(artifact.get("artifact_slices"), dict) else {},
         }
 
-    # Defines run issue action function for this module workflow.
     def run_issue_action(
         self,
         *,
@@ -101,7 +108,6 @@ class UserIssue:
             "summary": f"User 提出 {len(proposals)} 筆 issue proposal",
         }
 
-    # Defines issue payload function for this module workflow.
     def issue_payload(
         self,
         data: Dict[str, Any],
@@ -130,6 +136,8 @@ class UserIssue:
                 if not isinstance(source, dict):
                     continue
                 artifact = str(source.get("artifact") or "").strip()
+                if artifact not in self.issue_source_artifacts:
+                    continue
                 ids = [
                     str(x).strip()
                     for x in (source.get("ids") or [])
@@ -147,7 +155,9 @@ class UserIssue:
                 raise ValueError(f"issues[{idx}] importance 不合法: {importance or '<empty>'}")
             issue_level = str(row.get("issue_level") or "").strip().lower()
             if issue_level not in {"blocking", "improvement"}:
-                issue_level = "blocking" if importance == "high" else "improvement"
+                raise ValueError(
+                    f"issues[{idx}] issue_level must be blocking or improvement"
+                )
 
             key = (title, json.dumps(sources, ensure_ascii=False, sort_keys=True))
             if key in seen:

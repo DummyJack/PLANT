@@ -1,9 +1,7 @@
 # Handles plantuml logic for project artifact storage and file export behavior.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, Optional
-import os
-import shutil
+from typing import Any, Callable, Dict, Optional
 import socket
 import subprocess
 import tempfile
@@ -12,9 +10,24 @@ import urllib.request
 import zlib
 
 from .atomic import atomic_write_bytes, atomic_write_text
+from .plantuml_runtime import (
+    PlantUMLRuntime,
+    ensure_plantuml_runtime,
+    plantuml_online_enabled,
+    plantuml_server_url,
+)
 
 
-PLANTUML_SERVER = os.getenv("PLANTUML_SERVER_URL", "https://www.plantuml.com/plantuml").rstrip("/")
+PlantUMLStatusCallback = Callable[[str, str], None]
+
+
+def _report_status(
+    callback: Optional[PlantUMLStatusCallback],
+    status: str,
+    message: str,
+) -> None:
+    if callback is not None:
+        callback(status, message)
 
 
 # ========
@@ -69,16 +82,13 @@ def write_plantuml_file(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     return filename
 
 
-def _render_with_local_command(plantuml_code: str, filepath: Path) -> bool:
-    plantuml_bin = shutil.which("plantuml")
-    if not plantuml_bin:
-        return False
+def _render_with_local_command(plantuml_code: str, filepath: Path, command_path: Path) -> bool:
     with tempfile.TemporaryDirectory() as tmp_dir:
         source_path = Path(tmp_dir) / "diagram.plantuml"
         output_path = Path(tmp_dir) / "diagram.png"
         source_path.write_text(plantuml_code, encoding="utf-8")
         result = subprocess.run(
-            [plantuml_bin, "-tpng", str(source_path)],
+            [str(command_path), "-tpng", str(source_path)],
             capture_output=True,
             text=True,
             timeout=60,
@@ -91,20 +101,20 @@ def _render_with_local_command(plantuml_code: str, filepath: Path) -> bool:
         return False
 
 
-def _render_with_local_jar(plantuml_code: str, filepath: Path) -> bool:
-    jar_path = os.getenv("PLANTUML_JAR", "").strip()
-    if not jar_path:
-        return False
-    jar = Path(jar_path).expanduser()
-    if not jar.exists():
-        print(f"PlantUML JAR 不存在: {jar}")
+def _render_with_local_jar(
+    plantuml_code: str,
+    filepath: Path,
+    java_path: Path,
+    jar_path: Path,
+) -> bool:
+    if not java_path.exists() or not jar_path.exists():
         return False
     with tempfile.TemporaryDirectory() as tmp_dir:
         source_path = Path(tmp_dir) / "diagram.plantuml"
         output_path = Path(tmp_dir) / "diagram.png"
         source_path.write_text(plantuml_code, encoding="utf-8")
         result = subprocess.run(
-            ["java", "-jar", str(jar), "-tpng", str(source_path)],
+            [str(java_path), "-jar", str(jar_path), "-tpng", str(source_path)],
             capture_output=True,
             text=True,
             timeout=60,
@@ -118,7 +128,9 @@ def _render_with_local_jar(plantuml_code: str, filepath: Path) -> bool:
 
 
 def _render_with_server(plantuml_code: str, filepath: Path) -> bool:
-    url = f"{PLANTUML_SERVER}/png/{encode_plantuml(plantuml_code)}"
+    if not plantuml_online_enabled():
+        return False
+    url = f"{plantuml_server_url()}/png/{encode_plantuml(plantuml_code)}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Plant-Modeler/1.0"})
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -134,7 +146,12 @@ def _render_with_server(plantuml_code: str, filepath: Path) -> bool:
 # ========
 # Defines render plantuml png function for this module workflow.
 # ========
-def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[str]:
+def render_plantuml_png(
+    artifact_dir: Path,
+    model: Dict[str, Any],
+    status_callback: Optional[PlantUMLStatusCallback] = None,
+    runtime: Optional[PlantUMLRuntime] = None,
+) -> Optional[str]:
     plantuml_code = model.get("plantuml", "")
     if not plantuml_code:
         return None
@@ -143,9 +160,19 @@ def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
     models_dir = artifact_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     filepath = models_dir / filename
-    if _render_with_local_command(plantuml_code, filepath):
+    runtime = runtime or ensure_plantuml_runtime(status_callback=status_callback)
+    if runtime.command_path and _render_with_local_command(
+        plantuml_code,
+        filepath,
+        runtime.command_path,
+    ):
         return filename
-    if _render_with_local_jar(plantuml_code, filepath):
+    if runtime.java_path and runtime.jar_path and _render_with_local_jar(
+        plantuml_code,
+        filepath,
+        runtime.java_path,
+        runtime.jar_path,
+    ):
         return filename
     if _render_with_server(plantuml_code, filepath):
         return filename
@@ -156,10 +183,22 @@ def render_plantuml_png(artifact_dir: Path, model: Dict[str, Any]) -> Optional[s
 # ========
 # Defines save plantuml files function for this module workflow.
 # ========
-def save_plantuml_files(artifact_dir: Path, model_data: Any) -> None:
+def save_plantuml_files(
+    artifact_dir: Path,
+    model_data: Any,
+    status_callback: Optional[PlantUMLStatusCallback] = None,
+) -> None:
     models = [m for m in (model_data or []) if isinstance(m, dict) and m.get("plantuml")]
     if not models:
         return
+    runtime = ensure_plantuml_runtime(status_callback=status_callback)
+    online_fallback = runtime.mode == "online"
+    if online_fallback:
+        _report_status(
+            status_callback,
+            "online_fallback",
+            "本機缺少 Java，正在改用線上 PlantUML 產生圖片…",
+        )
     models_dir = artifact_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     for old in models_dir.glob("*.plantuml"):
@@ -171,15 +210,41 @@ def save_plantuml_files(artifact_dir: Path, model_data: Any) -> None:
         futures = []
         for model in models:
             futures.append(executor.submit(write_plantuml_file, artifact_dir, model))
-            futures.append(executor.submit(render_plantuml_png, artifact_dir, model))
+            futures.append(
+                executor.submit(
+                    render_plantuml_png,
+                    artifact_dir,
+                    model,
+                    status_callback,
+                    runtime,
+                )
+            )
         for future in as_completed(futures):
             try:
                 name = future.result()
                 if name:
-                    print(f"✓ 儲存 PlantUML 輸出: {name}")
+                    print(f"儲存 PlantUML 輸出: {name}")
             except Exception as e:
                 print(f"儲存 PlantUML 失敗: {e}")
     for model in models:
         filename = f"{plantuml_safe_name(model)}.png"
         if (models_dir / filename).exists():
             model["image_path"] = f"../models/{filename}"
+    if online_fallback:
+        rendered_count = sum(
+            1
+            for model in models
+            if (models_dir / f"{plantuml_safe_name(model)}.png").exists()
+        )
+        if rendered_count == len(models):
+            _report_status(
+                status_callback,
+                "ready",
+                "線上 PlantUML 圖片產生完成",
+            )
+        else:
+            _report_status(
+                status_callback,
+                "failed",
+                f"線上 PlantUML 圖片產生失敗：成功 {rendered_count}/{len(models)} 張",
+            )

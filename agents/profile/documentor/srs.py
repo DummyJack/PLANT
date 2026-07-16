@@ -10,11 +10,9 @@ from .actions.srs import generate_srs
 from storage.markdown import clean_llm_output, normalize_model_image_markdown
 
 
-# Defines DocumentorSrs class for this module workflow.
 class DocumentorSrs:
     image_suffixes = {".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".bmp"}
 
-    # Defines sync model images function for this module workflow.
     def sync_model_images(self) -> None:
         artifact_models = Path(self.store.artifact_dir) / "models"
         output_models = Path(self.store.output_dir) / "models"
@@ -31,11 +29,9 @@ class DocumentorSrs:
             shutil.copy2(src, dst)
 
     @staticmethod
-    # Defines fix model links function for this module workflow.
     def fix_model_links(srs_md: str) -> str:
         return re.sub(r"\(\.\./models/", "(./models/", srs_md or "")
 
-    # Defines fix model image filenames function for this module workflow.
     def fix_model_image_filenames(self, srs_md: str) -> str:
         models_dir = Path(self.store.output_dir) / "models"
         if not models_dir.exists():
@@ -48,6 +44,17 @@ class DocumentorSrs:
         ]
         if not existing:
             return srs_md
+
+        model_image_by_id: dict[str, str] = {}
+        artifact = self.store.load_artifact() or {}
+        for model in artifact.get("system_models", []) or []:
+            if not isinstance(model, dict):
+                continue
+            model_id = str(model.get("id") or "").strip().upper()
+            image_path = str(model.get("image_path") or "").strip().replace("\\", "/")
+            image_name = image_path.rsplit("/", 1)[-1]
+            if model_id and image_name and (models_dir / image_name).exists():
+                model_image_by_id[model_id] = image_name
 
         def best_match(label: str, filename: str) -> str:
             candidates = []
@@ -67,7 +74,7 @@ class DocumentorSrs:
             filename = Path(path).name
             if (models_dir / filename).exists():
                 return match.group(0)
-            fixed = best_match(alt, filename)
+            fixed = model_image_by_id.get(Path(filename).stem.upper()) or best_match(alt, filename)
             if fixed == filename:
                 return match.group(0)
             return f"![{alt}](./models/{fixed})"
@@ -383,7 +390,6 @@ class DocumentorSrs:
             normalized.append(line)
         return "\n".join(normalized).rstrip() + "\n"
 
-    # Defines generate from draft function for this module workflow.
     def generate_from_draft(
         self,
         draft_md: str,
@@ -422,7 +428,6 @@ class DocumentorSrs:
         srs_md = self.normalize_serialized_list_cells(srs_md)
         return srs_md
 
-    # Defines generate latest srs function for this module workflow.
     def generate_latest_srs(self) -> str:
         latest_version = self.store.get_draft_version()
         if latest_version < 0:

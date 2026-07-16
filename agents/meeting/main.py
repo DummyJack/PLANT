@@ -13,26 +13,17 @@ from agents.profile.mediator.validation import (
     trace_artifact_ids,
     trace_proposal_ids,
 )
-from utils import Collect, stage_enabled
+from utils import stage_enabled
 
 
-# ========
-# Defines issue artifact ids function for this module workflow.
-# ========
 def issue_artifact_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return trace_artifact_ids(issue)
 
 
-# ========
-# Defines issue proposal ids function for this module workflow.
-# ========
 def issue_proposal_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return trace_proposal_ids(issue)
 
 
-# ========
-# Defines conflict report resolution ids function for this module workflow.
-# ========
 def conflict_report_resolution_ids(
     artifact: Dict[str, Any],
     issue: Optional[Dict[str, Any]],
@@ -61,9 +52,6 @@ def conflict_report_resolution_ids(
     return list(dict.fromkeys(out))
 
 
-# ========
-# Defines conflict report requirement ids function for this module workflow.
-# ========
 def conflict_report_requirement_ids(row: Dict[str, Any]) -> List[str]:
     ids: List[str] = []
     for req in row.get("requirements") or []:
@@ -75,9 +63,17 @@ def conflict_report_requirement_ids(row: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(ids))
 
 
-# ========
-# Defines adopted resolution option text function for this module workflow.
-# ========
+def conflict_report_row_ids(row: Dict[str, Any]) -> set[str]:
+    return {
+        value
+        for value in (
+            str(row.get("id") or "").strip(),
+            str(row.get("source_id") or "").strip(),
+        )
+        if value
+    }
+
+
 def adopted_resolution_option_text(
     conflict_row: Dict[str, Any],
     decision_text: str,
@@ -88,7 +84,6 @@ def adopted_resolution_option_text(
     if not isinstance(options, list) or not options:
         return ""
 
-    # Defines compact function for this module workflow.
     def compact(value: Any) -> str:
         return re.sub(r"[\s:：,，。.\-_/]+", "", str(value or "").strip().lower())
 
@@ -137,9 +132,6 @@ def adopted_resolution_option_text(
     return f"採用{label}，{description}"
 
 
-# ========
-# Defines ingest round resolution effects function for this module workflow.
-# ========
 def ingest_round_resolution_effects(
     coordinator: Any,
     artifact: Dict[str, Any],
@@ -206,9 +198,6 @@ def ingest_round_resolution_effects(
     artifact["issue_resolution_effects"] = resolution_effects
 
 
-# ========
-# Defines post issue processing function for this module workflow.
-# ========
 def post_issue_processing(
     coordinator: Any,
     artifact: Dict[str, Any],
@@ -222,9 +211,6 @@ def post_issue_processing(
     coordinator.flow.store.save_artifact(artifact)
 
 
-# ========
-# Defines human decision issue record function for this module workflow.
-# ========
 def human_decision_issue_record(
     coordinator: Any,
     row: Dict[str, Any],
@@ -257,9 +243,6 @@ def human_decision_issue_record(
     return normalized
 
 
-# ========
-# Defines execute human decision queue function for this module workflow.
-# ========
 def execute_human_decision_queue(
     coordinator: Any,
     artifact: Dict[str, Any],
@@ -299,7 +282,7 @@ def execute_human_decision_queue(
                     }
                 )
             options = {"best_options": best_options, "compromise": {}}
-        resolution_raw = Collect.human_decision_on_issue(issue, options)
+        resolution_raw = runner.collect.human_decision_on_issue(issue, options)
         decision_text = str(resolution_raw.get("decision", "")).strip()
         decision_id = f"DEC-HQ-{round_num}-{idx}" if decision_text else ""
         has_decision = bool(decision_text)
@@ -335,9 +318,6 @@ def execute_human_decision_queue(
         row["human_decision_processed_round"] = round_num
 
 
-# ========
-# Defines run human decision queue function for this module workflow.
-# ========
 def run_human_decision_queue(
     coordinator: Any,
     artifact: Dict[str, Any],
@@ -370,15 +350,9 @@ def run_human_decision_queue(
         prev_after = total_after
 
 
-# ========
-# Defines run round opa loop function for this module workflow.
-# ========
 def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
     last_action_result: Optional[Dict[str, Any]] = None
-    try:
-        configured_issue_limit = int(runner.config.get("max_issues", 5) or 5)
-    except (AttributeError, TypeError, ValueError):
-        configured_issue_limit = 5
+    configured_issue_limit = runner.issue_limit()
     max_steps = max(60, configured_issue_limit * 12 + 30)
     last_decision_signature = ""
     repeated_decision_count = 0
@@ -460,9 +434,6 @@ def run_round_opa_loop(coordinator: Any, runner: Any) -> None:
         raise RuntimeError(f"formal meeting loop exceeded safety limit ({max_steps} steps)")
 
 
-# ========
-# Defines run meeting loop function for this module workflow.
-# ========
 def run_meeting_loop(coordinator: Any, runner: Any) -> None:
     obs = runner.run("plan_issues", None)
     if obs.get("error"):
@@ -479,12 +450,8 @@ def run_meeting_loop(coordinator: Any, runner: Any) -> None:
     run_round_opa_loop(coordinator, runner)
 
 
-# ========
-# Defines MeetingRunner class for this module workflow.
-# ========
 class MeetingRunner:
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         mediator_agent: MediatorAgent,
@@ -513,7 +480,22 @@ class MeetingRunner:
         self.meeting_records: List[Dict] = []
         self.open_questions: List[Dict] = []
 
-    # Defines log agenda function for this module workflow.
+    def issue_limit(self) -> int:
+        current_issues = self.current_meeting_issues()
+        if any(self.is_default_issue(issue) for issue in current_issues):
+            return max(1, len(current_issues))
+        try:
+            return max(1, int(self.config.get("max_issues", 5) or 5))
+        except (AttributeError, TypeError, ValueError):
+            return 5
+
+    @staticmethod
+    def issue_backlog_row(issue: Dict[str, Any]) -> Dict[str, Any]:
+        row = dict(issue)
+        row["issue_id"] = str(row.pop("id", "") or "").strip()
+        row.pop("round", None)
+        return row
+
     def log_agenda(
         self,
         *,
@@ -542,7 +524,6 @@ class MeetingRunner:
                 ),
             )
 
-    # Defines log discussion start function for this module workflow.
     def log_discussion_start(self, issue: Dict[str, Any]) -> None:
         participants = "、".join(issue.get("participants", []) or []) or "未指定"
         self.logger.info(
@@ -555,7 +536,6 @@ class MeetingRunner:
             participants,
         )
 
-    # Defines log discussion done function for this module workflow.
     def log_discussion_done(self, issue_id: str, result: Dict[str, Any]) -> None:
         self.logger.info(
             "  討論完成：%s/%s 輪，%s 則發言，%s 個 open question",
@@ -565,7 +545,6 @@ class MeetingRunner:
             result.get("oq_count", ""),
         )
 
-    # Defines log resolution done function for this module workflow.
     def log_resolution_done(self, issue_id: str, resolution: Dict[str, Any]) -> None:
         status = str(resolution.get("status") or "").strip()
         if resolution.get("needs_human"):
@@ -597,11 +576,9 @@ class MeetingRunner:
                 raise RuntimeError(f"{issue_id} resolution 缺少 status")
             self.logger.info("  收斂結果：%s｜%s", status, resolution.get("summary", ""))
 
-    # Defines log human judgment done function for this module workflow.
     def log_human_judgment_done(self, issue_id: str, decision_text: str) -> None:
         self.logger.info("  人類裁決：%s", decision_text or "已完成")
 
-    # Defines log issue saved function for this module workflow.
     def log_issue_saved(self, issue_id: str, save_result: Dict[str, Any]) -> None:
         filename = str(save_result.get("filename") or "").strip()
         if filename:
@@ -618,7 +595,6 @@ class MeetingRunner:
         self.logger.info("  已保存：%s", issue_id)
 
     @staticmethod
-    # Defines enrich resolution changes function for this module workflow.
     def enrich_resolution_changes(resolution: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(resolution, dict):
             return {}
@@ -631,10 +607,14 @@ class MeetingRunner:
             for row in resolution.get("url_updates") or []:
                 if not isinstance(row, dict):
                     continue
-                target = str(row.get("id") or row.get("source_id") or "").strip()
                 action = str(row.get("action") or "").strip()
-                if target and action:
-                    requirement_changes.append({"id": target, "change": action})
+                targets = row.get("ids") if isinstance(row.get("ids"), list) else [
+                    row.get("id") or row.get("source_id")
+                ]
+                for target in targets:
+                    target_id = str(target or "").strip()
+                    if target_id and action:
+                        requirement_changes.append({"id": target_id, "change": action})
             if requirement_changes:
                 resolution["requirement_changes"] = requirement_changes
         if not resolution.get("model_changes"):
@@ -649,7 +629,6 @@ class MeetingRunner:
                 resolution["model_changes"] = model_updates
         return resolution
 
-    # Defines current meeting issues function for this module workflow.
     def current_meeting_issues(self) -> List[Dict[str, Any]]:
         rows = []
         source = self.artifact.get("meeting_issues", []) or []
@@ -666,7 +645,6 @@ class MeetingRunner:
             rows.append(normalized)
         return rows
 
-    # Defines load meeting issues function for this module workflow.
     def load_meeting_issues(self) -> None:
         rows = self.current_meeting_issues()
         for issue in rows:
@@ -681,9 +659,6 @@ class MeetingRunner:
                 "saved": completed,
             }
 
-    # ========
-    # Defines issue action errors function for this module workflow.
-    # ========
     @staticmethod
     def issue_action_errors(conversation: List[Dict[str, Any]]) -> List[str]:
         latest_results: Dict[tuple[str, str], Dict[str, Any]] = {}
@@ -710,7 +685,6 @@ class MeetingRunner:
                 errors.append(f"{label or 'issue_action'}: {error or status}")
         return errors
 
-    # Defines mark issue completed function for this module workflow.
     def mark_issue_completed(self, issue: Dict[str, Any], *, meeting_id: str = "") -> None:
         issue_id = str(issue.get("id") or "").strip()
         if not issue_id:
@@ -736,7 +710,6 @@ class MeetingRunner:
         else:
             self.store.save_artifact(self.artifact)
 
-    # Defines refresh artifact from store function for this module workflow.
     def refresh_artifact_from_store(self) -> None:
         latest = self.store.load_artifact()
         if not isinstance(latest, dict):
@@ -748,7 +721,6 @@ class MeetingRunner:
             self.output_artifact.update(latest)
         self.load_meeting_issues()
 
-    # Defines missing issue trace ids function for this module workflow.
     def missing_issue_trace_ids(self, issue: Dict[str, Any]) -> List[str]:
         ids = [
             str(source_id).strip()
@@ -758,7 +730,6 @@ class MeetingRunner:
         if not ids:
             return []
 
-        # Defines ids from function for this module workflow.
         def ids_from(rows: Any) -> set[str]:
             if not isinstance(rows, list):
                 return set()
@@ -793,15 +764,12 @@ class MeetingRunner:
         return missing
 
     @staticmethod
-    # Defines is default issue function for this module workflow.
     def is_default_issue(issue: Dict[str, Any]) -> bool:
         return str(issue.get("proposed_by") or "").strip() == "mediator"
 
-    # Defines load agenda issue function for this module workflow.
     def load_agenda_issue(self, issue_id: Optional[str]) -> Optional[Dict[str, Any]]:
         return self.get_issue(issue_id)
 
-    # Defines prepare discussion function for this module workflow.
     def prepare_discussion(self, issue: Dict[str, Any]) -> Optional[str]:
         issue_id = issue.get("id")
         state = self.issue_states.get(issue_id, {})
@@ -823,7 +791,6 @@ class MeetingRunner:
         issue["issue_context"] = self.issue_context_summary(issue)
         return None
 
-    # Defines run discussion function for this module workflow.
     def run_discussion(self, issue: Dict[str, Any]) -> Dict[str, Any]:
         issue_id = issue.get("id")
         mode = issue.get("discussion_mode", "sequential")
@@ -921,7 +888,6 @@ class MeetingRunner:
         return result
 
     @staticmethod
-    # Defines conversation updated requirements function for this module workflow.
     def conversation_updated_requirements(conversation: List[Dict[str, Any]]) -> bool:
         requirement_actions = {"analyze_requirements", "update_requirement", "refine_requirement"}
         for entry in conversation or []:
@@ -950,7 +916,6 @@ class MeetingRunner:
         return False
 
     @staticmethod
-    # Defines conversation updated system models function for this module workflow.
     def conversation_updated_system_models(conversation: List[Dict[str, Any]]) -> bool:
         model_actions = {"system_modeling", "create_model", "update_model"}
         for entry in conversation or []:
@@ -974,7 +939,6 @@ class MeetingRunner:
                     return True
         return False
 
-    # Defines sync open questions to artifact function for this module workflow.
     def sync_open_questions_to_artifact(
         self,
         issue: Dict[str, Any],
@@ -1072,7 +1036,6 @@ class MeetingRunner:
         self.artifact["open_questions"] = existing
 
     @staticmethod
-    # Defines response state function for this module workflow.
     def response_state(response: Dict[str, Any]) -> str:
         if not isinstance(response, dict):
             return ""
@@ -1080,7 +1043,6 @@ class MeetingRunner:
         return str(stance.get("state") or "").strip()
 
     @staticmethod
-    # Defines response proposal function for this module workflow.
     def response_proposal(response: Dict[str, Any]) -> Any:
         if not isinstance(response, dict):
             return {}
@@ -1088,7 +1050,6 @@ class MeetingRunner:
         return stance.get("proposal")
 
     @staticmethod
-    # Defines needs extra round function for this module workflow.
     def needs_extra_round(conversation: List[Dict[str, Any]]) -> bool:
         for record_entry in conversation or []:
             if not isinstance(record_entry, dict):
@@ -1100,7 +1061,6 @@ class MeetingRunner:
                 return True
         return False
 
-    # Defines issue context summary function for this module workflow.
     def issue_context_summary(self, issue: Dict[str, Any]) -> Dict[str, Any]:
         source_ids = [
             str(source_id).strip()
@@ -1109,7 +1069,6 @@ class MeetingRunner:
         ]
         source_set = set(source_ids)
 
-        # Defines selected rows function for this module workflow.
         def selected_rows(rows: Any, prefixes: tuple[str, ...] = ()) -> List[Dict[str, Any]]:
             out: List[Dict[str, Any]] = []
             if not source_set or not isinstance(rows, list):
@@ -1178,7 +1137,6 @@ class MeetingRunner:
             },
         }
 
-    # Defines judgment context function for this module workflow.
     def judgment_context(self, issue: Dict[str, Any]) -> Dict[str, Any]:
         category = str(issue.get("category") or "").strip()
         source_ids = [
@@ -1203,7 +1161,6 @@ class MeetingRunner:
                     context["conflict_report"] = summary
         return context
 
-    # Defines update conflict report function for this module workflow.
     def update_conflict_report(self, conversation: List[Dict[str, Any]]) -> None:
         report_rows: List[Dict[str, Any]] = []
         report_md = ""
@@ -1239,10 +1196,12 @@ class MeetingRunner:
             return
         try:
             from storage.artifact import (
+                load_json_path,
                 reindex_conflict_report_rows,
                 save_json_path,
             )
 
+            report_rows = reindex_conflict_report_rows(report_rows)
             report_dir = self.store.artifact_dir / "report"
             latest_path = None
             latest_version = -1
@@ -1255,12 +1214,12 @@ class MeetingRunner:
             if latest_path is None:
                 report_dir.mkdir(parents=True, exist_ok=True)
                 latest_version = max(0, int(self.round_num or 0))
-                latest_path = report_dir / f"conflict_report_v{latest_version}.json"
+                report_path = report_dir / f"conflict_report_v{latest_version}.json"
+            elif load_json_path(latest_path, []) == report_rows:
                 report_path = latest_path
             else:
                 latest_version += 1
                 report_path = report_dir / f"conflict_report_v{latest_version}.json"
-            report_rows = reindex_conflict_report_rows(report_rows)
             save_json_path(self.store.base_dir, report_rows, report_path)
             conflict_state = self.artifact.setdefault("conflict", {})
             if isinstance(conflict_state, dict):
@@ -1283,7 +1242,6 @@ class MeetingRunner:
         except Exception as e:
             raise RuntimeError("更新 conflict report 失敗") from e
 
-    # Defines discussion round block function for this module workflow.
     def discussion_round_block(self, *, create: bool = True) -> Optional[Dict[str, Any]]:
         discussions = self.artifact.setdefault("discussions", [])
         for block in discussions:
@@ -1297,7 +1255,6 @@ class MeetingRunner:
         return block
 
     @staticmethod
-    # Defines meeting record participants function for this module workflow.
     def meeting_record_participants(issue: Dict[str, Any]) -> List[str]:
         participants = list(issue.get("participants", []) or [])
         proposer = str(issue.get("proposed_by") or "").strip()
@@ -1305,7 +1262,6 @@ class MeetingRunner:
             participants.insert(0, proposer)
         return list(dict.fromkeys(participants))
 
-    # Defines ensure meeting record function for this module workflow.
     def ensure_meeting_record(self, issue: Dict[str, Any]) -> Dict[str, Any]:
         issue_id = str(issue.get("id") or "").strip()
         block = self.discussion_round_block(create=True)
@@ -1330,11 +1286,25 @@ class MeetingRunner:
         issue_context = issue.get("issue_context")
         if isinstance(issue_context, dict) and issue_context:
             meeting_record["issue_context"] = issue_context
+        if str(issue.get("category") or "").strip() == "resolve_conflict":
+            try:
+                from storage.artifact import latest_conflict_report_payload
+
+                conflict_titles = {
+                    str(row.get("id") or "").strip(): str(row.get("title") or "").strip()
+                    for row in latest_conflict_report_payload(self.store.artifact_dir)
+                    if isinstance(row, dict)
+                    and str(row.get("id") or "").strip()
+                    and str(row.get("title") or "").strip()
+                }
+                if conflict_titles:
+                    meeting_record["conflict_titles"] = conflict_titles
+            except (OSError, ValueError, TypeError):
+                pass
         rows.append(meeting_record)
         self.meeting_records = rows
         return meeting_record
 
-    # Defines save progress function for this module workflow.
     def save_progress(
         self,
         issue: Dict[str, Any],
@@ -1367,6 +1337,11 @@ class MeetingRunner:
                 meeting_record["conversation"] = clean_rows
         if resolution is not None:
             resolution = self.enrich_resolution_changes(resolution)
+            if meeting_record.get("conflict_titles"):
+                resolution = {
+                    **resolution,
+                    "conflict_titles": dict(meeting_record["conflict_titles"]),
+                }
             self.apply_resolution(issue, resolution)
             meeting_record["resolution"] = resolution
             self.apply_default_issue_completion(issue, resolution, meeting_record)
@@ -1380,7 +1355,6 @@ class MeetingRunner:
             self.store.save_artifact(self.output_artifact)
         return meeting_record
 
-    # Defines apply resolution function for this module workflow.
     def apply_resolution(
         self,
         issue: Dict[str, Any],
@@ -1389,7 +1363,8 @@ class MeetingRunner:
         status = str(resolution.get("status") or "").strip()
         if status not in {"agreed", "human_decision"}:
             return
-        rows = self.artifact.get("conflict_report") if isinstance(self.artifact.get("conflict_report"), list) else []
+        report = self.artifact.get("conflict_report")
+        rows = report if isinstance(report, list) else []
         if not rows:
             return
         ordered_target_ids = conflict_report_resolution_ids(self.artifact, issue, resolution)
@@ -1401,11 +1376,7 @@ class MeetingRunner:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            row_ids = {
-                str(row.get("id") or "").strip(),
-                str(row.get("source_id") or "").strip(),
-            }
-            if not target_ids.intersection(row_ids):
+            if not target_ids.intersection(conflict_report_row_ids(row)):
                 continue
             row["status"] = status
             if meeting_id:
@@ -1434,7 +1405,41 @@ class MeetingRunner:
         )
         self.save_latest_conflict_report(rows)
 
-    # Defines update url function for this module workflow.
+    @staticmethod
+    def resolution_source_id(issue: Dict[str, Any]) -> str:
+        return (
+            str(issue.get("meeting_id") or "").strip()
+            or str(issue.get("id") or "").strip()
+        )
+
+    @classmethod
+    def annotate_url_resolution(
+        cls,
+        row: Dict[str, Any],
+        issue: Dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> None:
+        source_id = cls.resolution_source_id(issue)
+        row["source"] = source_id
+        if source_id:
+            row["updated_by_meeting"] = source_id
+        if reason:
+            row["resolution_reason"] = reason
+
+    def commit_url_changes(
+        self,
+        url_rows: List[Dict[str, Any]],
+        issue: Dict[str, Any],
+    ) -> None:
+        self.artifact["URL"] = url_rows
+        meta = self.artifact.setdefault("meta", {})
+        meta["requirements_changed"] = True
+        meta["requirements_changed_by"] = self.resolution_source_id(issue)
+        meta["requirements_changed_reason"] = "resolve_conflict"
+        meta["models_maybe_stale"] = True
+        meta["models_stale_reason"] = "requirements_changed"
+
     def update_url(
         self,
         *,
@@ -1464,7 +1469,6 @@ class MeetingRunner:
             for row in url_rows
             if str(row.get("id") or "").strip()
         }
-        meeting_id = str(issue.get("meeting_id") or "").strip()
         changed = False
         update_plan = self.normalize_url_update_plan(resolution.get("url_updates"), by_id=by_id)
         if update_plan:
@@ -1495,12 +1499,7 @@ class MeetingRunner:
                         cleaned_text = self.cleaned_single_url_text(row)
                         if cleaned_text:
                             row["text"] = cleaned_text
-                    update_meeting_id = meeting_id or str(issue.get("id") or "").strip()
-                    row["source"] = update_meeting_id
-                    if update_meeting_id:
-                        row["updated_by_meeting"] = update_meeting_id
-                    if reason:
-                        row["resolution_reason"] = reason
+                    self.annotate_url_resolution(row, issue, reason=reason)
                     changed = True
             if remove_ids:
                 url_rows = [
@@ -1509,24 +1508,13 @@ class MeetingRunner:
                 ]
                 url_rows = renumber_requirement_candidate_ids(url_rows)
             if changed:
-                self.artifact["URL"] = url_rows
-                meta = self.artifact.setdefault("meta", {})
-                meta["requirements_changed"] = True
-                meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
-                meta["requirements_changed_reason"] = "resolve_conflict"
-                meta["models_maybe_stale"] = True
-                meta["models_stale_reason"] = "requirements_changed"
+                self.commit_url_changes(url_rows, issue)
             return
 
         for conflict_row in conflict_rows:
             if not isinstance(conflict_row, dict):
                 continue
-            conflict_ids = {
-                str(conflict_row.get("id") or "").strip(),
-                str(conflict_row.get("source_id") or "").strip(),
-            }
-            conflict_ids.discard("")
-            if not target_ids.intersection(conflict_ids):
+            if not target_ids.intersection(conflict_report_row_ids(conflict_row)):
                 continue
             conflict_id = str(conflict_row.get("id") or "").strip()
             if not conflict_id:
@@ -1555,10 +1543,7 @@ class MeetingRunner:
                 if cleaned_text and cleaned_text != str(row.get("text") or "").strip():
                     row["text"] = cleaned_text
                     changed = True
-                update_meeting_id = meeting_id or str(issue.get("id") or "").strip()
-                row["source"] = update_meeting_id
-                if update_meeting_id:
-                    row["updated_by_meeting"] = update_meeting_id
+                self.annotate_url_resolution(row, issue)
                 changed = True
             if not source_set:
                 continue
@@ -1576,16 +1561,9 @@ class MeetingRunner:
 
         if not changed:
             return
-        self.artifact["URL"] = url_rows
-        meta = self.artifact.setdefault("meta", {})
-        meta["requirements_changed"] = True
-        meta["requirements_changed_by"] = meeting_id or str(issue.get("id") or "").strip()
-        meta["requirements_changed_reason"] = "resolve_conflict"
-        meta["models_maybe_stale"] = True
-        meta["models_stale_reason"] = "requirements_changed"
+        self.commit_url_changes(url_rows, issue)
 
     @staticmethod
-    # Defines normalize url update plan function for this module workflow.
     def normalize_url_update_plan(
         value: Any,
         *,
@@ -1623,7 +1601,6 @@ class MeetingRunner:
             out.append(item)
         return out
 
-    # Defines conversation url update plan function for this module workflow.
     def conversation_url_update_plan(
         self,
         conversation: List[Dict[str, Any]],
@@ -1646,80 +1623,8 @@ class MeetingRunner:
                 out.extend(self.normalize_url_update_plan(candidate, by_id=by_id))
         return out
 
-    # Defines default conflict url update plan function for this module workflow.
-    def default_conflict_url_update_plan(
-        self,
-        conflict_rows: List[Dict[str, Any]],
-        *,
-        target_ids: set[str],
-    ) -> List[Dict[str, Any]]:
-        url_rows = [
-            row for row in (self.artifact.get("URL", []) or [])
-            if isinstance(row, dict)
-        ]
-        by_id = {
-            str(row.get("id") or "").strip(): row
-            for row in url_rows
-            if str(row.get("id") or "").strip()
-        }
-        out: List[Dict[str, Any]] = []
-        seen: set[tuple[str, tuple[str, ...]]] = set()
-        for conflict_row in conflict_rows or []:
-            if not isinstance(conflict_row, dict):
-                continue
-            conflict_ids = {
-                str(conflict_row.get("id") or "").strip(),
-                str(conflict_row.get("source_id") or "").strip(),
-            }
-            conflict_ids.discard("")
-            if target_ids and not target_ids.intersection(conflict_ids):
-                continue
-            source_ids = [
-                req_id for req_id in conflict_report_requirement_ids(conflict_row)
-                if req_id in by_id
-            ]
-            source_rows = [by_id[source_id] for source_id in source_ids]
-            duplicate_groups = self.duplicate_url_groups(source_rows)
-            duplicate_ids = {
-                req_id
-                for group in duplicate_groups
-                for req_id in group[1:]
-            }
-            for source_id in source_ids:
-                row = by_id.get(source_id)
-                if not row:
-                    continue
-                if source_id in duplicate_ids:
-                    update = {
-                        "action": "remove",
-                        "ids": [source_id],
-                        "reason": "與同一衝突中的其他 URL 內容完全重複。",
-                    }
-                else:
-                    cleaned_text = self.cleaned_single_url_text(row)
-                    current_text = str(row.get("text") or "").strip()
-                    if cleaned_text and cleaned_text != current_text:
-                        update = {
-                            "action": "revise",
-                            "ids": [source_id],
-                            "text": cleaned_text,
-                            "reason": "清理重複片段，保留單筆 URL 的原始需求語意。",
-                        }
-                    else:
-                        update = {
-                            "action": "keep",
-                            "ids": [source_id],
-                            "reason": "此 URL 作為衝突解決後仍有效的使用者需求來源。",
-                        }
-                marker = (update["action"], tuple(update["ids"]))
-                if marker in seen:
-                    continue
-                seen.add(marker)
-                out.append(update)
-        return out
 
     @staticmethod
-    # Defines is decision text function for this module workflow.
     def is_decision_text(value: Any) -> bool:
         text = str(value or "").strip()
         if not text:
@@ -1736,7 +1641,6 @@ class MeetingRunner:
         return any(marker in text for marker in markers)
 
     @staticmethod
-    # Defines clean requirement text function for this module workflow.
     def clean_requirement_text(value: Any) -> str:
         text = re.sub(r"\s+", " ", str(value or "").strip())
         text = re.sub(r"^(使用者需求|需求|Requirement)\s*[:：]\s*", "", text, flags=re.I)
@@ -1752,7 +1656,6 @@ class MeetingRunner:
         return text.strip("；;，,。 ")
 
     @classmethod
-    # Defines requirement text clauses function for this module workflow.
     def requirement_text_clauses(cls, value: Any) -> List[str]:
         text = cls.clean_requirement_text(value)
         if not text:
@@ -1774,7 +1677,6 @@ class MeetingRunner:
         return out
 
     @classmethod
-    # Defines cleaned single url text function for this module workflow.
     def cleaned_single_url_text(cls, row: Dict[str, Any]) -> str:
         clauses = cls.requirement_text_clauses(row.get("text") or row.get("description"))
         if not clauses:
@@ -1784,7 +1686,6 @@ class MeetingRunner:
         return "；".join(clauses)
 
     @classmethod
-    # Defines duplicate url groups function for this module workflow.
     def duplicate_url_groups(cls, source_rows: List[Dict[str, Any]]) -> List[List[str]]:
         by_text: Dict[str, List[str]] = {}
         for row in source_rows or []:
@@ -1798,10 +1699,59 @@ class MeetingRunner:
             by_text.setdefault(marker, []).append(req_id)
         return [ids for ids in by_text.values() if len(ids) > 1]
 
-    # Defines save latest conflict report function for this module workflow.
     def save_latest_conflict_report(self, rows: List[Dict[str, Any]]) -> None:
         try:
             from storage.artifact import reindex_conflict_report_rows, save_json_path
+
+            conflict_state = (
+                self.artifact.get("conflict")
+                if isinstance(self.artifact.get("conflict"), dict)
+                else {}
+            )
+            source_rows = [
+                source
+                for key in ("pairs", "multiple")
+                for source in (conflict_state.get(key) or [])
+                if isinstance(source, dict)
+            ]
+            source_by_id = {
+                str(source.get("id") or "").strip(): source
+                for source in source_rows
+                if str(source.get("id") or "").strip()
+            }
+            source_by_requirements = {
+                tuple(sorted(conflict_report_requirement_ids(source))): source
+                for source in source_rows
+                if conflict_report_requirement_ids(source)
+            }
+            normalized_rows: List[Dict[str, Any]] = []
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                description = str(
+                    row.get("description")
+                    or row.get("initial_reason")
+                    or row.get("reason")
+                    or ""
+                ).strip()
+                if not description:
+                    source = source_by_id.get(str(row.get("id") or "").strip())
+                    if source is None:
+                        source = source_by_requirements.get(
+                            tuple(sorted(conflict_report_requirement_ids(row)))
+                        )
+                    if source:
+                        description = str(
+                            source.get("description")
+                            or source.get("initial_reason")
+                            or source.get("reason")
+                            or ""
+                        ).strip()
+                if description:
+                    row["description"] = description
+                normalized_rows.append(row)
+            rows = normalized_rows
 
             report_dir = self.store.artifact_dir / "report"
             latest_path = None
@@ -1819,7 +1769,6 @@ class MeetingRunner:
         except Exception as e:
             raise RuntimeError("正式會議 conflict report 狀態寫檔失敗") from e
 
-    # Defines apply default issue completion function for this module workflow.
     def apply_default_issue_completion(
         self,
         issue: Dict[str, Any],
@@ -1846,7 +1795,6 @@ class MeetingRunner:
             meta.pop("review_invalid_round", None)
             self.sync_models(issue, meeting_record)
 
-    # Defines sync models function for this module workflow.
     def sync_models(
         self,
         issue: Dict[str, Any],
@@ -1908,7 +1856,6 @@ class MeetingRunner:
             meta["model_alignment_status"] = "failed"
             meta["model_alignment_error"] = str(e)
 
-    # Defines append requirement review model record function for this module workflow.
     def append_requirement_review_model_record(
         self,
         issue: Dict[str, Any],
@@ -1978,7 +1925,6 @@ class MeetingRunner:
             existing.extend(clean_rows)
             meeting_record["conversation"] = existing
 
-    # Defines observe action function for this module workflow.
     def observe_action(self, action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
         action = self.action_name(action)
@@ -1993,7 +1939,6 @@ class MeetingRunner:
             "state_summary": state,
         }
 
-    # Defines resolve issue via substeps function for this module workflow.
     def resolve_issue_via_substeps(
         self,
         *,
@@ -2047,7 +1992,6 @@ class MeetingRunner:
         )
         return resolution
 
-    # Defines prepare human decision resolution function for this module workflow.
     def prepare_human_decision_resolution(
         self,
         issue: Dict[str, Any],
@@ -2078,7 +2022,6 @@ class MeetingRunner:
             resolution["human_decision_trigger"] = trigger
         return resolution
 
-    # Defines conflict rows for issue function for this module workflow.
     def conflict_rows_for_issue(self, issue: Dict[str, Any]) -> List[Dict[str, Any]]:
         report = self.artifact.get("conflict_report", [])
         if not isinstance(report, list):
@@ -2104,7 +2047,6 @@ class MeetingRunner:
         ]
 
     @staticmethod
-    # Defines has major conflict objection function for this module workflow.
     def has_major_conflict_objection(conversation: List[Dict[str, Any]]) -> bool:
         keywords = (
             "反對",
@@ -2142,7 +2084,6 @@ class MeetingRunner:
                 return True
         return False
 
-    # Defines close conflict function for this module workflow.
     def close_conflict(
         self,
         issue: Dict[str, Any],
@@ -2202,9 +2143,14 @@ class MeetingRunner:
         }
         url_updates = self.conversation_url_update_plan(conversation, by_id=by_id)
         if not url_updates:
-            url_updates = self.default_conflict_url_update_plan(
-                conflict_rows,
-                target_ids=target_ids,
+            return self.mediator.build_issue_result(
+                status="",
+                summary="衝突尚未形成可執行的 URL 更新方案。",
+                decision="",
+                agreed_points=[],
+                unresolved_points=["缺少明確 url_updates，不能完成衝突結案。"],
+                affected_conflict_ids=affected_conflict_ids,
+                needs_human=True,
             )
         recommended = [
             str(row.get("recommended_resolution") or "").strip()
@@ -2231,7 +2177,6 @@ class MeetingRunner:
         )
 
     @staticmethod
-    # Defines is requirement review issue function for this module workflow.
     def is_requirement_review_issue(issue: Dict[str, Any]) -> bool:
         title = str((issue or {}).get("title") or "").strip()
         category = str((issue or {}).get("category") or "").strip()
@@ -2250,7 +2195,6 @@ class MeetingRunner:
         )
 
     @staticmethod
-    # Defines needs requirement update function for this module workflow.
     def needs_requirement_update(conversation: List[Dict[str, Any]]) -> bool:
         for entry in conversation or []:
             if not isinstance(entry, dict):
@@ -2290,7 +2234,6 @@ class MeetingRunner:
                 return True
         return False
 
-    # Defines close requirement function for this module workflow.
     def close_requirement(
         self,
         issue: Dict[str, Any],
@@ -2338,7 +2281,6 @@ class MeetingRunner:
             needs_human=False,
         )
 
-    # Defines artifact updates summary function for this module workflow.
     def artifact_updates_summary(
         self,
         issue: Dict[str, Any],
@@ -2422,7 +2364,6 @@ class MeetingRunner:
                         }
         return updates
 
-    # Defines collect stance summary function for this module workflow.
     def collect_stance_summary(
         self,
         issue: Dict[str, Any],
@@ -2508,7 +2449,6 @@ class MeetingRunner:
             "participant_status": participant_status,
         }
 
-    # Defines judge issue function for this module workflow.
     def judge_issue(
         self,
         *,
@@ -2594,9 +2534,15 @@ class MeetingRunner:
             }
             url_updates = self.conversation_url_update_plan(conversation, by_id=by_id)
             if not url_updates:
-                url_updates = self.default_conflict_url_update_plan(
-                    conflict_rows,
-                    target_ids=set(affected_conflict_ids),
+                skipped = resolution.get("skipped") is True
+                return self.mediator.build_issue_result(
+                    status="",
+                    summary="衝突尚未形成可執行的 URL 更新方案。",
+                    decision="",
+                    agreed_points=[],
+                    unresolved_points=["缺少明確 url_updates，不能完成衝突結案。"],
+                    affected_conflict_ids=affected_conflict_ids,
+                    needs_human=not skipped,
                 )
         if resolution.get("skipped") is True:
             recommendation = status_resolution.get("recommendation")
@@ -2682,7 +2628,6 @@ class MeetingRunner:
         )
         return wrapped
 
-    # Defines load saved formal meeting issue function for this module workflow.
     def load_saved_formal_meeting_issue(
         self,
         issue: Dict[str, Any],
@@ -2711,7 +2656,6 @@ class MeetingRunner:
                 return row
         raise RuntimeError(f"formal meeting record 找不到 issue_id: {issue_id}")
 
-    # Defines write mom function for this module workflow.
     def write_mom(
         self,
         *,
@@ -2741,7 +2685,6 @@ class MeetingRunner:
             "resolution": resolution,
         }
 
-    # Defines mark issue saved function for this module workflow.
     def mark_issue_saved(
         self,
         *,
@@ -2754,7 +2697,6 @@ class MeetingRunner:
         self.issue_states.setdefault(issue_id, {})["saved"] = True
         self.mark_issue_completed(issue, meeting_id=meeting_id)
 
-    # Defines save issue artifacts function for this module workflow.
     def save_issue_artifacts(
         self,
         *,
@@ -2780,7 +2722,6 @@ class MeetingRunner:
             "filename": mom_result.get("filename"),
         }
 
-    # Defines conversation entry records function for this module workflow.
     def conversation_entry_records(self, record_entry: Dict[str, Any]) -> List[Dict[str, Any]]:
         response = record_entry.get("response") if isinstance(record_entry.get("response"), dict) else {}
         actions = [str(item).strip() for item in response.get("actions", []) if str(item).strip()]
@@ -2897,7 +2838,6 @@ class MeetingRunner:
             records.append(record)
         return records
 
-    # Defines JSON safe record value function for this module workflow.
     def json_safe_record_value(self, value: Any) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
@@ -2913,7 +2853,6 @@ class MeetingRunner:
         return str(value)
 
     @staticmethod
-    # Defines recordable issue action result function for this module workflow.
     def recordable_issue_action_result(value: Any) -> bool:
         if not isinstance(value, dict):
             return False
@@ -2935,7 +2874,6 @@ class MeetingRunner:
         return any(value.get(key) not in (None, "", [], {}) for key in recordable_keys)
 
     @staticmethod
-    # Defines split speaking as text function for this module workflow.
     def split_speaking_as_text(text: str, names: List[str]) -> Dict[str, str]:
         source = str(text or "").strip()
         clean_names = [str(name or "").strip() for name in names or [] if str(name or "").strip()]
@@ -2958,7 +2896,6 @@ class MeetingRunner:
         return parts
 
     @staticmethod
-    # Defines record actions function for this module workflow.
     def record_actions(actions: Any) -> List[str]:
         if isinstance(actions, str):
             actions = [actions]
@@ -2972,7 +2909,6 @@ class MeetingRunner:
         ]
 
     @staticmethod
-    # Defines issue action result value function for this module workflow.
     def issue_action_result_value(action_results: Any, key: str) -> Any:
         if not isinstance(action_results, list):
             return None
@@ -2982,7 +2918,6 @@ class MeetingRunner:
         return None
 
     @staticmethod
-    # Defines analyst issue artifacts function for this module workflow.
     def analyst_issue_artifacts(action_results: Any) -> Dict[str, Any]:
         if not isinstance(action_results, list):
             return {}
@@ -3018,7 +2953,6 @@ class MeetingRunner:
         return artifacts
 
     @staticmethod
-    # Defines system requirement summary function for this module workflow.
     def system_requirement_summary(rows: Any) -> List[Dict[str, Any]]:
         if not isinstance(rows, list):
             return []
@@ -3051,7 +2985,6 @@ class MeetingRunner:
         return summaries
 
     @staticmethod
-    # Defines requirement candidate summary function for this module workflow.
     def requirement_candidate_summary(output: Any) -> List[Dict[str, Any]]:
         if isinstance(output, list):
             rows = output
@@ -3084,7 +3017,6 @@ class MeetingRunner:
         return summaries
 
     @staticmethod
-    # Defines conflict report summary function for this module workflow.
     def conflict_report_summary(report: Any) -> List[Dict[str, Any]]:
         if not isinstance(report, list):
             return []
@@ -3128,7 +3060,6 @@ class MeetingRunner:
         return summaries
 
     @staticmethod
-    # Defines feedback summary function for this module workflow.
     def feedback_summary(feedback: Any) -> Dict[str, Any]:
         if not isinstance(feedback, dict):
             return {}
@@ -3156,7 +3087,6 @@ class MeetingRunner:
             summary["sources"] = sources
         return summary
 
-    # Defines plan action function for this module workflow.
     def plan_action(
         self,
         action: str,
@@ -3181,13 +3111,11 @@ class MeetingRunner:
             "observation": observation,
         }
 
-    # Defines execute action function for this module workflow.
     def execute_action(self, decision: Dict[str, Any]) -> Dict[str, Any]:
         action = self.action_name(decision.get("action", ""))
         params = decision.get("params") or {}
         return self.run_action_internal(action, params)
 
-    # Defines run function for this module workflow.
     def run(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
         action = self.action_name(action)
         observation = self.observe_action(action, params)
@@ -3196,17 +3124,14 @@ class MeetingRunner:
         return result
 
     @staticmethod
-    # Defines action name function for this module workflow.
     def action_name(action: str) -> str:
         return str(action or "").strip()
 
-    # Defines run action internal function for this module workflow.
     def run_action_internal(self, action: str, params: Optional[Dict] = None) -> Dict[str, Any]:
         action = self.action_name(action)
         params = params or {}
         obs = {"action": action, "result": None, "error": None}
 
-        # Defines sync meeting issues function for this module workflow.
         def sync_meeting_issues(issues: List[Dict[str, Any]]) -> None:
             existing = [
                 row for row in (self.artifact.get("meeting_issues", []) or [])
@@ -3256,7 +3181,6 @@ class MeetingRunner:
                 self.store.save_artifact(self.output_artifact)
             self.load_meeting_issues()
 
-        # Defines next issue id function for this module workflow.
         def next_issue_id(issues: List[Dict[str, Any]]) -> str:
             nums = []
             for row in issues:
@@ -3266,7 +3190,6 @@ class MeetingRunner:
                     nums.append(int(m.group(1)))
             return f"M-{(max(nums) if nums else 0) + 1}"
 
-        # Defines replan invalid issue function for this module workflow.
         def replan_invalid_issue(issue: Dict[str, Any], missing_ids: List[str]) -> Dict[str, Any]:
             issue_id = str(issue.get("id") or "").strip()
             current_issues = self.current_meeting_issues()
@@ -3344,6 +3267,39 @@ class MeetingRunner:
             existing_issues = self.current_meeting_issues()
             if existing_issues:
                 self.load_meeting_issues()
+                issue_limit = self.issue_limit()
+                pending_overflow = [
+                    issue
+                    for issue in existing_issues[issue_limit:]
+                    if not self.issue_states.get(str(issue.get("id") or "").strip(), {}).get("saved", False)
+                ]
+                if pending_overflow:
+                    pending_ids = {
+                        str(issue.get("id") or "").strip()
+                        for issue in pending_overflow
+                    }
+                    backlog = list(self.artifact.get("issue_backlog", []) or [])
+                    backlog_keys = {
+                        str(row.get("issue_id") or row.get("id") or "").strip()
+                        for row in backlog
+                        if isinstance(row, dict)
+                    }
+                    for issue in pending_overflow:
+                        backlog_issue = self.issue_backlog_row(issue)
+                        backlog_id = str(backlog_issue.get("issue_id") or "").strip()
+                        if backlog_id and backlog_id not in backlog_keys:
+                            backlog.append(backlog_issue)
+                            backlog_keys.add(backlog_id)
+                    retained = [
+                        issue
+                        for issue in existing_issues
+                        if str(issue.get("id") or "").strip() not in pending_ids
+                    ]
+                    self.artifact["issue_backlog"] = backlog
+                    for pending_id in pending_ids:
+                        self.issue_states.pop(pending_id, None)
+                    sync_meeting_issues(retained)
+                    existing_issues = self.current_meeting_issues()
                 self.log_agenda(label="沿用既有議程", issues=existing_issues)
                 obs["result"] = {
                     "issues": [
@@ -3411,9 +3367,8 @@ class MeetingRunner:
 
         if action == "add_issues":
             issues = self.current_meeting_issues()
-            issue_limit = self.config.get("max_issues", 5)
-            extra_issue_count = len([issue for issue in issues if not self.is_default_issue(issue)])
-            if extra_issue_count >= issue_limit:
+            issue_limit = self.issue_limit()
+            if len(issues) >= issue_limit:
                 obs["error"] = "已達 issue 上限，無法擴充"
                 return obs
             all_saved = all(
@@ -3446,7 +3401,7 @@ class MeetingRunner:
                 issue_ref = meeting_issues_by_id.get(str(rd.get("issue_id") or "").strip()) or {}
                 for sid in trace_artifact_ids(issue_ref):
                     skip.add(sid)
-            max_items = issue_limit - extra_issue_count
+            max_items = issue_limit - len(issues)
             new_items = self.mediator.plan_issues(
                 self.artifact,
                 registry=self.registry,
@@ -3650,7 +3605,6 @@ class MeetingRunner:
         obs["error"] = f"未知動作: {action}，可用: {meeting_actions}"
         return obs
 
-    # Defines get issue function for this module workflow.
     def get_issue(self, issue_id: Optional[str]) -> Optional[Dict]:
         if not issue_id:
             return None
@@ -3660,7 +3614,6 @@ class MeetingRunner:
                 return issue
         return None
 
-    # Defines find issue proposer function for this module workflow.
     def find_issue_proposer(self, issue: Dict) -> Optional[str]:
         issue_ids = set(issue_proposal_ids(issue))
         if not issue_ids:
@@ -3674,7 +3627,6 @@ class MeetingRunner:
                     return proposer
         return None
 
-    # Defines get state summary function for this module workflow.
     def get_state_summary(self) -> Dict[str, Any]:
         issue_state_rows = []
         for issue_id, issue_state in self.issue_states.items():
@@ -3688,7 +3640,7 @@ class MeetingRunner:
                     "saved": issue_state.get("saved", False),
                 }
             )
-        issue_limit = self.config.get("max_issues", 5)
+        issue_limit = self.issue_limit()
         issues = self.current_meeting_issues()
         issues_count = len(issues)
         general_issues_count = len([issue for issue in issues if not self.is_default_issue(issue)])
@@ -3697,7 +3649,7 @@ class MeetingRunner:
             issues_count > 0
             and all(self.issue_states.get(t["id"], {}).get("saved", False) for t in issues)
         )
-        can_add_issues = general_issues_count < issue_limit and all_saved and backlog_count > 0
+        can_add_issues = issues_count < issue_limit and all_saved and backlog_count > 0
         human_decision_queue = [
             row for row in (self.artifact.get("human_decision_queue", []) or [])
             if isinstance(row, dict)
@@ -3733,6 +3685,5 @@ class MeetingRunner:
             "records_count": len(self.meeting_records),
         }
 
-    # Defines get meeting records function for this module workflow.
     def get_meeting_records(self) -> List[Dict]:
         return self.meeting_records

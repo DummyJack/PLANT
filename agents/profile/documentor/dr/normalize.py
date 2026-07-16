@@ -126,10 +126,21 @@ class DocumentorDrNormalize:
     @staticmethod
     def extract_design_rationale_trace(block: str) -> str:
         text = str(block or "").strip()
+        trace_heading = re.search(
+            r"(?m)^#{1,6}\s*Trace(?:\s+Explanation)?(?:\s*\{[^}]*\})?\s*$",
+            text,
+        )
+        if trace_heading:
+            return text[trace_heading.end() :].strip()
         text = re.sub(r"(?m)^#{1,6}\s*(?:FR|NFR|CON)-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^(?:FR|NFR|CON)-\d+\s*[:：].*$", "", text)
         text = re.sub(r"(?m)^\*\*Description\*\*\s*[:：].*$", "", text)
-        text = re.sub(r"(?m)^#{1,6}\s*Trace(?:\s+Explanation)?(?:\s*\{[^}]*\})?\s*$", "", text)
+        text = re.sub(
+            r"(?ms)^\*\*Acceptance Criteria\*\*\s*:\s*\n.*?(?=^\*\*[A-Za-z ]+\*\*\s*:|^#{1,6}\s+|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(r"(?m)^\*\*Metric\*\*\s*:[^\n]*\n?", "", text)
         return re.sub(r"\n{3,}", "\n\n", text).strip()
 
     @staticmethod
@@ -335,92 +346,6 @@ class DocumentorDrNormalize:
         )
         return text
 
-    @staticmethod
-    def ensure_trace_explanation_meetings(trace: str, requirement: Dict[str, Any]) -> str:
-        text = str(trace or "").strip()
-        graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
-        nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict)]
-        edges = [edge for edge in (graph.get("edges") or []) if isinstance(edge, dict)]
-        display_by_id: Dict[str, str] = {}
-        for node in nodes:
-            node_id = str(node.get("id") or "").strip()
-            if not node_id.startswith("FB-GROUP-"):
-                continue
-            grouped_ids = [
-                str(grouped_id or "").strip()
-                for grouped_id in (node.get("grouped_ids") or [])
-                if str(grouped_id or "").strip()
-            ]
-            display_by_id[node_id] = "、".join(grouped_ids) if grouped_ids else "Feedback"
-        meeting_ids = [
-            str(node.get("id") or "").strip()
-            for node in nodes
-            if str(node.get("type") or "").strip() == "Meeting Discussion"
-            and str(node.get("id") or "").strip()
-        ]
-        if not meeting_ids:
-            return text
-
-        def order_key(value: str) -> tuple[int, int, str]:
-            match = re.fullmatch(r"R(\d+)-M(\d+)", value)
-            if not match:
-                return (999, 999, value)
-            return (int(match.group(1)), int(match.group(2)), value)
-
-        def visible_id(value: Any) -> str:
-            node_id = str(value or "").strip()
-            return display_by_id.get(node_id, node_id)
-
-        def format_ids(values: List[str]) -> str:
-            unique = [item for item in dict.fromkeys(values) if item]
-            if not unique:
-                return "前述 trace 節點"
-            if len(unique) <= 3:
-                return "、".join(unique)
-            return "、".join(unique[:3]) + f" 等 {len(unique)} 個節點"
-
-        existing_ids = set(
-            re.findall(
-                r"\bR\d+-M\d+\b",
-                text,
-            )
-        )
-        missing_meeting_ids = [meeting_id for meeting_id in sorted(meeting_ids, key=order_key) if meeting_id not in existing_ids]
-        if not missing_meeting_ids:
-            return text
-
-        bullets: List[str] = []
-        for meeting_id in missing_meeting_ids:
-            incoming = [
-                edge for edge in edges
-                if visible_id(edge.get("to")) == meeting_id
-            ]
-            outgoing = [
-                edge for edge in edges
-                if visible_id(edge.get("from")) == meeting_id
-            ]
-            source_ids = [visible_id(edge.get("from")) for edge in incoming]
-            target_ids = [visible_id(edge.get("to")) for edge in outgoing]
-            relations = [
-                visible_id(edge.get("relation"))
-                for edge in incoming + outgoing
-                if visible_id(edge.get("relation"))
-            ]
-            relation_text = "、".join(dict.fromkeys(relations)) if relations else "會議討論"
-            bullets.append(
-                f"- {meeting_id} 承接 {format_ids(source_ids)} 的{relation_text}，"
-                f"並推進到 {format_ids(target_ids)}。"
-            )
-
-        section = "Meeting Discussion\n" + "\n".join(bullets)
-        if re.search(r"(?m)^Meeting Discussion\s*$", text):
-            return re.sub(
-                r"(?m)^Meeting Discussion\s*$",
-                lambda match: match.group(0) + "\n" + "\n".join(bullets),
-                text,
-                count=1,
-            )
-        return text.rstrip() + "\n\n" + section
 
     @classmethod
     def clarify_trace_explanation_meetings(cls, trace: str, requirement: Dict[str, Any]) -> str:
@@ -800,264 +725,7 @@ class DocumentorDrNormalize:
             rendered.append("")
         return re.sub(r"\n{3,}", "\n\n", "\n".join(rendered)).strip()
 
-    @staticmethod
-    def ensure_trace_explanation_conflicts(trace: str, requirement: Dict[str, Any]) -> str:
-        text = str(trace or "").strip()
-        conflict_rows = [
-            row for row in (requirement.get("conflicts") or [])
-            if isinstance(row, dict) and str(row.get("id") or "").strip()
-        ]
-        if not conflict_rows:
-            return text
-        existing_ids = set(re.findall(r"\bCR-\d+\b", text))
-        missing_rows = [
-            row for row in conflict_rows
-            if str(row.get("id") or "").strip() not in existing_ids
-        ]
-        if not missing_rows:
-            return text
 
-        bullets: List[str] = []
-        for row in missing_rows:
-            conflict_id = str(row.get("id") or "").strip()
-            related_sources = [
-                str(item).strip()
-                for item in (row.get("related_user_requirements") or [])
-                if str(item).strip()
-            ]
-            source_text = "、".join(related_sources[:4])
-            if len(related_sources) > 4:
-                source_text += f" 等 {len(related_sources)} 個 URL"
-            description = str(row.get("description") or "").strip()
-            if description:
-                bullets.append(f"- {conflict_id} 指出 {source_text or '相關 URL'} 存在衝突：{description}")
-            else:
-                bullets.append(f"- {conflict_id} 指出 {source_text or '相關 URL'} 存在衝突，需透過會議或正式化決策收斂。")
-
-        section = "Conflict\n" + "\n".join(bullets)
-        if re.search(r"(?m)^Conflict\s*$", text):
-            return re.sub(
-                r"(?m)^Conflict\s*$",
-                lambda match: match.group(0) + "\n" + "\n".join(bullets),
-                text,
-                count=1,
-            )
-        feedback_match = re.search(r"(?m)^Feedback\s*$", text)
-        if feedback_match:
-            return text[: feedback_match.start()].rstrip() + "\n\n" + section + "\n\n" + text[feedback_match.start() :].lstrip()
-        system_match = re.search(r"(?m)^System Model\s*$", text)
-        if system_match:
-            return text[: system_match.start()].rstrip() + "\n\n" + section + "\n\n" + text[system_match.start() :].lstrip()
-        meeting_match = re.search(r"(?m)^Meeting Discussion\s*$", text)
-        if meeting_match:
-            return text[: meeting_match.start()].rstrip() + "\n\n" + section + "\n\n" + text[meeting_match.start() :].lstrip()
-        return text.rstrip() + "\n\n" + section
-
-    @staticmethod
-    def ensure_trace_explanation_topology_coverage(trace: str, requirement: Dict[str, Any]) -> str:
-        text = str(trace or "").strip()
-        graph = requirement.get("trace_graph") if isinstance(requirement.get("trace_graph"), dict) else {}
-        nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict)]
-        edges = [edge for edge in (graph.get("edges") or []) if isinstance(edge, dict)]
-        if not nodes:
-            return text
-
-        target_id = str(requirement.get("srs_id") or "").strip()
-        node_by_id = {
-            str(node.get("id") or "").strip(): node
-            for node in nodes
-            if str(node.get("id") or "").strip()
-        }
-        display_by_id: Dict[str, str] = {}
-        for node_id, node in node_by_id.items():
-            if not node_id.startswith("FB-GROUP-"):
-                display_by_id[node_id] = node_id
-                continue
-            grouped_ids = [
-                str(grouped_id or "").strip()
-                for grouped_id in (node.get("grouped_ids") or [])
-                if str(grouped_id or "").strip()
-            ]
-            display_by_id[node_id] = "、".join(grouped_ids) if grouped_ids else node_id
-
-        def visible_id(value: Any) -> str:
-            node_id = str(value or "").strip()
-            return display_by_id.get(node_id, node_id)
-
-        def format_ids(values: List[str]) -> str:
-            unique = [visible_id(value) for value in dict.fromkeys(values) if visible_id(value)]
-            if not unique:
-                return "前述節點"
-            if len(unique) <= 6:
-                return "、".join(unique)
-            return "、".join(unique[:6]) + f" 等 {len(unique)} 個節點"
-
-        def has_id(node_id: str) -> bool:
-            display_id = visible_id(node_id)
-            if not display_id:
-                return True
-            if node_id.startswith("FB-GROUP-"):
-                return all(
-                    re.search(rf"(?<![A-Za-z0-9_-]){re.escape(part)}(?![A-Za-z0-9_-])", text)
-                    for part in display_id.split("、")
-                    if part
-                )
-            return bool(re.search(rf"(?<![A-Za-z0-9_-]){re.escape(display_id)}(?![A-Za-z0-9_-])", text))
-
-        def section_for_type(node_type: str) -> str:
-            if node_type == "Stakeholder Statement":
-                return "Stakeholder"
-            if node_type in {"User Requirement", "User Requirement Group"}:
-                return "User Requirement"
-            if node_type == "Conflict":
-                return "Conflict"
-            if node_type in {"Feedback", "Feedback Group"}:
-                return "Feedback"
-            if node_type == "System Model":
-                return "System Model"
-            if node_type == "Meeting Discussion":
-                return "Meeting Discussion"
-            return "Requirement Formation"
-
-        def append_to_section(current: str, section: str, bullets: List[str]) -> str:
-            clean_bullets = [bullet for bullet in bullets if str(bullet or "").strip()]
-            if not clean_bullets:
-                return current
-            def clean_bullet(value: str) -> str:
-                return re.sub(r"^\s*[-*]\s+", "", value).strip()
-
-            insert = "\n".join(f"- {clean_bullet(bullet)}" for bullet in clean_bullets)
-            if re.search(rf"(?m)^{re.escape(section)}\s*$", current):
-                return re.sub(
-                    rf"(?m)^{re.escape(section)}\s*$",
-                    lambda match: match.group(0) + "\n" + insert,
-                    current,
-                    count=1,
-                )
-            section_order = [
-                "Stakeholder",
-                "User Requirement",
-                "Conflict",
-                "Feedback",
-                "System Model",
-                "Meeting Discussion",
-                "Requirement Formation",
-            ]
-            try:
-                section_index = section_order.index(section)
-            except ValueError:
-                section_index = len(section_order) - 1
-            for next_section in section_order[section_index + 1 :]:
-                match = re.search(rf"(?m)^{re.escape(next_section)}\s*$", current)
-                if match:
-                    return (
-                        current[: match.start()].rstrip()
-                        + "\n\n"
-                        + section
-                        + "\n"
-                        + insert
-                        + "\n\n"
-                        + current[match.start() :].lstrip()
-                    )
-            return current.rstrip() + "\n\n" + section + "\n" + insert
-
-        incoming_by_id: Dict[str, List[str]] = {}
-        outgoing_by_id: Dict[str, List[str]] = {}
-        for edge in edges:
-            from_id = str(edge.get("from") or "").strip()
-            to_id = str(edge.get("to") or "").strip()
-            if not from_id or not to_id:
-                continue
-            incoming_by_id.setdefault(to_id, []).append(from_id)
-            outgoing_by_id.setdefault(from_id, []).append(to_id)
-
-        bullets_by_section: Dict[str, List[str]] = {}
-        for node_id, node in node_by_id.items():
-            if not node_id or node_id == target_id or has_id(node_id):
-                continue
-            node_type = str(node.get("type") or "").strip()
-            section = section_for_type(node_type)
-            incoming = incoming_by_id.get(node_id) or []
-            outgoing = outgoing_by_id.get(node_id) or []
-            display_id = visible_id(node_id)
-            if section == "User Requirement":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中承接 {format_ids(incoming)}，並推進到 {format_ids(outgoing)}，因此也是本需求形成路徑的一部分。"
-                )
-            elif section == "Conflict":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中由 {format_ids(incoming)} 形成衝突節點，並交由 {format_ids(outgoing)} 處理。"
-                )
-            elif section == "System Model":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中作為模型佐證，補充本需求形成所需的模型依據。"
-                )
-            elif section == "Feedback":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中由 {format_ids(incoming)} 提供領域研究或外部依據，補充本需求的限制與判斷基礎。"
-                )
-            elif section == "Meeting Discussion":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中承接 {format_ids(incoming)}，並推進到 {format_ids(outgoing)}。"
-                )
-            elif section == "Stakeholder":
-                bullets_by_section.setdefault(section, []).append(
-                    f"{display_id} 在拓樸中作為來源，經由分析推進到 {format_ids(outgoing)}。"
-                )
-
-        relation_bullets_by_section: Dict[str, List[str]] = {}
-        for edge in edges:
-            from_id = str(edge.get("from") or "").strip()
-            to_id = str(edge.get("to") or "").strip()
-            relation = str(edge.get("relation") or "").strip()
-            if not from_id or not to_id or not relation:
-                continue
-            if relation and relation in text and visible_id(from_id) in text and visible_id(to_id) in text:
-                continue
-            from_type = str((node_by_id.get(from_id) or {}).get("type") or "").strip()
-            to_type = str((node_by_id.get(to_id) or {}).get("type") or "").strip()
-            source = visible_id(from_id)
-            target = visible_id(to_id)
-            if relation == "分析":
-                section = "User Requirement"
-                bullet = f"{source} 透過「分析」形成 {target}。"
-            elif relation == "衝突":
-                section = "Conflict"
-                bullet = f"{source} 與相關來源透過「衝突」關係形成 {target}。"
-            elif relation == "解決":
-                section = "Meeting Discussion"
-                bullet = f"{source} 經 {target}「解決」後，才進入後續正式化路徑。"
-            elif relation == "正式化":
-                section = "Meeting Discussion" if to_type == "Meeting Discussion" else "Requirement Formation"
-                bullet = f"{source} 透過「正式化」推進到 {target}。"
-            elif relation == "精煉":
-                section = "Meeting Discussion"
-                bullet = f"{source} 透過「精煉」推進到 {target}。"
-            elif relation == "建模":
-                section = "System Model"
-                bullet = f"{target} 作為模型佐證，補充 {source} 所屬需求的形成依據。"
-            else:
-                section = section_for_type(to_type or from_type)
-                bullet = f"{source} 透過「{relation}」推進到 {target}。"
-            relation_bullets_by_section.setdefault(section, []).append(bullet)
-
-        for section, bullets in relation_bullets_by_section.items():
-            bullets_by_section.setdefault(section, []).extend(
-                bullet for bullet in bullets if bullet not in bullets_by_section.get(section, [])
-            )
-
-        for section in [
-            "Stakeholder",
-            "User Requirement",
-            "Conflict",
-            "Feedback",
-            "System Model",
-            "Meeting Discussion",
-            "Requirement Formation",
-        ]:
-            text = append_to_section(text, section, bullets_by_section.get(section, []))
-
-        return re.sub(r"\n{3,}", "\n\n", text).strip()
 
     @staticmethod
     def remove_trace_explanation_topology_artifacts(trace: str) -> str:
@@ -1126,6 +794,16 @@ class DocumentorDrNormalize:
             rendered.extend(content)
             rendered.append("")
         return re.sub(r"\n{3,}", "\n\n", "\n".join(rendered)).strip()
+
+    @classmethod
+    def normalize_trace_explanation_content(
+        cls,
+        trace: str,
+        requirement: Dict[str, Any],
+    ) -> str:
+        normalized = cls.normalize_trace_explanation_ids(trace, requirement)
+        normalized = cls.remove_trace_explanation_topology_artifacts(normalized)
+        return cls.merge_trace_explanation_sections(normalized)
 
     @classmethod
     def build_trace_explanation_from_topology(cls, requirement: Dict[str, Any]) -> str:
@@ -1548,20 +1226,14 @@ class DocumentorDrNormalize:
                 raise ValueError(f"design rationale output missing block for {srs_id}")
             prompt_trace = cls.extract_design_rationale_trace(block)
             prompt_trace = cls.normalize_trace_explanation(prompt_trace, description)
-            topology_trace = cls.build_trace_explanation_from_topology(req)
-            trace = topology_trace or prompt_trace
-            trace = cls.normalize_trace_explanation_ids(trace, req)
-            trace = cls.ensure_trace_explanation_conflicts(trace, req)
-            trace = cls.ensure_trace_explanation_meetings(trace, req)
-            trace = cls.clarify_trace_explanation_meetings(trace, req)
-            if not topology_trace:
-                trace = cls.ensure_trace_explanation_topology_coverage(trace, req)
-            trace = cls.remove_trace_explanation_topology_artifacts(trace)
-            trace = cls.merge_trace_explanation_sections(trace)
+            trace = cls.normalize_trace_explanation_content(prompt_trace, req)
             if not trace:
-                trace = cls.build_trace_explanation_from_topology(req)
-                trace = cls.normalize_trace_explanation_ids(trace, req)
-                trace = cls.merge_trace_explanation_sections(trace)
+                topology_trace = cls.build_trace_explanation_from_topology(req)
+                trace = cls.normalize_trace_explanation_content(topology_trace, req)
+            if not trace:
+                raise ValueError(
+                    f"design rationale output missing trace explanation for {srs_id}"
+                )
             trace = re.sub(r"(?m)^Stakeholder User Requirement\s*$\n?", "", trace).strip()
             header = [
                 f"### {srs_id}: {title}".rstrip(),

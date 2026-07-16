@@ -10,9 +10,6 @@ diagram_headings = {
     "class_diagram": "## Class Diagram",
 }
 
-# ========
-# Defines markdown section function for this module workflow.
-# ========
 def markdown_section(content: str, heading: str) -> str:
     pattern = re.compile(
         rf"(^|\n)({re.escape(heading)}\n.*?)(?=\n## |\Z)",
@@ -21,9 +18,6 @@ def markdown_section(content: str, heading: str) -> str:
     match = pattern.search(content or "")
     return match.group(2).strip() if match else ""
 
-# ========
-# Defines uml skill guidance function for this module workflow.
-# ========
 def uml_skill_guidance(content: str, mode: str, diagram_type: str = "") -> str:
     mode_name = str(mode or "").strip()
     diagram_name = str(diagram_type or "").strip()
@@ -50,9 +44,6 @@ def uml_skill_guidance(content: str, mode: str, diagram_type: str = "") -> str:
         ]
     return "\n\n".join(section for section in sections if section)
 
-# ========
-# Defines uml skill subset function for this module workflow.
-# ========
 def uml_skill_subset(skill: dict, mode: str, diagram_type: str = "") -> dict:
     content = str(skill.get("content") or "")
     guidance = uml_skill_guidance(content, mode, diagram_type)

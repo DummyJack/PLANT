@@ -7,9 +7,6 @@ from agents.profile.analyst.conflicts import all_conflict_rows
 from ..validation import conflict_review_plan
 
 
-# ========
-# Defines build conflict review function for this module workflow.
-# ========
 def build_conflict_review(
     *,
     participants: List[str],
@@ -48,11 +45,7 @@ def build_conflict_review(
 """
 
 
-# ========
-# Defines ConflictPlan class for this module workflow.
-# ========
 class ConflictPlan:
-    # Defines plan conflict review internal function for this module workflow.
     def plan_conflict_review_internal(
         self,
         conflict: Dict[str, Any],

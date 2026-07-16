@@ -7,9 +7,7 @@ from storage.requirements import requirement_discussion_pool
 from .validation import scope_payload
 
 
-# Defines AnalystScope class for this module workflow.
 class AnalystScope:
-    # Defines generate scope function for this module workflow.
     def generate_scope(
         self, rough_idea: str, stakeholders: List[Dict],
         *, artifact: Optional[Dict[str, Any]] = None,
@@ -46,7 +44,6 @@ class AnalystScope:
         scope = scope_definition.get("scope") or {}
         return scope_payload(scope)
 
-    # Defines execute refine scope function for this module workflow.
     def execute_refine_scope(
         self,
         *,
@@ -89,7 +86,6 @@ class AnalystScope:
         }
 
     @staticmethod
-    # Defines clean scope updates function for this module workflow.
     def clean_scope_updates(raw: Any) -> Dict[str, List[str]]:
         source = raw if isinstance(raw, dict) else {}
         updates: Dict[str, List[str]] = {}
@@ -104,16 +100,13 @@ class AnalystScope:
         return updates
 
     @staticmethod
-    # Defines apply scope updates function for this module workflow.
     def apply_scope_updates(current_scope: Dict[str, Any], updates: Dict[str, List[str]]) -> Dict[str, List[str]]:
         scope = scope_payload(current_scope)
 
-        # Defines remove items function for this module workflow.
         def remove_items(rows: List[str], removals: List[str]) -> List[str]:
             remove_set = {item.strip().lower() for item in removals if item.strip()}
             return [item for item in rows if item.strip().lower() not in remove_set]
 
-        # Defines add items function for this module workflow.
         def add_items(rows: List[str], additions: List[str]) -> List[str]:
             seen = {item.strip().lower() for item in rows if item.strip()}
             out = list(rows)

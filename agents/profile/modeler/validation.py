@@ -41,9 +41,6 @@ interface_entry_re = re.compile(r"^[^－-]+[－-].+入口(?:（.*）)?$")
 missing_interface_marker = "待補充"
 
 
-# ========
-# Defines clean text function for this module workflow.
-# ========
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
@@ -58,16 +55,10 @@ def clean_text(value: Any) -> str:
     return str(value).strip()
 
 
-# ========
-# Defines compact text key function for this module workflow.
-# ========
 def compact_text_key(value: Any) -> str:
     return re.sub(r"[\s　,，、（）()]+", "", clean_text(value).lower())
 
 
-# ========
-# Defines normalize use case interface function for this module workflow.
-# ========
 def normalize_use_case_interface(_actor: str, _name: str, interface: str) -> str:
     interface_text = clean_text(interface)
     compact = compact_text_key(interface_text)
@@ -79,9 +70,6 @@ def normalize_use_case_interface(_actor: str, _name: str, interface: str) -> str
     return missing_interface_marker
 
 
-# ========
-# Defines clean list function for this module workflow.
-# ========
 def clean_list(values: Any) -> List[Any]:
     if values is None:
         return []
@@ -106,9 +94,32 @@ def clean_list(values: Any) -> List[Any]:
     return rows
 
 
-# ========
-# Defines model targets function for this module workflow.
-# ========
+def validate_model_requirement_references(
+    model: Dict[str, Any],
+    allowed_requirement_ids: Optional[set[str]],
+) -> None:
+    if allowed_requirement_ids is None:
+        return
+    referenced = {
+        clean_text(value)
+        for value in (model.get("related_requirement_ids") or [])
+        if clean_text(value)
+    }
+    for row in model.get("text") or []:
+        if isinstance(row, dict):
+            referenced.update(
+                clean_text(value)
+                for value in (row.get("related_requirement_ids") or [])
+                if clean_text(value)
+            )
+    unknown = sorted(referenced - allowed_requirement_ids)
+    if unknown:
+        raise ValueError(
+            "related_requirement_ids contain unknown requirement IDs: "
+            + ", ".join(unknown)
+        )
+
+
 def model_targets(values: Any) -> List[Dict[str, str]]:
     if not isinstance(values, list):
         return []
@@ -170,9 +181,6 @@ def model_targets(values: Any) -> List[Dict[str, str]]:
     return out
 
 
-# ========
-# Defines valid plantuml function for this module workflow.
-# ========
 def valid_plantuml(value: Any) -> str:
     text = clean_text(value)
     if "@startuml" not in text or "@enduml" not in text:
@@ -180,9 +188,6 @@ def valid_plantuml(value: Any) -> str:
     return text
 
 
-# ========
-# Defines clean class plantuml function for this module workflow.
-# ========
 def clean_class_plantuml(plantuml: str) -> str:
     return plantuml
 
@@ -197,9 +202,6 @@ self_relation_re = re.compile(
 )
 
 
-# ========
-# Defines dedupe elements function for this module workflow.
-# ========
 def dedupe_elements(plantuml: str) -> str:
     lines = plantuml.splitlines()
     label_to_alias: Dict[tuple[str, str], str] = {}
@@ -244,14 +246,12 @@ def dedupe_elements(plantuml: str) -> str:
     return "\n".join(normalized_lines)
 
 
-# ========
-# Defines parse diagram model function for this module workflow.
-# ========
 def parse_diagram_model(
     raw: Any,
     *,
     expected_type: Optional[str] = None,
     source: str = "",
+    allowed_requirement_ids: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("diagram output must be a JSON object")
@@ -338,13 +338,16 @@ def parse_diagram_model(
     source_text = clean_text(raw.get("source"))
     if source_text:
         row["source"] = source_text
+    validate_model_requirement_references(row, allowed_requirement_ids)
     return row
 
 
-# ========
-# Defines parse use case function for this module workflow.
-# ========
-def parse_use_case(raw: Any, *, source: str = "") -> Dict[str, Any]:
+def parse_use_case(
+    raw: Any,
+    *,
+    source: str = "",
+    allowed_requirement_ids: Optional[set[str]] = None,
+) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("use case text output must be a JSON object")
     model_type = clean_text(raw.get("type"))
@@ -393,45 +396,93 @@ def parse_use_case(raw: Any, *, source: str = "") -> Dict[str, Any]:
     source_text = clean_text(raw.get("source"))
     if source_text:
         result["source"] = source_text
+    validate_model_requirement_references(result, allowed_requirement_ids)
     return result
 
 
-# ========
-# Defines parse model function for this module workflow.
-# ========
-def parse_model(raw: Any, *, source: str = "") -> Dict[str, Any]:
+def parse_model(
+    raw: Any,
+    *,
+    source: str = "",
+    allowed_requirement_ids: Optional[set[str]] = None,
+) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("model output must be a JSON object")
     model_type = clean_text(raw.get("type"))
     if model_type == "use_case_text":
-        return parse_use_case(raw, source=source)
-    return parse_diagram_model(raw, source=source)
+        return parse_use_case(
+            raw,
+            source=source,
+            allowed_requirement_ids=allowed_requirement_ids,
+        )
+    return parse_diagram_model(
+        raw,
+        source=source,
+        allowed_requirement_ids=allowed_requirement_ids,
+    )
 
 
-# ========
-# Defines parse model list function for this module workflow.
-# ========
-def parse_model_list(raw: Any, *, source: str = "") -> List[Dict[str, Any]]:
+def parse_model_list(
+    raw: Any,
+    *,
+    source: str = "",
+    allowed_requirement_ids: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     if not isinstance(raw, list):
         raise ValueError("model output must be a JSON list")
     models: List[Dict[str, Any]] = []
     for idx, row in enumerate(raw, 1):
         try:
-            models.append(parse_model(row, source=source))
+            models.append(
+                parse_model(
+                    row,
+                    source=source,
+                    allowed_requirement_ids=allowed_requirement_ids,
+                )
+            )
         except ValueError as exc:
             raise ValueError(f"models[{idx}] invalid: {exc}") from exc
     return models
 
 
-# ========
-# Defines parse impact assessment function for this module workflow.
-# ========
-def parse_impact_assessment(raw: Any) -> Dict[str, Any]:
+def parse_impact_assessment(
+    raw: Any,
+    *,
+    allowed_requirement_ids: Optional[set[str]] = None,
+    allowed_model_ids: Optional[set[str]] = None,
+) -> Dict[str, Any]:
     source = raw if isinstance(raw, dict) else {}
     if not isinstance(source.get("model_plan"), dict):
         raise ValueError("model plan output must contain model_plan object")
     plan_source = source["model_plan"]
     targets = model_targets(plan_source.get("model_targets"))
+    for index, target in enumerate(targets, 1):
+        related_ids = {
+            clean_text(value)
+            for value in (target.get("related_requirement_ids") or [])
+            if clean_text(value)
+        }
+        if allowed_requirement_ids is not None:
+            unknown_requirements = sorted(related_ids - allowed_requirement_ids)
+            if unknown_requirements:
+                raise ValueError(
+                    f"model_targets[{index}] contains unknown requirement IDs: "
+                    + ", ".join(unknown_requirements)
+                    + "; allowed IDs: "
+                    + ", ".join(sorted(allowed_requirement_ids))
+                )
+        target_model_id = clean_text(target.get("target_model_id"))
+        if (
+            target.get("operation") == "update"
+            and target_model_id
+            and allowed_model_ids is not None
+            and target_model_id not in allowed_model_ids
+        ):
+            raise ValueError(
+                f"model_targets[{index}] references unknown target_model_id: "
+                f"{target_model_id}; allowed IDs: "
+                + ", ".join(sorted(allowed_model_ids))
+            )
     return {
         "model_plan": {
             "phase_decision": clean_text(plan_source.get("phase_decision")),
@@ -444,9 +495,6 @@ def parse_impact_assessment(raw: Any) -> Dict[str, Any]:
     }
 
 
-# ========
-# Defines parse plantuml fix function for this module workflow.
-# ========
 def parse_plantuml_fix(raw: Any) -> Dict[str, str]:
     source = raw if isinstance(raw, dict) else {}
     plantuml = valid_plantuml(source.get("plantuml"))

@@ -1,7 +1,7 @@
 # Defines elicitation meeting response prompt.
 from typing import Any, Dict, List, Optional
 
-from utils.language import current_output_language
+from agents.profile.base import elicitation_stop_phrase
 
 from ...rules import (
     analyst_elicitation,
@@ -17,11 +17,7 @@ def issue_response(
     previous_responses: Optional[List[Dict[str, Any]]],
     related_context: Optional[Dict[str, Any]],
 ) -> str:
-    stop_phrase = (
-        "I have gathered enough information"
-        if current_output_language() == "en"
-        else "我已蒐集足夠資訊"
-    )
+    stop_phrase = elicitation_stop_phrase()
     return render_response_prompt(
         issue=issue,
         previous_responses=previous_responses,

@@ -4,9 +4,6 @@ from typing import Optional
 
 from agents.profile.analyst.rules import label_rules
 
-# ========
-# Defines review signoff function for this module workflow.
-# ========
 def review_signoff(
     *,
     proposal_list: list,
@@ -56,9 +53,6 @@ Discussion Rows:
   }}
 }}"""
 
-# ========
-# Defines review reason function for this module workflow.
-# ========
 def review_reason(
     *,
     decision_list: list,

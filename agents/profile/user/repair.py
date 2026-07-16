@@ -1,5 +1,6 @@
 # Defines repair prompts for agent output.
-from typing import List, Optional
+import json
+from typing import Any, List, Optional
 
 
 def retry_response(
@@ -10,6 +11,7 @@ def retry_response(
     need_speaking_as: bool = False,
     names_list_text: str = "",
     target_stakeholders: Optional[List[str]] = None,
+    invalid_response: Any = None,
 ) -> str:
     speaking_as_field = (
         '  "speaking_as": ["本輪發言身份名稱"],\n'
@@ -58,6 +60,10 @@ def retry_response(
         f"{user_prompt}\n\n"
         "# 格式錯誤\n"
         f"{format_error}\n\n"
+        "# 前次回應\n"
+        f"{json.dumps(invalid_response or {}, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "- 前次回應中沒有被格式錯誤點名的有效欄位必須原樣保留。\n"
+        "- 只修正錯誤欄位，不得改寫原本有效的 text、open_questions、stance 或 pair_reviews。\n\n"
         "# 必須符合的 JSON 結構\n"
         f"{output_contract}"
     )

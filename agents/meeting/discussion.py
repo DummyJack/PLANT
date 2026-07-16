@@ -9,9 +9,9 @@ from agents.profile.base import retry_response
 from agents.meeting.pair_review import normalize_pair_review_record
 
 
-# Defines MediatorDiscussion class for this module workflow.
 class MediatorDiscussion:
     related_id_re = re.compile(r"\b(?:URL|REQ|SM|CR)-\d+\b")
+    conflict_update_actions = frozenset({"keep", "revise", "remove"})
     recordable_action_result_keys = {
         "REQ",
         "URL",
@@ -24,7 +24,6 @@ class MediatorDiscussion:
     }
 
     @classmethod
-    # Defines recordable issue action result function for this module workflow.
     def recordable_issue_action_result(
         cls,
         action_name: str,
@@ -46,7 +45,6 @@ class MediatorDiscussion:
         )
 
     @classmethod
-    # Defines related context targets function for this module workflow.
     def related_context_targets(
         cls,
         issue: Dict[str, Any],
@@ -79,7 +77,6 @@ class MediatorDiscussion:
         return ids
 
     @classmethod
-    # Defines enrich related context function for this module workflow.
     def enrich_related_context(
         cls,
         related_context: Optional[Dict[str, Any]],
@@ -106,7 +103,6 @@ class MediatorDiscussion:
         return context
 
     @staticmethod
-    # Defines suppress open questions for issue function for this module workflow.
     def suppress_open_questions_for_issue(issue: Dict[str, Any]) -> bool:
         title = str((issue or {}).get("title") or "").strip()
         category = str((issue or {}).get("category") or "").strip()
@@ -120,7 +116,6 @@ class MediatorDiscussion:
         )
 
     @staticmethod
-    # Defines artifact has rows function for this module workflow.
     def artifact_has_rows(artifact: Optional[Dict[str, Any]], *keys: str) -> bool:
         if not isinstance(artifact, dict):
             return False
@@ -133,7 +128,6 @@ class MediatorDiscussion:
         return False
 
     @classmethod
-    # Defines question asks for existing artifact function for this module workflow.
     def question_asks_for_existing_artifact(
         cls,
         question: str,
@@ -167,14 +161,12 @@ class MediatorDiscussion:
         return False
 
     @staticmethod
-    # Defines normalized question key function for this module workflow.
     def normalized_question_key(question: str) -> str:
         text = str(question or "").strip().lower()
         text = re.sub(r"\s+", "", text)
         text = re.sub(r"[?？。．.!！、，,；;：「」『』（）()【】\\[\\]]+", "", text)
         return text
 
-    # Defines clean open questions function for this module workflow.
     def clean_open_questions(
         self,
         questions: Any,
@@ -223,7 +215,6 @@ class MediatorDiscussion:
             cleaned.append(clean_row)
         return cleaned
 
-    # Defines validate conflict review contract function for this module workflow.
     def validate_conflict_review_contract(
         self,
         response: Dict[str, Any],
@@ -312,7 +303,6 @@ class MediatorDiscussion:
         response["pair_reviews"] = reviews
         return response
 
-    # Defines validate requirement elicitation response function for this module workflow.
     def validate_requirement_elicitation_response(
         self,
         response: Dict[str, Any],
@@ -352,7 +342,6 @@ class MediatorDiscussion:
             response["format_error"] = "ELICIT ask_user/supplement_question text must be a direct question"
         return response
 
-    # Defines validate agent response function for this module workflow.
     def validate_agent_response(
         self,
         response: Dict[str, Any],
@@ -362,9 +351,49 @@ class MediatorDiscussion:
         agent_name: str,
     ) -> Dict[str, Any]:
         response = self.validate_conflict_review_contract(response, contract)
-        return self.validate_requirement_elicitation_response(response, issue, agent_name)
+        response = self.validate_requirement_elicitation_response(response, issue, agent_name)
+        return self.validate_conflict_resolution_response(response, issue, agent_name)
 
-    # Defines run agent response loop function for this module workflow.
+    @classmethod
+    def validate_conflict_resolution_response(
+        cls,
+        response: Dict[str, Any],
+        issue: Dict[str, Any],
+        agent_name: str,
+    ) -> Dict[str, Any]:
+        if str(issue.get("category") or "").strip() != "resolve_conflict":
+            return response
+        actions = issue.get("actions") if isinstance(issue.get("actions"), dict) else {}
+        action_info = actions.get(agent_name) if isinstance(actions.get(agent_name), dict) else {}
+        if str(action_info.get("action") or "").strip() != "discuss_conflict":
+            return response
+
+        stance = response.get("stance") if isinstance(response.get("stance"), dict) else {}
+        proposal = stance.get("proposal") if isinstance(stance.get("proposal"), dict) else {}
+        updates = proposal.get("url_updates")
+        errors: List[str] = []
+        if not isinstance(updates, list) or not updates:
+            errors.append("stance.proposal.url_updates must contain at least one update")
+        else:
+            for index, update in enumerate(updates, 1):
+                if not isinstance(update, dict):
+                    errors.append(f"url_updates[{index}] must be an object")
+                    continue
+                action = str(update.get("action") or "").strip().lower()
+                ids = update.get("ids")
+                reason = str(update.get("reason") or "").strip()
+                if action not in cls.conflict_update_actions:
+                    errors.append(f"url_updates[{index}].action is invalid")
+                if not isinstance(ids, list) or not any(str(value).strip() for value in ids):
+                    errors.append(f"url_updates[{index}].ids must not be empty")
+                if action == "revise" and not str(update.get("text") or "").strip():
+                    errors.append(f"url_updates[{index}].text is required for revise")
+                if not reason:
+                    errors.append(f"url_updates[{index}].reason is required")
+        if errors:
+            response["format_error"] = "; ".join(errors)
+        return response
+
     def run_agent_response_loop(
         self,
         agent: Any,
@@ -583,7 +612,6 @@ class MediatorDiscussion:
             "issue_action_results": action_results,
         }
 
-    # Defines collect issue response function for this module workflow.
     def collect_issue_response(
         self,
         agent: Any,
@@ -611,7 +639,6 @@ class MediatorDiscussion:
             artifact=artifact,
         )
 
-    # Defines moderate sequential function for this module workflow.
     def moderate_sequential(
         self,
         issue: Dict,
@@ -674,7 +701,6 @@ class MediatorDiscussion:
 
         return (record, oq_records)
 
-    # Defines respond one simultaneous function for this module workflow.
     def respond_one_simultaneous(
         self,
         agent_name: str,
@@ -708,7 +734,6 @@ class MediatorDiscussion:
         except Exception as e:
             raise RuntimeError(f"{agent_name} 發言失敗") from e
 
-    # Defines attach agent action function for this module workflow.
     def attach_agent_action(self, issue: Dict, agent_name: str, response: Any) -> Dict[str, Any]:
         payload = response if isinstance(response, dict) else {"content": str(response)}
         payload = dict(payload)
@@ -733,7 +758,6 @@ class MediatorDiscussion:
             ]
         return payload
 
-    # Defines moderate simultaneous function for this module workflow.
     def moderate_simultaneous(
         self,
         issue: Dict,
@@ -803,7 +827,6 @@ class MediatorDiscussion:
             return (record, oq_records)
         return record
 
-    # Defines pending question targets function for this module workflow.
     def pending_question_targets(
         self,
         record: List[Dict],
@@ -824,7 +847,6 @@ class MediatorDiscussion:
         return list(dict.fromkeys(targets))
 
     @staticmethod
-    # Defines stakeholder names from issue function for this module workflow.
     def stakeholder_names_from_issue(issue: Optional[Dict[str, Any]]) -> set[str]:
         names = {
             str(name).strip()
@@ -838,7 +860,6 @@ class MediatorDiscussion:
                     names.add(name)
         return names
 
-    # Defines normalize open question target function for this module workflow.
     def normalize_open_question_target(
         self,
         raw_target: Any,
@@ -856,7 +877,6 @@ class MediatorDiscussion:
             return "user", [target]
         return target, []
 
-    # Defines pending open questions function for this module workflow.
     def pending_open_questions(
         self,
         record: List[Dict],
@@ -956,7 +976,6 @@ class MediatorDiscussion:
                 pending.append(pending_row)
         return pending
 
-    # Defines get questions to agent function for this module workflow.
     def get_questions_to_agent(
         self,
         record: List[Dict],
@@ -971,7 +990,6 @@ class MediatorDiscussion:
             if q.get("to_agent") == to_agent_name
         ]
 
-    # Defines answer pending questions function for this module workflow.
     def answer_pending_questions(
         self,
         record: List[Dict],
@@ -1000,7 +1018,6 @@ class MediatorDiscussion:
         return (added, oq_records)
 
 
-    # Defines answer questions for agent function for this module workflow.
     def answer_questions_for_agent(
         self,
         record: List[Dict],
@@ -1067,7 +1084,6 @@ class MediatorDiscussion:
         return (added, oq_records)
 
     @staticmethod
-    # Defines is open question answer issue function for this module workflow.
     def is_open_question_answer_issue(issue: Optional[Dict[str, Any]]) -> bool:
         if not isinstance(issue, dict):
             return False
@@ -1076,7 +1092,6 @@ class MediatorDiscussion:
         return issue_id == "OQ" or issue_id.startswith("OQ-") or focus == "open_question_answer"
 
     @staticmethod
-    # Defines open question source ids function for this module workflow.
     def open_question_source_ids(issue: Optional[Dict[str, Any]]) -> set[str]:
         if not isinstance(issue, dict):
             return set()

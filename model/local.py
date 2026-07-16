@@ -118,6 +118,7 @@ class LocalModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
+        schema: Optional[Dict] = None,
     ) -> Dict:
         kwargs = self.build_kwargs(temperature, max_tokens, max_output_tokens)
         request_kwargs = dict(kwargs)

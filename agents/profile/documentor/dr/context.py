@@ -1,5 +1,4 @@
 # Builds Design Rationale evidence context and trace graphs.
-from difflib import SequenceMatcher
 import html
 import json
 import re
@@ -296,19 +295,31 @@ class DocumentorDrContext(
         ]
 
         def basename(value: str) -> str:
-            text = str(value or "").strip()
+            text = str(value or "").strip().split("?", 1)[0]
             text = re.sub(r"^(?:\.\./|\./)+", "", text)
             text = re.sub(r"^(?:artifact/|output/|results/)?models/", "", text)
             return Path(text).name
 
-        def exists_in_models(filename: str) -> bool:
+        def existing_model_path(filename: str) -> Optional[Path]:
             if not filename:
-                return False
-            return any((directory / filename).exists() for directory in search_dirs if directory)
+                return None
+            return next(
+                (
+                    directory / filename
+                    for directory in search_dirs
+                    if directory and (directory / filename).exists()
+                ),
+                None,
+            )
+
+        def versioned_path(value: str, local_path: Path) -> str:
+            clean_value = str(value or "").strip().split("?", 1)[0]
+            return f"{clean_value}?v={local_path.stat().st_mtime_ns}"
 
         raw_name = basename(raw_path)
-        if raw_name and exists_in_models(raw_name):
-            return raw_path
+        raw_model_path = existing_model_path(raw_name)
+        if raw_model_path:
+            return versioned_path(raw_path, raw_model_path)
 
         if model_id and artifact_dir:
             drafts_dir = artifact_dir / "drafts"
@@ -333,8 +344,9 @@ class DocumentorDrContext(
                     continue
                 candidate = image_match.group(1).strip()
                 candidate_name = basename(candidate)
-                if candidate_name and exists_in_models(candidate_name):
-                    return candidate
+                candidate_path = existing_model_path(candidate_name)
+                if candidate_path:
+                    return versioned_path(candidate, candidate_path)
 
         return raw_path
 
@@ -548,91 +560,6 @@ class DocumentorDrContext(
             if stakeholder_name:
                 statements_by_stakeholder.setdefault(stakeholder_name, []).append(statement)
 
-        def infer_related_statement_ids(url: Dict[str, Any], source_text: str) -> List[str]:
-            explicit_source_id = str(url.get("source_id") or "").strip()
-            explicit_related = [
-                str(item).strip()
-                for item in (url.get("related_statement_ids") or [])
-                if str(item).strip()
-            ]
-            if explicit_source_id or explicit_related:
-                return explicit_related
-            if not re.fullmatch(r"R\d+-M\d+", str(source_text or "").strip(), flags=re.IGNORECASE):
-                return []
-            stakeholder_name = cls.dr_stakeholder_name(url.get("stakeholder"))
-            candidates = statements_by_stakeholder.get(stakeholder_name) or []
-            url_text = str(url.get("text") or "").strip()
-            if not stakeholder_name or not candidates or not url_text:
-                return []
-
-            url_id = str(url.get("id") or "").strip()
-            source_match = re.fullmatch(
-                r"R(\d+)-M(\d+)",
-                source_text.strip(),
-                flags=re.IGNORECASE,
-            )
-            source_order = (
-                (int(source_match.group(1)), int(source_match.group(2)))
-                if source_match
-                else None
-            )
-
-            def is_available_at_update(statement: Dict[str, Any]) -> bool:
-                statement_source = str(statement.get("source") or "").strip()
-                statement_match = re.fullmatch(
-                    r"R(\d+)-M(\d+)",
-                    statement_source,
-                    flags=re.IGNORECASE,
-                )
-                if source_order is None or statement_match is None:
-                    return True
-                return (int(statement_match.group(1)), int(statement_match.group(2))) <= source_order
-
-            available_candidates = [
-                statement for statement in candidates if is_available_at_update(statement)
-            ]
-            direct_candidates = [
-                statement
-                for statement in available_candidates
-                if url_id and url_id in (statement.get("related_sources") or [])
-            ]
-            same_meeting_candidates = [
-                statement
-                for statement in available_candidates
-                if str(statement.get("source") or "").strip().upper() == source_text.strip().upper()
-            ]
-            same_meeting_direct_candidates = [
-                statement for statement in same_meeting_candidates if statement in direct_candidates
-            ]
-            preferred_candidates = (
-                same_meeting_direct_candidates
-                or same_meeting_candidates
-                or direct_candidates
-                or available_candidates
-            )
-
-            def chinese_chars(value: str) -> set[str]:
-                return {
-                    char
-                    for char in str(value or "")
-                    if "\u4e00" <= char <= "\u9fff"
-                }
-
-            url_chars = chinese_chars(url_text)
-            scored: List[tuple[float, str]] = []
-            for statement in preferred_candidates:
-                statement_id = str(statement.get("id") or "").strip()
-                statement_text = str(statement.get("text") or "").strip()
-                if not statement_id or not statement_text:
-                    continue
-                overlap = len(url_chars.intersection(chinese_chars(statement_text))) / max(1, len(url_chars))
-                sequence_ratio = SequenceMatcher(None, url_text, statement_text).ratio()
-                score = max(overlap, sequence_ratio)
-                if direct_candidates or same_meeting_candidates or overlap >= 0.45 or sequence_ratio >= 0.30:
-                    scored.append((score, statement_id))
-            scored.sort(reverse=True)
-            return [statement_id for _, statement_id in scored[:1]]
-
         user_requirement_rows: List[Dict[str, Any]] = []
         for url in url_rows:
             url_id = str(url.get("id") or "").strip()
@@ -652,8 +579,6 @@ class DocumentorDrContext(
                 for item in (url.get("related_statement_ids") or [])
                 if str(item).strip()
             ]
-            if not source_id and not related_statement_ids:
-                related_statement_ids = infer_related_statement_ids(url, source_text)
             user_requirement_rows.append({
                 "id": url_id,
                 "stakeholder": cls.dr_stakeholder_name(url.get("stakeholder")),
@@ -878,6 +803,25 @@ class DocumentorDrContext(
                 trace_req_rows,
                 fallback_graph=fallback_graph,
             )
+            related_meeting_ids = {
+                str(row.get("id") or "").strip()
+                for row in (req_context.get("meetings") or [])
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            trace_node_ids = {
+                str(node.get("id") or "").strip()
+                for node in (trace_graph.get("nodes") or [])
+                if isinstance(node, dict) and str(node.get("id") or "").strip()
+            }
+            fallback_node_ids = {
+                str(node.get("id") or "").strip()
+                for node in (fallback_graph.get("nodes") or [])
+                if isinstance(node, dict) and str(node.get("id") or "").strip()
+            }
+            missing_meeting_ids = related_meeting_ids - trace_node_ids
+            if missing_meeting_ids and missing_meeting_ids <= fallback_node_ids:
+                trace_graph = fallback_graph
+                req_context["trace_runtime_status"] = "runtime_repaired_missing_meetings"
             req_context["trace_repair_reference_graph"] = fallback_graph
             req_context["trace_graph"] = trace_graph
             if not trace_graph:

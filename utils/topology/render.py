@@ -381,26 +381,17 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             node for node in groups["Evidence"]
             if str(node.get("type") or "").strip() in {"Feedback", "Feedback Group", "Conflict"}
         ]
-        direct_feedback_nodes = [
-            node for node in evidence_left_nodes
-            if str(node.get("id") or "").strip() in direct_url_feedback_node_ids
-        ]
-        evidence_left_nodes = [
-            node for node in evidence_left_nodes
-            if str(node.get("id") or "").strip() not in direct_url_feedback_node_ids
-        ]
+        # Feedback always belongs to the right-side support panel, including
+        # feedback directly referenced by a single URL.
+        direct_feedback_nodes: List[Dict[str, Any]] = []
         evidence_right_nodes = [
             node for node in groups["Evidence"]
             if str(node.get("type") or "").strip() not in {"Feedback", "Feedback Group", "Conflict"}
         ]
-        direct_model_nodes = [
-            node for node in evidence_right_nodes
-            if str(node.get("id") or "").strip() in direct_url_model_node_ids
-        ]
-        evidence_right_nodes = [
-            node for node in evidence_right_nodes
-            if str(node.get("id") or "").strip() not in direct_url_model_node_ids
-        ]
+        # Keep every System Model in the dedicated left-side model panel.
+        # Feedback and conflict evidence remain in the right-side support panel.
+        direct_model_nodes = list(evidence_right_nodes)
+        evidence_right_nodes = []
         seen_direct_model_ids = {
             str(node.get("id") or "").strip()
             for node in direct_model_nodes
@@ -411,7 +402,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             for node in groups[column_name]:
                 node_id = str(node.get("id") or "").strip()
                 node_type = str(node.get("type") or "").strip()
-                if node_id in direct_url_model_node_ids and node_type == "System Model":
+                if node_type == "System Model":
                     if node_id not in seen_direct_model_ids:
                         direct_model_nodes.append(node)
                         seen_direct_model_ids.add(node_id)
@@ -480,12 +471,12 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         url_height = node_height if groups["User Requirement"] else 0
         support_nodes = evidence_left_nodes + evidence_right_nodes + groups["Background"]
         support_count = len(support_nodes)
-        support_individual_feedback_count = sum(
+        support_feedback_count = sum(
             1
             for node in support_nodes
-            if str(node.get("type") or "").strip() == "Feedback"
+            if str(node.get("type") or "").strip() in {"Feedback", "Feedback Group"}
         )
-        wrap_support_feedback = support_individual_feedback_count >= 2
+        wrap_support_feedback = support_feedback_count >= 2
         support_columns = 1 if support_count else 0
         support_rows = (support_count + support_columns - 1) // support_columns if support_columns else 0
         model_support_count = len(direct_model_nodes)
@@ -506,7 +497,7 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         wrap_direct_feedback = sum(
             1
             for node in direct_feedback_nodes
-            if str(node.get("type") or "").strip() == "Feedback"
+            if str(node.get("type") or "").strip() in {"Feedback", "Feedback Group"}
         ) >= 2
         direct_feedback_counts_by_source: Dict[str, int] = {}
         for edge in edges_for_layout:
@@ -1159,10 +1150,22 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
                 f'L {tx:.1f} {ty:.1f}" marker-end="url(#{marker_id})"></path>'
             )
             if label_each_target:
-                label_y = junction_y + 18 if reverse_or_mixed_flow else junction_y + max(14, (ty - junction_y) / 2)
+                forward_source_ys = [sy for _, sy in source_points if sy < ty]
+                label_y = (
+                    (max(forward_source_ys) + ty) / 2
+                    if reverse_or_mixed_flow and forward_source_ys
+                    else ty - 14 if reverse_or_mixed_flow
+                    else junction_y + max(14, (ty - junction_y) / 2)
+                )
                 parts.append(edge_label_markup(tx, label_y, label))
         if not label_each_target:
-            label_y = junction_y + 18 if reverse_or_mixed_flow else junction_y - 14
+            forward_source_ys = [sy for _, sy in source_points if sy < target_y]
+            label_y = (
+                (max(forward_source_ys) + target_y) / 2
+                if reverse_or_mixed_flow and forward_source_ys
+                else target_y - 14 if reverse_or_mixed_flow
+                else junction_y - 14
+            )
             label_x = target_points[0][0] if len(target_points) == 1 else (min_x + max_x) / 2
             parts.append(edge_label_markup(label_x, label_y, label))
         return "".join(parts)
@@ -1250,7 +1253,14 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
         panel_x = float(support_panel.get("x") or 0)
         panel_y = float(support_panel.get("y") or 0)
         panel_height = float(support_panel.get("height") or 0)
-        source_x = panel_x
+        feedback_positions = [
+            node_positions[node_id]
+            for node_id, node in node_by_id.items()
+            if node_id in node_positions
+            and str(node.get("type") or "").strip() in {"Feedback", "Feedback Group"}
+        ]
+        single_feedback_position = feedback_positions[0] if len(feedback_positions) == 1 else None
+        source_x = float(single_feedback_position[0]) if single_feedback_position else panel_x
 
         def single_url_formalization_point() -> Optional[Tuple[float, float]]:
             url_ids = [
@@ -1310,8 +1320,14 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             ]
             source_y = max(point[1] for point in source_points)
             target_y = min(point[1] for point in target_points)
-            junction_y = source_y + max(20, (target_y - source_y) / 2)
             target_x = sum(point[0] for point in target_points) / len(target_points)
+            forward_source_ys = [point[1] for point in source_points if point[1] < target_y]
+            junction_y = (
+                (max(forward_source_ys) + target_y) / 2
+                if target_y <= source_y and forward_source_ys
+                else target_y - 14 if target_y <= source_y
+                else source_y + max(20, (target_y - source_y) / 2)
+            )
             return (target_x, junction_y)
 
         target_point = single_url_formalization_point() or meeting_bundle_junction("正式化") or meeting_bundle_junction("精煉")
@@ -1335,7 +1351,11 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             target = node_positions[target_id]
             target_x = target[0] + target[2]
             target_y = target[1] + node_height / 2
-        source_y = min(max(target_y, panel_y + 26), panel_y + panel_height - 26)
+        source_y = (
+            float(single_feedback_position[1] + node_height / 2)
+            if single_feedback_position
+            else min(max(target_y, panel_y + 26), panel_y + panel_height - 26)
+        )
         mid_x = target_x + max(30, (source_x - target_x) / 2)
         return (
             f'<path class="dr-trace-edge dr-trace-edge--dashed" data-support-summary="true" '
@@ -1376,8 +1396,14 @@ def render_trace_topology(requirement: Dict[str, Any]) -> str:
             ]
             source_y = max(point[1] for point in source_points)
             target_y = min(point[1] for point in target_points)
-            junction_y = source_y + max(20, (target_y - source_y) / 2)
             target_x = sum(point[0] for point in target_points) / len(target_points)
+            forward_source_ys = [point[1] for point in source_points if point[1] < target_y]
+            junction_y = (
+                (max(forward_source_ys) + target_y) / 2
+                if target_y <= source_y and forward_source_ys
+                else target_y - 14 if target_y <= source_y
+                else source_y + max(20, (target_y - source_y) / 2)
+            )
             return (target_x, junction_y)
 
         target_point = meeting_bundle_junction("正式化") or meeting_bundle_junction("精煉")

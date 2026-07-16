@@ -30,6 +30,13 @@ POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT = 2
 # Defines MeetingCoordinator class for this module workflow.
 # ========
 class MeetingCoordinator:
+    @staticmethod
+    def positive_config_int(config: Dict[str, Any], key: str, default: int) -> int:
+        try:
+            return max(1, int(config.get(key, default) or default))
+        except (AttributeError, TypeError, ValueError):
+            return default
+
     # ========
     # Defines __init__ function for this module workflow.
     # ========
@@ -69,12 +76,8 @@ class MeetingCoordinator:
             try:
                 return int(round_num) == int(end)
             except (TypeError, ValueError):
-                pass
-        try:
-            total = int(self.flow.config.get("rounds", 1) or 1)
-        except (TypeError, ValueError):
-            total = 1
-        return int(round_num) >= total
+                raise RuntimeError("artifact.meta.meeting_end_round 必須是整數")
+        raise RuntimeError("artifact.meta 缺少 meeting_end_round")
 
     # ========
     # Defines general meeting round enabled function for this module workflow.
@@ -615,6 +618,19 @@ class MeetingCoordinator:
         ]
 
         current_issues = runner.current_meeting_issues()
+        is_default_meeting = any(
+            runner.is_default_issue(issue)
+            for issue in current_issues
+            if isinstance(issue, dict)
+        )
+        if not is_default_meeting:
+            issue_limit = self.positive_config_int(runner.config, "max_issues", 5)
+            if len(current_issues) >= issue_limit:
+                self.flow.logger.info(
+                    "Conflict Gate：本輪已達 max_issues=%s，不追加衝突議題",
+                    issue_limit,
+                )
+                return False
         next_index = len(current_issues) + 1
         if candidates:
             issue = dict(candidates[0])
@@ -705,6 +721,32 @@ class MeetingCoordinator:
         *,
         log_prefix: str,
     ) -> bool:
+        meta = artifact.setdefault("meta", {})
+        conflict_attempt_limit = self.positive_config_int(
+            getattr(runner, "config", None) or self.flow.config,
+            "max_conflict_attempts",
+            POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT,
+        )
+        try:
+            previous_streak = int(meta.get("post_requirement_conflict_streak") or 0)
+        except (TypeError, ValueError):
+            previous_streak = 0
+        human_round_flag = f"default_conflict_human_round_{runner.round_num}"
+        if previous_streak >= conflict_attempt_limit and meta.get(human_round_flag):
+            meta["requirements_changed"] = False
+            meta["post_requirement_conflict_attempts_exhausted"] = True
+            if runner.artifact is not artifact:
+                runner.artifact.setdefault("meta", {}).update(meta)
+            if runner.output_artifact is not None and runner.output_artifact is not artifact:
+                runner.output_artifact.setdefault("meta", {}).update(meta)
+            self.flow.store.save_artifact(artifact)
+            self.flow.logger.info(
+                "%s：已達 max_conflict_attempts=%s 且人工裁決流程已處理，停止重新辨識並進入下一階段",
+                log_prefix,
+                conflict_attempt_limit,
+            )
+            return False
+
         self.refresh_conflicts(
             runner,
             artifact,
@@ -717,18 +759,18 @@ class MeetingCoordinator:
         if self.has_pending_conflict_issue(runner):
             return True
 
-        meta = artifact.setdefault("meta", {})
         try:
             post_requirement_streak = int(meta.get("post_requirement_conflict_streak") or 0)
         except (TypeError, ValueError):
             post_requirement_streak = 0
-        if post_requirement_streak >= POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT:
-            meta[f"default_conflict_human_round_{runner.round_num}"] = True
+        if post_requirement_streak >= conflict_attempt_limit:
+            meta[human_round_flag] = True
             self.flow.logger.info(
-                "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突，交由人類裁決",
+                "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突，已達 max_conflict_attempts=%s，交由人類裁決",
                 log_prefix,
                 post_requirement_streak,
                 len(unresolved),
+                conflict_attempt_limit,
             )
             return self.append_conflict_issue(
                 runner,
@@ -740,7 +782,7 @@ class MeetingCoordinator:
             log_prefix,
             len(unresolved),
             post_requirement_streak,
-            POST_REQUIREMENT_CONFLICT_HUMAN_LIMIT,
+            conflict_attempt_limit,
         )
         return self.append_conflict_issue(runner, artifact)
 
@@ -1114,7 +1156,7 @@ class MeetingCoordinator:
             except (TypeError, ValueError):
                 streak = 0
             meta["post_requirement_conflict_streak"] = streak + 1
-            self.flow.store.save_artifact(artifact)
+            self.flow.store.save_artifact(artifact, commit_conflict_version=True)
             if block_on_unresolved:
                 self.flow.logger.info(
                     "%s：需求更新後連續 %s 次仍有 %s 筆未解決衝突；暫停更新 draft，需先完成需求衝突解決",
@@ -1131,7 +1173,7 @@ class MeetingCoordinator:
             )
             return False
         meta["post_requirement_conflict_streak"] = 0
-        self.flow.store.save_artifact(artifact)
+        self.flow.store.save_artifact(artifact, commit_conflict_version=True)
         self.flow.logger.info(
             "%s：需求更新後已重新整理 conflict report，接著更新 draft",
             log_prefix,

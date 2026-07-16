@@ -6,8 +6,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .atomic import atomic_write_text
+from .coordinator import FileRunCoordinator
 from .json import save_json_file
 from .trace_req.base import build_trace_req
+
+
+WORKFLOW_STATE_KEYS = (
+    "open_questions",
+    "human_decision_queue",
+    "issue_backlog",
+)
 
 
 # ========
@@ -26,6 +34,29 @@ def load_json_path(path: Path, default: Any) -> Any:
 def save_json_path(base_dir: Path, data: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     save_json_file(base_dir, data, path)
+
+
+def workflow_state_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"schema_version": 1}
+    for key in WORKFLOW_STATE_KEYS:
+        value = data.get(key, [])
+        if not isinstance(value, list):
+            raise ValueError(f"workflow state {key} 必須是 array")
+        payload[key] = [dict(item) for item in value if isinstance(item, dict)]
+    return payload
+
+
+def load_workflow_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    payload = load_json_path(path, {})
+    if not isinstance(payload, dict):
+        raise ValueError("workflow_state.json 必須是 object")
+    state: Dict[str, List[Dict[str, Any]]] = {}
+    for key in WORKFLOW_STATE_KEYS:
+        value = payload.get(key, [])
+        if not isinstance(value, list):
+            raise ValueError(f"workflow_state.json {key} 必須是 array")
+        state[key] = [dict(item) for item in value if isinstance(item, dict)]
+    return state
 
 
 # ========
@@ -634,6 +665,24 @@ def conflict_requirement_signature(item: Dict[str, Any]) -> str:
     return "REQSIG:" + "|".join(req_parts)
 
 
+def conflict_requirement_id_signature(item: Dict[str, Any]) -> str:
+    requirement_ids = sorted(conflict_requirement_ids(item))
+    if not requirement_ids:
+        return ""
+    return "REQIDS:" + "|".join(requirement_ids)
+
+
+def conflict_requirement_signatures(item: Dict[str, Any]) -> set[str]:
+    return {
+        signature
+        for signature in (
+            conflict_requirement_signature(item),
+            conflict_requirement_id_signature(item),
+        )
+        if signature
+    }
+
+
 FINAL_CONFLICT_STATUSES = {"agreed", "human_decision"}
 
 
@@ -655,12 +704,12 @@ def unresolved_conflict_report_rows(rows: Any, resolved_signatures: Optional[set
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        signature = conflict_requirement_signature(row)
+        signatures = conflict_requirement_signatures(row)
+        signature = conflict_requirement_id_signature(row) or conflict_requirement_signature(row)
         if conflict_report_resolved(row):
-            if signature:
-                resolved.add(signature)
+            resolved.update(signatures)
             continue
-        if signature and signature in resolved:
+        if signatures & resolved:
             continue
         if signature and signature in seen:
             continue
@@ -683,15 +732,17 @@ def merge_conflict_report_history(versioned_rows: List[List[Dict[str, Any]]]) ->
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            signature = conflict_requirement_signature(row)
+            signatures = conflict_requirement_signatures(row)
+            signature = conflict_requirement_id_signature(row) or conflict_requirement_signature(row)
             if conflict_report_resolved(row):
                 resolved_rows.append(dict(row))
-                if signature:
-                    resolved_signatures.add(signature)
-                    unresolved_by_signature.pop(signature, None)
+                resolved_signatures.update(signatures)
+                for unresolved_signature, unresolved_row in list(unresolved_by_signature.items()):
+                    if conflict_requirement_signatures(unresolved_row) & resolved_signatures:
+                        unresolved_by_signature.pop(unresolved_signature, None)
                 continue
-            if signature:
-                if signature in resolved_signatures:
+            if signatures:
+                if signatures & resolved_signatures:
                     continue
                 unresolved_by_signature[signature] = dict(row)
             else:
@@ -998,9 +1049,16 @@ def conflict_detection_signature(payload: Any) -> str:
     return json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def append_conflict_version(existing: Any, current: Dict[str, Any]) -> Dict[str, Any]:
-    if not has_payload_content(current):
+def append_conflict_version(
+    existing: Any,
+    current: Dict[str, Any],
+    *,
+    allow_empty: bool = False,
+) -> Dict[str, Any]:
+    if not has_payload_content(current) and not allow_empty:
         return existing if isinstance(existing, dict) else {}
+    if not has_payload_content(current):
+        current = {"pairs": [], "multiple": []}
     versions: Dict[str, Any] = {}
     if is_versioned_conflict_payload(existing):
         for key, value in existing.items():
@@ -1068,12 +1126,20 @@ def conflict_report_history_state(artifact_dir: Path) -> Dict[str, Any]:
         return {"report": [], "resolved_signatures": []}
     versioned_paths.sort(key=lambda item: item[0])
     history: List[List[Dict[str, Any]]] = []
+    latest_is_explicitly_empty = False
     for _, path in versioned_paths:
         payload = load_json_path(path, [])
         if not isinstance(payload, list):
             continue
         history.append([dict(item) for item in payload if isinstance(item, dict)])
-    return merge_conflict_report_history(history)
+        latest_is_explicitly_empty = len(payload) == 0
+    state = merge_conflict_report_history(history)
+    if latest_is_explicitly_empty:
+        state["report"] = []
+        state["cleared"] = True
+    else:
+        state["cleared"] = False
+    return state
 
 
 # ========
@@ -1081,6 +1147,8 @@ def conflict_report_history_state(artifact_dir: Path) -> Dict[str, Any]:
 # ========
 def latest_conflict_report_payload(artifact_dir: Path) -> List[Dict[str, Any]]:
     state = conflict_report_history_state(artifact_dir)
+    if state.get("cleared") is True:
+        return []
     rows = [dict(item) for item in (state.get("report") or []) if isinstance(item, dict)]
     md_rows = latest_conflict_report_markdown_rows(artifact_dir)
     if not md_rows:
@@ -1419,7 +1487,7 @@ def load_formal_meeting_discussions(artifact_dir: Path) -> Dict[str, List[Dict[s
 # ========
 # Defines split payload function for this module workflow.
 # ========
-def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
+def _split_payload_unlocked(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     project_dir = artifact_dir.parent
     project_file = artifact_dir / "project.json"
     requirements_file = artifact_dir / "requirements.json"
@@ -1451,6 +1519,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     issues = load_json_path(issues_path, {})
     models = load_json_path(artifact_dir / "system_models.json", [])
     trace_req = load_json_path(project_dir / "trace_req.json", [])
+    workflow_state = load_workflow_state(artifact_dir / "workflow_state.json")
     issue_rows = []
     meeting_issue_rows = []
     if issues_path.exists() and not isinstance(issues, dict):
@@ -1523,6 +1592,7 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
         "meeting_issues": meeting_issue_rows,
         "system_models": models if isinstance(models, list) else [],
         "trace_req": trace_req if isinstance(trace_req, list) else [],
+        **workflow_state,
     }
     if isinstance(scope, dict) and has_payload_content(scope):
         artifact["scope"] = scope
@@ -1564,6 +1634,17 @@ def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
     return artifact
 
 
+def split_payload(artifact_dir: Path) -> Optional[Dict[str, Any]]:
+    artifact_dir = Path(artifact_dir)
+    if len(artifact_dir.parents) < 3:
+        return _split_payload_unlocked(artifact_dir)
+    base_dir = artifact_dir.parents[2]
+    project_id = artifact_dir.parent.name
+    coordinator = FileRunCoordinator(base_dir)
+    with coordinator.exclusive_lock(f"artifact-{project_id}", timeout=30.0):
+        return _split_payload_unlocked(artifact_dir)
+
+
 # ========
 # Defines load artifact function for this module workflow.
 # ========
@@ -1578,7 +1659,13 @@ def ensure_trace_req(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 # ========
 # Defines save artifact function for this module workflow.
 # ========
-def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> None:
+def _save_artifact_unlocked(
+    base_dir: Path,
+    artifact_dir: Path,
+    data: Dict[str, Any],
+    *,
+    commit_conflict_version: bool = False,
+) -> None:
     try:
         from .requirements import assign_stable_srs_ids, renumber_system_requirement_ids
         from .requirements import attach_initial_source_ids
@@ -1596,14 +1683,28 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     save_json_path(base_dir, project_payload(data, existing_project), project_path)
     save_optional_json_path(base_dir, scope_payload(data), artifact_dir / "scope.json")
     save_json_path(base_dir, requirements_payload(data), artifact_dir / "requirements.json")
-    conflict_path = artifact_dir / "result.json"
-    existing_conflict_payload = load_json_path(conflict_path, None)
-    save_optional_json_path(
-        base_dir,
-        append_conflict_version(existing_conflict_payload, conflict_storage_payload(data)),
-        conflict_path,
-    )
+    if commit_conflict_version:
+        conflict_path = artifact_dir / "result.json"
+        existing_conflict_payload = load_json_path(conflict_path, None)
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        conflict_state = data.get("conflict") if isinstance(data.get("conflict"), dict) else None
+        conflict_detection_refreshed = bool(
+            meta.get("conflict_refresh_by")
+            and isinstance(conflict_state, dict)
+            and "pairs" in conflict_state
+            and "multiple" in conflict_state
+        )
+        save_optional_json_path(
+            base_dir,
+            append_conflict_version(
+                existing_conflict_payload,
+                conflict_storage_payload(data),
+                allow_empty=conflict_detection_refreshed,
+            ),
+            conflict_path,
+        )
     save_optional_json_path(base_dir, feedback_payload(data), artifact_dir / "feedback.json")
+    (artifact_dir / "research_results.json").unlink(missing_ok=True)
     save_optional_json_path(base_dir, elicitation_payload(data), meeting_dir / "elicitation_meeting.json")
     for pattern in ("formal_meeting_r*.json",):
         for path in meeting_dir.glob(pattern):
@@ -1614,10 +1715,33 @@ def save_artifact(base_dir: Path, artifact_dir: Path, data: Dict[str, Any]) -> N
     if any(key in data for key in ("issue_proposals", "meeting_issues")):
         save_optional_json_path(base_dir, issue_proposals_payload(data), meeting_dir / "issues.json")
     save_optional_json_path(base_dir, models_payload(data), artifact_dir / "system_models.json")
+    save_json_path(
+        base_dir,
+        workflow_state_payload(data),
+        artifact_dir / "workflow_state.json",
+    )
     save_optional_json_path(base_dir, ensure_trace_req(data), artifact_dir.parent / "trace_req.json")
     (base_dir / "trace_req.json").unlink(missing_ok=True)
     (artifact_dir / "trace_req.json").unlink(missing_ok=True)
     (artifact_dir / "trace_events.json").unlink(missing_ok=True)
+
+
+def save_artifact(
+    base_dir: Path,
+    artifact_dir: Path,
+    data: Dict[str, Any],
+    *,
+    commit_conflict_version: bool = False,
+) -> None:
+    project_id = Path(artifact_dir).parent.name
+    coordinator = FileRunCoordinator(Path(base_dir))
+    with coordinator.exclusive_lock(f"artifact-{project_id}", timeout=30.0):
+        _save_artifact_unlocked(
+            Path(base_dir),
+            Path(artifact_dir),
+            data,
+            commit_conflict_version=commit_conflict_version,
+        )
 
 
 # ========

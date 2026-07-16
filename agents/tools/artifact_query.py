@@ -9,9 +9,6 @@ from storage.requirements import requirement_discussion_pool
 from storage.artifact import load_artifact as load_split_artifact
 
 
-# ========
-# Defines conflict req keys function for this module workflow.
-# ========
 def conflict_req_keys(item: Dict[str, Any]) -> List[str]:
     return sorted(
         [k for k in item.keys() if k.startswith("req_") and k[4:].isdigit()],
@@ -19,9 +16,6 @@ def conflict_req_keys(item: Dict[str, Any]) -> List[str]:
     )
 
 
-# ========
-# Defines conflict req values function for this module workflow.
-# ========
 def conflict_req_values(item: Dict[str, Any]) -> List[str]:
     return [
         str(item.get(k) or "").strip()
@@ -30,9 +24,6 @@ def conflict_req_values(item: Dict[str, Any]) -> List[str]:
     ]
 
 
-# ========
-# Defines ArtifactQueryTool class for this module workflow.
-# ========
 class ArtifactQueryTool(BaseTool):
     name = "artifact_query"
     description = (
@@ -82,7 +73,6 @@ class ArtifactQueryTool(BaseTool):
         },
     }
 
-    # Defines __init__ function for this module workflow.
     def __init__(self, artifact_path: str):
         self.artifact_path = Path(artifact_path)
         self._cache: Dict[str, str] = {}
@@ -91,7 +81,6 @@ class ArtifactQueryTool(BaseTool):
         self._artifact_cache_mtime: Optional[float] = None
         self._artifact_cache_size: Optional[int] = None
 
-    # Defines execute function for this module workflow.
     def execute(self, **kwargs) -> str:
         query_key = json.dumps(
             {
@@ -166,7 +155,6 @@ class ArtifactQueryTool(BaseTool):
             self._cache[query_key] = out
         return out
 
-    # Defines load artifact function for this module workflow.
     def load_artifact(self) -> Optional[Dict[str, Any]]:
         if not self.artifact_path.exists():
             return None
@@ -191,7 +179,6 @@ class ArtifactQueryTool(BaseTool):
             self._artifact_cache_size = size
             return artifact
 
-    # Defines as list function for this module workflow.
     def as_list(self, artifact: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
         if section == "URL" and not artifact.get("URL"):
             return requirement_discussion_pool(artifact)
@@ -209,7 +196,6 @@ class ArtifactQueryTool(BaseTool):
         raw = artifact.get(section, [])
         return raw if isinstance(raw, list) else []
 
-    # Defines feedback items function for this module workflow.
     def feedback_items(self, artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
         feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
         rows: List[Dict[str, Any]] = []
@@ -223,20 +209,17 @@ class ArtifactQueryTool(BaseTool):
                 rows.append(row)
         return rows
 
-    # Defines parse limit function for this module workflow.
     def parse_limit(self, limit: Any) -> Optional[int]:
         try:
             return max(1, int(limit))
         except (TypeError, ValueError):
             return None
 
-    # Defines parse compact function for this module workflow.
     def parse_compact(self, compact: Any) -> Optional[bool]:
         if isinstance(compact, bool):
             return compact
         return None
 
-    # Defines compact item function for this module workflow.
     def compact_item(self, section: str, item: Dict[str, Any]) -> Dict[str, Any]:
         presets = {
             "URL": ["id", "text", "priority", "source"],
@@ -259,13 +242,11 @@ class ArtifactQueryTool(BaseTool):
             return dict(item)
         return {k: item.get(k) for k in fields if k in item}
 
-    # Defines select fields function for this module workflow.
     def select_fields(self, item: Dict[str, Any], fields: Any) -> Dict[str, Any]:
         if not isinstance(fields, list) or not fields:
             return dict(item)
         return {k: item.get(k) for k in fields if isinstance(k, str)}
 
-    # Defines match filters function for this module workflow.
     def match_filters(self, item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         if not isinstance(filters, dict):
             return True
@@ -301,7 +282,6 @@ class ArtifactQueryTool(BaseTool):
                 return False
         return True
 
-    # Defines post process function for this module workflow.
     def post_process(
         self, section: str, items: List[Dict[str, Any]], fields: Any, compact: bool, max_n: Optional[int]
     ) -> List[Dict[str, Any]]:
@@ -313,7 +293,6 @@ class ArtifactQueryTool(BaseTool):
             out.append(row)
         return out
 
-    # Defines get section function for this module workflow.
     def get_section(
         self, artifact: Dict[str, Any], *, section: str, fields: Any, limit: Any, compact: bool
     ) -> Dict[str, Any]:
@@ -365,7 +344,6 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 為單一區塊",
         }
 
-    # Defines find items function for this module workflow.
     def find_items(
         self, artifact: Dict[str, Any], *, section: str, filters: Any, fields: Any, limit: Any, compact: Any
     ) -> Dict[str, Any]:
@@ -388,7 +366,6 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{section} 符合條件 {len(items)} 筆",
         }
 
-    # Defines related context function for this module workflow.
     def related_context(self, artifact: Dict[str, Any], *, item_id: str, compact: Any) -> Dict[str, Any]:
         if not item_id:
             return {"ok": False, "error": "related_context 需要 item_id"}
@@ -565,7 +542,6 @@ class ArtifactQueryTool(BaseTool):
             "summary": f"{item_id} 相關上下文已整理",
         }
 
-    # Defines summarize function for this module workflow.
     def summarize(self, artifact: Dict[str, Any], *, section: str) -> Dict[str, Any]:
         if section:
             raw = artifact.get(section)

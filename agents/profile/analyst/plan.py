@@ -25,7 +25,6 @@ def analyst_available_actions_for_issue(observation: Dict[str, Any]) -> Dict[str
     return actions
 
 
-# Defines AnalystPlan class for this module workflow.
 class AnalystPlan:
     def plan_actions(
         self,

@@ -53,6 +53,16 @@ def stage_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bo
     return bool(value)
 
 
+def formal_meeting_enabled(config: Dict[str, Any]) -> bool:
+    return stage_enabled(config, "default_formal_meeting", True) or stage_enabled(
+        config, "general_formal_meeting", True
+    )
+
+
+def general_formal_meeting_enabled(config: Dict[str, Any]) -> bool:
+    return stage_enabled(config, "general_formal_meeting", True)
+
+
 # ========
 # Defines force regenerate output flag helper.
 # ========
@@ -175,6 +185,13 @@ def has_feedback_payload(artifact: Dict[str, Any]) -> bool:
     )
 
 
+def has_feedback_stage_result(artifact: Dict[str, Any]) -> bool:
+    if has_feedback_payload(artifact):
+        return True
+    feedback = artifact.get("feedback") if isinstance(artifact.get("feedback"), dict) else {}
+    return str(feedback.get("status") or "").strip() == "no_applicable_feedback"
+
+
 # ========
 # Defines has system models payload function for this module workflow.
 # ========
@@ -241,16 +258,31 @@ def require_stage_inputs(flow: Any, artifact: Dict[str, Any], stage_name: str) -
             "stage.system_model 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json"
         )
     if stage_name == "draft":
+        system_model_required = stage_enabled(flow.config, "system_model", True)
+        system_model_ready = (
+            not system_model_required
+            or (
+                artifact_json_non_empty(flow, "system_models.json")
+                and has_system_models_payload(artifact)
+            )
+        )
         if (
             has_project_scope_requirements(flow, artifact)
             and artifact_json_non_empty(flow, "feedback.json")
-            and artifact_json_non_empty(flow, "system_models.json")
-            and has_feedback_payload(artifact)
-            and has_system_models_payload(artifact)
+            and has_feedback_stage_result(artifact)
+            and system_model_ready
         ):
             return
+        required_paths = [
+            "artifact/project.json",
+            "artifact/scope.json",
+            "artifact/requirements.json",
+            "artifact/feedback.json",
+        ]
+        if system_model_required:
+            required_paths.append("artifact/system_models.json")
         raise RuntimeError(
-            "stage.draft 缺少輸入；需要 artifact/project.json、artifact/scope.json、artifact/requirements.json、artifact/feedback.json、artifact/system_models.json"
+            f"stage.draft 缺少輸入；需要{'、'.join(required_paths)}"
         )
     if stage_name in {"DR", "SRS"}:
         if has_draft_payload(flow):

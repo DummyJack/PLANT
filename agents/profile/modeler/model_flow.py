@@ -15,6 +15,7 @@ from .skill import uml_skill_subset
 from .validation import (
     model_type_set,
     parse_diagram_model,
+    parse_model,
     parse_model_list,
     parse_use_case,
     parse_plantuml_fix,
@@ -22,11 +23,9 @@ from .validation import (
 )
 
 
-# Defines ModelerModeling class for this module workflow.
 class ModelerModeling(ModelPlan):
     model_type_list = sorted(model_type_set)
 
-    # Defines obs model function for this module workflow.
     def obs_model(self, **kwargs: Any) -> Dict[str, Any]:
         return self.build_model_state(
             kwargs["artifact"],
@@ -37,7 +36,6 @@ class ModelerModeling(ModelPlan):
             kwargs["max_iterations"],
         )
 
-    # Defines decide model action function for this module workflow.
     def decide_model_action(
         self,
         *,
@@ -47,7 +45,6 @@ class ModelerModeling(ModelPlan):
     ) -> Dict[str, Any]:
         return self.plan_model(observation, last_result)
 
-    # Defines run model step function for this module workflow.
     def run_model_step(
         self,
         *,
@@ -61,7 +58,6 @@ class ModelerModeling(ModelPlan):
             kwargs.get("last_result"),
         )
 
-    # Defines run model loop function for this module workflow.
     def run_model_loop(
         self,
         artifact,
@@ -106,7 +102,6 @@ class ModelerModeling(ModelPlan):
                 else:
                     artifact["modeling_phase"] = previous_phase
 
-    # Defines build model state function for this module workflow.
     def build_model_state(
         self, artifact, recent_discussions, issue, actions_taken,
         iteration, max_iterations,
@@ -168,7 +163,6 @@ class ModelerModeling(ModelPlan):
         }
 
     @staticmethod
-    # Defines modeling phase function for this module workflow.
     def modeling_phase(artifact: Dict[str, Any], issue: Any = None) -> str:
         explicit = str(artifact.get("modeling_phase") or "").strip()
         if explicit:
@@ -183,7 +177,6 @@ class ModelerModeling(ModelPlan):
         return "align_model_issue"
 
     @staticmethod
-    # Defines model issue context function for this module workflow.
     def model_issue_context(issue: Any) -> Dict[str, Any]:
         if not isinstance(issue, dict):
             return {}
@@ -197,7 +190,6 @@ class ModelerModeling(ModelPlan):
             "discussion_rounds": issue.get("discussion_rounds"),
         }
 
-    # Defines execute model action function for this module workflow.
     def execute_model_action(
         self, action, params, artifact, last_observation=None,
     ):
@@ -253,14 +245,28 @@ class ModelerModeling(ModelPlan):
             task = target_prompt(context=context)
             skill = uml_skill_subset(get_skill("UML"), "selection")
             messages = self.build_skill_messages(skill, "UML", task)
+            allowed_requirement_ids = {
+                str(row.get("id") or "").strip()
+                for row in reqs
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            allowed_model_ids = {
+                str(row.get("id") or "").strip()
+                for row in models
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
             try:
                 raw_plan = self.chat_json(messages)
                 try:
-                    result = parse_impact_assessment(raw_plan)
+                    result = parse_impact_assessment(
+                        raw_plan,
+                        allowed_requirement_ids=allowed_requirement_ids,
+                        allowed_model_ids=allowed_model_ids,
+                    )
                 except Exception as plan_error:
                     repair_prompt = render_repair_prompt(
                         "model_plan_repair",
-                        raw=json.dumps(raw_plan, ensure_ascii=False, indent=2)
+                        raw=json.dumps(raw_plan, ensure_ascii=False, separators=(",", ":"))
                         if isinstance(raw_plan, (dict, list))
                         else str(raw_plan),
                         error_msg=str(plan_error),
@@ -272,7 +278,11 @@ class ModelerModeling(ModelPlan):
                             repair_prompt,
                         )
                     )
-                    result = parse_impact_assessment(repaired)
+                    result = parse_impact_assessment(
+                        repaired,
+                        allowed_requirement_ids=allowed_requirement_ids,
+                        allowed_model_ids=allowed_model_ids,
+                    )
                 plan = result.get("model_plan") if isinstance(result.get("model_plan"), dict) else {}
                 plan["model_targets"] = self.apply_modeling_policy(
                     plan.get("model_targets", []),
@@ -339,6 +349,7 @@ class ModelerModeling(ModelPlan):
                 if result_type != diagram_type:
                     raise ValueError(f"model result type must be {diagram_type}, got {result_type or '<empty>'}")
                 new_row = {
+                    **(existing or {}),
                     "id": str((existing or {}).get("id") or target.get("target_model_id") or "").strip()
                     or self.next_model_id(models),
                     "name": new_name,
@@ -346,6 +357,12 @@ class ModelerModeling(ModelPlan):
                 }
                 if result.get("plantuml"):
                     new_row["plantuml"] = result.get("plantuml", "")
+                    for key in (
+                        "plantuml_validation_status",
+                        "plantuml_validation_error",
+                        "plantuml_repaired",
+                    ):
+                        new_row.pop(key, None)
                 if result.get("description"):
                     new_row["description"] = result.get("description", "")
                 if result.get("text"):
@@ -488,9 +505,10 @@ class ModelerModeling(ModelPlan):
                 {"plantuml_code": code},
                 active_skill="UML",
             )
-            if "通過" in result:
+            if "通過" in result or "驗證跳過" in result:
                 obs["result"] = {
                     "valid": True,
+                    "validation_skipped": "驗證跳過" in result,
                     "target_model_id": target.get("id"),
                     "type": target.get("type"),
                     "name": target.get("name"),
@@ -541,7 +559,6 @@ class ModelerModeling(ModelPlan):
         return obs
 
     @staticmethod
-    # Defines apply modeling policy function for this module workflow.
     def apply_modeling_policy(
         targets: Any,
         policy: Dict[str, Any],
@@ -567,7 +584,6 @@ class ModelerModeling(ModelPlan):
 
 
     @staticmethod
-    # Defines next model id function for this module workflow.
     def next_model_id(models: list[Dict[str, Any]]) -> str:
         max_num = 0
         for model in models or []:
@@ -583,7 +599,6 @@ class ModelerModeling(ModelPlan):
         return f"SM-{max_num + 1}"
 
     @staticmethod
-    # Defines find model target function for this module workflow.
     def find_model_target(
         models: list[Dict[str, Any]],
         target: Dict[str, Any],
@@ -606,7 +621,6 @@ class ModelerModeling(ModelPlan):
         return None
 
     @staticmethod
-    # Defines model name function for this module workflow.
     def model_name(model_type: str) -> str:
         zh_names = {
             "context_diagram": "情境圖",
@@ -628,7 +642,6 @@ class ModelerModeling(ModelPlan):
         return names.get(model_type, model_type)
 
     @staticmethod
-    # Defines model source function for this module workflow.
     def model_source(revision_context: Optional[Dict[str, Any]] = None) -> str:
         if isinstance(revision_context, dict):
             meeting_ids = [
@@ -641,7 +654,6 @@ class ModelerModeling(ModelPlan):
         return ""
 
     @staticmethod
-    # Defines system model rows function for this module workflow.
     def system_model_rows(artifact: Any) -> list[Dict[str, Any]]:
         if not isinstance(artifact, dict):
             return []
@@ -651,7 +663,6 @@ class ModelerModeling(ModelPlan):
         return [row for row in models if isinstance(row, dict)]
 
     @staticmethod
-    # Defines model user requirements function for this module workflow.
     def model_user_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
         source_rows = artifact.get("URL") or []
         return [
@@ -661,7 +672,6 @@ class ModelerModeling(ModelPlan):
         ]
 
     @staticmethod
-    # Defines model spec requirements function for this module workflow.
     def model_spec_requirements(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
         rows = []
         for req in artifact.get("REQ") or []:
@@ -697,17 +707,14 @@ class ModelerModeling(ModelPlan):
             rows.append(row)
         return rows
 
-    # Defines model requirements function for this module workflow.
     def model_requirements(self, artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
         spec_rows = self.model_spec_requirements(artifact)
         return spec_rows or self.model_user_requirements(artifact)
 
-    # Defines model requirement source function for this module workflow.
     def model_requirement_source(self, artifact: Dict[str, Any]) -> str:
         return "REQ" if self.model_spec_requirements(artifact) else "URL"
 
     @staticmethod
-    # Defines related req ids function for this module workflow.
     def related_req_ids(
         model: Dict[str, Any],
         target: Optional[Dict[str, Any]] = None,
@@ -730,7 +737,6 @@ class ModelerModeling(ModelPlan):
         return rows
 
     @staticmethod
-    # Defines model stakeholders function for this module workflow.
     def model_stakeholders(artifact: Dict[str, Any]) -> list[Dict[str, Any]]:
         rows: list[Dict[str, Any]] = []
         for stakeholder in artifact.get("stakeholders", []) or []:
@@ -747,7 +753,6 @@ class ModelerModeling(ModelPlan):
         return rows
 
     @staticmethod
-    # Defines model feedback function for this module workflow.
     def model_feedback(artifact_or_context: Dict[str, Any]) -> Dict[str, Any]:
         feedback = (
             artifact_or_context.get("feedback")
@@ -786,7 +791,6 @@ class ModelerModeling(ModelPlan):
             out["sources"] = sources
         return out
 
-    # Defines build model context function for this module workflow.
     def build_model_context(
         self,
         artifact: Dict[str, Any],
@@ -810,7 +814,6 @@ class ModelerModeling(ModelPlan):
             "model_revision_context": revision_context or artifact.get("model_revision_context", {}) or {},
         }
 
-    # Defines generate system models function for this module workflow.
     def generate_system_models(
         self,
         artifact: Dict[str, Any],
@@ -854,7 +857,6 @@ class ModelerModeling(ModelPlan):
             store.save_artifact(artifact)
         return model_data
 
-    # Defines ensure context diagram function for this module workflow.
     def ensure_context_diagram(self, artifact_context: Dict[str, Any]) -> None:
         models = self.system_model_rows(artifact_context)
         has_context = any(
@@ -899,7 +901,6 @@ class ModelerModeling(ModelPlan):
         models.append(new_row)
         artifact_context["system_models"] = models
 
-    # Defines ensure use case function for this module workflow.
     def ensure_use_case(
         self,
         model_data: list[Dict[str, Any]],
@@ -927,14 +928,13 @@ class ModelerModeling(ModelPlan):
             raise RuntimeError("use_case_diagram 已生成，但 use_case_text 生成失敗")
         use_case_diagram["text"] = use_case_text
 
-    # Defines build model function for this module workflow.
     def build_model(
         self, diagram_type, requirements,
         existing_model=None,
         artifact_context: Optional[Dict[str, Any]] = None,
     ):
         type_name = self.model_name(diagram_type)
-        req_text = json.dumps(requirements, ensure_ascii=False, indent=2)
+        req_text = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
         artifact_context = artifact_context or {}
         context_payload = {
             "scenario": artifact_context.get("scenario", "") or artifact_context.get("rough_idea", ""),
@@ -945,7 +945,12 @@ class ModelerModeling(ModelPlan):
             "model_revision_context": artifact_context.get("model_revision_context", {}) or {},
             "model_target": artifact_context.get("model_target", {}) or {},
         }
-        context_text = json.dumps(context_payload, ensure_ascii=False, indent=2)
+        context_text = json.dumps(context_payload, ensure_ascii=False, separators=(",", ":"))
+        allowed_requirement_ids = {
+            str(row.get("id") or "").strip()
+            for row in requirements
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
         diagram_layout_hint = model_layout_hint(diagram_type)
         description_rule, description_field = model_description_contract(diagram_type)
 
@@ -966,7 +971,7 @@ class ModelerModeling(ModelPlan):
                     "source": use_case_diagram.get("source"),
                 },
                 ensure_ascii=False,
-                indent=2,
+                separators=(",", ":"),
             ) if use_case_diagram else "{}"
             task = use_case_text(
                 req_text=req_text,
@@ -976,7 +981,11 @@ class ModelerModeling(ModelPlan):
             skill = uml_skill_subset(get_skill("UML"), "use_case_text")
             messages = self.build_skill_messages(skill, "UML", task)
             result = self.chat_json(messages)
-            return parse_use_case(result)
+            return self.parse_single_model_output(
+                result,
+                expected_type="use_case_text",
+                allowed_requirement_ids=allowed_requirement_ids,
+            )
 
         if existing_model and existing_model.get("plantuml"):
             task = update_model(
@@ -1003,16 +1012,125 @@ class ModelerModeling(ModelPlan):
         skill = uml_skill_subset(get_skill("UML"), "diagram", diagram_type)
         messages = self.build_skill_messages(skill, "UML", task)
         result = self.chat_json(messages)
-        return parse_diagram_model(result, expected_type=diagram_type)
+        return self.parse_single_model_output(
+            result,
+            expected_type=diagram_type,
+            allowed_requirement_ids=allowed_requirement_ids,
+        )
 
-    # Defines parse model output function for this module workflow.
+    def parse_single_model_output(
+        self,
+        result: Any,
+        *,
+        expected_type: str,
+        allowed_requirement_ids: Optional[set[str]] = None,
+        source: str = "",
+    ) -> Dict[str, Any]:
+        try:
+            if expected_type == "use_case_text":
+                return parse_use_case(
+                    result,
+                    source=source,
+                    allowed_requirement_ids=allowed_requirement_ids,
+                )
+            return parse_diagram_model(
+                result,
+                expected_type=expected_type,
+                source=source,
+                allowed_requirement_ids=allowed_requirement_ids,
+            )
+        except ValueError as exc:
+            if expected_type == "use_case_text":
+                output_schema = (
+                    '{"type":"use_case_text","text":['
+                    '{"id":"UC-1","actor":"角色","name":"用例名稱",'
+                    '"purpose":"用途","interface":"具體介面",'
+                    '"related_requirement_ids":["REQ-1"]}]}'
+                )
+                repair_skill = uml_skill_subset(get_skill("UML"), "use_case_text")
+            else:
+                output_schema = (
+                    '{"name":"模型名稱","type":"'
+                    + expected_type
+                    + '","plantuml":"@startuml\\n...\\n@enduml",'
+                    '"description":"模型說明",'
+                    '"related_requirement_ids":["REQ-1"]}'
+                )
+                repair_skill = uml_skill_subset(
+                    get_skill("UML"), "diagram", expected_type
+                )
+            repair_prompt = render_repair_prompt(
+                "single_model_output_repair",
+                raw=json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                if isinstance(result, (dict, list))
+                else str(result),
+                error_msg=str(exc),
+                expected_type=expected_type,
+                output_schema=output_schema,
+            )
+            repaired = self.chat_json(
+                self.build_skill_messages(
+                    repair_skill,
+                    "UML",
+                    repair_prompt,
+                )
+            )
+            parsed = parse_model(
+                repaired,
+                source=source,
+                allowed_requirement_ids=allowed_requirement_ids,
+            )
+            repaired_type = str(parsed.get("type") or "").strip()
+            if repaired_type != expected_type:
+                raise ValueError(
+                    f"repaired model type must be {expected_type}, got "
+                    f"{repaired_type or '<empty>'}"
+                )
+            return parsed
+
     def parse_model_output(self, result, *, source: str = "") -> list[Dict[str, Any]]:
+        if isinstance(result, list):
+            parsed = []
+            for row in result:
+                expected_type = (
+                    str(row.get("type") or "").strip()
+                    if isinstance(row, dict)
+                    else ""
+                )
+                if expected_type in model_type_set:
+                    parsed.append(
+                        self.parse_single_model_output(
+                            row,
+                            expected_type=expected_type,
+                            source=source,
+                        )
+                    )
+                    continue
+                repair_prompt = render_repair_prompt(
+                    "model_output_repair",
+                    raw=json.dumps([row], ensure_ascii=False, separators=(",", ":")),
+                    error_msg=(
+                        f"model output type is invalid: {expected_type or '<empty>'}"
+                    ),
+                )
+                repaired = self.chat_json(
+                    self.build_skill_messages(
+                        uml_skill_subset(get_skill("UML"), "diagram"),
+                        "UML",
+                        repair_prompt,
+                    )
+                )
+                repaired_rows = parse_model_list(repaired, source=source)
+                if len(repaired_rows) != 1:
+                    raise ValueError("single model repair must return exactly one model")
+                parsed.append(repaired_rows[0])
+            return parsed
         try:
             return parse_model_list(result, source=source)
         except ValueError as exc:
             repair_prompt = render_repair_prompt(
                 "model_output_repair",
-                raw=json.dumps(result, ensure_ascii=False, indent=2)
+                raw=json.dumps(result, ensure_ascii=False, separators=(",", ":"))
                 if isinstance(result, (dict, list))
                 else str(result),
                 error_msg=str(exc),
@@ -1026,7 +1144,6 @@ class ModelerModeling(ModelPlan):
             )
             return parse_model_list(repaired, source=source)
 
-    # Defines validate plantuml models function for this module workflow.
     def validate_plantuml_models(self, model_data: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         validator = self.tools.get("plantuml_validate")
         if not validator:
@@ -1038,7 +1155,6 @@ class ModelerModeling(ModelPlan):
 
         validation_results = {}
 
-        # Defines validate one function for this module workflow.
         def validate_one(idx: int, m: Dict) -> tuple:
             code = m.get("plantuml", "")
             if not code:
@@ -1068,8 +1184,8 @@ class ModelerModeling(ModelPlan):
             m, result = validation_results.get(i, (models[i], None))
             if result is None:
                 continue
-            if "通過" in result:
-                m["plantuml_validation_status"] = "passed"
+            if "通過" in result or "驗證跳過" in result:
+                m["plantuml_validation_status"] = "skipped" if "驗證跳過" in result else "passed"
                 m.pop("plantuml_validation_error", None)
                 continue
             self.logger.warning(f"  {m.get('name', '')} 語法修正中")
@@ -1095,7 +1211,6 @@ class ModelerModeling(ModelPlan):
 
         return model_data
 
-    # Defines repair plantuml function for this module workflow.
     def repair_plantuml(self, model: Dict, error_msg: str) -> Optional[str]:
         user_prompt = render_repair_prompt(
             'modeler_plantuml_repair',

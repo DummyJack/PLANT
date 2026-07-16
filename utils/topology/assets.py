@@ -344,7 +344,7 @@ def render_trace_topology_assets() -> str:
     <div class="dr-trace-modal__body"></div>
   </div>
 </div>
-<script>
+<script data-cfasync="false">
 (() => {
   const modal = document.querySelector('.dr-trace-modal');
   if (!modal || modal.dataset.ready === 'true') return;
@@ -363,6 +363,66 @@ def render_trace_topology_assets() -> str:
   `;
   const title = modal.querySelector('.dr-trace-modal__title');
   const body = modal.querySelector('.dr-trace-modal__body');
+  const sanitizeHtml = (source) => {
+    const allowedTags = new Set([
+      'A', 'BLOCKQUOTE', 'BR', 'CODE', 'DIV', 'EM', 'H2', 'H3', 'H4', 'H5',
+      'IMG', 'LI', 'OL', 'P', 'PRE', 'SPAN', 'STRONG', 'TABLE', 'TBODY', 'TD',
+      'TH', 'THEAD', 'TR', 'UL'
+    ]);
+    const blockedTags = new Set(['IFRAME', 'OBJECT', 'SCRIPT', 'STYLE', 'TEMPLATE']);
+    const parsed = new DOMParser().parseFromString(source || '', 'text/html');
+    const clean = (parent) => {
+      Array.from(parent.children).forEach((element) => {
+        if (blockedTags.has(element.tagName)) {
+          element.remove();
+          return;
+        }
+        if (!allowedTags.has(element.tagName)) {
+          clean(element);
+          element.replaceWith(...Array.from(element.childNodes));
+          return;
+        }
+        Array.from(element.attributes).forEach((attribute) => {
+          const name = attribute.name.toLowerCase();
+          const allowed = name === 'class'
+            || (element.tagName === 'A' && ['href', 'title'].includes(name))
+            || (element.tagName === 'IMG' && ['src', 'alt', 'title'].includes(name))
+            || (['TD', 'TH'].includes(element.tagName) && ['colspan', 'rowspan'].includes(name));
+          if (!allowed) element.removeAttribute(attribute.name);
+        });
+        if (element.tagName === 'A' && element.hasAttribute('href')) {
+          try {
+            const url = new URL(element.getAttribute('href'), document.baseURI);
+            if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) throw new Error('unsafe link');
+            element.href = url.href;
+            element.target = '_blank';
+            element.rel = 'noopener noreferrer';
+          } catch (error) {
+            element.removeAttribute('href');
+          }
+        }
+        if (element.tagName === 'IMG' && element.hasAttribute('src')) {
+          try {
+            const raw = element.getAttribute('src') || '';
+            const url = new URL(raw, document.baseURI);
+            const safeData = url.protocol === 'data:' && /^data:image\//i.test(raw);
+            const safeLocal = ['http:', 'https:'].includes(url.protocol) && url.origin === location.origin;
+            const safeOfflineModel = location.protocol === 'file:'
+              && url.protocol === 'file:'
+              && /^\.\/models\/[^/\\?#]+\.(?:png|jpe?g|gif|webp|svg)(?:[?#].*)?$/i.test(raw);
+            if (!safeData && !safeLocal && !safeOfflineModel) throw new Error('unsafe image');
+            element.src = url.href;
+          } catch (error) {
+            element.remove();
+            return;
+          }
+        }
+        clean(element);
+      });
+    };
+    clean(parsed.body);
+    return parsed.body.innerHTML;
+  };
   const close = () => {
     modal.hidden = true;
     modal.setAttribute('aria-hidden', 'true');
@@ -383,7 +443,7 @@ def render_trace_topology_assets() -> str:
     }
     if ((button.dataset.traceFormat || '') === 'html') {
       body.classList.add('dr-trace-modal__body--html');
-      body.innerHTML = content;
+      body.innerHTML = sanitizeHtml(content);
     } else {
       body.classList.remove('dr-trace-modal__body--html');
       body.textContent = content;
@@ -524,7 +584,18 @@ def inject_trace_topologies(body: str, requirements: List[Dict[str, Any]]) -> st
                 topology = render_trace_topology(req)
             except Exception as exc:
                 topology = render_trace_links_fallback(req, exc)
-        if topology and "dr-trace-topology" not in block:
+        if topology and "dr-trace-topology" in block:
+            block = re.sub(
+                r'(?m)^<div class="dr-trace-topology">.*?</svg></div></div>\s*$',
+                "",
+                block,
+            ).strip()
+            block = re.sub(
+                r"(?m)^#{1,6}\s+Requirements Traceability Map\s*$\n*",
+                "",
+                block,
+            ).strip()
+        if topology:
             block = insert_dr_trace_topology(block, topology)
         block = re.sub(r"(?m)^#{1,6}\s+Topology\s*$\n*", "", block)
         out.append(block)

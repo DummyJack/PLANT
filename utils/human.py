@@ -119,6 +119,14 @@ def referenced_files_from_cli_text(raw: str, references: List[Dict]) -> tuple[st
 # ========
 # Defines Collect class for this module workflow.
 # ========
+def domain_research_review_response(raw: str, references: List[Dict]) -> Dict:
+    text = str(raw or "").strip()
+    if not text or text == "0":
+        return {"action": "approve"}
+    feedback, referenced_files = referenced_files_from_cli_text(text, references)
+    return cli_suggestion_response(feedback, referenced_files)
+
+
 class Collect:
     # ========
     # Defines custom stakeholder type function for this module workflow.
@@ -460,11 +468,8 @@ class Collect:
                 name = str(reference.get("name") or "").strip()
                 if name:
                     print(f"  {index}. {name}")
-        raw = input("\n輸入領域研究建議；引用文件請直接輸入編號(按 Enter 確認)：").strip()
-        if not raw:
-            return {"action": "approve"}
-        feedback, referenced_files = referenced_files_from_cli_text(raw, references)
-        return cli_suggestion_response(feedback, referenced_files)
+        raw = input("\n輸入領域研究建議；引用文件請直接輸入編號(按 Enter 或輸入 0 確認)：")
+        return domain_research_review_response(raw, references)
 
     @staticmethod
     def meeting_issue_proposal_review(

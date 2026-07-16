@@ -5,14 +5,12 @@ from typing import Any
 from agents.profile.base import render_template
 
 
-requirement_update_output_schema = """# Output JSON
+requirement_output_schema = """# Output JSON
 {
-  "requirement_update": {
-    "REQ": [],
-    "remove_REQ": [],
-    "coverage": [],
-    "reason": "一句說明"
-  }
+  "REQ": [],
+  "remove_REQ": [],
+  "coverage": [],
+  "reason": "一句說明"
 }"""
 
 requirement_candidates_output_schema = """# Output JSON
@@ -196,8 +194,9 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # 修復規則
 - 只修正 coverage。
-- 最外層必須只有 requirement_update。
+- 最外層只能包含 REQ、remove_REQ、coverage 與 reason。
 - coverage 每筆必須包含 source_id、status、covered_by、reason。
+- source_id 只能使用 context.current_URL 中既有的 URL-*；不得使用會議 ID。若沒有可用的 current_URL，coverage 輸出空陣列。
 - status 只能是 covered、needs_clarification、assumption、risk、excluded。
 - 不要把不合法 status 自動改成預設值；請根據原始輸出語意選擇正確 status。
 - covered_by 只能放 REQ-* id；沒有對應 REQ 時使用空陣列。
@@ -205,7 +204,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 若原始輸出包含 remove_REQ，必須原樣保留。
 - 只輸出修復後 JSON。
 
-{requirement_update_output_schema}""",
+{requirement_output_schema}""",
     ),
     "title_repair": (
         True,
@@ -220,14 +219,14 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # 修復規則
 - 只修正 REQ[*].title。
-- 最外層必須只有 requirement_update。
+- 最外層只能包含 REQ、remove_REQ、coverage 與 reason。
 - title 是 brief description，只寫需求核心短語，不寫完整句。
 - title 不要用 stakeholder 角色名稱作為前綴；角色資訊保留在 description、source 或 trace。
 - 不得改變 description、type、priority、source、acceptance_criteria、rationale、dependencies、risks、assumptions、remove_REQ、coverage 或 reason 的語意。
 - 保留原本 JSON 結構與所有欄位。
 - 只輸出修復後 JSON。
 
-{requirement_update_output_schema}""",
+{requirement_output_schema}""",
     ),
     "type_repair": (
         True,
@@ -243,7 +242,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 # 修復規則
 - 每筆 REQ 只能表達一種主要性質：functional、non-functional 或 constraint。
 - priority 只適用於 functional / non-functional；constraint 是限制或底線，不做 priority 取捨，若 constraint 有 priority 請移除。
-- 最外層必須只有 requirement_update。
+- 最外層只能包含 REQ、remove_REQ、coverage 與 reason。
 - 若同一筆 REQ 同時包含系統能力與品質要求，且兩者可獨立驗收或追蹤，請拆成 functional 與 non-functional。
 - 若同一筆 REQ 同時包含系統能力與外部限制、法規、政策、資料保存/刪除、第三方或技術限制，請拆成 functional 與 constraint。
 - 若品質要求只是該功能的驗收條件，且不能獨立追蹤，可保留在 acceptance_criteria，不必拆。
@@ -257,7 +256,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 若多個來源描述的是相同系統責任、相同業務目的、相同主要角色與相同可驗收結果，即使措辭不同，也應合併或更新同一筆 REQ；不得因來源句數不同而機械式拆成多筆。
 - description 應在來源支持範圍內盡可能具體完整；不得為了增加細節而加入來源未支持的功能、流程、資料欄位、角色、權限、例外處理或驗收條件。
 
-{requirement_update_output_schema}""",
+{requirement_output_schema}""",
     ),
     "targeted_repair": (
         True,
@@ -272,7 +271,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # 定點修復規則
 - 只修改「仍不合格的項目」中點名的 REQ；其他 REQ 必須原樣保留。
-- 最外層必須只有 requirement_update。
+- 最外層只能包含 REQ、remove_REQ、coverage 與 reason。
 - 被點名為 functional 但混入品質、穩定性或效能語意時，必須拆成：
   1. functional：只保留系統能力本體。
   2. non-functional：只保留品質、穩定性、可用性、可靠性、效能、SLA、錯誤率或高峰負載等要求。
@@ -295,7 +294,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - description 說明系統責任與完成結果；具體可測試條件、輸入輸出檢查、狀態驗證、錯誤處理驗收方式應放入 acceptance_criteria，不要全部塞進 description。
 - 只輸出完整修復後 JSON；不要解釋。
 
-{requirement_update_output_schema}""",
+{requirement_output_schema}""",
     ),
     "nfr_repair": (
         True,
@@ -310,7 +309,7 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 
 # 修復規則
 - 只補齊被點名 REQ 的 non-functional 欄位：category、metric、validation。
-- 最外層必須只有 requirement_update。
+- 最外層只能包含 REQ、remove_REQ、coverage 與 reason。
 - 僅能使用輸入內容可支持的描述，禁止虛構數值與門檻。
 - category 依 ISO/IEC 25010 取值（如 Performance / Reliability / Security / Usability / Maintainability），不使用 functional suitability。
 - metric 以 acceptance_criteria 或 description / rationale 中可觀測條件為準；若只有描述字眼，保留可觀測語句，不用空字串。
@@ -319,14 +318,11 @@ repair_prompts: dict[str, tuple[bool, str]] = {
 - 不能確定時，保留既有欄位，不得新增不實內容。
 - 只輸出修復後 JSON，不要說明。
 
-{requirement_update_output_schema}""",
+{requirement_output_schema}""",
     ),
 }
 
 
-# ========
-# Defines render repair prompt function for this module workflow.
-# ========
 def render_repair_prompt(key: str, **context: Any) -> str:
     is_f, template = repair_prompts[key]
     if not is_f:
@@ -336,7 +332,7 @@ def render_repair_prompt(key: str, **context: Any) -> str:
         {
             "json": json,
             "requirement_candidates_output_schema": requirement_candidates_output_schema,
-            "requirement_update_output_schema": requirement_update_output_schema,
+            "requirement_output_schema": requirement_output_schema,
             "conflict_signoff_output_schema": conflict_signoff_output_schema,
             "conflict_finalization_output_schema": conflict_finalization_output_schema,
             **context,
@@ -344,8 +340,5 @@ def render_repair_prompt(key: str, **context: Any) -> str:
     )
 
 
-# ========
-# Defines requirement repair prompt function for this module workflow.
-# ========
 def requirement_repair_prompt(kind: str, **context: Any) -> str:
     return render_repair_prompt(kind, **context)

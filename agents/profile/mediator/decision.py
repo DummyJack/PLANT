@@ -9,9 +9,7 @@ from .validation import (
     trace_artifact_ids,
 )
 
-# Defines MediatorDecision class for this module workflow.
 class MediatorDecision:
-    # Defines obs meeting action function for this module workflow.
     def obs_meeting_action(self, **kwargs: Any) -> Dict[str, Any]:
         state_summary = kwargs.get("state_summary") or {}
         return {
@@ -27,7 +25,6 @@ class MediatorDecision:
             "max_iterations": kwargs["max_iterations"],
         }
 
-    # Defines decide meeting action function for this module workflow.
     def decide_meeting_action(
         self,
         *,
@@ -50,7 +47,6 @@ class MediatorDecision:
             last_result,
         )
 
-    # Defines execute meeting action function for this module workflow.
     def execute_meeting_action(
         self,
         *,
@@ -64,7 +60,6 @@ class MediatorDecision:
             "params": decision.get("params") or {},
         }
 
-    # Defines plan meeting action via opa function for this module workflow.
     def plan_meeting_action_via_opa(
         self,
         state_summary: Dict[str, Any],
@@ -84,7 +79,6 @@ class MediatorDecision:
         decision = dict((trace[-1].get("decision") if trace else {}) or {})
         return decision
 
-    # Defines run decision loop function for this module workflow.
     def run_decision_loop(
         self,
         action: str,
@@ -111,7 +105,6 @@ class MediatorDecision:
             raise RuntimeError(result.get("error"))
         return result.get("output", {})
 
-    # Defines obs decision function for this module workflow.
     def obs_decision(self, **kwargs: Any) -> Dict[str, Any]:
         issue = kwargs.get("issue") or {}
         conversation = kwargs.get("conversation") or []
@@ -126,7 +119,6 @@ class MediatorDecision:
             "main_conversation_count": len(main_records),
         }
 
-    # Defines decide decision action function for this module workflow.
     def decide_decision_action(
         self,
         *,
@@ -147,7 +139,6 @@ class MediatorDecision:
             "reasoning": f"執行會議收斂與決議任務：{action}。",
         }
 
-    # Defines execute decision action function for this module workflow.
     def execute_decision_action(
         self,
         *,
@@ -177,7 +168,6 @@ class MediatorDecision:
             "summary": f"完成 decision: {action}",
         }
 
-    # Defines prepare judgment function for this module workflow.
     def prepare_judgment(
         self,
         issue: Dict,
@@ -191,7 +181,6 @@ class MediatorDecision:
             decision_context=decision_context,
         )
 
-    # Defines close issue function for this module workflow.
     def close_issue(
         self,
         issue: Dict,
@@ -261,7 +250,6 @@ class MediatorDecision:
             needs_human=False,
         )
 
-    # Defines build judgment function for this module workflow.
     def build_judgment(
         self,
         issue: Dict,

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 
 from datetime import datetime
 from pathlib import Path
@@ -16,21 +18,42 @@ class Logger:
     # ========
     def __init__(self, log_dir: str = "log", write_file: bool = True):
         timestamp = datetime.now().strftime("%H%M%S%f")
+        owner_thread_id = threading.get_ident()
+
+        class RunThreadFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                return record.thread == owner_thread_id
+
         handlers = [logging.StreamHandler()]
         if write_file:
             self.log_dir = Path(log_dir)
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = self.log_dir / f"system_{timestamp}.log"
+            log_file = self.log_dir / f"system_{os.getpid()}_{owner_thread_id}_{timestamp}.log"
             handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
         else:
             self.log_dir = Path(log_dir)
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=handlers,
-        )
         self.logger = logging.getLogger("Plant")
+        self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        self._handlers = handlers
+        for handler in handlers:
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(formatter)
+            handler.addFilter(RunThreadFilter())
+            self.logger.addHandler(handler)
+
+    def close(self) -> None:
+        for handler in getattr(self, "_handlers", []):
+            self.logger.removeHandler(handler)
+            try:
+                handler.flush()
+            finally:
+                handler.close()
+        self._handlers = []
 
     # ========
     # Defines info function for this module workflow.

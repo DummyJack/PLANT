@@ -3,10 +3,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-# Defines ToolRegistry class for this module workflow.
 class ToolRegistry:
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         config: Dict[str, Any],
@@ -20,11 +18,11 @@ class ToolRegistry:
         self.artifact_path = artifact_path
         self.doc_dir = Path(doc_dir) if doc_dir else Path("doc")
 
-    # Defines build tools for agent function for this module workflow.
     def build_tools_for_agent(self, agent_name: str) -> List[Any]:
         from .artifact_query import ArtifactQueryTool
         from .plantuml_validator import PlantUMLValidatorTool
-        from .read_file import ReadFileTool, has_supported_files
+        from storage.plantuml import plantuml_online_enabled, plantuml_server_url
+        from .read_file import ReadFileTool
         from .web_search import WebSearchTool
 
         allowed = set(self.policy.allowed_tools_for_agent(agent_name))
@@ -36,11 +34,17 @@ class ToolRegistry:
         if "read_file" in allowed and self.enable_tools.get("read_file", True):
             doc_dir = self.doc_dir
             doc_dir.mkdir(parents=True, exist_ok=True)
-            if has_supported_files(doc_dir):
-                built.append(ReadFileTool(base_dir=doc_dir))
+            # Files may be uploaded while the flow is already waiting for human
+            # input. Keep the tool available; it refreshes its index at execution.
+            built.append(ReadFileTool(base_dir=doc_dir))
 
         if "plantuml_validate" in allowed and self.enable_tools.get("plantuml_validate", True):
-            built.append(PlantUMLValidatorTool(server_url=""))
+            built.append(
+                PlantUMLValidatorTool(
+                    server_url=plantuml_server_url(),
+                    allow_online=plantuml_online_enabled(self.config),
+                )
+            )
 
         if "artifact_query" in allowed and self.enable_tools.get("artifact_query", True):
             if self.artifact_path:

@@ -7,9 +7,6 @@ from agents.profile.base import question_rules
 from agents.profile.base import conflict_review_text_hint
 
 
-# ========
-# Defines response actions function for this module workflow.
-# ========
 def response_actions() -> Dict[str, str]:
     return {
         "answer_question": "使用時機：議題是 OQ（待回答 open question）或 expected_actions 指定 user 回答特定問題。不要使用：一般議題發言。寫回或影響：只回覆問題文字，補 `reply_to_question`、`reply_to_agent` 與 `speaking_as`，不主動更新需求。",
@@ -17,9 +14,6 @@ def response_actions() -> Dict[str, str]:
     }
 
 
-# ========
-# Defines stakeholder contract function for this module workflow.
-# ========
 def stakeholder_contract(
     *,
     related_context: Optional[Dict[str, Any]],
@@ -56,9 +50,6 @@ def stakeholder_contract(
     )
 
 
-# ========
-# Defines category hint function for this module workflow.
-# ========
 def category_hint(
     *,
     issue: Dict[str, Any],
@@ -118,18 +109,12 @@ def category_hint(
     )
 
 
-# ========
-# Defines open question rule function for this module workflow.
-# ========
 def open_question_rule(*, is_elicitation: bool, is_answer_question: bool) -> str:
     if is_answer_question:
         return "- open_questions 預設輸出空陣列；只有問題本身無法回答且答案會影響本議題結論時才提出。\n"
     return "" if is_elicitation else question_rules + "\n"
 
 
-# ========
-# Defines stance rule function for this module workflow.
-# ========
 def stance_rule(*, suppress_stance: bool) -> str:
     if suppress_stance:
         return ""
@@ -145,18 +130,12 @@ def stance_rule(*, suppress_stance: bool) -> str:
     )
 
 
-# ========
-# Defines stance json function for this module workflow.
-# ========
 def stance_json(*, suppress_stance: bool) -> str:
     if suppress_stance:
         return ""
     return ', "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}'
 
 
-# ========
-# Defines response json function for this module workflow.
-# ========
 def response_json(
     *,
     need_speaking_as: bool,
@@ -179,9 +158,6 @@ def response_json(
     return text
 
 
-# ========
-# Defines response flow function for this module workflow.
-# ========
 def response_flow(
     *,
     need_speaking_as: bool,

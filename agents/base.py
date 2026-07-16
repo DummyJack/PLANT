@@ -23,30 +23,20 @@ if TYPE_CHECKING:
 
 
 
-# ========
-# Defines AgentRegistry class for this module workflow.
-# ========
 class AgentRegistry:
-    # Defines __init__ function for this module workflow.
     def __init__(self):
         self.agents: Dict[str, Any] = {}
 
-    # Defines register function for this module workflow.
     def register(self, name: str, agent):
         self.agents[name] = agent
 
-    # Defines get function for this module workflow.
     def get(self, agent_name: str):
         return self.agents.get(agent_name)
 
-    # Defines get names function for this module workflow.
     def get_names(self) -> list:
         return list(self.agents.keys())
 
 
-# ========
-# Defines response language directive function for this module workflow.
-# ========
 def response_language_directive() -> str:
     return output_language_directive()
 
@@ -54,7 +44,7 @@ def response_language_directive() -> str:
 def available_data_block(context: Dict[str, Any]) -> str:
     return (
         "# Context\n"
-        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+        f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'))}"
     )
 
 
@@ -68,9 +58,6 @@ def insert_context_before_task(content: str, context: Optional[Dict[str, Any]]) 
         return f"{content[:idx]}{block}{content[idx:]}"
     return f"{block}{content}"
 
-# ========
-# Defines parse json payload function for this module workflow.
-# ========
 def parse_json_payload(raw: str) -> Any:
     if not raw or not isinstance(raw, str):
         return {}
@@ -106,9 +93,6 @@ def parse_json_payload(raw: str) -> Any:
     raise ValueError("Agent output must be a valid JSON object or array.")
 
 
-# ========
-# Defines parse json object function for this module workflow.
-# ========
 def parse_json_object(raw: str) -> Dict[str, Any]:
     data = parse_json_payload(raw)
     if not isinstance(data, dict):
@@ -116,15 +100,10 @@ def parse_json_object(raw: str) -> Dict[str, Any]:
     return data
 
 
-# ========
-# Defines ToolCallingSupport class for this module workflow.
-# ========
 class ToolCallingSupport:
-    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return ""
 
-    # Defines tool context message function for this module workflow.
     def tool_context_message(
         self,
         active_skill: Optional[str] = None,
@@ -141,7 +120,6 @@ class ToolCallingSupport:
             policy_text=policy_text,
         )
 
-    # Defines messages with tool context function for this module workflow.
     def messages_with_tool_context(
         self,
         messages: List[Dict[str, Any]],
@@ -153,7 +131,6 @@ class ToolCallingSupport:
             updated.append(context_message)
         return updated
 
-    # Defines execute tool function for this module workflow.
     def execute_tool(
         self,
         tool_name: str,
@@ -176,7 +153,6 @@ class ToolCallingSupport:
         except Exception as e:
             return f"工具 '{tool_name}' 執行失敗: {str(e)}"
 
-    # Defines get tool schemas function for this module workflow.
     def get_tool_schemas(self, active_skill: Optional[str] = None) -> List[Dict]:
         return build_tool_schemas(
             self.tools,
@@ -185,7 +161,6 @@ class ToolCallingSupport:
             active_skill=active_skill,
         )
 
-    # Defines supports tool calling function for this module workflow.
     def supports_tool_calling(self) -> bool:
         try:
             c = getattr(self.model, "client", None)
@@ -193,11 +168,9 @@ class ToolCallingSupport:
         except Exception:
             return False
 
-    # Defines supports gemini tool calling function for this module workflow.
     def supports_gemini_tool_calling(self) -> bool:
         return callable(getattr(self.model, "gemini_chat_with_tools", None))
 
-    # Defines reset tool sessions function for this module workflow.
     def reset_tool_sessions(self) -> None:
         for t in (self.tools or {}).values():
             reset = getattr(t, "reset_session", None)
@@ -207,12 +180,10 @@ class ToolCallingSupport:
                 except Exception as e:
                     self.logger.debug("tool reset_session: %s", e)
 
-    # Defines artifact query tool function for this module workflow.
     def artifact_query_tool(self) -> Optional["BaseTool"]:
         tool = (self.tools or {}).get("artifact_query")
         return tool
 
-    # Defines load artifact context from files function for this module workflow.
     def load_artifact_context_from_files(self) -> Dict[str, Any]:
         tool = self.artifact_query_tool()
         load_artifact = getattr(tool, "load_artifact", None)
@@ -225,7 +196,6 @@ class ToolCallingSupport:
             return {}
         return artifact if isinstance(artifact, dict) else {}
 
-    # Defines sync artifact context files function for this module workflow.
     def sync_artifact_context_files(self, artifact: Optional[Dict[str, Any]]) -> None:
         if not isinstance(artifact, dict):
             return
@@ -239,20 +209,17 @@ class ToolCallingSupport:
         except Exception as e:
             self.logger.debug("artifact_query sync artifact files failed: %s", e)
 
-    # Defines tool loop action function for this module workflow.
     def tool_loop_action(self, active_skill: Optional[str] = None) -> str:
         return self.usage_action(
             f"tool_loop.{active_skill}" if active_skill else "tool_loop.general"
         )
 
-    # Defines parse tool arguments function for this module workflow.
     def parse_tool_arguments(self, raw_arguments: str) -> Dict[str, Any]:
         try:
             return json.loads(raw_arguments)
         except json.JSONDecodeError:
             return {}
 
-    # Defines run single tool call function for this module workflow.
     def run_single_tool_call(
         self,
         tool_call: Any,
@@ -265,7 +232,6 @@ class ToolCallingSupport:
         result = self.execute_tool(fname, fargs, active_skill=active_skill)
         return tool_call.id, result
 
-    # Defines append openai tool results function for this module workflow.
     def append_openai_tool_results(
         self,
         messages: List[Dict[str, Any]],
@@ -311,7 +277,6 @@ class ToolCallingSupport:
                 }
             )
 
-    # Defines chat with gemini tools function for this module workflow.
     def chat_with_gemini_tools(
         self,
         messages: List[Dict[str, Any]],
@@ -329,7 +294,6 @@ class ToolCallingSupport:
             action=self.tool_loop_action(active_skill),
         )
 
-    # Defines chat with openai tools function for this module workflow.
     def chat_with_openai_tools(
         self,
         messages: List[Dict[str, Any]],
@@ -401,7 +365,6 @@ class ToolCallingSupport:
             )
         return last.choices[0].message.content or ""
 
-    # Defines chat with tools function for this module workflow.
     def chat_with_tools(
         self,
         messages: List[Dict],
@@ -434,14 +397,10 @@ class ToolCallingSupport:
         )
 
 
-# ========
-# Defines BaseAgent class for this module workflow.
-# ========
 class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSupport):
     name: str = ""
     system_prompt: str = ""
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -460,7 +419,6 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
         self.runtime_store = None
         self.runtime_run_id = ""
 
-    # Defines record runtime checkpoint function for this module workflow.
     def record_runtime_checkpoint(
         self,
         *,
@@ -487,30 +445,39 @@ class BaseAgent(AgentLoop, IssueResponseSupport, SkillSupport, ToolCallingSuppor
             if logger:
                 logger.warning("runtime checkpoint failed", exc_info=True)
 
-    # Defines parse issue response json function for this module workflow.
     def parse_issue_response_json(self, raw: str) -> Dict[str, Any]:
         return parse_json_object(raw)
 
 
-    # Defines ensure json messages function for this module workflow.
     def ensure_json_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         updated = list(messages or [])
         updated.append({"role": "user", "content": json_format_instruction()})
         return updated
 
-    # Defines chat json function for this module workflow.
-    def chat_json(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Dict[str, Any]:
-        return self.model.chat_json(self.ensure_json_messages(messages), **kwargs)
+    def chat_json(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        schema: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        payload = self.model.chat_json(
+            self.ensure_json_messages(messages),
+            schema=schema,
+            **kwargs,
+        )
+        if schema is not None:
+            from agents.json_schema import validate_json_schema
 
-    # Defines usage action function for this module workflow.
+            validate_json_schema(payload, schema)
+        return payload
+
     def usage_action(self, suffix: str) -> str:
         return f"{self.name}.{suffix}"
 
-    # Defines output language directive function for this module workflow.
     def output_language_directive(self) -> str:
         return response_language_directive()
 
-    # Defines build direct messages function for this module workflow.
     def build_direct_messages(
         self,
         task: str,

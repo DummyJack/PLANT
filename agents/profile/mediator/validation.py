@@ -47,9 +47,6 @@ related_artifacts = {
 }
 
 
-# ========
-# Defines normalize sources function for this module workflow.
-# ========
 def normalize_sources(value: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -76,9 +73,6 @@ def normalize_sources(value: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-# ========
-# Defines normalize trace function for this module workflow.
-# ========
 def normalize_trace(value: Any) -> Dict[str, List[str]]:
     if not isinstance(value, dict):
         value = {}
@@ -98,23 +92,14 @@ def normalize_trace(value: Any) -> Dict[str, List[str]]:
     }
 
 
-# ========
-# Defines trace artifact ids function for this module workflow.
-# ========
 def trace_artifact_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return normalize_trace((issue or {}).get("trace")).get("artifact_ids", [])
 
 
-# ========
-# Defines trace proposal ids function for this module workflow.
-# ========
 def trace_proposal_ids(issue: Optional[Dict[str, Any]]) -> List[str]:
     return normalize_trace((issue or {}).get("trace")).get("proposal_ids", [])
 
 
-# ========
-# Defines issue proposal function for this module workflow.
-# ========
 def issue_proposal(
     item: Dict[str, Any],
     *,
@@ -136,7 +121,7 @@ def issue_proposal(
         return None
     issue_level = str(item.get("issue_level") or "").strip().lower()
     if issue_level not in {"blocking", "improvement"}:
-        issue_level = "blocking" if importance == "high" else "improvement"
+        return None
 
     issue_id = (item.get("issue_id") or "").strip()
     if not issue_id:
@@ -179,9 +164,6 @@ def issue_proposal(
     return proposal
 
 
-# ========
-# Defines normalize expected actions function for this module workflow.
-# ========
 def normalize_expected_actions(value: Any) -> Dict[str, List[str]]:
     if not isinstance(value, dict):
         return {}
@@ -204,9 +186,6 @@ def normalize_expected_actions(value: Any) -> Dict[str, List[str]]:
     return out
 
 
-# ========
-# Defines meeting issue function for this module workflow.
-# ========
 def meeting_issue(
     item: Dict[str, Any],
     *,
@@ -271,7 +250,7 @@ def meeting_issue(
     issue_id = (item.get("id") or "").strip() or f"M-{index}"
     issue_level = str(item.get("issue_level") or "").strip().lower()
     if issue_level not in {"blocking", "improvement"}:
-        issue_level = "blocking"
+        return None
     expected_actions = {
         agent: actions
         for agent, actions in normalize_expected_actions(item.get("expected_actions")).items()
@@ -306,9 +285,6 @@ def meeting_issue(
     }
 
 
-# ========
-# Defines meeting action decision function for this module workflow.
-# ========
 def meeting_action_decision(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("meeting action 必須輸出 JSON object")
@@ -325,9 +301,6 @@ def meeting_action_decision(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ========
-# Defines elicitation plan function for this module workflow.
-# ========
 def elicitation_plan(
     data: Dict[str, Any],
     *,
@@ -403,9 +376,6 @@ def elicitation_plan(
     }
 
 
-# ========
-# Defines conflict review plan function for this module workflow.
-# ========
 def conflict_review_plan(
     data: Dict[str, Any],
     *,
@@ -429,9 +399,6 @@ def conflict_review_plan(
     return {"discussion_mode": mode, "participants": participants}
 
 
-# ========
-# Defines judgment data function for this module workflow.
-# ========
 def judgment_data(
     data: Dict[str, Any],
     *,
@@ -474,8 +441,22 @@ def judgment_data(
     if rec_option not in option_ids:
         raise ValueError("decision option analysis recommendation.option_id 不合法")
     affected_requirement_ids = data.get("affected_requirement_ids", [])
-    if not isinstance(affected_requirement_ids, list) or not affected_requirement_ids:
-        affected_requirement_ids = list(source_requirement_ids)
+    allowed_requirement_order = list(dict.fromkeys(
+        str(value).strip()
+        for value in source_requirement_ids
+        if str(value).strip()
+    ))
+    allowed_requirement_ids = set(allowed_requirement_order)
+    if isinstance(affected_requirement_ids, list):
+        affected_requirement_ids = [
+            str(value).strip()
+            for value in affected_requirement_ids
+            if str(value).strip() in allowed_requirement_ids
+        ]
+    else:
+        affected_requirement_ids = []
+    if not affected_requirement_ids:
+        affected_requirement_ids = list(allowed_requirement_order)
     unresolved_points = data.get("unresolved_points", [])
     if not isinstance(unresolved_points, list):
         unresolved_points = []
@@ -512,9 +493,6 @@ def judgment_data(
     }
 
 
-# ========
-# Defines close issue data function for this module workflow.
-# ========
 def close_issue_data(
     data: Dict[str, Any],
     *,
@@ -533,13 +511,39 @@ def close_issue_data(
     if not isinstance(agreed_points, list):
         agreed_points = []
     affected_requirement_ids = data.get("affected_requirement_ids", [])
-    if not isinstance(affected_requirement_ids, list) or not affected_requirement_ids:
-        affected_requirement_ids = list(source_requirement_ids)
+    allowed_requirement_order = list(dict.fromkeys(
+        str(value).strip()
+        for value in source_requirement_ids
+        if str(value).strip()
+    ))
+    allowed_requirement_ids = set(allowed_requirement_order)
+    if isinstance(affected_requirement_ids, list):
+        affected_requirement_ids = [
+            str(value).strip()
+            for value in affected_requirement_ids
+            if str(value).strip() in allowed_requirement_ids
+        ]
+    else:
+        affected_requirement_ids = []
+    if not affected_requirement_ids:
+        affected_requirement_ids = list(allowed_requirement_order)
     affected_conflict_ids = data.get("affected_conflict_ids", [])
-    if not isinstance(affected_conflict_ids, list) or not affected_conflict_ids:
-        affected_conflict_ids = list(source_conflict_ids)
-    elif source_conflict_ids:
-        affected_conflict_ids = list(affected_conflict_ids) + list(source_conflict_ids)
+    allowed_conflict_order = list(dict.fromkeys(
+        str(value).strip()
+        for value in source_conflict_ids
+        if str(value).strip()
+    ))
+    allowed_conflict_ids = set(allowed_conflict_order)
+    if isinstance(affected_conflict_ids, list):
+        affected_conflict_ids = [
+            str(value).strip()
+            for value in affected_conflict_ids
+            if str(value).strip() in allowed_conflict_ids
+        ]
+    else:
+        affected_conflict_ids = []
+    if not affected_conflict_ids:
+        affected_conflict_ids = list(allowed_conflict_order)
     requirement_changes = data.get("requirement_changes", [])
     if not isinstance(requirement_changes, list):
         requirement_changes = []

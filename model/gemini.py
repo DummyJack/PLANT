@@ -502,6 +502,7 @@ class GeminiModel(BaseLLM):
         max_tokens: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
         action: Optional[str] = None,
+        schema: Optional[Dict] = None,
     ) -> Dict:
         system_instruction, contents = gemini_split_messages(messages)
         self.costTracker.start()

@@ -5,9 +5,6 @@ from agents.profile.base import elicitation_action_rules, elicitation_action_tas
 label_rules = base_label_rules
 
 
-# ========
-# Defines tool usage policy function for this module workflow.
-# ========
 def tool_usage_policy() -> str:
     return """- artifact_query 用於查詢目前需求、衝突、open_questions、decisions 與相關來源。
 - 若議題、trace、source 或前文出現 URL-*、REQ-*、SM-*、CR-*，優先用 artifact_query mode=related_context, item_id=<id>, compact=true 取得關聯脈絡；不要逐筆 find_items 查同一批來源。
@@ -15,9 +12,6 @@ def tool_usage_policy() -> str:
 - 工具結果不得直接覆蓋已定案需求；有不確定性時提出 open question 或 change candidate。"""
 
 
-# ========
-# Defines url extraction rules function for this module workflow.
-# ========
 def url_extraction_rules() -> str:
     return """1. 只抽取輸入明確支持的需求。
 2. 保持粗粒度；同一個利害關係人目標下的細節要合併。
@@ -36,9 +30,6 @@ def url_extraction_rules() -> str:
 - text 用中性需求描述，表達該利害關係人的目標、需求或限制。"""
 
 
-# ========
-# Defines requirement context rules function for this module workflow.
-# ========
 def requirement_context_rules() -> str:
     return """# Context Rules
 - current_URL 是最新 User Requirements，也是正式 REQ 的主要來源。
@@ -51,9 +42,6 @@ def requirement_context_rules() -> str:
 - req_source_index 提供 source_id 到既有 REQ-* 的索引；請直接引用，不要逐筆 artifact_query 比對。"""
 
 
-# ========
-# Defines requirement formalization rules function for this module workflow.
-# ========
 def requirement_formalization_rules() -> str:
     return """# Formalization Rules
 - 每筆 current_URL 必須被 REQ.source 覆蓋，或在 coverage 中標示 excluded、needs_clarification、risk 或 assumption。
@@ -69,9 +57,6 @@ def requirement_formalization_rules() -> str:
 - needs_clarification 只用於無法辨識系統行為、品質要求或限制本體的 URL；缺少驗收細節不是 needs_clarification 的充分理由。"""
 
 
-# ========
-# Defines requirement refinement rules function for this module workflow.
-# ========
 def requirement_refinement_rules(source_id: str) -> str:
     return f"""# Refinement Rules
 - 修正既有項目時必須保留該項 REQ-* id。
@@ -79,14 +64,11 @@ def requirement_refinement_rules(source_id: str) -> str:
 - 除非會議已明確收斂出新的可追蹤需求，否則不要新增 REQ。
 - 新增 REQ 必須有 current_URL 或明確會議決議支持，source 必須包含 URL-* 或 {source_id}。
 - 不要因 current_URL 中還有未覆蓋來源，就在本次一般議題主動補齊全量 REQ。
-- coverage 只回報本議題實際處理的 source；不要為未進入本議題的 URL 建立 coverage。
+- coverage 只回報本議題 current_URL 實際處理的 URL-* source；不要放會議 ID，也不要為未進入本議題的 URL 建立 coverage。若 current_URL 為空，coverage 必須是空陣列。
 - cleanup 模式處理的是正式化後品質：同一能力、限制或品質面向被拆太細時要合併，不是逐條重寫全部 REQ。
 - 合併既有 REQ 時，保留最能代表群組的一筆 id，把被合併 REQ 的 source、驗收條件、風險與假設整合進保留項，並將被合併 id 放入 remove_REQ。"""
 
 
-# ========
-# Defines requirement quality rules function for this module workflow.
-# ========
 def requirement_quality_rules() -> str:
     return """# Requirement Quality Rules
 - source 是可追蹤來源 ID；優先使用 URL-*。若內容來自正式會議決議、feedback 或 system model，可加入 R*-M*、Feedback 或 SM-*。
@@ -119,9 +101,6 @@ def requirement_quality_rules() -> str:
 - 有依據就填欄位；沒有依據就留空陣列或省略，不要臆測。"""
 
 
-# ========
-# Defines requirement coverage gap rules function for this module workflow.
-# ========
 def requirement_coverage_gap_rules(coverage_gaps=None) -> str:
     if not coverage_gaps:
         return ""
@@ -135,9 +114,6 @@ def requirement_coverage_gap_rules(coverage_gaps=None) -> str:
 - 不要因缺少驗收條件、優先級、量化門檻或細節尚未完整，就把可辨識的需求標成 needs_clarification；先形成 REQ，將不確定內容放入 acceptance_criteria 空欄、assumptions、risks 或 open_questions。"""
 
 
-# ========
-# Defines requirement candidates output schema function for this module workflow.
-# ========
 def requirement_candidates_output_schema() -> str:
     return """# Output JSON
 {
@@ -147,9 +123,6 @@ def requirement_candidates_output_schema() -> str:
 }"""
 
 
-# ========
-# Defines requirement output schema function for this module workflow.
-# ========
 def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> str:
     remove_req = (
         '\n  "remove_REQ": ["update 模式才可填；列出已被合併進其他 REQ 的舊 REQ-*"],'
@@ -158,9 +131,8 @@ def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> st
     )
     return f"""# Output JSON
 {{
-  "requirement_update": {{
-    "REQ": [
-      {{
+  "REQ": [
+    {{
         "type": "functional | non-functional | constraint",
         "id": "既有 REQ-*；新增時省略或留空",
         "title": "短標題",
@@ -175,22 +147,20 @@ def requirement_output_schema(*, source_id: str, include_remove_req: bool) -> st
         "dependencies": [],
         "risks": [],
         "assumptions": []
-      }}
-    ],{remove_req}
-    "coverage": [
-      {{
-        "source_id": "URL-1 或 {source_id}",
-        "status": "covered | needs_clarification | assumption | risk | excluded",
-        "covered_by": ["REQ-1"],
-        "reason": "為何已覆蓋或為何暫不能形成 REQ"
-      }}
-    ],
-    "reason": "一句說明"
-  }}
+    }}
+  ],{remove_req}
+  "coverage": [
+    {{
+      "source_id": "只能填 context.current_URL 中既有的 URL-*；不得填 {source_id}，current_URL 為空時不輸出此筆",
+      "status": "covered | needs_clarification | assumption | risk | excluded",
+      "covered_by": ["REQ-1"],
+      "reason": "為何已覆蓋或為何暫不能形成 REQ"
+    }}
+  ],
+  "reason": "一句說明"
 }}"""
 
 
-# ========
 analyst_elicitation = f"""{elicitation_context}
 
 - 聚焦 User Requirement 是否能成立：使用者目標、使用價值、產出內容、成功標準與待確認缺口。
@@ -198,16 +168,10 @@ analyst_elicitation = f"""{elicitation_context}
 - 若資訊足以支撐需求草稿，提出收束，不要為了分工硬問。"""
 
 
-# ========
-# Defines analyst elicitation action task function for this module workflow.
-# ========
 def analyst_elicitation_action_task(stop_phrase: str) -> str:
     return elicitation_action_task(stop_phrase)
 
 
-# ========
-# Defines analyst elicitation action rules function for this module workflow.
-# ========
 def analyst_elicitation_action_rules(stop_phrase: str) -> str:
     return f"""{elicitation_action_rules(stop_phrase)}
 - target_stakeholders 優先選擇能說明需求目標、使用情境、成功標準或待確認缺口的 stakeholder。
@@ -279,3 +243,5 @@ conflict_rules = f"""{review_contract}
 - 以兩層判斷收斂理由：先說是否同一需求槽位，再說同槽位差異是否改變驗收邊界或需要裁定。
 - 不要處理外部法規/合規研究，也不要處理模型可共存性推論；若只能從那些角度判斷，維持 current_label 並說明非本職責範圍。
 - 不要跳到實作方案或最終決策。"""
+
+

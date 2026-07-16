@@ -32,7 +32,6 @@ user_system = """你是一位專業利害關係人模擬者。
 - 不主動提出技術實作方案。"""
 
 
-# Defines UserAgent class for this module workflow.
 class UserAgent(
     UserStakeholder,
     UserResponse,
@@ -44,7 +43,6 @@ class UserAgent(
     name = "user"
     system_prompt = user_system
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -57,7 +55,6 @@ class UserAgent(
         )
         self.stakeholders: List[Dict] = []
 
-    # Defines plan actions function for this module workflow.
     def plan_actions(
         self,
         *,

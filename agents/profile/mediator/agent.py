@@ -32,11 +32,7 @@ mediator_system = """你是一位專業需求會議主持人。
 - 不把未討論或未確認內容寫成會議決議。"""
 
 
-# ========
-# Defines MediatorAgentSupport class for this module workflow.
-# ========
 class MediatorAgentSupport:
-    # Defines conflict review description function for this module workflow.
     def conflict_review_description(self, conflict_summaries: List[str]) -> str:
         return (
             "以下為本輪會前需審查的 Conflict/Neutral 項目。\n"
@@ -55,7 +51,6 @@ class MediatorAgentSupport:
             "待審清單：\n" + "\n".join(conflict_summaries)
         )
 
-    # Defines build reply issue function for this module workflow.
     def build_reply_issue(
         self,
         *,
@@ -75,7 +70,6 @@ class MediatorAgentSupport:
         }
 
     @staticmethod
-    # Defines build issue result function for this module workflow.
     def build_issue_result(
         *,
         status: str,
@@ -150,9 +144,6 @@ class MediatorAgentSupport:
             result["mediator_compromise"] = mediator_compromise
         return result
 
-# ========
-# Defines MediatorAgent class for this module workflow.
-# ========
 class MediatorAgent(
     MediatorAgentSupport,
     MediatorIssuePlanning,
@@ -168,7 +159,6 @@ class MediatorAgent(
     enabled_issue_type_ids: Optional[List[str]] = None
     enable_human_judgment: bool = True
 
-    # Defines __init__ function for this module workflow.
     def __init__(
         self,
         model,
@@ -180,11 +170,9 @@ class MediatorAgent(
             model, tools=tools, registry=registry, project_config=project_config
         )
 
-    # Defines tool usage policy function for this module workflow.
     def tool_usage_policy(self, active_skill: Optional[str] = None) -> str:
         return mediator_tool_usage_policy()
 
-    # Defines closure vote prompt function for this module workflow.
     def closure_vote_prompt(
         self,
         *,
