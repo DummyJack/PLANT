@@ -3,17 +3,7 @@
 描述: 補足資料修改與狀態規則的理解缺口。
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # Elicitation Context
 # Requirement Elicitation Interview

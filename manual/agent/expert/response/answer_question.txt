@@ -3,17 +3,7 @@
 描述: 修改規則應以送審前還是核准後為準？
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # 回應契約
 - 只回答 description 中的問題；不要做正式議題提案或收斂判斷。

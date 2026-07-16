@@ -2,25 +2,7 @@
 請根據非預設議題提案進行分流，產生本輪正式會議議題、backlog 與 discarded。
 
 # 非預設議題提案
-[
-  {
-    "title": "資料修改規則是否一致",
-    "category": "clarify_requirement",
-    "issue_focus": "requirement_completeness",
-    "importance": "high",
-    "reason": "修改規則影響需求可驗收性",
-    "sources": [
-      {
-        "artifact": "URL",
-        "ids": [
-          "URL-1",
-          "URL-2"
-        ],
-        "evidence": "兩筆需求對修改時點描述不一致"
-      }
-    ]
-  }
-]
+[{"title":"資料修改規則是否一致","category":"clarify_requirement","issue_focus":"requirement_completeness","importance":"high","reason":"修改規則影響需求可驗收性","sources":[{"artifact":"URL","ids":["URL-1","URL-2"],"evidence":"兩筆需求對修改時點描述不一致"}]}]
 
 - 本輪 round=1，is_last_round=false，max_issues=5，already_discussed_artifact_ids=["URL-1"]。
 - 只處理非 mediator 提案；mediator 預設提案已由程式直接送入正式會議規劃。

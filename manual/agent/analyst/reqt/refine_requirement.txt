@@ -234,9 +234,9 @@ Quality Attributes:
 
 # Action Boundary
 - action=refine_requirement
-- 本 action 將本議題的 meeting resolution 轉成 requirement_update JSON。
-- requirement_update 只描述受本議題影響的正式 REQ 修正、合併、移除與 coverage。
-- runtime 會驗證 requirement_update 後寫入 artifact.REQ / artifact.coverage。
+- 本 action 將本議題的 meeting resolution 轉成包含 REQ、remove_REQ、coverage 與 reason 的 JSON。
+- 輸出只描述受本議題影響的正式 REQ 修正、合併、移除與 coverage。
+- runtime 會驗證輸出後寫入 artifact.REQ / artifact.coverage。
 - current_REQ 是修正基底；只更新本議題影響到的 REQ。
 - current_URL 只作為本議題 trace 或來源查核，不是全量整理清單。
 - 若 context.mode=refine_granularity_cleanup 或 context.cleanup_issues 有值，本次只處理 cleanup_issues 點名的 REQ 粒度、類型或合併問題，不做其他需求精修。
@@ -269,7 +269,7 @@ Quality Attributes:
 - 除非會議已明確收斂出新的可追蹤需求，否則不要新增 REQ。
 - 新增 REQ 必須有 current_URL 或明確會議決議支持，source 必須包含 URL-* 或 R1-M1。
 - 不要因 current_URL 中還有未覆蓋來源，就在本次一般議題主動補齊全量 REQ。
-- coverage 只回報本議題實際處理的 source；不要為未進入本議題的 URL 建立 coverage。
+- coverage 只回報本議題 current_URL 實際處理的 URL-* source；不要放會議 ID，也不要為未進入本議題的 URL 建立 coverage。若 current_URL 為空，coverage 必須是空陣列。
 - cleanup 模式處理的是正式化後品質：同一能力、限制或品質面向被拆太細時要合併，不是逐條重寫全部 REQ。
 - 合併既有 REQ 時，保留最能代表群組的一筆 id，把被合併 REQ 的 source、驗收條件、風險與假設整合進保留項，並將被合併 id 放入 remove_REQ。
 
@@ -308,9 +308,8 @@ Quality Attributes:
 
 # Output JSON
 {
-  "requirement_update": {
-    "REQ": [
-      {
+  "REQ": [
+    {
         "type": "functional | non-functional | constraint",
         "id": "既有 REQ-*；新增時省略或留空",
         "title": "短標題",
@@ -325,19 +324,18 @@ Quality Attributes:
         "dependencies": [],
         "risks": [],
         "assumptions": []
-      }
-    ],
+    }
+  ],
   "remove_REQ": ["update 模式才可填；列出已被合併進其他 REQ 的舊 REQ-*"],
-    "coverage": [
-      {
-        "source_id": "URL-1 或 R1-M1",
-        "status": "covered | needs_clarification | assumption | risk | excluded",
-        "covered_by": ["REQ-1"],
-        "reason": "為何已覆蓋或為何暫不能形成 REQ"
-      }
-    ],
-    "reason": "一句說明"
-  }
+  "coverage": [
+    {
+      "source_id": "只能填 context.current_URL 中既有的 URL-*；不得填 R1-M1，current_URL 為空時不輸出此筆",
+      "status": "covered | needs_clarification | assumption | risk | excluded",
+      "covered_by": ["REQ-1"],
+      "reason": "為何已覆蓋或為何暫不能形成 REQ"
+    }
+  ],
+  "reason": "一句說明"
 }
 
 # Forbidden Output

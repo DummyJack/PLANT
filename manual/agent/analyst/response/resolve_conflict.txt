@@ -3,17 +3,7 @@
 描述: 針對 CR-1 的解決選項做取捨。
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # 任務
 直接針對既有衝突報告中的解決選項與建議解法做取捨。
@@ -41,8 +31,8 @@
 # Output JSON
 {
     "text": "依需求分析立場對此議題的自然會議發言",
-    "open_questions": [{"to": "目標參與者名稱（user、analyst、expert、modeler）", "question": "會影響本議題結論的具體問題", "reason": "此答案會如何影響本議題結論"}],
-    "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"]}}
+    "open_questions": [],
+    "stance": {"state": "ready_to_close | needs_more_discussion", "needs_human_decision": false, "proposal": {"summary": "建議方案", "rationale": "理由", "tradeoffs": ["取捨或限制"], "url_updates": [{"action": "keep | revise | remove", "ids": ["URL-1"], "text": "revise 時必填的完整需求文字", "reason": "此修改如何解決衝突"}]}}
 }
 
 # Forbidden Output

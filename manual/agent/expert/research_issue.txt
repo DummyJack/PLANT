@@ -186,11 +186,16 @@ When a `sources` field is requested, put only complete URL strings in `sources`.
 - 外部 URL 只接受可追溯的公開或官方來源；來源可信度依 URL、頁面標題、發布者與 context 中的 web_search_evidence 判斷。
 - sources 使用可追溯來源；不確定來源可信度時不要輸出該外部結論。
 - 若 context 內有 web_search_evidence / web_search_urls，必須只從這些搜尋證據中引用外部 URL。
+- context.web_search_sources 會提供可引用來源的 id、title、url；sources 必須沿用這些 id，不得自行建立來源 ID。
+- 若 context.web_search_sources 為空，所有項目都不得使用 evidence_type=web，也不得輸出僅憑模型記憶推導的外部法規或主管機關結論。
+- 每個 evidence_type=web 項目必須以 source_ids 引用至少一筆本次 sources 中的 SRC-*。
+- 每個 evidence_type=project_document 項目必須以 source_paths 引用至少一筆本次 sources 中 type=file 的完整專案文件路徑。
+- 涉及法律、法規、條例或主管機關要求的結論，至少引用一筆政府或主管機關官方來源。
 - findings、constraints、risks、recommendations 的每個 item 包含 text、related_requirement_ids、source、trace_reason 與 evidence_type。
 - evidence_type 使用 web、project_document、user_statement、artifact_context 或 model_context；使用外部 URL 證據時必須是 web，使用專案引用文件時必須是 project_document。
-- related_requirement_ids 只能引用 context.target.target_ids 或輸入 URL 中存在且與本次研究 context 相關的 URL-*；無法對應 target 時用空陣列。
-- trace_reason 用一句話說明為什麼此研究證據對應這些 URL-*；若 related_requirement_ids 為空，也要說明無法明確對應的原因。
-- sources 集中放在最外層；web 來源使用 {"title": "web_search 或官方頁面提供的來源標題", "url": "完整 URL"}，專案引用文件使用 {"title": "檔名", "url": "專案文件路徑", "type": "file"}。
+- related_requirement_ids 只能引用 context.target.target_ids，或輸入 URL / REQ 中存在且與本次研究 context 相關的 URL-* / REQ-*；無法對應 target 時用空陣列。
+- trace_reason 用一句話說明為什麼此研究證據對應這些 URL-* / REQ-*；若 related_requirement_ids 為空，也要說明無法明確對應的原因。
+- sources 集中放在最外層；web 來源必須沿用 context.web_search_sources 的真實 {"id": "SRC-*", "title": "來源標題", "url": "完整 URL", "type": "web"}，專案引用文件使用 {"title": "檔名", "url": "專案文件路徑", "type": "file"}。
 - sources.title 必須是人可讀的頁面標題、法規/文件名稱或「發布機關/組織：文件主題」；不得填 URL、網址路徑或純網域。若 web_search 只有 URL，請依來源發布者與頁面主題補成簡短標題，不可把完整 URL 放進 title。
 - 若輸出任何 evidence_type=web 的結論，sources 必須至少包含對應完整 URL；找不到 URL 或 context 沒有可用 URL 時不要輸出該外部結論。
 - constraints / recommendations 使用候選或建議語氣，不寫成已定案需求。
@@ -199,11 +204,11 @@ When a `sources` field is requested, put only complete URL strings in `sources`.
 # Output JSON
 {
   "research_evidence": {
-    "findings": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "trace_reason": "", "evidence_type": "web"}],
-    "sources": [{"title": "發布機關：文件主題", "url": "https://..."}, {"title": "參考文件.pdf", "url": "104431333156/參考文件.pdf", "type": "file"}],
-    "constraints": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "trace_reason": "", "evidence_type": "web"}],
-    "risks": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "trace_reason": "", "evidence_type": "web"}],
-    "recommendations": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "trace_reason": "", "evidence_type": "web"}]
+    "findings": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "source_ids": ["SRC-..."], "trace_reason": "", "evidence_type": "web"}, {"text": "", "related_requirement_ids": [], "source": "R1-M1", "source_paths": ["104431333156/參考文件.pdf"], "trace_reason": "", "evidence_type": "project_document"}],
+    "sources": [{"id": "SRC-...", "title": "發布機關：文件主題", "url": "https://...", "type": "web"}, {"title": "參考文件.pdf", "url": "104431333156/參考文件.pdf", "type": "file"}],
+    "constraints": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "source_paths": ["104431333156/參考文件.pdf"], "trace_reason": "", "evidence_type": "project_document"}],
+    "risks": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "source_paths": ["104431333156/參考文件.pdf"], "trace_reason": "", "evidence_type": "project_document"}],
+    "recommendations": [{"text": "", "related_requirement_ids": [], "source": "R1-M1", "source_paths": ["104431333156/參考文件.pdf"], "trace_reason": "", "evidence_type": "project_document"}]
   }
 }
 

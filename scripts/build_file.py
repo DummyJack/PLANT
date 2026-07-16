@@ -16,6 +16,8 @@ from utils.clean import apply_entrypoint_bootstrap
 
 apply_entrypoint_bootstrap()
 
+from storage.atomic import atomic_write_text
+
 PROJECT_DIR = ROOT / "projects"
 OUTPUT_FILE = ROOT / "file.json"
 
@@ -160,7 +162,8 @@ def write_manifest(
     href_root = Path(href_root) if href_root is not None else output_file.parent
     manifest = build_manifest(project_dir=Path(project_dir), href_root=href_root)
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text(
+    atomic_write_text(
+        output_file,
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )

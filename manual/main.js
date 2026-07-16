@@ -1172,7 +1172,7 @@ async function previewFile(file, sourceButton, previewContent) {
       return;
     }
 
-    if (href.endsWith(".html")) {
+    if (href.endsWith(".html") || fileName.toLowerCase().endsWith(".html")) {
       renderHtmlPreview(href, previewContent);
       return;
     }

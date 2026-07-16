@@ -3,17 +3,7 @@
 描述: 使用者、審核人員與管理者對資料修改條件的理解是否一致？
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # 任務
 聚焦需求意圖、需求範圍、需求條目品質、驗收條件、來源追蹤與未決缺口。

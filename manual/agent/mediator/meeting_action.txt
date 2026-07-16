@@ -10,18 +10,10 @@
 - finish_round：僅在 formal issues 已 save、human_decision_queue 已處理或遞延，且沒有可追加議題時
 
 # 目前狀態
-{
-  "issues": [],
-  "can_add_issues": true,
-  "human_decision_queue": [],
-  "meeting_issues": []
-}
+{"issues":[],"can_add_issues":true,"human_decision_queue":[],"meeting_issues":[]}
 
 # 上一動結果
-{
-  "action": "plan_issues",
-  "status": "success"
-}
+{"action":"plan_issues","status":"success"}
 
 - issues 為空先 plan_issues；既有本輪 agenda 會被重用
 - human_decision_queue 優先：需要人類裁決的項目先交由裁決流程處理

@@ -3,17 +3,7 @@
 描述: 修改規則應以送審前還是核准後為準？
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # 任務
 以建模角度直接回答提問。

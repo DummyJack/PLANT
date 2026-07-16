@@ -50,43 +50,7 @@ For early requirements modeling:
 - model_targets 指定要 create 或 update 的 system model 類型、名稱、理由與需求來源。
 
 # 建模情境
-{
-  "issue": {
-    "id": "I-R1-001",
-    "title": "資料修改規則是否一致",
-    "category": "clarify_requirement",
-    "description": "使用者、審核人員與管理者對資料修改條件的理解是否一致？",
-    "meeting_id": "R1-M1"
-  },
-  "scenario": "線上服務管理系統",
-  "stakeholders": [
-    {
-      "name": "使用者",
-      "type": "primary_user",
-      "text": []
-    }
-  ],
-  "URL": [
-    {
-      "id": "URL-1",
-      "text": "使用者能完成資料提交",
-      "stakeholder": "使用者",
-      "source": "initial"
-    }
-  ],
-  "REQ": [],
-  "scope": {
-    "in_scope": [
-      "線上服務管理"
-    ],
-    "out_of_scope": []
-  },
-  "feedback": {},
-  "open_questions": [],
-  "current_models": [],
-  "model_revision_context": {},
-  "requirement_source": "URL"
-}
+{"issue":{"id":"I-R1-001","title":"資料修改規則是否一致","category":"clarify_requirement","description":"使用者、審核人員與管理者對資料修改條件的理解是否一致？","meeting_id":"R1-M1"},"scenario":"線上服務管理系統","stakeholders":[{"name":"使用者","type":"primary_user","text":[]}],"URL":[{"id":"URL-1","text":"使用者能完成資料提交","stakeholder":"使用者","source":"initial"}],"REQ":[],"scope":{"in_scope":["線上服務管理"],"out_of_scope":[]},"feedback":{},"open_questions":[],"current_models":[],"model_revision_context":{},"requirement_source":"URL"}
 
 - model_targets：需處理的模型目標；同一 type 可有多張模型。
 - modeling_phase 控制本輪產圖時機、偏好的圖型與最大數量；必須遵守 context.modeling_policy.allowed_types 與 max_targets。

@@ -3,17 +3,7 @@
 描述: 逐筆再審查 Conflict/Neutral 項目。
 
 # Related Context
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 # 任務
 請逐筆再審查目前這批 Conflict/Neutral 項目，先根據 User Requirements（URL-*）原文獨立重判，並將重判結果填入 proposed_label。

@@ -2,30 +2,10 @@
 把已選入正式會議的單一議題提案，轉成一筆可執行的正式會議議題。
 
 # 議題提案
-{
-  "title": "資料修改規則是否一致",
-  "category": "clarify_requirement",
-  "description": "使用者、審核人員與管理者對資料修改條件的理解是否一致？",
-  "expect_outcome": "釐清取消規則",
-  "trace": {
-    "proposal_ids": [
-      "P-1"
-    ]
-  }
-}
+{"title":"資料修改規則是否一致","category":"clarify_requirement","description":"使用者、審核人員與管理者對資料修改條件的理解是否一致？","expect_outcome":"釐清取消規則","trace":{"proposal_ids":["P-1"]}}
 
 # 相關專案資料
-{
-  "related_context": {
-    "requirements": [
-      {
-        "id": "REQ-1",
-        "title": "服務管理",
-        "description": "系統應支援線上服務管理"
-      }
-    ]
-  }
-}
+{"related_context":{"requirements":[{"id":"REQ-1","title":"服務管理","description":"系統應支援線上服務管理"}]}}
 
 - clarify_requirement：聚焦需求語意、觸發條件、成功結果、例外情境與驗收方式。用於讓模糊需求變得明確、可測試、可追溯；不處理單純補欄位、格式或命名。
 - define_boundary：聚焦系統、外部服務、人工流程與角色責任的邊界。用於釐清能力是否屬於本系統、第三方、人工處理或特定利害關係人責任。
@@ -33,9 +13,7 @@
 - align_model：聚焦模型揭露的流程、狀態、actor、use case、資料物件或權限不一致。用於讓模型與需求互相校正，並把缺口回寫成需求或 open question。
 
 # 可用利害關係人
-[
-  "使用者"
-]
+["使用者"]
 
 - category 只能使用可用類型。
 - participants 只能使用 agents=["user", "analyst", "expert", "modeler"]。
