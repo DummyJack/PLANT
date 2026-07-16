@@ -1,119 +1,78 @@
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readFileSync,
-  statfsSync,
-  unlinkSync,
-} from "node:fs";
-import { spawnSync } from "node:child_process";
+import { readFileSync, statfsSync } from "node:fs";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
+import {
+  readFrontendHost,
+  validateFrontendHost,
+} from "./preflight/frontend-host.mjs";
+import {
+  findDependencyIssues,
+  loadPackageManifest,
+  repairDependencies,
+} from "./preflight/dependencies.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const projectRoot = resolve(root, "..");
+const systemRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const projectRoot = resolve(systemRoot, "..");
 
-function preflightEnabled() {
+function readPreflightSetting() {
+  const path = resolve(projectRoot, "config.json");
   try {
-    const config = JSON.parse(readFileSync(resolve(projectRoot, "config.json"), "utf8"));
+    const config = JSON.parse(readFileSync(path, "utf8"));
     const value = config?.preflight?.system;
-    return typeof value === "boolean" ? value : true;
-  } catch {
-    return true;
+    if (value !== undefined && typeof value !== "boolean") {
+      return {
+        enabled: true,
+        error: `config.json 的 preflight.system 必須是布林值；位置：${path}`,
+      };
+    }
+    return { enabled: value ?? true, error: null };
+  } catch (error) {
+    return {
+      enabled: true,
+      error: `無法讀取 config.json ${path}：${error instanceof Error ? error.message : error}`,
+    };
   }
 }
 
-if (!preflightEnabled()) {
+const preflightSetting = readPreflightSetting();
+if (!preflightSetting.enabled && !preflightSetting.error) {
   process.exit(0);
 }
 
-const errors = [];
+const errors = preflightSetting.error ? [preflightSetting.error] : [];
 const warnings = [];
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const nodeVersion = process.versions.node;
+const nodeMajor = Number.parseInt(nodeVersion.split(".", 1)[0], 10);
+const supportedNodeVersion = nodeMajor === 18 || nodeMajor === 20 || nodeMajor >= 22;
 
 console.log("前端環境檢查");
 
-const packagePath = resolve(root, "package.json");
-if (!existsSync(packagePath)) {
-  errors.push("找不到 system/package.json");
+if (!supportedNodeVersion) {
+  errors.push(
+    `不支援 Node.js ${nodeVersion}；Vite 需要 Node.js 18、20 或 22 以上版本`,
+  );
 }
 
-let packageJson = {};
-try {
-  packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
-} catch (error) {
-  errors.push(`無法讀取 system/package.json：${error instanceof Error ? error.message : error}`);
+const frontendHostConfig = readFrontendHost(projectRoot);
+if (frontendHostConfig.readError) errors.push(frontendHostConfig.readError);
+const configuredFrontendHost = frontendHostConfig.host;
+const frontendHostResult = await validateFrontendHost(configuredFrontendHost);
+if (frontendHostResult.error) {
+  errors.push(
+    `frontend_host 無效：${configuredFrontendHost}\n` +
+      `        來源：${frontendHostConfig.source}\n` +
+      `        原因：${frontendHostResult.error}\n` +
+      "        範例：frontend_host=plant.example.com 或 frontend_host=127.0.0.1",
+  );
 }
 
-const declaredPackages = [
-  ...Object.keys(packageJson.dependencies ?? {}),
-  ...Object.keys(packageJson.devDependencies ?? {}),
-];
-
-function dependencyIssues() {
-  if (!existsSync(resolve(root, "node_modules"))) {
-    return declaredPackages.map((name) => `${name} 未安裝`);
-  }
-  const issues = declaredPackages
-    .filter((name) => !existsSync(resolve(root, "node_modules", name, "package.json")))
-    .map((name) => `${name} 未安裝`);
-
-  const lockfilePath = resolve(root, "package-lock.json");
-  if (!existsSync(lockfilePath)) {
-    issues.push("找不到 package-lock.json");
-  } else {
-    try {
-      const lockfile = JSON.parse(readFileSync(lockfilePath, "utf8"));
-      const lockedRoot = lockfile.packages?.[""] ?? {};
-      for (const section of ["dependencies", "devDependencies"]) {
-        const declared = packageJson[section] ?? {};
-        const locked = lockedRoot[section] ?? {};
-        for (const [name, version] of Object.entries(declared)) {
-          if (locked[name] !== version) {
-            issues.push(`package-lock.json 與 ${section}.${name} 不一致`);
-          }
-        }
-      }
-    } catch (error) {
-      issues.push(`無法讀取 package-lock.json：${error instanceof Error ? error.message : error}`);
-    }
-  }
-
-  if (!issues.length) {
-    const listed = spawnSync(npm, ["ls", "--depth=0", "--json"], {
-      cwd: root,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (listed.error || listed.status !== 0) {
-      issues.push("node_modules 套件版本不完整或與 package.json 不相容");
-    }
-  }
-  return issues;
-}
-
-function checkInstallDirectoryWritable() {
-  const targetDir = existsSync(resolve(root, "node_modules"))
-    ? resolve(root, "node_modules")
-    : root;
-  const probe = resolve(targetDir, `.plant-package-probe-${process.pid}-${Date.now()}`);
-  try {
-    const descriptor = openSync(probe, "wx");
-    closeSync(descriptor);
-    unlinkSync(probe);
-  } catch (error) {
-    try {
-      unlinkSync(probe);
-    } catch {}
-    throw new Error(`前端套件安裝目錄無法寫入：${targetDir}`, { cause: error });
-  }
-}
+const packageManifest = loadPackageManifest(systemRoot);
+if (packageManifest.error) errors.push(packageManifest.error);
 
 function checkDiskSpace() {
-  const disk = statfsSync(root);
+  const disk = statfsSync(systemRoot);
   const available = Number(disk.bavail) * Number(disk.bsize);
   const availableMb = Math.floor(available / 1024 / 1024);
   if (available < 1024 ** 3) {
@@ -121,63 +80,65 @@ function checkDiskSpace() {
   } else if (available < 2 * 1024 ** 3) {
     warnings.push(`磁碟可用空間僅剩 ${availableMb} MB，建議保留 2 GB`);
   }
+  return availableMb;
 }
 
-function portAvailable(port) {
+function probePort(port) {
   return new Promise((resolvePort) => {
     const server = createServer();
     server.unref();
-    server.once("error", () => resolvePort(false));
+    server.once("error", (error) => resolvePort({ available: false, error }));
     server.listen({ host: "0.0.0.0", port, exclusive: true }, () => {
-      server.close(() => resolvePort(true));
+      server.close(() => resolvePort({ available: true, error: null }));
     });
   });
 }
 
+function portErrorMessage(port, error) {
+  if (error?.code === "EADDRINUSE") {
+    const command = process.platform === "win32"
+      ? `netstat -ano | findstr :${port}`
+      : `lsof -nP -iTCP:${port} -sTCP:LISTEN`;
+    return `前端 Port ${port} 已被其他程式占用；請關閉占用程序後重試（可用 ${command} 查詢）`;
+  }
+  if (error?.code === "EACCES") {
+    return `沒有權限綁定前端 Port ${port}；請檢查執行帳號與系統權限`;
+  }
+  const reason = error instanceof Error ? error.message : String(error);
+  return `無法檢查前端 Port ${port}：${reason}`;
+}
+
+let availableDiskMb;
 try {
-  checkDiskSpace();
+  availableDiskMb = checkDiskSpace();
 } catch (error) {
   warnings.push(`無法取得磁碟空間：${error instanceof Error ? error.message : error}`);
 }
 
-let issues = errors.length ? [] : dependencyIssues();
-if (!errors.length && issues.length) {
-  const lockfilePath = resolve(root, "package-lock.json");
-  const hasLockfile = existsSync(lockfilePath);
-  const lockfileOutOfSync = issues.some((issue) => issue.includes("package-lock.json"));
-  const installArgs = hasLockfile && !lockfileOutOfSync
-    ? ["ci", "--include=dev"]
-    : ["install", "--include=dev"];
-  console.log(
-    `\n前端套件缺失或版本不符，正在自動執行 npm ${installArgs.join(" ")}…`,
+const packageIssues = packageManifest.manifest
+  ? findDependencyIssues(systemRoot, packageManifest.manifest)
+  : [];
+if (packageIssues.length) {
+  console.log("[INFO] 偵測到以下前端套件問題：");
+  packageIssues.forEach((issue) => console.log(`       - ${issue}`));
+}
+if (!errors.length && packageIssues.length) {
+  const repairError = repairDependencies(
+    systemRoot,
+    packageManifest.manifest,
+    packageIssues,
   );
-  try {
-    checkInstallDirectoryWritable();
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
-  }
-  if (!errors.length) {
-    const result = spawnSync(npm, installArgs, {
-      cwd: root,
-      stdio: "inherit",
-      shell: process.platform === "win32",
-    });
-    if (result.error || result.status !== 0) {
-      errors.push(
-        `前端套件自動安裝失敗${result.error ? `：${result.error.message}` : ""}`,
-      );
-    } else {
-      const unresolved = dependencyIssues();
-      if (unresolved.length) {
-        errors.push(`前端套件修復後仍有問題：${unresolved.join("；")}`);
-      }
-    }
-  }
+  if (repairError) errors.push(repairError);
 }
 
 const lifecycle = process.env.npm_lifecycle_event ?? "";
-if (!errors.length && lifecycle !== "prebuild" && !(await portAvailable(3000))) {
-  errors.push("前端 Port 3000 已被其他程式占用");
+let frontendPortAvailable;
+if (lifecycle !== "prebuild") {
+  const portResult = await probePort(3000);
+  frontendPortAvailable = portResult.available;
+  if (!portResult.available) {
+    errors.push(portErrorMessage(3000, portResult.error));
+  }
 }
 
 if (errors.length) {
@@ -187,4 +148,23 @@ if (errors.length) {
 }
 
 warnings.forEach((message) => console.warn(`[WARN] ${message}`));
-console.log("[OK] Node.js 可正常執行\n[OK] 前端套件已安裝");
+console.log(`[OK] Node.js ${nodeVersion}（符合 Vite 版本需求）`);
+console.log("[OK] 前端套件完整且版本相容");
+console.log(
+  `[OK] frontend_host 格式正確：${configuredFrontendHost}（來源：${frontendHostConfig.source}）`,
+);
+if (frontendHostResult.addresses.length) {
+  const displayedAddresses = frontendHostResult.addresses.slice(0, 4);
+  const addressSuffix = frontendHostResult.addresses.length > 4 ? "…" : "";
+  console.log(
+    `[OK] frontend_host DNS 解析成功：${configuredFrontendHost} → ${displayedAddresses.join(", ")}${addressSuffix}`,
+  );
+} else {
+  console.log(`[OK] frontend_host 不需要 DNS 解析：${configuredFrontendHost}`);
+}
+if (frontendPortAvailable === true) {
+  console.log("[OK] 前端 Port 可綁定：0.0.0.0:3000");
+}
+if (availableDiskMb !== undefined && availableDiskMb >= 2 * 1024) {
+  console.log(`[OK] 磁碟可用空間：${availableDiskMb} MB`);
+}

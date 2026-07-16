@@ -536,7 +536,12 @@ function findFlowTargetMessage(messages: ChatMessage[], title: string, outputPat
       return { id: message.id, index };
     }
     if (message.outputPath && outputLabel(message.outputPath, message.text) === title) return { id: message.id, index };
-    if (message.kind === "action" && isPrimaryAction(message) && actionDisplay(message).title === title) {
+    if (
+      targetDraftVersion === null &&
+      message.kind === "action" &&
+      isPrimaryAction(message) &&
+      actionDisplay(message).title === title
+    ) {
       return { id: message.id, index };
     }
   }
@@ -642,20 +647,30 @@ function artifactFlowItems(
       tone: "action",
     }, messages, t.systemModelGeneration, "artifact/system_models.json"));
   }
-  const draftPath = firstExistingPath(paths, [
-    "artifact/drafts/draft_v0.md",
-    "results/drafts/draft_v0.html",
-  ]);
-  if (draftPath) {
-    flowItems.push(applyFlowTarget({
-      id: "artifact-flow-draft",
-      title: t.draftCreation,
-      detail: t.updatedDraft,
-      dedupeKey: "output:draft",
-      outputPath: draftPath,
-      tone: "action",
-    }, messages, t.draftCreation, draftPath));
-  }
+  const seenDraftVersions = new Set<number>();
+  Array.from(paths)
+    .map((path) => ({ path, version: draftVersionFromPath(path) }))
+    .filter((item): item is { path: string; version: number } => item.version !== null)
+    .sort((a, b) => {
+      const versionDiff = a.version - b.version;
+      if (versionDiff) return versionDiff;
+      return Number(b.path.startsWith("artifact/")) - Number(a.path.startsWith("artifact/"));
+    })
+    .forEach(({ path, version }) => {
+      if (seenDraftVersions.has(version)) return;
+      seenDraftVersions.add(version);
+      const isInitialDraft = version === 0;
+      const title = isInitialDraft ? t.draftCreation : `Draft v${version}`;
+      flowItems.push(applyFlowTarget({
+        id: `artifact-flow-draft-v${version}`,
+        title,
+        detail: t.updatedDraft,
+        dedupeKey: isInitialDraft ? "output:draft" : `output:draft:v${version}`,
+        orderHint: draftOrderHint(version),
+        outputPath: path,
+        tone: "action",
+      }, messages, title, path));
+    });
   const seenRounds = new Set<number>();
   meetingPaths.forEach((path) => {
     const round = Number(/(?:formal_meeting_r|\/R)(\d+)/i.exec(path)?.[1] ?? 0);
@@ -854,7 +869,20 @@ function outputPathForFlowItem(item: FlowItem, paths: Set<string>) {
 function flowIdentity(item: FlowItem) {
   const meetingRound = meetingRoundFromTitle(item.title);
   if (meetingRound) return `meeting:R${meetingRound}`;
-  if (item.dedupeKey === "output:draft") return "artifact:draft";
+  const identityByTitle = new Map<string, string>([
+    [tx().initialRequirementAnalysis, "artifact:requirements"],
+    [tx().defineSystemScope, "artifact:scope"],
+    ["Scope", "artifact:scope"],
+    [tx().elicitationMeeting, "artifact:elicitation"],
+    [tx().conflictDetection, "artifact:conflict"],
+    [tx().domainResearch, "artifact:feedback"],
+    [tx().systemModelGeneration, "artifact:system_models"],
+    [tx().draftCreation, "artifact:draft"],
+  ]);
+  const artifactIdentity = identityByTitle.get(item.title);
+  if (artifactIdentity && (item.dedupeKey.startsWith("action:") || item.dedupeKey.startsWith("output:"))) {
+    return artifactIdentity;
+  }
   const draftVersion = /Draft v(\d+)/i.exec(item.title)?.[1] ??
     /draft_v(\d+)/i.exec(item.outputPath ?? "")?.[1];
   if (draftVersion) return `draft:v${draftVersion}`;
@@ -871,6 +899,10 @@ function flowIdentity(item: FlowItem) {
   if (item.dedupeKey === "output:requirements") return "artifact:requirements";
   if (item.dedupeKey === "output:project") return "artifact:project";
   return item.dedupeKey;
+}
+
+function isRedundantIntroFlowItem(item: FlowItem) {
+  return item.dedupeKey === "output:project" || item.title === tx().stakeholderStatements;
 }
 
 function normalizeMeetingIssuePlacement(items: FlowItem[]) {
@@ -895,12 +927,14 @@ function normalizeMeetingIssuePlacement(items: FlowItem[]) {
 }
 
 function isFormalMeetingFlowItem(item: FlowItem) {
+  const draftVersion = draftVersionFromPath(item.outputPath);
   const isMeetingHumanAssist =
     (item.dedupeKey.startsWith("decision:meeting_issues") || item.title === tx().humanDecision || item.title === tx().humanSuggestion) &&
     item.orderHint !== undefined &&
     item.orderHint >= 69 &&
     item.orderHint < 80;
   return meetingRoundFromTitle(item.title) !== null ||
+    (draftVersion !== null && draftVersion > 0) ||
     item.dedupeKey.startsWith("decision:meeting_issues") ||
     isMeetingHumanAssist;
 }
@@ -956,10 +990,11 @@ export function WorkspaceFlowIndex({
   const [open, setOpen] = useState(false);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const itemRefs = useRef<Record<string, HTMLElement | null>>({});
   const messages = useChatStore((s) => s.messages);
   const activeFlowMessageId = useUiStore((s) => s.activeFlowMessageId);
   const setScrollTargetMessageId = useUiStore((s) => s.setScrollTargetMessageId);
+  const setActiveFlowMessageId = useUiStore((s) => s.setActiveFlowMessageId);
   const setSelectedOutputPath = useUiStore((s) => s.setSelectedOutputPath);
 
   const items = useMemo(() => {
@@ -971,19 +1006,47 @@ export function WorkspaceFlowIndex({
     const messageItems: FlowItem[] = [];
     messages.forEach((message, index) => {
       const item = messageToFlowItem(message);
-      if (item) messageItems.push({ ...item, messageIndex: index });
+      if (item) {
+        messageItems.push({
+          ...item,
+          messageIndex: index,
+          scrollTargetId: item.scrollTargetId ?? message.id,
+        });
+      }
     });
     const hideGeneratedDocuments = activeRun?.mode === "continue" &&
       ["queued", "running", "waiting_for_human", "cancelling"].includes(activeRun.status);
     const artifactItemsForFlow = artifactFlowItems(artifactItems, messages, hideGeneratedDocuments);
     const byKey = new Map<string, FlowItem>();
-    messageItems.forEach((item) => byKey.set(flowIdentity(item), item));
+    messageItems.forEach((item) => {
+      const key = flowIdentity(item);
+      const existing = byKey.get(key);
+      const keepActionLabel = existing?.dedupeKey.startsWith("action:") && item.dedupeKey.startsWith("output:");
+      const displayItem = keepActionLabel && existing ? existing : item;
+      byKey.set(key, {
+        ...displayItem,
+        outputPath: item.outputPath ?? existing?.outputPath,
+        scrollTargetId: item.scrollTargetId ?? existing?.scrollTargetId,
+        messageIndex: item.messageIndex ?? existing?.messageIndex,
+      });
+    });
     artifactItemsForFlow.forEach((item) => {
       const key = flowIdentity(item);
-      if (!byKey.has(key)) byKey.set(key, item);
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, item);
+        return;
+      }
+      byKey.set(key, {
+        ...existing,
+        outputPath: item.outputPath ?? existing.outputPath,
+        scrollTargetId: item.scrollTargetId ?? existing.scrollTargetId,
+        messageIndex: item.messageIndex ?? existing.messageIndex,
+      });
     });
     const combinedItems = groupFormalMeetingItems(normalizeMeetingIssuePlacement(Array.from(byKey.values())));
     return combinedItems
+      .filter((item) => !isRedundantIntroFlowItem(item))
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
         const orderDiff = flowItemOrder(a.item) - flowItemOrder(b.item);
@@ -1049,6 +1112,7 @@ export function WorkspaceFlowIndex({
       return;
     }
     setExpandedGroupId(null);
+    setActiveFlowMessageId(item.id);
     if (item.scrollTargetId) {
       setScrollTargetMessageId(item.scrollTargetId);
     } else if (item.outputPath) {
@@ -1136,7 +1200,7 @@ export function WorkspaceFlowIndex({
                 />
                 <span
                   className={cn(
-                    "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
+                    "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-max max-w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
                     active
                       ? "border-slate-300 bg-white shadow-sm"
                       : "border-gray-200 bg-white",
@@ -1192,13 +1256,16 @@ export function WorkspaceFlowIndex({
         const start = 6;
         const top = items.length === 1 ? 50 : start + (index / (items.length - 1)) * span;
         return (
-          <button
+          <div
             key={item.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             ref={(node) => {
               itemRefs.current[item.id] = node;
             }}
             aria-current={item.id === activeItemId ? "true" : undefined}
+            aria-expanded={item.children?.length ? groupExpanded : undefined}
+            aria-label={flowItemTooltip(item)}
             title={flowItemTooltip(item)}
             style={{ top: `${top}%` }}
             className={cn(
@@ -1206,6 +1273,12 @@ export function WorkspaceFlowIndex({
               item.children?.length ? "h-7" : "h-5",
             )}
             onClick={(event) => {
+              jumpTo(item);
+              if (!item.children?.length) event.currentTarget.blur();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
               jumpTo(item);
               if (!item.children?.length) event.currentTarget.blur();
             }}
@@ -1222,10 +1295,10 @@ export function WorkspaceFlowIndex({
             >
               <FlowItemIcon item={item} className="h-2.5 w-2.5" />
             </span>
-            {!item.children?.length ? (
+            {(!item.children?.length || !groupExpanded) ? (
               <span
                 className={cn(
-                  "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
+                  "pointer-events-none absolute left-full top-1/2 z-40 ml-3 w-max max-w-48 -translate-y-1/2 rounded-control border px-2.5 py-1.5 text-left opacity-0 shadow-lg transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100",
                   active
                     ? "border-slate-300 bg-white shadow-sm"
                     : "border-gray-200 bg-white",
@@ -1272,7 +1345,7 @@ export function WorkspaceFlowIndex({
                       >
                         <FlowItemIcon item={child} className="h-2.5 w-2.5" />
                       </span>
-                      <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 w-44 -translate-y-1/2 rounded-control border border-gray-200 bg-white px-2.5 py-1.5 text-left opacity-0 shadow-lg transition group-hover/child:opacity-100">
+                      <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 w-max max-w-44 -translate-y-1/2 rounded-control border border-gray-200 bg-white px-2.5 py-1.5 text-left opacity-0 shadow-lg transition group-hover/child:opacity-100">
                         <span className="block truncate text-[12px] font-semibold text-slate-800">{child.title}</span>
                         {shouldShowFlowSummary(child) && (
                           <span className="mt-1 block truncate text-[11px] text-slate-500">{stageCardSummary(child)}</span>
@@ -1283,7 +1356,7 @@ export function WorkspaceFlowIndex({
                 })}
               </span>
             ) : null}
-          </button>
+          </div>
         );
       })}
     </div>

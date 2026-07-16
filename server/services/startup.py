@@ -14,6 +14,30 @@ from .api_key_validation import (
 
 
 logger = logging.getLogger("Plant")
+MAX_DISPLAYED_ERROR_LENGTH = 300
+
+
+class BackendPreflightError(RuntimeError):
+    """A user-facing startup failure that should be printed without a traceback."""
+
+
+def concise_error(error: object) -> str:
+    message = " ".join(str(error or "未知錯誤").split())
+    if len(message) <= MAX_DISPLAYED_ERROR_LENGTH:
+        return message
+    return message[: MAX_DISPLAYED_ERROR_LENGTH - 3] + "..."
+
+
+def format_preflight_failure(report: PreflightReport) -> str:
+    failures = []
+    for check in report.checks:
+        if check.status != "error":
+            continue
+        failure = f"- {check.message}"
+        if check.detail:
+            failure += f"\n  詳細：{check.detail}"
+        failures.append(failure)
+    return "後端前置檢查失敗：\n" + "\n".join(failures)
 
 
 def require_backend_preflight(base_dir: Path) -> PreflightReport:
@@ -21,13 +45,7 @@ def require_backend_preflight(base_dir: Path) -> PreflightReport:
     if report.can_start:
         return report
 
-    failures = [
-        f"[{check.check_id}] {check.message}"
-        + (f": {check.detail}" if check.detail else "")
-        for check in report.checks
-        if check.status == "error"
-    ]
-    raise RuntimeError("Backend preflight failed:\n" + "\n".join(failures))
+    raise BackendPreflightError(format_preflight_failure(report))
 
 
 def print_backend_preflight(report: PreflightReport) -> None:
@@ -52,12 +70,14 @@ def test_backend_api_keys(base_dir: Path) -> None:
             print(f"[OK] {provider} API Key 可正常使用", flush=True)
         else:
             print(f"[WARN] {provider} API Key 測試失敗", flush=True)
-            logger.warning("%s API Key startup test failed: %s", provider, result.error)
+            print(f"       原因：{concise_error(result.error)}", flush=True)
+            logger.info("%s API Key startup test failed: %s", provider, result.error)
     try:
         persist_api_key_validation_results(base_dir, results)
-    except OSError as exc:
+    except (OSError, TimeoutError, ValueError) as exc:
         print("[WARN] API Key 測試狀態無法寫入 config.json", flush=True)
-        logger.warning("Unable to persist API Key startup test state: %s", exc)
+        print(f"       原因：{exc}", flush=True)
+        logger.info("Unable to persist API Key startup test state: %s", exc)
     print(flush=True)
 
 

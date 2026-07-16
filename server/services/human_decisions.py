@@ -171,172 +171,171 @@ def normalize_decision_options_payload(options: Any) -> Any:
     return payload
 
 
+def _empty_decision(summary: str = "人類選擇暫不裁決", **extra: Any) -> Dict[str, Any]:
+    return {
+        "summary": summary,
+        "decision": "",
+        "chosen_option_id": "",
+        "chosen_option_title": "",
+        **extra,
+    }
+
+
+def _option_text(option: Dict[str, Any]) -> str:
+    title = _clean_option_title(option.get("title", ""))
+    description = str(option.get("description") or "").strip()
+    rationale = str(option.get("rationale") or "").strip()
+    text = title
+    if description and description != title:
+        text = f"{title}，{description}" if title else description
+    if rationale:
+        text = f"{text}。理由：{rationale}" if text else f"理由：{rationale}"
+    return text
+
+
+def _decision_from_options(
+    selected_options: List[Dict[str, Any]],
+    *,
+    empty_when_text_missing: bool,
+    strip_summary: bool,
+) -> Dict[str, Any]:
+    decision_items = [text for option in selected_options if (text := _option_text(option))]
+    if empty_when_text_missing and not decision_items:
+        return _empty_decision()
+
+    choice_label = ",".join(
+        str(option.get("option_id"))
+        for option in selected_options
+        if option.get("option_id") is not None
+    )
+    title_label = "；".join(
+        _clean_option_title(option.get("title", "")) for option in selected_options
+    )
+    decision_text = "\n".join(
+        f"{index}. {text}" for index, text in enumerate(decision_items, 1)
+    )
+    summary = f"人類採納{_option_display_label(choice_label)}: {title_label}"
+    return {
+        "status": "human_decision",
+        "summary": summary.strip() if strip_summary else summary,
+        "decision": decision_text,
+        "chosen_option_id": choice_label,
+        "chosen_option_title": title_label,
+        "chosen_options": selected_options,
+    }
+
+
+def _option_with_overrides(
+    source: Dict[str, Any],
+    overrides: Dict[str, Any],
+    option_id: str,
+) -> Dict[str, Any]:
+    description = str(overrides.get("description") or "").strip()
+    rationale = str(overrides.get("rationale") or "").strip()
+    return _selected_option_payload(
+        {
+            **source,
+            "option_id": option_id,
+            "description": description
+            or str(source.get("description") or "").strip(),
+            "rationale": rationale or str(source.get("rationale") or "").strip(),
+        }
+    )
+
+
+def _parse_structured_options(
+    structured_options: List[Any],
+    all_options: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    selected_options = []
+    options_by_id = {
+        str(option.get("option_id") or "").strip().upper(): option
+        for option in all_options
+    }
+    for option in structured_options:
+        if not isinstance(option, dict):
+            continue
+        option_id = _normalize_choice(option.get("option_id"), all_options)
+        if not option_id:
+            raise ValueError("invalid human decision choices")
+        source = options_by_id.get(option_id, option)
+        selected_options.append(_option_with_overrides(source, option, option_id))
+    return _decision_from_options(
+        selected_options,
+        empty_when_text_missing=True,
+        strip_summary=True,
+    )
+
+
+def _parse_choice_list(
+    choices: List[Any],
+    custom_decision: str,
+    all_options: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    parsed_choices = []
+    for item in choices:
+        normalized = _normalize_choice(item, all_options)
+        if not normalized:
+            raise ValueError("invalid human decision choices")
+        if normalized not in parsed_choices:
+            parsed_choices.append(normalized)
+
+    if "0" in parsed_choices and len(parsed_choices) > 1:
+        raise ValueError("custom decision cannot be combined with other choices")
+    if parsed_choices == ["0"]:
+        if not custom_decision:
+            return _empty_decision(
+                "人類未輸入裁決",
+                chosen_option_id="0",
+                chosen_option_title="自行輸入裁決",
+            )
+        return {
+            "status": "human_decision",
+            "summary": f"由人類裁決: {custom_decision}",
+            "decision": custom_decision,
+            "chosen_option_id": "0",
+            "chosen_option_title": "自行輸入裁決",
+        }
+
+    options_by_id = {
+        str(option.get("option_id") or "").strip().upper(): option
+        for option in all_options
+    }
+    try:
+        chosen_options = [options_by_id[choice] for choice in parsed_choices]
+    except KeyError as exc:
+        raise ValueError("invalid human decision choices") from exc
+    selected_options = [_selected_option_payload(option) for option in chosen_options]
+    return _decision_from_options(
+        selected_options,
+        empty_when_text_missing=False,
+        strip_summary=False,
+    )
+
+
 def parse_human_decision_response(
     response: Dict[str, Any],
     options: Any,
 ) -> Dict[str, Any]:
     if response.get("skipped") is True:
-        return {
-            "skipped": True,
-            "summary": "人類選擇暫不裁決",
-            "decision": "",
-            "chosen_option_id": "",
-            "chosen_option_title": "",
-        }
+        return _empty_decision(skipped=True)
 
+    all_options = _normalize_options(options)
     structured_options = response.get("chosen_options")
     if isinstance(structured_options, list) and structured_options:
-        decision_items = []
-        selected_options = []
-        all_options = _normalize_options(options)
-        for opt in structured_options:
-            if not isinstance(opt, dict):
-                continue
-            normalized_id = _normalize_choice(opt.get("option_id"), all_options)
-            if not normalized_id:
-                raise ValueError("invalid human decision choices")
-            source = next(
-                (
-                    row for row in all_options
-                    if str(row.get("option_id") or "").strip().upper() == normalized_id
-                ),
-                opt,
-            )
-            title = _clean_option_title(source.get("title", ""))
-            desc = str(opt.get("description") or "").strip()
-            if not desc:
-                desc = str(source.get("description") or "").strip()
-            rationale = str(opt.get("rationale") or "").strip()
-            if not rationale:
-                rationale = str(source.get("rationale") or "").strip()
-            option_text = title
-            if desc and desc != title:
-                option_text = f"{title}，{desc}" if title else desc
-            if rationale:
-                option_text = (
-                    f"{option_text}。理由：{rationale}" if option_text else f"理由：{rationale}"
-                )
-            if option_text:
-                decision_items.append(option_text)
-            selected_options.append(_selected_option_payload({
-                **source,
-                "option_id": normalized_id,
-                "description": desc,
-                "rationale": rationale,
-            }))
-        if not decision_items:
-            return {
-                "summary": "人類選擇暫不裁決",
-                "decision": "",
-                "chosen_option_id": "",
-                "chosen_option_title": "",
-            }
-        decision_text = "\n".join(
-            f"{index}. {text}" for index, text in enumerate(decision_items, 1)
-        )
-        choice_label = ",".join(
-            str(opt.get("option_id"))
-            for opt in selected_options
-            if opt.get("option_id") is not None
-        )
-        title_label = "；".join(
-            _clean_option_title(opt.get("title", "")) for opt in selected_options
-        )
-        return {
-            "status": "human_decision",
-            "summary": f"人類採納{_option_display_label(choice_label)}: {title_label}".strip(),
-            "decision": decision_text,
-            "chosen_option_id": choice_label,
-            "chosen_option_title": title_label,
-            "chosen_options": selected_options,
-        }
+        return _parse_structured_options(structured_options, all_options)
 
     custom_decision = str(response.get("custom_decision") or "").strip()
     choices = response.get("choices")
-    all_options = _normalize_options(options)
-
     if isinstance(choices, list) and choices:
-        parsed_choices = []
-        for item in choices:
-            normalized = _normalize_choice(item, all_options)
-            if not normalized:
-                raise ValueError("invalid human decision choices")
-            parsed_choices.append(normalized)
-        parsed_choices = list(dict.fromkeys(parsed_choices))
-        if "0" in parsed_choices and len(parsed_choices) > 1:
-            raise ValueError("custom decision cannot be combined with other choices")
-        if parsed_choices == ["0"]:
-            if not custom_decision:
-                return {
-                    "summary": "人類未輸入裁決",
-                    "decision": "",
-                    "chosen_option_id": "0",
-                    "chosen_option_title": "自行輸入裁決",
-                }
-            return {
-                "status": "human_decision",
-                "summary": f"由人類裁決: {custom_decision}",
-                "decision": custom_decision,
-                "chosen_option_id": "0",
-                "chosen_option_title": "自行輸入裁決",
-            }
-        chosen_options = [
-            opt for choice in parsed_choices for opt in all_options if opt.get("option_id") == choice
-        ]
-        if len(chosen_options) != len(parsed_choices):
-            raise ValueError("invalid human decision choices")
-        decision_items = []
-        selected_options = []
-        for opt in chosen_options:
-            title = _clean_option_title(opt.get("title", ""))
-            desc = str(opt.get("description") or "").strip()
-            rationale = str(opt.get("rationale") or "").strip()
-            option_text = title
-            if desc and desc != title:
-                option_text = f"{title}，{desc}" if title else desc
-            if rationale:
-                option_text = (
-                    f"{option_text}。理由：{rationale}" if option_text else f"理由：{rationale}"
-                )
-            if option_text:
-                decision_items.append(option_text)
-            selected_options.append(
-                {
-                    "option_id": opt.get("option_id"),
-                    "index": opt.get("index"),
-                    "title": title,
-                    "description": desc,
-                    "rationale": rationale,
-                }
-            )
-        decision_text = "\n".join(
-            f"{index}. {text}" for index, text in enumerate(decision_items, 1)
-        )
-        choice_label = ",".join(str(choice) for choice in parsed_choices)
-        title_label = "；".join(
-            _clean_option_title(opt.get("title", "")) for opt in chosen_options
-        )
-        return {
-            "status": "human_decision",
-            "summary": f"人類採納{_option_display_label(choice_label)}: {title_label}",
-            "decision": decision_text,
-            "chosen_option_id": choice_label,
-            "chosen_option_title": title_label,
-            "chosen_options": selected_options,
-        }
+        return _parse_choice_list(choices, custom_decision, all_options)
 
-    decision = custom_decision
-    if not decision:
-        return {
-            "summary": "人類選擇暫不裁決",
-            "decision": "",
-            "chosen_option_id": "",
-            "chosen_option_title": "",
-        }
+    if not custom_decision:
+        return _empty_decision()
     return {
         "status": "human_decision",
-        "summary": f"由人類裁決: {decision}",
-        "decision": decision,
+        "summary": f"由人類裁決: {custom_decision}",
+        "decision": custom_decision,
         "chosen_option_id": "custom",
         "chosen_option_title": "前端輸入裁決",
     }

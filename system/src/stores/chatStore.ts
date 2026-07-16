@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ChatMessage, RunCheckpoint } from "@/types/api";
+import { completeStageProgress, completeStepProgress } from "@/utils/chatProgress";
 
 type ContinueTrimTarget =
   | string
@@ -48,16 +49,6 @@ function isGeneratedDocumentDisplayMessage(message: ChatMessage) {
 function messageTime(message: ChatMessage) {
   const value = message.timestamp ? new Date(message.timestamp).getTime() : NaN;
   return Number.isFinite(value) ? value : null;
-}
-
-function findLastMessageIndex(
-  messages: ChatMessage[],
-  predicate: (message: ChatMessage) => boolean,
-) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (predicate(messages[index])) return index;
-  }
-  return -1;
 }
 
 function trimDocumentGenerationMessagesForContinue(messages: ChatMessage[]) {
@@ -245,19 +236,8 @@ export const useChatStore = create<ChatState>((set) => ({
     }),
   resolveStageProgress: (stage) =>
     set((s) => {
-      const normalizedStage = String(stage ?? "").trim();
-      if (!normalizedStage) return s;
-      const index = findLastMessageIndex(s.messages, (message) =>
-        message.role === "system" &&
-        message.kind === "stage" &&
-        message.status === "running" &&
-        String(message.stage ?? "").trim() === normalizedStage &&
-        !message.id.startsWith("heartbeat-")
-      );
-      if (index < 0) return s;
-      const messages = [...s.messages];
-      messages[index] = { ...messages[index], status: "done" };
-      return { messages };
+      const messages = completeStageProgress(s.messages, stage);
+      return messages === s.messages ? s : { messages };
     }),
   resolveHeartbeatProgress: () =>
     set((s) => {
@@ -266,19 +246,8 @@ export const useChatStore = create<ChatState>((set) => ({
     }),
   resolveStepProgress: (stage, action) =>
     set((s) => {
-      const normalizedStage = String(stage ?? "").trim();
-      const normalizedAction = String(action ?? "").trim();
-      if (!normalizedAction) return s;
-      const index = findLastMessageIndex(s.messages, (message) =>
-        message.kind === "action" &&
-        message.status === "running" &&
-        String(message.action ?? "").trim() === normalizedAction &&
-        (!normalizedStage || String(message.stage ?? "").trim() === normalizedStage)
-      );
-      if (index < 0) return s;
-      return {
-        messages: s.messages.filter((_, messageIndex) => messageIndex !== index),
-      };
+      const messages = completeStepProgress(s.messages, stage, action);
+      return messages === s.messages ? s : { messages };
     }),
   setContinueReplacementStage: (stageId) =>
     set({

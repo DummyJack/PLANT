@@ -151,6 +151,89 @@ def _artifact_has_feedback_content(artifact: Dict[str, Any]) -> bool:
     )
 
 
+def _validated_project_id(base_dir: Path, value: Any) -> str:
+    project_id = str(value or "").strip()
+    invalid = (
+        not project_id
+        or project_id in {".", ".."}
+        or "/" in project_id
+        or "\\" in project_id
+        or "\x00" in project_id
+    )
+    if invalid:
+        raise ValueError("Invalid project_id")
+    project_dir = base_dir / "projects" / project_id
+    if not project_dir.is_dir():
+        raise ValueError("Project not found")
+    return project_id
+
+
+def _reference_stage_overrides(
+    mode: str,
+    stage_overrides: Optional[Dict[str, bool]],
+    project_paths: List[str],
+    new_paths: List[str],
+    has_research_content: bool,
+) -> Optional[Dict[str, bool]]:
+    research_is_stale = bool(
+        new_paths or (project_paths and not has_research_content)
+    )
+    if mode != "continue" or not research_is_stale:
+        return stage_overrides
+    return {**(stage_overrides or {}), "research_domain": True}
+
+
+def _resolved_reference_paths(
+    project_id: str,
+    mode: str,
+    requested_paths: Optional[List[str]],
+    project_paths: List[str],
+    new_paths: List[str],
+    has_research_content: bool,
+) -> List[str]:
+    attached_paths = normalize_attached_reference_paths(project_id, requested_paths)
+    if mode != "continue":
+        return attached_paths
+    automatic_paths = (
+        project_paths if project_paths and not has_research_content else new_paths
+    )
+    return _merge_unique_strings(attached_paths, automatic_paths)
+
+
+def _new_run_state(
+    *,
+    run_id: str,
+    project_id: str,
+    mode: str,
+    rounds: Optional[int],
+    rough_idea: Optional[str],
+    attached_paths: List[str],
+    base_config: Dict[str, Any],
+    resolved_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "project_id": project_id,
+        "mode": mode,
+        "status": "queued",
+        "current_stage": "",
+        "current_agent": "",
+        "round": resolved_config.get("rounds"),
+        "rough_idea": rough_idea or "",
+        "attached_reference_paths": attached_paths,
+        "requires_rounds_input": general_formal_meeting_enabled(base_config)
+        and rounds is None,
+        "config_snapshot": resolved_config,
+        "pending_decision": None,
+        "skip_all_human_interventions": False,
+        "cancel_requested": False,
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "error": None,
+        "events": [],
+    }
+
+
 def _ui_error_message(exc: Exception) -> str:
     normalized = normalize_authentication_error(exc)
     text = str(normalized).strip() or "執行失敗"
@@ -253,19 +336,8 @@ class RunManager:
         stage_overrides: Optional[Dict[str, bool]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        project_id = _validated_project_id(self.base_dir, project_id)
         run_id = f"run_{uuid.uuid4().hex[:10]}"
-        project_id = str(project_id or "").strip()
-        if (
-            not project_id
-            or project_id in {".", ".."}
-            or "/" in project_id
-            or "\\" in project_id
-            or "\x00" in project_id
-        ):
-            raise ValueError("Invalid project_id")
-        project_dir = self.base_dir / "projects" / project_id
-        if not project_dir.exists() or not project_dir.is_dir():
-            raise ValueError("Project not found")
         self.recover_on_startup()
         if self.get_active_run(project_id):
             raise ValueError("Project already has an active run")
@@ -275,13 +347,13 @@ class RunManager:
         new_project_reference_paths = _new_project_reference_paths(store, artifact)
         has_reference_research_content = _artifact_has_feedback_content(artifact)
 
-        if mode == "continue" and (
-            new_project_reference_paths or (project_reference_paths and not has_reference_research_content)
-        ):
-            stage_overrides = {
-                **(stage_overrides or {}),
-                "research_domain": True,
-            }
+        stage_overrides = _reference_stage_overrides(
+            mode,
+            stage_overrides,
+            project_reference_paths,
+            new_project_reference_paths,
+            has_reference_research_content,
+        )
 
         base_config = copy.deepcopy(config) if config else Store(self.base_dir).load_config()
         resolved_config = apply_run_stage_overrides(base_config, stage_overrides)
@@ -294,17 +366,14 @@ class RunManager:
             store,
             mode=mode,
         )
-        attached_paths = normalize_attached_reference_paths(
+        attached_paths = _resolved_reference_paths(
             project_id,
+            mode,
             attached_reference_paths,
+            project_reference_paths,
+            new_project_reference_paths,
+            has_reference_research_content,
         )
-        if mode == "continue":
-            auto_reference_paths = (
-                project_reference_paths
-                if project_reference_paths and not has_reference_research_content
-                else new_project_reference_paths
-            )
-            attached_paths = _merge_unique_strings(attached_paths, auto_reference_paths)
 
         with self._lock:
             active_id = self._project_active.get(project_id)
@@ -315,26 +384,16 @@ class RunManager:
 
             if not self._coordinator.claim_project(project_id, run_id):
                 raise ValueError("Project already has an active run")
-            state = {
-                "run_id": run_id,
-                "project_id": project_id,
-                "mode": mode,
-                "status": "queued",
-                "current_stage": "",
-                "current_agent": "",
-                "round": resolved_config.get("rounds"),
-                "rough_idea": rough_idea or "",
-                "attached_reference_paths": attached_paths,
-                "requires_rounds_input": general_formal_meeting_enabled(base_config) and rounds is None,
-                "config_snapshot": resolved_config,
-                "pending_decision": None,
-                "skip_all_human_interventions": False,
-                "cancel_requested": False,
-                "started_at": datetime.now().isoformat(),
-                "finished_at": None,
-                "error": None,
-                "events": [],
-            }
+            state = _new_run_state(
+                run_id=run_id,
+                project_id=project_id,
+                mode=mode,
+                rounds=rounds,
+                rough_idea=rough_idea,
+                attached_paths=attached_paths,
+                base_config=base_config,
+                resolved_config=resolved_config,
+            )
             self._runs[run_id] = state
             self._project_active[project_id] = run_id
             try:

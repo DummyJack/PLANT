@@ -7,6 +7,7 @@ import {
   useChatStore,
 } from "@/stores/chatStore";
 import type { ChatMessage, FileTreeNode, RunCheckpoint, RunState } from "@/types/api";
+import { completeStageProgress, completeStepProgress } from "@/utils/chatProgress";
 import {
   buildInitialUserMessage,
   logEventToChat,
@@ -20,6 +21,8 @@ const ACTIVE = new Set([
   "waiting_for_human",
   "cancelling",
 ]);
+
+type LogEvent = Parameters<typeof logEventToChat>[0];
 
 function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
   const seen = new Set<string>();
@@ -49,7 +52,7 @@ function uniqueChatMessages(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
-function isHistoricalTransientEvent(event: Parameters<typeof logEventToChat>[0]) {
+function isHistoricalTransientEvent(event: LogEvent) {
   return (
     event.type === "heartbeat" ||
     event.type === "cancel_requested" ||
@@ -59,22 +62,25 @@ function isHistoricalTransientEvent(event: Parameters<typeof logEventToChat>[0])
   );
 }
 
-function historicalEventMessages(event: Parameters<typeof logEventToChat>[0]): ChatMessage[] {
-  if (isHistoricalTransientEvent(event)) return [];
-  const messages = logEventToChats(event);
-  if (event.type !== "stage_started") return messages;
-  return messages.map((message) =>
-    message.role === "system" && message.kind === "stage" && message.status === "running"
-      ? { ...message, status: "done" }
-      : message,
-  );
+function resolveHistoricalProgress(messages: ChatMessage[], event: LogEvent): ChatMessage[] {
+  if (event.type === "stage_completed") {
+    return completeStageProgress(messages, event.stage_id);
+  }
+  return event.type === "step_completed"
+    ? completeStepProgress(messages, event.stage_id, event.step_id ?? event.action)
+    : messages;
 }
 
 function historicalLogMessages(events: unknown[]): ChatMessage[] {
-  return events.flatMap((event) => {
-    const row = event as Parameters<typeof logEventToChat>[0];
-    return historicalEventMessages(row);
-  });
+  let messages: ChatMessage[] = [];
+  for (const event of events) {
+    const row = event as LogEvent;
+    messages = resolveHistoricalProgress(messages, row);
+    if (!isHistoricalTransientEvent(row)) {
+      messages.push(...logEventToChats(row));
+    }
+  }
+  return messages;
 }
 
 function checkpointFromEvents(events: unknown[]): Pick<RunCheckpoint, "stage_id" | "step_id" | "round"> | null {
@@ -131,7 +137,18 @@ function historicalRunMessages(run: RunState, events: unknown[]): ChatMessage[] 
   if (run.mode === "continue" && ACTIVE.has(run.status)) {
     return trimTrailingGeneratedDocumentMessages(messages);
   }
-  return messages;
+  if (ACTIVE.has(run.status)) return messages;
+
+  return messages.flatMap((message) => {
+    if (message.status !== "running") return [message];
+    if (message.kind === "action") return [];
+    if (message.role === "system" && message.kind === "stage") {
+      return run.status === "failed"
+        ? [{ ...message, status: "failed" as const }]
+        : [{ ...message, status: "done" as const }];
+    }
+    return [message];
+  });
 }
 
 function trimCurrentMessagesForCheckpoint(

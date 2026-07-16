@@ -3,6 +3,17 @@ import { UI_TEXT } from "@/i18n";
 import { useUiStore } from "@/stores/uiStore";
 import type { ChatMessage, RunEvent } from "@/types/api";
 
+const HIDDEN_STAGE_PILL_IDS = new Set(["export", "conflict_review"]);
+
+function shouldHideStagePill(event: RunEvent, label: string): boolean {
+  if (HIDDEN_STAGE_PILL_IDS.has(String(event.stage_id ?? "").trim())) return true;
+  const normalizedLabel = label.trim();
+  return (
+    (event.stage_id === "draft" && normalizedLabel === "草稿更新") ||
+    (event.stage_id === "formal_meeting" && normalizedLabel === "正式會議")
+  );
+}
+
 function currentTexts() {
   return UI_TEXT[useUiStore.getState().language];
 }
@@ -225,12 +236,8 @@ export function logEventToChat(event: RunEvent): ChatMessage | null {
   if (event.type === "stage_completed") return null;
 
   if (event.type === "stage_started") {
-    if (event.stage_id === "export") return null;
-    if (event.stage_id === "conflict_review") return null;
     const label = workspaceEventText(event, "階段開始");
-    if (event.stage_id === "formal_meeting" && /^正式會議$/.test(label.trim())) {
-      return null;
-    }
+    if (shouldHideStagePill(event, label)) return null;
     const round = /^第\s*(\d+)\s*輪正式會議開始$/.exec(label.trim())?.[1];
     return {
       id: `stage-${event.id}`,

@@ -5,8 +5,8 @@ info:
   version: 1.0.0
 
 servers:
-  - url: http://127.0.0.1:8000
-    description: 本機開發環境
+  - url: /
+    description: 目前後端服務
 
 security: []
 

@@ -1,21 +1,16 @@
 import os
-import sys
 import uuid
 from pathlib import Path
 
-from utils.preflight import ensure_python_dependencies, preflight_enabled
+from utils.preflight import abort_startup, preflight_enabled, prepare_python_environment
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 PREFLIGHT_ENABLED = preflight_enabled(BASE_DIR, "server")
-
-if PREFLIGHT_ENABLED and sys.version_info < (3, 10):
-    current = ".".join(str(part) for part in sys.version_info[:3])
-    raise RuntimeError(
-        f"PLANT requires Python 3.10 or newer; current version is Python {current}"
-    )
-
-if PREFLIGHT_ENABLED and os.getenv("PLANT_BACKEND_STARTUP_CHECKED") != "1":
-    ensure_python_dependencies(BASE_DIR)
+STARTUP_CHECK_REQUIRED = (
+    PREFLIGHT_ENABLED and os.getenv("PLANT_BACKEND_STARTUP_CHECKED") != "1"
+)
+prepare_python_environment(BASE_DIR, enabled=STARTUP_CHECK_REQUIRED)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -32,8 +27,11 @@ from .services.startup import run_backend_startup_checks
 
 load_dotenv(BASE_DIR / ".env")
 
-if PREFLIGHT_ENABLED and os.getenv("PLANT_BACKEND_STARTUP_CHECKED") != "1":
-    run_backend_startup_checks(BASE_DIR)
+if STARTUP_CHECK_REQUIRED:
+    try:
+        run_backend_startup_checks(BASE_DIR)
+    except RuntimeError as exc:
+        abort_startup(exc)
 run_manager = RunManager(BASE_DIR)
 run_manager.recover_on_startup()
 

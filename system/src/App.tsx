@@ -1,15 +1,11 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchConfig } from "@/api/config";
-import {
-  Panel,
-  PanelGroup,
-  PanelResizeHandle,
-} from "react-resizable-panels";
 import { HeaderBar } from "@/features/header/HeaderBar";
-import { MeetingPanel } from "@/features/meeting/MeetingPanel";
-import { ResultPreview } from "@/features/output/ResultPreview";
-import { ReferencePanel } from "@/features/upload/ReferencePanel";
+import {
+  WorkspaceLayout,
+  type LayoutMode,
+} from "@/features/layout/WorkspaceLayout";
 import { NoticeStack } from "@/components/NoticeStack";
 import { useBootstrap, useProjectData } from "@/hooks/useProjectQueries";
 import { useI18n } from "@/i18n";
@@ -18,9 +14,6 @@ import { useUiStore } from "@/stores/uiStore";
 import { cn } from "@/utils/cn";
 import type { FileTreeNode, ProjectSummary } from "@/types/api";
 
-const LAYOUT_KEY = "plant-layout-v16";
-const TABLET_LAYOUT_KEY = "plant-layout-tablet-v1";
-const TABLET_AUX_LAYOUT_KEY = "plant-layout-tablet-aux-v1";
 const EMPTY_ITEMS: FileTreeNode[] = [];
 const ACTIVE_PROJECT_STATUSES = new Set([
   "queued",
@@ -29,8 +22,6 @@ const ACTIVE_PROJECT_STATUSES = new Set([
   "cancelling",
 ]);
 const PUBLIC_READABLE_RESULT_STATUSES = new Set(["completed", "idle"]);
-
-type LayoutMode = "desktop" | "tablet" | "mobile";
 
 function positiveConfigNumber(value: unknown): number | null {
   const parsed = Number(value);
@@ -133,194 +124,18 @@ export default function App() {
   }, [bootstrap.data, bootstrap.isFetching, hasWriteAccess, projectId, setActiveProjectId]);
 
   const items = artifacts.data?.items ?? EMPTY_ITEMS;
-  const panelCount = Object.values(visiblePanels).filter(Boolean).length;
-
-  const referencesPanel = visiblePanels.references ? (
-    <Panel key="references" defaultSize={20} minSize={14}>
-      <ReferencePanel projectId={readableProjectId} />
-    </Panel>
-  ) : null;
-  const workspacePanel = visiblePanels.workspace ? (
-    <Panel key="workspace" defaultSize={45} minSize={30}>
-      <MeetingPanel projectId={readableProjectId} />
-    </Panel>
-  ) : null;
-  const outputPanel = visiblePanels.output ? (
-    <Panel key="output" defaultSize={35} minSize={22}>
-      <ResultPreview projectId={readableProjectId} items={items} />
-    </Panel>
-  ) : null;
-
-  const renderPanels = (panels: Array<React.ReactNode>) =>
-    panels.filter(Boolean).map((panel, index) => (
-      <Fragment key={index}>
-        {index > 0 && <PanelResizeHandle />}
-        {panel}
-      </Fragment>
-    ));
-
-  const renderDesktopLayout = () => (
-    <PanelGroup
-      direction="horizontal"
-      autoSaveId={LAYOUT_KEY}
-      className="h-full"
-    >
-      {renderPanels([referencesPanel, workspacePanel, outputPanel])}
-    </PanelGroup>
-  );
-
-  const renderTabletLayout = () => {
-    const auxItems = [
-      visiblePanels.references && {
-        key: "references",
-        node: <ReferencePanel projectId={readableProjectId} />,
-      },
-      visiblePanels.output && {
-        key: "output",
-        node: <ResultPreview projectId={readableProjectId} items={items} />,
-      },
-    ].filter(Boolean) as Array<{ key: string; node: React.ReactNode }>;
-    const auxGroup =
-      auxItems.length === 0 ? null : auxItems.length === 1 ? (
-        <Panel key="aux-single" defaultSize={34} minSize={24}>
-          {auxItems[0].node}
-        </Panel>
-      ) : (
-        <Panel key="aux" defaultSize={34} minSize={24}>
-          <PanelGroup
-            direction="vertical"
-            autoSaveId={TABLET_AUX_LAYOUT_KEY}
-            className="h-full"
-          >
-            {renderPanels(
-              auxItems.map((item) => (
-                <Panel key={`${item.key}-inner`} defaultSize={50} minSize={24}>
-                  {item.node}
-                </Panel>
-              )),
-            )}
-          </PanelGroup>
-        </Panel>
-      );
-
-    if (panelCount === 1) {
-      const only = visiblePanels.workspace ? (
-        <MeetingPanel projectId={readableProjectId} />
-      ) : visiblePanels.output ? (
-        <ResultPreview projectId={readableProjectId} items={items} />
-      ) : (
-        <ReferencePanel projectId={readableProjectId} />
-      );
-      return (
-        <PanelGroup direction="horizontal" className="h-full">
-          <Panel defaultSize={100} minSize={24}>
-            {only}
-          </Panel>
-        </PanelGroup>
-      );
-    }
-
-    if (panelCount === 2 && visiblePanels.workspace) {
-      const side = visiblePanels.references ? (
-        <ReferencePanel projectId={readableProjectId} />
-      ) : (
-        <ResultPreview projectId={readableProjectId} items={items} />
-      );
-      return (
-        <PanelGroup
-          direction="horizontal"
-          autoSaveId={TABLET_LAYOUT_KEY}
-          className="h-full"
-        >
-          <Panel key="side-tablet" defaultSize={34} minSize={24}>
-            {side}
-          </Panel>
-          <PanelResizeHandle />
-          <Panel key="workspace-tablet" defaultSize={66} minSize={40}>
-            <MeetingPanel projectId={readableProjectId} />
-          </Panel>
-        </PanelGroup>
-      );
-    }
-
-    if (!workspacePanel && auxGroup) {
-      return auxItems.length === 1 ? (
-        <PanelGroup direction="horizontal" className="h-full">
-          <Panel defaultSize={100} minSize={24}>
-            {auxItems[0].node}
-          </Panel>
-        </PanelGroup>
-      ) : (
-        <PanelGroup
-          direction="vertical"
-          autoSaveId={TABLET_AUX_LAYOUT_KEY}
-          className="h-full"
-        >
-          {renderPanels(
-            auxItems.map((item) => (
-              <Panel key={`${item.key}-only`} defaultSize={50} minSize={24}>
-                {item.node}
-              </Panel>
-            )),
-          )}
-        </PanelGroup>
-      );
-    }
-
-    return (
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId={TABLET_LAYOUT_KEY}
-        className="h-full"
-      >
-        {renderPanels([
-          auxGroup,
-          visiblePanels.workspace && (
-            <Panel key="workspace-tablet" defaultSize={66} minSize={40}>
-              <MeetingPanel projectId={readableProjectId} />
-            </Panel>
-          ),
-        ])}
-      </PanelGroup>
-    );
-  };
-
-  const renderMobileLayout = () => (
-    <div className="mobile-layout-scroll flex h-full min-w-0 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-2">
-      {visiblePanels.workspace && (
-        <section className="h-[78vh] min-h-[560px] min-w-0 shrink-0 overflow-hidden">
-          <MeetingPanel projectId={readableProjectId} />
-        </section>
-      )}
-      {visiblePanels.output && (
-        <section className="h-[72vh] min-h-[480px] min-w-0 shrink-0 overflow-hidden">
-          <ResultPreview projectId={readableProjectId} items={items} />
-        </section>
-      )}
-      {visiblePanels.references && (
-        <section className="h-[56vh] min-h-[360px] min-w-0 shrink-0 overflow-hidden">
-          <ReferencePanel projectId={readableProjectId} />
-        </section>
-      )}
-    </div>
-  );
-
   return (
     <div className={cn("flex h-full min-w-0 flex-col overflow-hidden bg-slate-50", darkMode && "theme-dark")}>
       <HeaderBar />
       <NoticeStack />
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-1">
-        {panelCount === 0 ? (
-          <div className="flex h-full items-center justify-center rounded-surface border border-gray-200 bg-white text-sm font-medium text-slate-400">
-            {t.noPanelOpen}
-          </div>
-        ) : layoutMode === "mobile" ? (
-          renderMobileLayout()
-        ) : layoutMode === "tablet" ? (
-          renderTabletLayout()
-        ) : (
-          renderDesktopLayout()
-        )}
+        <WorkspaceLayout
+          emptyLabel={t.noPanelOpen}
+          items={items}
+          layoutMode={layoutMode}
+          projectId={readableProjectId}
+          visiblePanels={visiblePanels}
+        />
       </div>
     </div>
   );
