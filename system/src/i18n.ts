@@ -106,7 +106,7 @@ export const UI_TEXT = {
     requiredAgentReason: (reasons: string) => `目前階段需要此代理：${reasons}`,
     initialIdea: "輸入初步想法",
     enterActivationFirst: "請先到設定輸入啟動碼",
-    testApiKeyFirst: "請先到設定測試 API Key",
+    testApiKeyFirst: "請先到設定輸入 API Key，並測試",
     stoppingAgent: "正在停止 Agent 執行，請稍候...",
     runningWait: "執行中，請稍候…",
     recoverHint: "偵測到上次中斷，按「繼續」會清理並重跑",
