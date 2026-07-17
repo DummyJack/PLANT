@@ -372,10 +372,10 @@ def iter_json_structured_then_window(
 def iter_pdf_page_chunks(
     path: Path, max_size: int, overlap: int
 ) -> Iterator[Tuple[int, int, str]]:
-    import PyPDF2
+    import pypdf
 
     with open(path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
+        reader = pypdf.PdfReader(f)
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
     if not pages:
         yield 0, 0, ""
@@ -629,10 +629,10 @@ class ReadFileTool(BaseTool):
         if suffix in (".txt", ".md", ".json", ".csv"):
             return path.read_text(encoding="utf-8", errors="replace")
         if suffix == ".pdf":
-            import PyPDF2
+            import pypdf
 
             with open(path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
+                reader = pypdf.PdfReader(f)
                 return "\n".join(page.extract_text() or "" for page in reader.pages)
         if suffix in (".docx", ".doc"):
             from docx import Document
