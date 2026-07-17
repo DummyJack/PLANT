@@ -5,7 +5,7 @@ import type { DragEvent, RefObject } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { fetchFile, manualFileUrl } from "@/api/projects";
+import { fetchFile, fetchPdfExport, manualFileUrl } from "@/api/projects";
 import { decisionMutationKey, submitDecision } from "@/api/runs";
 import { PanelChrome } from "@/components/PanelChrome";
 import { agentLabel } from "@/constants/agents";
@@ -32,6 +32,30 @@ import { sortStakeholdersByType, stakeholderTypeLabel } from "@/utils/stakeholde
 interface ResultPreviewProps {
   projectId: string | null;
   items: FileTreeNode[];
+}
+
+interface DownloadMenuItemProps {
+  disabled?: boolean;
+  label: string;
+  onSelect: () => void;
+}
+
+function DownloadMenuItem({
+  disabled = false,
+  label,
+  onSelect,
+}: DownloadMenuItemProps) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+      onClick={onSelect}
+    >
+      <Download className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  );
 }
 
 interface TocItem {
@@ -432,9 +456,14 @@ function downloadHtmlPathForPreview(path: string, availablePaths: Set<string>) {
   return path;
 }
 
-type DownloadFormat = "markdown" | "html";
+type FileDownloadFormat = "markdown" | "html";
+type DownloadFormat = FileDownloadFormat | "pdf";
 
-function downloadPathForFormat(path: string, availablePaths: Set<string>, format: DownloadFormat) {
+function downloadPathForFormat(
+  path: string,
+  availablePaths: Set<string>,
+  format: FileDownloadFormat,
+) {
   return format === "html"
     ? downloadHtmlPathForPreview(path, availablePaths)
     : downloadSourcePathForPreview(path, availablePaths);
@@ -1726,7 +1755,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
       .replaceAll(`/${projectId}/manual/dr`, "design_rationale.html");
     return standalone;
   };
-  const downloadArtifactPath = async (path: string, format: DownloadFormat) => {
+  const downloadArtifactPath = async (path: string, format: FileDownloadFormat) => {
     if (!projectId) return;
     const sourcePath = downloadPathForFormat(path, availablePaths, format);
     const data = await fetchFile(projectId, sourcePath);
@@ -1737,7 +1766,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     }
     downloadBlob(fileContentForDownload(data, sourcePath), filenameFromPath(sourcePath));
   };
-  const zipEntryForPath = async (path: string, format: DownloadFormat) => {
+  const zipEntryForPath = async (path: string, format: FileDownloadFormat) => {
     if (!projectId) return null;
     const sourcePath = downloadPathForFormat(path, availablePaths, format);
     const data = await fetchFile(projectId, sourcePath);
@@ -1795,14 +1824,17 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     : "";
   const hasMarkdownDownload = !!markdownDownloadPath && /\.md$/i.test(markdownDownloadPath);
   const hasHtmlDownload = !!htmlDownloadPath && /\.html$/i.test(htmlDownloadPath);
+  const hasPdfDownload = /^(?:output\/[^/]+\.md|artifact\/drafts\/[^/]+\.md)$/i.test(
+    markdownDownloadPath,
+  );
   const canChooseDownloadFormat =
     !isModelArtifact &&
     hasMarkdownDownload &&
     hasHtmlDownload &&
     markdownDownloadPath !== htmlDownloadPath;
-  const hasDownloadChoices = canChooseDownloadFormat || !!isModelArtifact;
+  const hasDownloadChoices = canChooseDownloadFormat || hasPdfDownload || !!isModelArtifact;
   const defaultDownloadFormat: DownloadFormat = "markdown";
-  const downloadTargetsForFormat = (format: DownloadFormat) => {
+  const downloadTargetsForFormat = (format: FileDownloadFormat) => {
     if (format === "html" && selectedOutputPath) {
       const htmlPath = downloadHtmlPathForPreview(selectedOutputPath, availablePaths);
       if (/\.html$/i.test(htmlPath)) {
@@ -1830,6 +1862,17 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     setDownloadError("");
     setDownloadPending(true);
     try {
+      if (format === "pdf") {
+        if (!projectId || !hasPdfDownload) return;
+        const blob = await fetchPdfExport(projectId, markdownDownloadPath);
+        const url = URL.createObjectURL(blob);
+        const filename = /^output\/srs\.md$/i.test(markdownDownloadPath)
+          ? "srs-with-design-rationale.pdf"
+          : `${filenameFromPath(markdownDownloadPath).replace(/\.md$/i, "")}.pdf`;
+        triggerDownload(url, filename);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return;
+      }
       const targets = downloadTargetsForFormat(format);
       const selectedIsSrs =
         !!selectedOutputPath && /(?:^results\/srs\.html$|^output\/srs\.md$)/i.test(selectedOutputPath);
@@ -1883,7 +1926,7 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
         await downloadArtifactPath(path, format);
       }
     } catch (error) {
-      setDownloadError(error instanceof Error ? error.message : t.downloadFailed);
+      setDownloadError(errorMessage(error, t.downloadFailed));
       console.error(error);
     } finally {
       setDownloadPending(false);
@@ -2376,71 +2419,65 @@ export function ResultPreview({ projectId, items }: ResultPreviewProps) {
     <>
       {isModelArtifact ? (
         <>
-          <button
-            type="button"
+          <DownloadMenuItem
             disabled={!modelPair.image || downloadPending}
-            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => {
+            label={t.downloadImage}
+            onSelect={() => {
               closeMenu();
               void downloadModelOutput("image");
             }}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {t.downloadImage}
-          </button>
-          <button
-            type="button"
+          />
+          <DownloadMenuItem
             disabled={!modelPair.source || downloadPending}
-            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => {
+            label={t.downloadPlantUml}
+            onSelect={() => {
               closeMenu();
               void downloadModelOutput("source");
             }}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {t.downloadPlantUml}
-          </button>
+          />
         </>
-      ) : canChooseDownloadFormat ? (
+      ) : canChooseDownloadFormat || hasPdfDownload ? (
         <>
-          <button
-            type="button"
-            disabled={downloadPending}
-            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
-            onClick={() => {
-              closeMenu();
-              void downloadSelectedOutput("markdown");
-            }}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {t.downloadMarkdown}
-          </button>
-          <button
-            type="button"
-            disabled={downloadPending}
-            className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
-            onClick={() => {
-              closeMenu();
-              void downloadSelectedOutput("html");
-            }}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {t.downloadHtml}
-          </button>
+          {hasMarkdownDownload && (
+            <DownloadMenuItem
+              disabled={downloadPending}
+              label={t.downloadMarkdown}
+              onSelect={() => {
+                closeMenu();
+                void downloadSelectedOutput("markdown");
+              }}
+            />
+          )}
+          {hasHtmlDownload && (
+            <DownloadMenuItem
+              disabled={downloadPending}
+              label={t.downloadHtml}
+              onSelect={() => {
+                closeMenu();
+                void downloadSelectedOutput("html");
+              }}
+            />
+          )}
+          {hasPdfDownload && (
+            <DownloadMenuItem
+              disabled={downloadPending}
+              label={t.downloadPdf}
+              onSelect={() => {
+                closeMenu();
+                void downloadSelectedOutput("pdf");
+              }}
+            />
+          )}
         </>
       ) : (
-        <button
-          type="button"
+        <DownloadMenuItem
           disabled={downloadPending}
-          className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-xs font-medium text-slate-700 hover:bg-gray-50"
-          onClick={() => {
+          label={t.download}
+          onSelect={() => {
             closeMenu();
             void downloadSelectedOutput();
           }}
-        >
-          <Download className="h-3.5 w-3.5" />
-          {t.download}
-        </button>
+        />
       )}
     </>
   );

@@ -1,5 +1,5 @@
 import type { BootstrapResponse, CostSummary, FileContent, FileTreeNode } from "@/types/api";
-import { apiFetch, apiUrl } from "./client";
+import { apiFetch, apiUrl, responseErrorMessage } from "./client";
 
 export function fetchBootstrap() {
   return apiFetch<BootstrapResponse>("/api/bootstrap");
@@ -99,4 +99,18 @@ export function fetchFile(projectId: string, path: string) {
   return apiFetch<FileContent>(
     `/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`,
   );
+}
+
+export async function fetchPdfExport(projectId: string, path: string) {
+  const url = apiUrl(
+    `/api/projects/${encodeURIComponent(projectId)}/exports/pdf?path=${encodeURIComponent(path)}`,
+  );
+  const response = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/pdf" },
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, "PDF export failed"));
+  }
+  return response.blob();
 }

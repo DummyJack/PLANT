@@ -8,11 +8,13 @@ import json
 import posixpath
 import re
 import zipfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from server.services.artifact_service import ArtifactService
+from server.services.pdf_export import render_markdown_pdf
 from server.services.security import resolve_project_file, resolve_under
 from .auth import require_project_read_access
 
@@ -398,6 +400,33 @@ def download_shared_manual_zip(request: Request):
 def read_file(project_id: str, path: str, request: Request):
     require_project_read_access(request, project_id)
     return service(request).read_file(project_id, path)
+
+
+@router.get("/projects/{project_id}/exports/pdf")
+def download_project_pdf(project_id: str, path: str, request: Request):
+    require_project_read_access(request, project_id)
+    svc = service(request)
+    export = render_markdown_pdf(
+        base_dir=request.app.state.base_dir,
+        project_dir=svc.project_dir(project_id),
+        project_id=project_id,
+        markdown_path=path,
+        public_base_url=str(request.base_url),
+    )
+    ascii_filename = re.sub(r"[^A-Za-z0-9._-]", "_", export.filename) or "document.pdf"
+    return Response(
+        export.content,
+        media_type="application/pdf",
+        headers={
+            **NO_CACHE_HEADERS,
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{quote(export.filename)}"
+            ),
+            "Content-Length": str(len(export.content)),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @public_router.get("/{project_id}/manual")

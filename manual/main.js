@@ -495,7 +495,11 @@ function manifestFileList(manifest, key) {
       .sort((left, right) => left.version - right.version);
     const maxVersion = versioned.length ? Math.max(...versioned.map((item) => item.version)) : -1;
     return versioned
-      .filter((item) => (key === "conflict_reports_initial" ? item.version < maxVersion : item.version > 0))
+      .filter((item) =>
+        key === "conflict_reports_initial"
+          ? versioned.length === 1 || item.version < maxVersion
+          : item.version > 0
+      )
       .map(({ file, version }) => {
         return {
           ...file,
@@ -529,6 +533,7 @@ function createFileLink(file) {
 
 function syncFileList(list, files) {
   if (!files.length) {
+    removeAdjacentFileListSeparator(list);
     list.remove();
     return;
   }
@@ -537,6 +542,21 @@ function syncFileList(list, files) {
     return;
   }
   renderFileList(list, files);
+}
+
+function removeAdjacentFileListSeparator(list) {
+  const next = list.nextSibling;
+  if (next?.nodeType === Node.TEXT_NODE && /^\s*、/.test(next.textContent || "")) {
+    next.textContent = (next.textContent || "").replace(/^\s*、\s*/, "");
+    if (!next.textContent) next.remove();
+    return;
+  }
+
+  const previous = list.previousSibling;
+  if (previous?.nodeType === Node.TEXT_NODE && /、\s*$/.test(previous.textContent || "")) {
+    previous.textContent = (previous.textContent || "").replace(/、\s*$/, "");
+    if (!previous.textContent) previous.remove();
+  }
 }
 
 function renderFileList(list, files) {
