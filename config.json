@@ -83,8 +83,8 @@
     }
   },
   "api_state": {
-    "openai": "valid",
-    "gemini": "valid",
+    "openai": "untested",
+    "gemini": "untested",
     "claude": "untested"
   },
   "preflight": {
