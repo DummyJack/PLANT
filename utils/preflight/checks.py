@@ -231,9 +231,10 @@ def _check_environment(
     tavily_key = str(
         os.getenv("TAVILY_API_KEY") or values.get("TAVILY_API_KEY") or ""
     ).strip()
-    if web_search_enabled and (
-        not tavily_key or tavily_key.lower() == "your_tavily_api_key"
-    ):
+    tavily_key_configured = bool(
+        tavily_key and tavily_key.lower() != "your_tavily_api_key"
+    )
+    if web_search_enabled and not tavily_key_configured:
         try:
             coordinator = FileRunCoordinator(base_dir)
             with coordinator.exclusive_lock("config", timeout=30.0):
@@ -264,6 +265,13 @@ def _check_environment(
                 "warning",
                 "尚未設定有效的 TAVILY_API_KEY，已自動關閉網路搜尋",
             )
+    elif not web_search_enabled and tavily_key_configured:
+        report.add(
+            "tavily_api_key",
+            "info",
+            "已偵測到 TAVILY_API_KEY，但網路搜尋目前關閉",
+            "如需啟用，請設定 config.json > enable_tools.web_search = true",
+        )
 
 
 def _probe_directory(path: Path) -> Optional[str]:
