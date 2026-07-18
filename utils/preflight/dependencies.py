@@ -16,6 +16,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from .weasyprint_runtime import (
+    configure_weasyprint_runtime,
+    ensure_weasyprint_runtime,
+    is_missing_weasyprint_native_runtime,
+)
+
 
 _REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]+\])?")
 _LOCK_TIMEOUT_SECONDS = 300.0
@@ -109,6 +115,9 @@ def _dependency_issues(requirements_path: Path) -> list[str]:
                 "python": sys.executable,
                 "imports": imports_to_check,
                 "versions": installed_versions,
+                "weasyprint_dll_directories": os.environ.get(
+                    "WEASYPRINT_DLL_DIRECTORIES", ""
+                ),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -334,6 +343,7 @@ def _check_python_install_directory() -> None:
 
 def ensure_python_dependencies(base_dir: Path) -> None:
     root = Path(base_dir).resolve()
+    configure_weasyprint_runtime(root)
     requirements_path = root / "requirements.txt"
     if not requirements_path.is_file():
         raise RuntimeError(f"找不到 Python 套件清單：{requirements_path}")
@@ -346,6 +356,12 @@ def ensure_python_dependencies(base_dir: Path) -> None:
         issues = _dependency_issues(requirements_path)
         if not issues:
             return
+
+        if is_missing_weasyprint_native_runtime(issues):
+            ensure_weasyprint_runtime(root)
+            issues = _dependency_issues(requirements_path)
+            if not issues:
+                return
 
         print(
             "\n偵測到 Python 套件缺失或版本不符，正在自動修復："
@@ -384,6 +400,9 @@ def ensure_python_dependencies(base_dir: Path) -> None:
 
         importlib.invalidate_caches()
         unresolved = _dependency_issues(requirements_path)
+        if is_missing_weasyprint_native_runtime(unresolved):
+            ensure_weasyprint_runtime(root)
+            unresolved = _dependency_issues(requirements_path)
         if unresolved:
             raise RuntimeError(
                 "下列 Python 套件安裝後仍無法使用：" + "、".join(unresolved)
